@@ -226,7 +226,7 @@ secret keys, except `/credentials`.
 |---|---|---|---|
 | GET | `/storage` | `storage:read` | `?includeDeleted=1` adds the trash → `{ storage: StorageView[] }` |
 | POST | `/storage` | `storage:create` (+ `project:update` with `project`) | `{ name, engine? (rustfs), version?, placement? (auto\|edge\|node id), memoryMb?, cpus?, storageMb?, storage? (`system`, `fast`, `bulk` or a disk name; default: the kind's default from Settings → Storage, docs/STORAGE.md §2.2), public?, buckets? (names, created private), project?, envPrefix? }` → `201 { storage }`. `project` needs at least one bucket and is granted read-write on all of them; a private instance with `project` follows the project's node |
-| GET | `/storage/:name` | `storage:read` | `?includeDeleted=1` to read a trashed one → `{ storage }` |
+| GET | `/storage/:name` | `storage:read` | `?includeDeleted=1` to read a trashed one → `{ storage }`, including `sts` (`{ enabled, endpoint, issuer, audience, claim, rolePolicy }`) and `capabilities.sts` for the pinned RustFS build |
 | PATCH | `/storage/:name` | `storage:update` | any of `{ memoryMb, cpus, storageMb, public, version }`; more memory re-checks admission; going private is refused (409) while apps on other nodes use it → `{ storage }` |
 | DELETE | `/storage/:name` | `storage:delete` | soft delete, restorable 7 days; the container and public route stop; 409 while projects are attached → `{ storage }` |
 | DELETE | `/storage/:name?purge=1` | `storage:delete` | trashed instances only: the node removes the data, then the rows go → `{ ok: true }` |
@@ -245,7 +245,7 @@ secret keys, except `/credentials`.
 | PATCH | `/storage/:name/buckets/:bucket` | `storage:update` | `{ access }` → `{ bucket }`. `public-read` allows unsigned GETs of objects, not listing |
 | DELETE | `/storage/:name/buckets/:bucket` | `storage:update`; with `?force=1` `storage:delete` | the node deletes it if empty (else it turns `delete-blocked`); 409 while granted to a project, or when it is known to hold objects without `force`. `force` empties it first → `{ bucket }` |
 | GET | `/projects/:slug/storage` | `storage:read` | `{ attachments }` with grants, the env names each one injects and its access key id |
-| POST | `/projects/:slug/storage` | `storage:update` + `project:update` | `{ storage, envPrefix? (UPPER_SNAKE, default S3), grants: [{ bucket, mode? (read\|read-write, default read-write) }] }` → `201 { attachment, warning }`. The project gets its own key as `<PREFIX>_ENDPOINT_URL`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY`, `_REGION`, `_FORCE_PATH_STYLE` (+ `_BUCKET` with one grant, `_PUBLIC_ENDPOINT_URL` when public) at activation and restarts. A private instance must share the project's node; `warning` says when it must be redeployed there |
+| POST | `/projects/:slug/storage` | `storage:update` + `project:update` | `{ storage, envPrefix? (UPPER_SNAKE, default S3), grants: [{ bucket, mode? (read\|read-write, default read-write) }] }` → `201 { attachment, warning }`. The project gets its own key as `<PREFIX>_ENDPOINT_URL`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY`, `_REGION`, `_FORCE_PATH_STYLE` (+ `_BUCKET` with one grant, `_PUBLIC_ENDPOINT_URL` when public) at activation and restarts. When the node advertises `storage-sts` and the RustFS build supports it, the key pair is replaced with short-lived STS credentials and `<PREFIX>_SESSION_TOKEN` is added; a failure falls back to the sealed static key. A private instance must share the project's node; `warning` says when it must be redeployed there |
 | PATCH | `/projects/:slug/storage/:name` | `storage:update` + `project:update` | `{ grants }` replaces the grants; the key's policy changes in place → `{ attachment }` |
 | DELETE | `/projects/:slug/storage/:name` | `storage:update` + `project:update` | detach and revoke the key; the app re-activates without the variables → `{ ok: true }` |
 | GET | `/storage/:name/objects` | `storage:read` | `?bucket&prefix&delimiter=/&token&limit` → `{ bucket, prefix, delimiter, objects: [{ key, sizeBytes, etag, lastModified, storageClass }], prefixes, isTruncated, nextToken }`. `delimiter=/` gives the folder view; `token` continues a truncated listing (D82) |
@@ -262,6 +262,14 @@ host-matched routes on its WireGuard-only app port. Requests are SigV4-signed fo
 `s3-<id>.storage.internal`, the gateway preserves `Host`, and RustFS verifies the signature. The
 root key stays sealed in the control plane; every upload, delete and folder creation is audited.
 The dashboard browser (`/storage/:name/objects`) uses the same endpoints (D82).
+
+**Storage STS is activation-only.** There is no public REST route that mints S3 credentials. On a
+node advertising `storage-sts`, the workload's activation carries short-lived RustFS credentials
+(`<PREFIX>_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY`, `_SESSION_TOKEN`) minted from the workload token
+through `AssumeRoleWithWebIdentity`; the agent applies them to the attached app. An older agent or
+RustFS build, a missing scoped policy, or a failed exchange keeps the sealed static attachment key
+in the same env names, so a deploy never depends on STS being available (D201). The credentials
+cache until five minutes before expiry and are dropped on revoke, detach or a grant change.
 
 **MCP tools.** `list_storage` (`includeDeleted?`), `get_storage` (the view plus a `lastHour`
 summary: bytes used vs the storage budget, objects, buckets, memory), `create_storage` (same
@@ -418,7 +426,10 @@ listen port and peer list); an external/BYO join omits both and keeps `publicAdd
   and storage sizes land in SQLite even when DuckDB telemetry is disabled; samples for instances
   the calling node doesn't host are dropped. → `{ ok, stored, databasesStored, storageStored }`.
 - `GET /api/agent/workloads/:id/activation` — decrypted env/secret-file values for a workload
-  owned by the calling node. Never cached on disk by the agent.
+  owned by the calling node. Never cached on disk by the agent. When the node advertises
+  `storage-sts`, attached storage's env carries short-lived credentials plus `_SESSION_TOKEN` and an
+  `identity` block; `storageSts` lists the temporary access key ids and expiries so the agent can
+  rotate them. A failed exchange leaves the sealed static key in place.
 - `GET /api/agent/builds/next` — claim the oldest queued build (builder nodes only); returns the
   clone/ref/command plus a presigned upload URL.
 - `POST /api/agent/builds/:id/log` and `POST /api/agent/builds/:id/report` — stream logs and report
@@ -541,6 +552,9 @@ across segments. The STS endpoint is in [STS token exchange](#sts-token-exchange
 
 Org-owned machine principals (`sa_…`), bound to roles like any other principal ([IAM.md](./IAM.md) I13, §7.2).
 Disabling is the normal off-switch; delete is refused while a binding still uses the account.
+Each pipeline repository also gets a managed `pipeline-<repo>` account with `pipeline:*` at the
+repository, `deployment:create`/`project:update` at its linked projects and `image:push` on
+`<org>/<repo>` (D205); it appears in this list and has no separate create route.
 
 | Method | Path | Permission | Notes |
 |---|---|---|---|
@@ -640,8 +654,8 @@ write-only; a blank `clientSecret` on update keeps the stored one.
 
 | Method | Path | Permission | Notes |
 |---|---|---|---|
-| GET | `/sso/providers` | `sso:read` | `{ providers }` with `protocol` (`oidc`\|`saml`), issuer, endpoints, scopes, claim map, `hasClientSecret`, `callbackUrl`, and for SAML the `acsUrl`, `spMetadataUrl`, `certificateCount`, `certificates`, `sloUrl`, `sloBinding` and `spSigning` (`{ certificate, previousCertificate, createdAt, previousPublishedUntil }`; the private key never leaves the server) |
-| POST | `/sso/providers` | `sso:manage` | `{ name, protocol? (oidc\|saml), issuer? \| preset: { id, values? }, clientId?, clientSecret?, discoveryUrl?, scopes?, claims?, enabled?, saml? }` → 201; 409 for a second provider on the same issuer. OIDC needs `issuer` (or a preset), `clientId` and `clientSecret`; SAML takes `saml: { metadataUrl?, entityId?, entryPoint?, cert?, certs?, secondaryCerts?, sloUrl?, sloBinding? (redirect\|post), spEntityId?, audience?, wantAssertionsSigned?, identifierFormat? }`, where `metadataUrl` is fetched at save time and otherwise `entityId`, `entryPoint` and at least one certificate are required. `certs`/`secondaryCerts` add IdP signing certificates for a rollover; an explicit blank `sloUrl` disables SLO. `protocol` cannot change after creation |
+| GET | `/sso/providers` | `sso:read` | `{ providers }` with `protocol` (`oidc`\|`saml`), issuer, endpoints, scopes, claim map, `hasClientSecret`, `callbackUrl`, and for SAML the `acsUrl`, `spMetadataUrl`, `certificateCount`, `certificates`, `sloUrl`, `sloBinding`, `wantAssertionsEncrypted`, `spSigning` and `spEncryption` (`{ certificate, previousCertificate, createdAt, previousPublishedUntil }`; private keys never leave the server). `spEncryption` is null until assertion encryption is enabled |
+| POST | `/sso/providers` | `sso:manage` | `{ name, protocol? (oidc\|saml), issuer? \| preset: { id, values? }, clientId?, clientSecret?, discoveryUrl?, scopes?, claims?, enabled?, saml? }` → 201; 409 for a second provider on the same issuer. OIDC needs `issuer` (or a preset), `clientId` and `clientSecret`; SAML takes `saml: { metadataUrl?, entityId?, entryPoint?, cert?, certs?, secondaryCerts?, sloUrl?, sloBinding? (redirect\|post), spEntityId?, audience?, wantAssertionsSigned?, wantAssertionsEncrypted?, identifierFormat? }`, where `metadataUrl` is fetched at save time and otherwise `entityId`, `entryPoint` and at least one certificate are required. `certs`/`secondaryCerts` add IdP signing certificates for a rollover; an explicit blank `sloUrl` disables SLO; `wantAssertionsEncrypted` generates a separate sealed SP encryption key and publishes its certificate with `use="encryption"` (default false). `protocol` cannot change after creation |
 | GET | `/sso/providers/:id` | `sso:read` | one provider (no secret) |
 | PATCH | `/sso/providers/:id` | `sso:manage` | partial update; `clientSecret` omitted keeps the current one |
 | DELETE | `/sso/providers/:id` | `sso:manage` | `{ ok: true }`; sign-in through it stops at once |
@@ -667,7 +681,11 @@ The Better Auth SSO callback is `/api/auth/sso/callback/:providerId` for OIDC an
 The plugin's SLO callback is `/api/auth/sso/saml2/sp/slo/:providerId`; it accepts an IdP-initiated
 `LogoutRequest` and deletes the matching session. SAML SP requests are signed with a per-provider
 RSA key; its certificate (and the previous one during the 30-day rollover) is in `spSigning` and the
-SP metadata document. Rotate it in Settings → SSO; there is no REST rotate route.
+SP metadata document. With `wantAssertionsEncrypted` on, a separate sealed RSA encryption key is
+published in `spEncryption` with `use="encryption"`; its previous certificate stays in the metadata
+during a rollover, but only the current private key decrypts, so import the new certificate at the
+IdP before the old one is used to encrypt. Rotate either key in Settings → SSO; there is no REST
+rotate route.
 
 ### Access policies (Skiff Access)
 
@@ -675,14 +693,15 @@ Ordered allow/deny rules for the `access` protection mode ([IAM.md](./IAM.md) I2
 D192). A matching deny beats every allow; no match denies. Rules match an org group, any member, an
 email or domain, an SSO provider, a user pool and its groups, a CIDR, or a service-token header.
 
-A **service token** is a `serviceToken` rule: a header name and the SHA-256 of a `skiff_svc_…`
-secret. There is no REST route that returns the secret: Settings → Access policies mints it through
-a form action and shows it once; revoking it removes the rule. Desired state carries only the header
-name, hash and action, and the agent decides a matching machine before any login redirect. Editing
-or removing a rule, disabling a policy, or reassigning a host bumps that policy's `version`, which
-is folded into the site key of every host using it, so issued cookies and callback tokens for those
-hosts stop verifying while hosts on another policy keep theirs. Adding an allow rule does not sign
-existing visitors out.
+A **machine token** is a named `skiff_svc_…` secret stored as a header name and its SHA-256
+(legacy `serviceToken` rule matchers still work and the edge merges both). The raw value is
+returned once from `POST` and never again; Settings → Access policies → Machines is the same
+surface. Desired state carries only header names, hashes and actions, and the agent decides a
+matching machine before any login redirect. Creating a token does not sign existing visitors out;
+revoking a token (or editing/removing a rule, disabling a policy, or reassigning a host) bumps that
+policy's `version`, which is folded into the site key of every host using it, so issued cookies and
+callback tokens for those hosts stop verifying while hosts on another policy keep theirs. Adding an
+allow rule does not sign existing visitors out.
 
 | Method | Path | Permission | Notes |
 |---|---|---|---|
@@ -691,30 +710,43 @@ existing visitors out.
 | GET | `/access-policies/:id` | `accessPolicy:read` at its scope | one policy |
 | PATCH | `/access-policies/:id` | `accessPolicy:update` at its scope | `{ name?, description?, enabled?, rules? }` (rules replace the ordered list) |
 | DELETE | `/access-policies/:id` | `accessPolicy:delete` at its scope | `{ ok: true }`; refused while a project or environment still assigns it |
+| GET | `/access-policies/:id/service-tokens` | `accessPolicy:read` at its scope | the array directly: each item has id, name, header, creation/last-used/revocation times; never the secret or hash |
+| POST | `/access-policies/:id/service-tokens` | `accessPolicy:update` at its scope | `{ name, header? (default X-Skiff-Access-Token) }` → 201 `{ token, secret }`; `secret` is the `skiff_svc_…` value and is shown once. At most 100 active tokens plus legacy matchers per policy. `cache-control: no-store` |
+| DELETE | `/access-policies/:id/service-tokens/:tokenId` | `accessPolicy:update` at its scope | revoke one token → `{ ok: true }`; the row is kept for history and the policy version is bumped, signing out browser sessions issued under that policy. Idempotent |
+| POST | `/access/service-tokens/touch` | signed in or a valid API key (the request hook still authenticates this path) | `{ policyId, header?, tokenHash (64 hex) }` → 204 always; the agent reports a matched machine token's last use, throttled to once a minute. It never reveals whether a token exists. Note: the edge calls it without credentials today, so a 401 from the hook leaves last-used unchanged |
 | POST | `/projects/:slug/access` | `project:update` | assign one with `{ scope: production\|previews, mode: "access", policyId }`; this is the same route as the other protection modes. Named-environment assignment exists only in the dashboard |
 | GET | `/access/authorize?host=&return=` | public (platform session optional) | the Skiff Access login page. The agent redirects an unauthenticated visitor here; the platform evaluates the host's ordered policy and, on `allow`, redirects to the agent's `/_skiff/access/callback` with a single-use host-bound token, else renders an HTML 403. A `userPool` rule accepts the pool's session cookie or bearer access token and matches `groups`/`poolGroups` metadata; a person with no pool session is sent to that pool's hosted login. SSO sessions are attributed to their linked provider. Service-token rules are deliberately not evaluated here, so a leaked token cannot mint a browser session. Only content hosts this platform serves may be a `return` target |
 
 ### User pools and OIDC clients
 
 A pool is an org resource: a hosted OIDC provider for one app's own users ([IAM.md](./IAM.md)
-I26–I29, §11.2). The native `skiff-identity` engine runs in the control plane today: pool users,
+I26–I29, §11.2). The native `skiff-identity` engine runs in the control plane by default: pool users,
 sessions, authorization codes, access/ID tokens, magic links, password reset, email verification and
-invites live in the `user_pool_*` tables, signed by the pool's `pool:<id>` key. Pool users are not
-platform users and a platform session cannot sign anybody into a pool. The hosted pages are
-`/pool/<id>/{login,signup,reset,magic,logout,verify}`. Passkeys, TOTP MFA and pool-local groups are
-built; social login, import and export are not. Groups and the pool-level `mfaRequired` switch are
-managed in Settings → Identity (there are no REST group routes); pool users enrol TOTP and manage
-passkeys/groups from the hosted `/pool/<id>` account page. Attaching a pool to a project is a
+invites live in the control plane's `user_pool_*` tables, signed by the pool's `pool:<id>` key. A
+pool assigned to the separate identity process is served from that process's own database (see
+[Identity process on the auth host](#identity-process-on-the-auth-host)). Pool users are not
+platform users and a platform session cannot sign anybody into a pool. The control-plane hosted
+pages are `/pool/<id>/{login,signup,reset,magic,logout,verify,otp}`. Passkeys, TOTP MFA,
+pool-local groups, social login (Google, GitHub, Microsoft, Apple), email OTP, breach checks,
+lockout and import/export are built. Social providers are configured in Settings → Identity
+(`userPool:credentials`) with a sealed per-pool client secret; there is no REST provider-admin
+route. The hosted login shows enabled providers and starts the flow through a form action; the
+provider callback below exchanges the code and links only a verified email. Groups, the
+`mfaRequired` and `breachCheckEnabled` switches and imports are managed in Settings → Identity
+(there are no REST group routes); pool users enrol TOTP and manage passkeys/groups from the hosted
+`/pool/<id>` account page. Attaching a pool to a project is a
 dashboard action (there is no REST attachment route): it injects `<P>_ISSUER`, `<P>_CLIENT_ID` and
 `<P>_CLIENT_SECRET`, and a function gets `env.AUTH.verify(request)`.
 
 | Method | Path | Permission | Notes |
 |---|---|---|---|
 | GET | `/user-pools` | `userPool:read` (org or per pool) | `{ pools }`; an org grant sees every pool |
-| POST | `/user-pools` | `userPool:create` | `{ name, description?, engine? (skiff-identity), signupMode? (invite\|open), requireEmailVerification?, mfaRequired?, theme? }` → 201 with the pool; 409 for a duplicate name |
-| GET | `/user-pools/:id` | `userPool:read` on the pool | `{ pool }` with issuer, active signing `kid` and `mfaRequired` |
-| PATCH | `/user-pools/:id` | `userPool:update` on the pool | `{ name?, description?, signupMode?, requireEmailVerification?, mfaRequired?, theme?, disabled? }` → `{ pool }`; disabling keeps clients and keys |
+| POST | `/user-pools` | `userPool:create` | `{ name, description?, engine? (skiff-identity), signupMode? (invite\|open), requireEmailVerification?, mfaRequired?, breachCheckEnabled?, theme? }` → 201 with the pool; 409 for a duplicate name |
+| GET | `/user-pools/:id` | `userPool:read` on the pool | `{ pool }` with issuer, active signing `kid`, `mfaRequired` and `breachCheckEnabled` |
+| PATCH | `/user-pools/:id` | `userPool:update` on the pool | `{ name?, description?, signupMode?, requireEmailVerification?, mfaRequired?, breachCheckEnabled?, theme?, disabled? }` → `{ pool }`; disabling keeps clients and keys |
 | DELETE | `/user-pools/:id` | `userPool:delete` on the pool | `{ ok: true }`; removes the clients, signing key, users, passkeys, TOTP rows and groups; refused while a project is attached |
+| GET | `/user-pools/:id/export` | `userPool:manage-users` on the pool | `skiff.user-pool/v1` JSON download with pool settings, users (password hashes included), groups, clients (secrets omitted) and OAuth providers (secrets omitted); `content-disposition: attachment`, `cache-control: no-store` |
+| POST | `/user-pools/:id/import` | `userPool:manage-users` on the pool | `{ format? (auto\|skiff\|auth0\|cognito\|firebase), dryRun?, data }` → 200 for a dry run, 201 for an apply. Users are matched by email and never overwritten; unsupported hashes force a reset; confidential clients get a fresh secret once (`clientSecrets`); providers import disabled with `needsSecret`. The report gives create/skip/invalid counts and per-email outcomes |
 | GET | `/user-pools/:id/clients` | `userPool:read` on the pool | `{ clients }`: public `clientId`, redirect allowlist, no secret |
 | POST | `/user-pools/:id/clients` | `userPool:credentials` on the pool | `{ name, redirectUris, public? }` → 201 `{ client, clientSecret }`; `clientSecret` is `null` for a public (PKCE) client and is shown once |
 | DELETE | `/user-pools/:id/clients/:clientId` | `userPool:credentials` on the pool | `{ ok: true }`; `:clientId` may be the row id or the public OIDC `client_id`; refused while attached |
@@ -724,11 +756,22 @@ dashboard action (there is no REST attachment route): it injects `<P>_ISSUER`, `
 | GET | `/user-pools/:id/users/invites` | `userPool:manage-users` on the pool | `{ invites }`: pending invitations, no raw token |
 | POST | `/user-pools/:id/users/invites` | `userPool:manage-users` on the pool | `{ email }` → 201 with the invitation and its token **once** |
 | GET | `/user-pools/:id/oauth/authorize` | public | OIDC authorization code flow: `?client_id&redirect_uri&response_type=code&scope=&state=&nonce=&code_challenge=&code_challenge_method=`. A signed-in pool session gets a single-use code; anyone else is redirected to the pool's hosted login. Always a 303 |
+| GET | `/user-pools/:id/oauth/callback/:provider` | public | social-login return URL for a configured provider (Google, GitHub, Microsoft or Apple). It consumes the server-side `state`/PKCE verifier, exchanges the code, links or creates the user by verified email, sets the pool session cookie and redirects to the captured return path; failures redirect to `/pool/<id>/login?oauth=error` with no provider or token detail |
 | POST | `/user-pools/:id/oauth/token` | public | `grant_type=authorization_code`, `code`, `redirect_uri`, `client_id`, `client_secret?` (or HTTP Basic), `code_verifier?` → `{ access_token, token_type: "Bearer", expires_in, id_token, scope }`; `cache-control: no-store` |
 | GET/POST | `/user-pools/:id/oauth/userinfo` | pool bearer access token | `{ sub, email?, email_verified?, name?, groups }`; an ID token or a revoked/disabled user is refused |
 | GET/POST | `/user-pools/:id/oauth/logout` | public | revokes the pool session and redirects to `post_logout_redirect_uri` when it is same-origin, else `/pool/<id>/login` |
 | GET | `/user-pools/:id/.well-known/openid-configuration` | public | OpenID Connect Discovery for the pool; 404 while the pool is disabled |
 | GET | `/user-pools/:id/.well-known/jwks.json` | public | the pool's `pool:<id>` signing keys; 404 while disabled |
+
+**Pool export and import (D204).** `GET /user-pools/:id/export` returns a `skiff.user-pool/v1`
+document with users and their password hashes, groups, clients (secrets always omitted) and
+providers (secrets always omitted). `POST /user-pools/:id/import` accepts that document or an
+Auth0, Cognito (JSON or CSV) or Firebase export, with `format: "auto"` by default. Run
+`{ dryRun: true }` first: it returns the same report without writing. An apply creates only
+missing users (an existing email is skipped), creates groups and adds members by email, creates
+missing clients with a fresh secret shown once, and imports providers disabled so their secret can
+be pasted in. A hash the engine cannot verify is replaced with an argon2id hash of a random value
+and the user must reset their password; argon2id, bcrypt and the portable scrypt wrapper are kept.
 
 **Hosted pool passkeys and MFA (D194).** These are browser routes on the platform origin, not
 `/api/v1`, and take the pool's session/CSRF cookies. The challenge is stored server-side and is
@@ -745,6 +788,38 @@ groups. A user who has enrolled must pass the code step before a password sign-i
 | POST | `/pool/:id/passkeys/register/verify` | pool session | `{ challengeId, response, name?, csrf }` → `{ passkey }`; 409 when the credential is already registered |
 | POST | `/pool/:id/passkeys/login/options` | public | `{ email?, csrf }` → discoverable authentication options; the answer is the same for a known and an unknown address |
 | POST | `/pool/:id/passkeys/login/verify` | public | `{ challengeId, response, email?, return_to?, csrf }` → starts a pool session and `{ redirect }`; failures share one generic refusal |
+
+**Hosted email OTP (D204).** `GET /pool/:id/otp` renders the six-digit sign-in form; its
+`?/request` and `?/verify` form actions mail a code and exchange it for a normal pool session. A
+code expires in ten minutes, allows five attempts, is rate limited per address and IP, and is
+stored only as a hash. Requesting one is enumeration-safe: an unknown address gets the same answer.
+
+**Hosted reset, magic link and verification.** `/pool/:id/{reset,magic,verify}` are SvelteKit form
+actions in the control plane; they use the pool's own session cookie and CSRF token. A reset or
+magic-link token is single use; verification marks the address verified.
+
+### Identity process on the auth host
+
+When a pool is assigned to `skiff-identity`, Caddy sends that pool's `/<pool>/…` and
+`/pool/<pool>/…` paths to the identity process on loopback instead of the control-plane fallback.
+The process has no public admin API; the node agent pushes its non-secret projection over
+`/run/skiff/identity.sock`. Its public surface is:
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/<pool>/.well-known/openid-configuration` | discovery for the pool issuer |
+| GET | `/<pool>/.well-known/jwks.json` | the pool's signing keys |
+| GET | `/<pool>/oauth2/authorize` | OIDC authorization code flow; sends an unauthenticated visitor to the hosted login |
+| POST | `/<pool>/oauth2/token` | code exchange; public PKCE clients work, confidential clients fail closed until their sealed secret is projected |
+| GET/POST | `/<pool>/oauth2/userinfo` | bearer access token |
+| GET/POST | `/<pool>/oauth2/logout` | revokes the pool session and redirects only to a same-origin `post_logout_redirect_uri` |
+| GET/POST | `/<pool>/{login,signup,verify,reset,magic,mfa,logout}` | the basic hosted pages and form actions |
+
+This is a scaffold, not the whole pool surface: passkeys, social login, email OTP, the
+account/groups pages, invites and the `breachCheckEnabled` switch are not projected to the
+process, and confidential clients fail closed because their sealed secrets are not sent through
+desired state. Admin user, export and import routes remain on the control plane, and the identity
+database starts empty. Do not treat the presence of the unit as a completed migration (D206).
 
 ### STS token exchange and platform discovery
 
@@ -769,7 +844,9 @@ registry also accepts one as the Basic password. It resolves to the service acco
 narrowed by the token's `scope` and `resources`. A workload token must carry `aud: skiff`; an STS
 token may carry `skiff`, the platform origin or the MCP resource, depending on the surface. A
 missing or disabled service account, or a token whose `org_id` no longer matches it, is refused even
-with a valid signature. Storage STS (RustFS `AssumeRoleWithWebIdentity`) is still deferred.
+with a valid signature. Storage STS is built but activation-only: the control plane exchanges a
+workload token for short-lived RustFS credentials when the node advertises `storage-sts`, and the
+sealed static attachment key remains the fallback. There is no public credential-mint route.
 
 Federation trusts are managed at `/api/v1/federation-trusts` (above). The token service reads the
 same rows on every exchange; a deleted trust stops new exchanges but does not revoke a token already

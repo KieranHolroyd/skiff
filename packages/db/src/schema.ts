@@ -2374,6 +2374,8 @@ export const pipelineRepositories = sqliteTable(
 		minIsolationJson: text('min_isolation_json').notNull().default('{}'),
 		/** Sealed GitHub token for commit statuses; never returned by the API (0074). */
 		statusToken: text('status_token'),
+		/** `service_accounts.id` this repository's trusted jobs act as (IAM.md §7.2, 0108). */
+		serviceAccountId: text('service_account_id'),
 		createdBy: text('created_by').notNull(),
 		createdAt: integer('created_at').notNull().$defaultFn(now),
 		updatedAt: integer('updated_at').notNull().$defaultFn(now),

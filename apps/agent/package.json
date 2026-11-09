@@ -12,6 +12,7 @@
 	"dependencies": {
 		"@skiff/builder": "workspace:*",
 		"@skiff/contracts": "workspace:*",
+		"@skiff/identity": "workspace:*",
 		"@skiff/mail": "workspace:*",
 		"@skiff/site-config": "workspace:*",
 		"@skiff/studio": "workspace:*",

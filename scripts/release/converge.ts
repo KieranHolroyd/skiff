@@ -27,6 +27,7 @@ import { ensureHelper } from '../systemd/helper.ts';
 import { ensureStorageUnits } from '../systemd/storage.ts';
 import { ensureStudioUnit } from '../systemd/studio.ts';
 import { ensureMailUnit } from '../systemd/mail.ts';
+import { ensureIdentityUnits } from '../systemd/identity.ts';
 import { TRIGGER_PATH_UNIT, triggerUnits, updateCommandScript } from '../update-self/units.ts';
 
 export interface HostPaths {
@@ -215,6 +216,12 @@ export async function convergeHost(input: ConvergeInput): Promise<ConvergeReport
 	// Email's MTA (docs/EMAIL.md): static like the studio; only the mail node's agent starts it.
 	await step(report, 'mail-unit', () =>
 		ensureMailUnit({ systemdDir: paths.systemdDir, optDir: paths.optDir, runDir: paths.runDir, socketGroup: 'caddy', run: tolerant, log }),
+	);
+
+	// The separate user-pool identity process (docs/IAM.md §11.2): static; only the identity node's
+	// agent starts it, and the Litestream companion follows it.
+	await step(report, 'identity-unit', () =>
+		ensureIdentityUnits({ systemdDir: paths.systemdDir, optDir: paths.optDir, runDir: paths.runDir, socketGroup: 'caddy', run: tolerant, log }),
 	);
 
 	// Binary and unit; the caller restarts it (the running helper keeps its old inode until then).

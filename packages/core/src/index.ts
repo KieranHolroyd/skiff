@@ -105,6 +105,7 @@ export * from './iam/access-policies.ts';
 export * from './iam/scim.ts';
 export * from './user-pools.ts';
 export * from './user-pool-engine.ts';
+export * from './identity-desired.ts';
 export * from './platform-iam.ts';
 export * from './service-accounts.ts';
 export * from './access-keys.ts';

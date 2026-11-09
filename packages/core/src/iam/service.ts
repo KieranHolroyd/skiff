@@ -193,22 +193,32 @@ export class IamService {
 		}
 		this.ensureMemberBinding(principal);
 		const version = this.version(principal.orgId);
-		const type = bindingType(principal);
+		// A pipeline job resolves through its repository's service account (IAM.md §7.2), so a
+		// removed creator's role never enters the decision. Everything else uses its own binding
+		// principal id.
+		const binding = this.bindingPrincipal(principal);
+		const type = binding.type;
 		// A credential can only narrow its principal's bindings (IAM.md §2). A scoped key or an
 		// MCP consent contributes its effective permissions; an STS/workload token contributes the
 		// `scope`/`resources` it was minted with. Every kind may carry a restriction.
 		const restriction = this.restrictionFor(principal);
-		const key = `${type}:${principal.userId}:${principal.orgId}:${version}${restrictionKey(restriction)}`;
+		const key = `${type}:${binding.id}:${principal.orgId}:${version}${restrictionKey(restriction)}`;
 		const cached = this.#cache.get(key);
 		if (cached) return cached;
 
-		const rows = this.bindingRows(principal.orgId, type, principal.userId);
+		const rows = this.bindingRows(principal.orgId, type, binding.id);
 
 		const bindings = this.bindingsFromRows(principal.orgId, rows);
 		// Compatibility until I2 has seeded bindings everywhere: a principal with no binding rows
 		// at all keeps exactly the permissions its legacy role/grant already gave it. Once the
-		// member endpoints write bindings, this branch is unreachable and gets deleted.
-		if (bindings.length === 0 && version === 0 && principal.permissions.size > 0) {
+		// member endpoints write bindings, this branch is unreachable and gets deleted. A job never
+		// uses it: its permissions come from the service account's bindings, not the run creator.
+		if (
+			bindings.length === 0 &&
+			version === 0 &&
+			principal.kind !== 'job' &&
+			principal.permissions.size > 0
+		) {
 			bindings.push({
 				id: 'compat:legacy-role',
 				roleId: principal.role,
@@ -220,7 +230,7 @@ export class IamService {
 		const compiled = compileGrants({
 			orgId: principal.orgId,
 			bindings,
-			guardrails: this.guardrails(principal, type),
+			guardrails: this.guardrails(binding.principal, type),
 			restriction,
 		});
 		this.#cache.set(key, compiled);
@@ -474,6 +484,17 @@ export class IamService {
 			.get(orgId, now);
 		this.#cache.clear();
 		return row?.version ?? 1;
+	}
+
+	/**
+	 * Drop one principal's compiled grants without moving `iamVersion`. Used when only that
+	 * identity's own bindings changed (provisioning or reconciling a pipeline service account),
+	 * so the org's other principals keep their cached decisions and legacy test principals do not
+	 * lose their compatibility grants.
+	 */
+	forget(orgId: string, type: BindingPrincipalType, principalId: string): void {
+		const prefix = `${type}:${principalId}:${orgId}:`;
+		for (const key of this.#cache.keys()) if (key.startsWith(prefix)) this.#cache.delete(key);
 	}
 
 	// ---------------------------------------------------------------- roles
@@ -897,6 +918,49 @@ export class IamService {
 	}
 
 	// ---------------------------------------------------------------- internals
+
+	/**
+	 * The principal whose bindings apply. A `job` principal is a pipeline builder credential; its
+	 * grants come from the repository's service account (IAM.md §7.2), never from `actingFor` (the
+	 * run creator). If the repository has no account yet the job simply has no bindings.
+	 */
+	private bindingPrincipal(principal: Principal): {
+		type: BindingPrincipalType;
+		id: string;
+		principal: Principal;
+	} {
+		if (principal.kind !== 'job')
+			return { type: bindingType(principal), id: principal.userId, principal };
+		const serviceAccountId = this.pipelineServiceAccountFor(principal);
+		if (!serviceAccountId)
+			return {
+				type: 'serviceAccount',
+				id: principal.userId,
+				principal: { ...principal, kind: 'serviceAccount' },
+			};
+		return {
+			type: 'serviceAccount',
+			id: serviceAccountId,
+			principal: { ...principal, kind: 'serviceAccount', userId: serviceAccountId },
+		};
+	}
+
+	private pipelineServiceAccountFor(principal: Principal): string | null {
+		try {
+			const row = this.#sqlite
+				.query<{ service_account_id: string | null }, [string, string, string]>(
+					`SELECT pr.service_account_id
+					   FROM pipeline_jobs pj
+					   JOIN pipeline_repositories pr ON pr.id = pj.repository_id
+					  WHERE pj.id = ? AND pj.org_id = ? AND pr.org_id = ?`,
+				)
+				.get(principal.userId, principal.orgId, principal.orgId);
+			return row?.service_account_id ?? null;
+		} catch {
+			// A bare core test or a boot before migrations: no job binding path.
+			return null;
+		}
+	}
 
 	/**
 	 * The narrowing a principal's credential imposes. A scoped key or an MCP consent is capped by

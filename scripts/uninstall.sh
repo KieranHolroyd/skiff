@@ -68,6 +68,8 @@ skiff-storage.path
 skiff-storage.service
 skiff-studio.service
 skiff-mail.service
+skiff-identity.service
+skiff-litestream-identity.service
 skiff-agent.service
 skiff-helper.service
 skiff-control-plane-standby.service

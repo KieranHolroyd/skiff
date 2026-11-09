@@ -62,11 +62,12 @@ import {
 	type PipelineStepReport,
 	type PipelineTrust,
 	type PipelineWorkflow,
+	type Permission,
+	type Principal,
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { entriesFromZip } from './artifact.ts';
-import { buildSystemPrincipal } from './iam/system.ts';
 import { newId } from './util.ts';
 import { PipelineOidc } from './pipeline-oidc.ts';
 import { commitState, githubTarget, postCommitStatus } from './pipeline-status.ts';
@@ -1774,11 +1775,35 @@ export class PipelineEngine {
 			);
 		if (link.environment && link.environment !== job.environment)
 			throw new CoreError('forbidden', `Deploys to "${slug}" are only allowed from jobs in environment "${link.environment}".`, 403);
-		const principal = buildSystemPrincipal(
-			'system:pipeline-deploy',
-			job.orgId,
-			run.createdBy ? { actingFor: { kind: 'user', id: run.createdBy } } : undefined,
-		);
+		const repository = this.requireRepository(job.repositoryId);
+		const serviceAccountId = this.ctx.serviceAccounts.ensurePipelineAccount({
+			orgId: job.orgId,
+			repositoryId: repository.id,
+			repositoryName: repository.name,
+			createdBy: run.createdBy ?? repository.createdBy,
+		});
+		if (!this.ctx.serviceAccounts.pipelineAccountEnabled(job.orgId, serviceAccountId))
+			throw new CoreError(
+				'forbidden',
+				'The repository pipeline service account is disabled. Re-enable it in Settings → Access to resume deploys.',
+				403,
+			);
+		// IAM.md §7.2: the control-plane side acts as the repository's account, with the run's
+		// creator recorded as `actingFor` for audit. `pipeline_project_links` above remains the
+		// extra gate, so the account's project binding is never the only thing allowing a deploy.
+		const shell: Principal = {
+			kind: 'serviceAccount',
+			userId: serviceAccountId,
+			orgId: job.orgId,
+			role: 'viewer',
+			permissions: new Set<Permission>(),
+			credential: 'job',
+			...(run.createdBy ? { actingFor: { kind: 'user' as const, id: run.createdBy } } : {}),
+		};
+		const principal: Principal = {
+			...shell,
+			permissions: new Set<Permission>([...this.ctx.iam.compiledFor(shell).index.keys()]),
+		};
 		return { run, project, principal };
 	}
 
@@ -1840,7 +1865,7 @@ export class PipelineEngine {
 		}
 	}
 
-	private audit(principal: ReturnType<typeof buildSystemPrincipal>, job: PipelineJobRow, project: string, deploymentId: string): void {
+	private audit(principal: Principal, job: PipelineJobRow, project: string, deploymentId: string): void {
 		this.ctx.audit.record({
 			principal,
 			action: 'pipeline.deploy',

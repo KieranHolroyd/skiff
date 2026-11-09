@@ -53,6 +53,8 @@ import {
 	type PlatformPermission,
 	type RouteSpec,
 	type WorkloadSpec,
+	IDENTITY_CAPABILITY,
+	selectIdentityNode,
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, CoreError, NotFoundError, UnauthorizedError, ValidationError } from './errors.ts';
@@ -61,6 +63,7 @@ import { upstreamFor } from './workloads.ts';
 import { allocateOverlayAddress, buildWireguardState, type OverlayNode } from './overlay.ts';
 import { effectiveAccessMode } from './access.ts';
 import { newId, randomToken, sha256Hex, parseJson } from './util.ts';
+import { IDENTITY_NODE_SETTING, identityDesiredForNode } from './identity-desired.ts';
 import type { ParsedConfig } from '@skiff/site-config';
 
 const JOIN_TTL_MS = 60 * 60 * 1000;
@@ -1087,7 +1090,13 @@ export class NodeService {
 		const node = this.authenticate(token);
 		const now = this.ctx.now();
 		const allNodes = this.ctx.db
-			.select({ id: nodes.id, mode: nodes.mode, publicAddress: nodes.publicAddress, status: nodes.status })
+			.select({
+				id: nodes.id,
+				mode: nodes.mode,
+				publicAddress: nodes.publicAddress,
+				status: nodes.status,
+				capabilitiesJson: nodes.capabilitiesJson,
+			})
 			.from(nodes)
 			.all();
 		const edgeId = this.ctx.config.edgeNodeId ?? allNodes.find((row) => row.mode === 'edge')?.id ?? null;
@@ -1436,6 +1445,21 @@ export class NodeService {
 			],
 		};
 
+		// The separate user-pool identity process (IAM.md §11.2): one node per install. An operator
+		// pins it with the `identity.node_id` setting; otherwise the edge or the first online capable
+		// node wins. Scale-out later places pools individually; this scaffold sends every enabled
+		// pool to that one node.
+		const identityCapable = allNodes.filter((row) => capabilities(row.capabilitiesJson).includes(IDENTITY_CAPABILITY));
+		const identityOnline = identityCapable.filter((row) => row.status === 'online');
+		const configuredIdentityNode = this.ctx.sqlite
+			.query<{ value: string }, [string]>('SELECT value FROM settings WHERE key = ?')
+			.get(IDENTITY_NODE_SETTING)?.value ?? null;
+		const identityNodeId = selectIdentityNode(
+			(identityOnline.length > 0 ? identityOnline : identityCapable).map((row) => row.id),
+			configuredIdentityNode,
+			edgeId,
+		);
+
 		return {
 			version: this.stateVersion(),
 			nodeId: node.id,
@@ -1497,6 +1521,7 @@ export class NodeService {
 			storagePurges: this.ctx.storage.purgesForNode(node.id),
 			brokerPurges: this.ctx.brokers.purgesForNode(node.id),
 			mail: this.ctx.email.desiredForNode(node.id),
+			identity: node.id === identityNodeId ? identityDesiredForNode(this.ctx, node.id) : null,
 			domains: this.ctx.domains.desiredForProjects(servedProjectIds),
 			serviceEndpoints: this.serviceEndpointsForNode(node.id),
 			serviceProviders: this.serviceProvidersForNode(node.id),

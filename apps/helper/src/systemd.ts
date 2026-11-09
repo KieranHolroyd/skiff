@@ -17,6 +17,7 @@ import {
 	type RegistrySecrets,
 } from './registry.ts';
 import { copyMailTls, MAIL_UNIT } from './mail.ts';
+import { IDENTITY_LITESTREAM_UNIT, IDENTITY_UNIT } from './identity.ts';
 import { constants as fsConstants, promises as fs } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import {
@@ -1146,6 +1147,21 @@ export class SystemdDriver {
 
 	async stopMail(): Promise<void> {
 		await this.systemctl(['stop', MAIL_UNIT]);
+	}
+
+	/**
+	 * Start the identity process and its Litestream companion (docs/IAM.md §11.2). The companion is
+	 * best-effort: an install without R2 or without Litestream still serves sign-in, just without
+	 * continuous backup, and the warning is visible through the unit state.
+	 */
+	async startIdentity(): Promise<void> {
+		await this.systemctl(['start', IDENTITY_UNIT]);
+		await this.systemctl(['start', IDENTITY_LITESTREAM_UNIT], { allowFailure: true });
+	}
+
+	async stopIdentity(): Promise<void> {
+		await this.systemctl(['stop', IDENTITY_LITESTREAM_UNIT], { allowFailure: true });
+		await this.systemctl(['stop', IDENTITY_UNIT]);
 	}
 
 	/** Copy the submission certificate out of Caddy's storage for `skiff-mail`. */

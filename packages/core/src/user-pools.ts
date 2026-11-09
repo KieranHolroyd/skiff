@@ -14,11 +14,14 @@
  */
 import {
 	USER_POOL_AUTH_BINDING,
+	USER_POOL_EXPORT_SCHEMA,
+	USER_POOL_EXPORT_VERSION,
 	userPoolAttachSchema,
 	userPoolClientCreateSchema,
 	userPoolCreateSchema,
 	userPoolDefaultEnvPrefix,
 	userPoolEnvNames,
+	userPoolOAuthProviders,
 	userPoolUpdateSchema,
 	type FunctionRuntimeBinding,
 	type Permission,
@@ -30,12 +33,22 @@ import {
 	type UserPoolClientView,
 	type UserPoolCreate,
 	type UserPoolEngineId,
+	type UserPoolExport,
+	type UserPoolExportClient,
+	type UserPoolExportGroup,
+	type UserPoolExportMetadata,
+	type UserPoolExportOAuthProvider,
 	type UserPoolGroupMemberView,
 	type UserPoolGroupView,
+	type UserPoolImportFormat,
+	type UserPoolImportFormatId,
+	type UserPoolImportReport,
+	type UserPoolImportRequest,
 	type UserPoolJwks,
 	type UserPoolOAuthProviderConfig,
 	type UserPoolOAuthProviderView,
 	type UserPoolOidcDiscovery,
+	type UserPoolPasswordAlgorithm,
 	type UserPoolSignupMode,
 	type UserPoolTheme,
 	type UserPoolUpdate,
@@ -47,6 +60,10 @@ import type {
 	UserPoolInviteCreated,
 	UserPoolInviteView,
 	UserPoolUserView
+} from './user-pool-engine.ts';
+import {
+	scryptHashFromParts,
+	userPoolPasswordAlgorithm
 } from './user-pool-engine.ts';
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from './errors.ts';
 import { newId, parseJson, randomToken, sha256Hex } from './util.ts';
@@ -67,6 +84,11 @@ export function userPoolRequireEmailVerificationKey(poolId: string): string {
 /** The per-pool "ask every user to enrol TOTP MFA" switch; a settings row like the one above. */
 export function userPoolMfaRequiredKey(poolId: string): string {
 	return `user_pool.${poolId}.mfa_required`;
+}
+
+/** The per-pool "check new passwords against Have I Been Pwned" switch. */
+export function userPoolBreachCheckKey(poolId: string): string {
+	return `user_pool.${poolId}.breach_check`;
 }
 
 /**
@@ -415,6 +437,291 @@ export class UserPoolService {
 		});
 	}
 
+	// ---------------------------------------------------------------- export and import
+
+	/**
+	 * A versioned JSON snapshot of one pool for backup or migration. Password hashes are included
+	 * because a migrated account must keep its password; client and provider secrets are not, so a
+	 * reader of the file cannot impersonate a client. Callers need `userPool:manage-users`.
+	 */
+	exportPool(principal: Principal, poolId: string): UserPoolExport {
+		const row = this.#row(principal, poolId);
+		this.#require(principal, 'userPool:manage-users', row);
+		const users = this.ctx.userPoolEngine.listUsersForExport(row.id);
+		const groups: UserPoolExportGroup[] = this.ctx.userPoolEngine
+			.listGroups(row.id)
+			.map((group) => ({
+				id: group.id,
+				name: group.name,
+				createdAt: group.createdAt,
+				members: this.ctx.userPoolEngine
+					.listGroupMembers(row.id, group.id)
+					.map((member) => member.email)
+			}));
+		const clients: UserPoolExportClient[] = this.#clients(row.id).map((client) => ({
+			id: client.id,
+			name: client.name,
+			clientId: client.client_id,
+			redirectUris: parseStringArray(client.redirect_uris_json),
+			public: client.public === 1,
+			createdAt: client.created_at,
+			clientSecret: null,
+			secretHandling: 'regenerated-on-import'
+		}));
+		const oauthProviders: UserPoolExportOAuthProvider[] = this.ctx.userPoolEngine
+			.listOAuthProviders(row.id)
+			.filter((provider) => provider.configured)
+			.map((provider) => ({
+				provider: provider.provider,
+				clientId: provider.clientId,
+				scopes: [...provider.scopes],
+				enabled: provider.enabled,
+				createdAt: provider.createdAt ?? this.ctx.now(),
+				secretOmitted: true
+			}));
+		const metadata: UserPoolExportMetadata = {
+			id: row.id,
+			name: row.name,
+			description: row.description,
+			engine: row.engine as UserPoolEngineId,
+			signupMode: row.signup_mode as UserPoolSignupMode,
+			requireEmailVerification: this.#requireEmailVerification(row),
+			mfaRequired: this.#mfaRequired(row),
+			breachCheckEnabled: this.#breachCheckEnabled(row),
+			theme: parseTheme(row.theme_json)
+		};
+		this.ctx.audit.record({
+			principal,
+			action: 'user_pool.export',
+			resource: 'user_pool',
+			resourceId: row.id,
+			args: { poolId: row.id, pool: row.name, users: users.length },
+			result: 'ok'
+		});
+		return {
+			schema: USER_POOL_EXPORT_SCHEMA,
+			version: USER_POOL_EXPORT_VERSION,
+			exportedAt: new Date(this.ctx.now()).toISOString(),
+			pool: metadata,
+			users,
+			groups,
+			clients,
+			oauthProviders
+		};
+	}
+
+	/**
+	 * Import Auth0, Cognito, Firebase or a Skiff pool export. `dryRun` never writes and returns the
+	 * same counts as an apply. Duplicate addresses are skipped, never overwritten. A hash this
+	 * engine cannot verify forces a password reset instead of silently storing a dead password.
+	 */
+	async importPool(
+		principal: Principal,
+		poolId: string,
+		request: UserPoolImportRequest
+	): Promise<UserPoolImportReport> {
+		const row = this.#row(principal, poolId);
+		this.#require(principal, 'userPool:manage-users', row);
+		const dryRun = request.dryRun === true;
+		const normalized = normalizePoolImport(request.data, request.format ?? 'auto');
+		const report: UserPoolImportReport = {
+			format: normalized.format,
+			dryRun,
+			users: {
+				total: normalized.users.length,
+				create: 0,
+				skip: 0,
+				invalid: 0,
+				mustResetPassword: 0,
+				unsupportedHashes: []
+			},
+			groups: { total: normalized.groups.length, create: 0, skip: 0 },
+			clients: { total: normalized.clients.length, create: 0, skip: 0 },
+			oauthProviders: {
+				total: normalized.oauthProviders.length,
+				create: 0,
+				skip: 0,
+				needsSecret: 0
+			},
+			outcomes: [],
+			clientSecrets: []
+		};
+
+		const existingEmails = new Set(this.ctx.userPoolEngine.listUsers(row.id).map((user) => user.email));
+		const seen = new Set<string>();
+		const creates: NormalizedImportUser[] = [];
+		for (const user of normalized.users) {
+			if (user.invalidReason) {
+				report.users.invalid += 1;
+				report.outcomes.push({
+					email: user.email,
+					action: 'invalid',
+					reason: user.invalidReason,
+					passwordAlgorithm: user.passwordAlgorithm,
+					mustResetPassword: user.mustResetPassword
+				});
+				continue;
+			}
+			if (existingEmails.has(user.email) || seen.has(user.email)) {
+				report.users.skip += 1;
+				report.outcomes.push({
+					email: user.email,
+					action: 'skip',
+					reason: existingEmails.has(user.email)
+						? 'An account with that email already exists.'
+						: 'That email appears more than once in the file.',
+					passwordAlgorithm: user.passwordAlgorithm,
+					mustResetPassword: user.mustResetPassword
+				});
+				continue;
+			}
+			seen.add(user.email);
+			creates.push(user);
+			if (user.mustResetPassword) report.users.mustResetPassword += 1;
+			if (user.unsupportedHash) report.users.unsupportedHashes.push(user.unsupportedHash);
+			report.outcomes.push({
+				email: user.email,
+				action: 'create',
+				...(user.mustResetPassword ? { reason: user.resetReason } : {}),
+				passwordAlgorithm: user.passwordAlgorithm,
+				mustResetPassword: user.mustResetPassword
+			});
+		}
+		report.users.create = creates.length;
+
+		// Dry run stops before any write. Counts above are the whole answer.
+		if (dryRun) {
+			report.groups.create = normalized.groups.filter(
+				(group) => !this.#groupNameExists(row.id, group.name)
+			).length;
+			report.groups.skip = report.groups.total - report.groups.create;
+			report.clients.create = normalized.clients.filter(
+				(client) => !this.#clientNameExists(row.id, client.name)
+			).length;
+			report.clients.skip = report.clients.total - report.clients.create;
+			const providers = new Set(
+				this.ctx.userPoolEngine.listOAuthProviders(row.id).filter((p) => p.configured).map((p) => p.provider)
+			);
+			report.oauthProviders.create = normalized.oauthProviders.filter(
+				(provider) => !providers.has(provider.provider)
+			).length;
+			report.oauthProviders.skip =
+				report.oauthProviders.total - report.oauthProviders.create;
+			report.oauthProviders.needsSecret = report.oauthProviders.create;
+			return report;
+		}
+
+		// A forced reset needs a valid hash that no password can match; hash one random value once
+		// and share it across every reset account in this import.
+		const resetHash = creates.some((user) => user.mustResetPassword)
+			? await Bun.password.hash(randomToken(32), { algorithm: 'argon2id' })
+			: null;
+		for (const user of creates) {
+			const passwordHash = user.mustResetPassword ? resetHash! : user.passwordHash!;
+			try {
+				this.ctx.userPoolEngine.importUserRecord(row.id, {
+					email: user.email,
+					name: user.name,
+					emailVerified: user.emailVerified,
+					disabled: user.disabled,
+					passwordHash,
+					metadata: {
+						...user.metadata,
+						...(user.mustResetPassword ? { mustResetPassword: true } : {})
+					}
+				});
+			} catch (cause) {
+				// A concurrent import won the unique index. Count it as skipped, not a hard failure.
+				if (cause instanceof ConflictError) {
+					report.users.create -= 1;
+					report.users.skip += 1;
+					const outcome = report.outcomes.find(
+						(item) => item.email === user.email && item.action === 'create'
+					);
+					if (outcome) {
+						outcome.action = 'skip';
+						outcome.reason = 'An account with that email already exists.';
+					}
+					continue;
+				}
+				throw cause;
+			}
+		}
+		if (report.users.create === 0) report.users.mustResetPassword = 0;
+
+		// Groups are created only when the name is free; membership is mapped by email across both
+		// the existing users and the rows this import just created.
+		const emailToId = new Map(
+			this.ctx.userPoolEngine.listUsers(row.id).map((user) => [user.email, user.id])
+		);
+		for (const group of normalized.groups) {
+			if (this.#groupNameExists(row.id, group.name)) {
+				report.groups.skip += 1;
+				continue;
+			}
+			const created = this.ctx.userPoolEngine.createGroup(row.id, group.name);
+			report.groups.create += 1;
+			for (const email of group.members) {
+				const userId = emailToId.get(email);
+				if (userId) this.ctx.userPoolEngine.addGroupMember(row.id, created.id, userId);
+			}
+		}
+
+		// A fresh secret replaces every omitted client secret and is returned exactly once.
+		for (const client of normalized.clients) {
+			if (this.#clientNameExists(row.id, client.name)) {
+				report.clients.skip += 1;
+				continue;
+			}
+			const created = this.#insertImportedClient(row, client);
+			report.clients.create += 1;
+			if (created.clientSecret)
+				report.clientSecrets.push({
+					name: client.name,
+					clientId: created.clientId,
+					clientSecret: created.clientSecret
+				});
+		}
+
+		// Providers are imported disabled with an unusable sealed placeholder: the real secret was
+		// deliberately left out of the export and must be pasted into Settings before enabling.
+		const configuredProviders = new Set(
+			this.ctx.userPoolEngine.listOAuthProviders(row.id).filter((p) => p.configured).map((p) => p.provider)
+		);
+		for (const provider of normalized.oauthProviders) {
+			if (configuredProviders.has(provider.provider)) {
+				report.oauthProviders.skip += 1;
+				continue;
+			}
+			this.ctx.userPoolEngine.setOAuthProvider(row.id, provider.provider, {
+				clientId: provider.clientId,
+				clientSecret: randomToken(32),
+				scopes: provider.scopes,
+				enabled: false
+			});
+			report.oauthProviders.create += 1;
+			report.oauthProviders.needsSecret += 1;
+		}
+
+		this.ctx.audit.record({
+			principal,
+			action: 'user_pool.import',
+			resource: 'user_pool',
+			resourceId: row.id,
+			args: {
+				poolId: row.id,
+				pool: row.name,
+				format: report.format,
+				users: report.users.create,
+				skipped: report.users.skip,
+				invalid: report.users.invalid,
+				forcedReset: report.users.mustResetPassword
+			},
+			result: 'ok'
+		});
+		return report;
+	}
+
 	// ---------------------------------------------------------------- lifecycle
 
 	async create(principal: Principal, raw: UserPoolCreate): Promise<UserPoolView> {
@@ -462,6 +769,7 @@ export class UserPoolService {
 		}
 		if (input.requireEmailVerification) this.#setRequireEmailVerification(id, true);
 		if (input.mfaRequired) this.#setMfaRequired(id, true);
+		if (input.breachCheckEnabled) this.#setBreachCheckEnabled(id, true);
 		this.ctx.audit.record({
 			principal,
 			action: 'user_pool.create',
@@ -473,6 +781,7 @@ export class UserPoolService {
 				signupMode: input.signupMode,
 				requireEmailVerification: input.requireEmailVerification === true,
 				mfaRequired: input.mfaRequired === true,
+				breachCheckEnabled: input.breachCheckEnabled === true,
 				issuer,
 				signingKeyId: key.kid
 			},
@@ -493,6 +802,7 @@ export class UserPoolService {
 			signupMode === 'invite' ||
 			(patch.requireEmailVerification ?? this.#requireEmailVerification(row));
 		const mfaRequired = patch.mfaRequired ?? this.#mfaRequired(row);
+		const breachCheckEnabled = patch.breachCheckEnabled ?? this.#breachCheckEnabled(row);
 		const disabledAt =
 			patch.disabled === undefined
 				? row.disabled_at
@@ -515,6 +825,7 @@ export class UserPoolService {
 			signupMode === row.signup_mode &&
 			requireEmailVerification === this.#requireEmailVerification(row) &&
 			mfaRequired === this.#mfaRequired(row) &&
+			breachCheckEnabled === this.#breachCheckEnabled(row) &&
 			disabledAt === row.disabled_at &&
 			JSON.stringify(theme) === JSON.stringify(parseTheme(row.theme_json));
 		if (unchanged) return this.#view(row);
@@ -522,6 +833,8 @@ export class UserPoolService {
 		if (patch.requireEmailVerification !== undefined)
 			this.#setRequireEmailVerification(row.id, patch.requireEmailVerification);
 		if (patch.mfaRequired !== undefined) this.#setMfaRequired(row.id, patch.mfaRequired);
+		if (patch.breachCheckEnabled !== undefined)
+			this.#setBreachCheckEnabled(row.id, patch.breachCheckEnabled);
 		this.ctx.sqlite.run(
 			`UPDATE user_pools
 			    SET name = ?, description = ?, signup_mode = ?, theme_json = ?, disabled_at = ?, updated_at = ?
@@ -548,6 +861,7 @@ export class UserPoolService {
 				signupMode,
 				requireEmailVerification,
 				mfaRequired,
+				breachCheckEnabled,
 				disabled: disabledAt !== null,
 				...(row.name !== name ? { previousName: row.name } : {})
 			},
@@ -938,6 +1252,27 @@ export class UserPoolService {
 		);
 	}
 
+	#breachCheckEnabled(row: UserPoolRow): boolean {
+		return (
+			this.ctx.sqlite
+				.query<{ value: string }, [string]>('SELECT value FROM settings WHERE key = ?')
+				.get(userPoolBreachCheckKey(row.id))?.value === '1'
+		);
+	}
+
+	#setBreachCheckEnabled(poolId: string, value: boolean): void {
+		const key = userPoolBreachCheckKey(poolId);
+		if (!value) {
+			this.ctx.sqlite.run('DELETE FROM settings WHERE key = ?', [key]);
+			return;
+		}
+		this.ctx.sqlite.run(
+			`INSERT INTO settings (key, value, updated_at) VALUES (?, '1', ?)
+			 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+			[key, this.ctx.now()]
+		);
+	}
+
 	#require(principal: Principal, permission: Permission, pool: UserPoolRow): void {
 		this.ctx.iam.require(principal, permission, { type: 'userPool', id: pool.id });
 	}
@@ -1027,6 +1362,52 @@ export class UserPoolService {
 		return row;
 	}
 
+	#groupNameExists(poolId: string, name: string): boolean {
+		return Boolean(
+			this.ctx.sqlite
+				.query<{ id: string }, [string, string]>(
+					'SELECT id FROM user_pool_groups WHERE pool_id = ? AND name = ? COLLATE NOCASE'
+				)
+				.get(poolId, name)
+		);
+	}
+
+	#clientNameExists(poolId: string, name: string): boolean {
+		return Boolean(
+			this.ctx.sqlite
+				.query<{ id: string }, [string, string]>(
+					'SELECT id FROM user_pool_clients WHERE pool_id = ? AND name = ?'
+				)
+				.get(poolId, name)
+		);
+	}
+
+	/** Create an imported client without requiring `userPool:credentials`; the import is audited. */
+	#insertImportedClient(
+		pool: UserPoolRow,
+		input: NormalizedImportClient
+	): { clientId: string; clientSecret: string | null } {
+		const id = newId('upcc_');
+		const clientId = newId('upc_');
+		const clientSecret = input.public ? null : randomToken(32);
+		this.ctx.sqlite.run(
+			`INSERT INTO user_pool_clients
+			   (id, pool_id, name, client_id, client_secret_sealed, redirect_uris_json, public, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			[
+				id,
+				pool.id,
+				input.name,
+				clientId,
+				clientSecret ? this.ctx.secrets.seal(pool.org_id, clientSecret) : null,
+				JSON.stringify(input.redirectUris),
+				input.public ? 1 : 0,
+				this.ctx.now()
+			]
+		);
+		return { clientId, clientSecret };
+	}
+
 	/** Create or repair the pool's ring entry and keep `signing_key_id` in step with rotation. */
 	async #ensurePoolKey(row: UserPoolRow): Promise<void> {
 		const key = await this.ctx.signingKeys.active(userPoolSigningPurpose(row.id));
@@ -1051,6 +1432,7 @@ export class UserPoolService {
 			signupMode: row.signup_mode as UserPoolSignupMode,
 			requireEmailVerification: this.#requireEmailVerification(row),
 			mfaRequired: this.#mfaRequired(row),
+			breachCheckEnabled: this.#breachCheckEnabled(row),
 			theme: parseTheme(row.theme_json),
 			disabled: row.disabled_at !== null,
 			disabledAt: row.disabled_at,
@@ -1105,4 +1487,517 @@ function clientView(row: UserPoolClientRow): UserPoolClientView {
 		public: row.public === 1,
 		createdAt: row.created_at
 	};
+}
+
+// ---------------------------------------------------------------- import normalisation
+
+interface NormalizedImportUser {
+	email: string;
+	name: string;
+	emailVerified: boolean;
+	disabled: boolean;
+	passwordHash: string | null;
+	passwordAlgorithm: UserPoolPasswordAlgorithm;
+	mustResetPassword: boolean;
+	resetReason?: string;
+	unsupportedHash?: { email: string; algorithm: string; reason: string };
+	invalidReason?: string;
+	metadata: Record<string, unknown>;
+}
+
+interface NormalizedImportGroup {
+	name: string;
+	members: string[];
+}
+
+interface NormalizedImportClient {
+	name: string;
+	redirectUris: string[];
+	public: boolean;
+}
+
+interface NormalizedImportOAuthProvider {
+	provider: UserPoolExportOAuthProvider['provider'];
+	clientId: string;
+	scopes: string[];
+	enabled: boolean;
+}
+
+interface NormalizedPoolImport {
+	format: UserPoolImportFormat;
+	users: NormalizedImportUser[];
+	groups: NormalizedImportGroup[];
+	clients: NormalizedImportClient[];
+	oauthProviders: NormalizedImportOAuthProvider[];
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+	return value && typeof value === 'object' && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: null;
+}
+
+function text(value: unknown): string | undefined {
+	return typeof value === 'string' ? value : undefined;
+}
+
+function bool(value: unknown): boolean | undefined {
+	return typeof value === 'boolean' ? value : undefined;
+}
+
+function number(value: unknown): number | undefined {
+	return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function parseStringArray(raw: string): string[] {
+	const value = parseJson<unknown>(raw, []);
+	return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function importEmail(raw: string | undefined): { email: string } | { invalid: string } {
+	const email = (raw ?? '').trim().toLowerCase();
+	if (!email) return { invalid: 'The row has no email address.' };
+	if (email.length > 320 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+		return { invalid: 'That email address is not valid.' };
+	return { email };
+}
+
+/** Detect the document family. An explicit format always wins. */
+function detectPoolImportFormat(data: unknown): UserPoolImportFormat {
+	let value = data;
+	if (typeof value === 'string') {
+		try {
+			value = JSON.parse(value) as unknown;
+		} catch {
+			return 'cognito';
+		}
+	}
+	if (Array.isArray(value)) {
+		const first = record(value[0]);
+		if (first?.localId) return 'firebase';
+		if (first?.user_id || first?.custom_password_hash) return 'auth0';
+		if (first?.passwordAlgorithm || first?.passwordHash) return 'skiff';
+		return 'auth0';
+	}
+	const root = record(value);
+	if (!root) throw new ValidationError('The import file is not a JSON object or a CSV export.');
+	if (root.schema === USER_POOL_EXPORT_SCHEMA) return 'skiff';
+	if (Array.isArray(root.Users)) return 'cognito';
+	if (Array.isArray(root.users)) {
+		const first = record(root.users[0]);
+		if (root.pool && root.version) return 'skiff';
+		if (first?.localId) return 'firebase';
+		if (first?.user_id || first?.custom_password_hash) return 'auth0';
+		if (first?.passwordAlgorithm) return 'skiff';
+		return 'skiff';
+	}
+	throw new ValidationError('Could not recognise that user export. Use Auth0, Cognito, Firebase or a Skiff pool export.');
+}
+
+/** Normalise every supported document into the same rows before the dry run or apply. */
+function normalizePoolImport(
+	raw: unknown,
+	requested: UserPoolImportFormatId
+): NormalizedPoolImport {
+	if (requested !== 'auto') {
+		const forced = normalizeWithFormat(raw, requested);
+		return forced;
+	}
+	const format = detectPoolImportFormat(raw);
+	return normalizeWithFormat(raw, format);
+}
+
+function normalizeWithFormat(raw: unknown, format: UserPoolImportFormat): NormalizedPoolImport {
+	if (typeof raw === 'string') {
+		if (format === 'cognito') {
+			const rows = parseCsv(raw);
+			return {
+				format,
+				users: rows.map(cognitoCsvUser),
+				groups: [],
+				clients: [],
+				oauthProviders: []
+			};
+		}
+		try {
+			return normalizeWithFormat(JSON.parse(raw) as unknown, format);
+		} catch (cause) {
+			if (cause instanceof ValidationError) throw cause;
+			throw new ValidationError('The import file is not valid JSON.');
+		}
+	}
+	if (format === 'skiff') return normalizeSkiffImport(raw);
+	if (format === 'auth0') return normalizeAuth0Import(raw);
+	if (format === 'cognito') return normalizeCognitoImport(raw);
+	return normalizeFirebaseImport(raw);
+}
+
+function normalizeSkiffImport(raw: unknown): NormalizedPoolImport {
+	const root = record(raw) ?? {};
+	if (!Array.isArray(raw) && Object.keys(root).length === 0)
+		throw new ValidationError('A Skiff pool export must be a JSON object.');
+	if (root.version !== undefined && root.version !== USER_POOL_EXPORT_VERSION)
+		throw new ValidationError(
+			`This pool export is version ${String(root.version)}; this platform imports version ${USER_POOL_EXPORT_VERSION}.`
+		);
+	const list = Array.isArray(root.users) ? root.users : Array.isArray(raw) ? raw : null;
+	if (!list) throw new ValidationError('The Skiff export has no users array.');
+	const users = list.map((entry) => {
+		const user = record(entry) ?? {};
+		const email = importEmail(text(user.email));
+		const rawHash = text(user.passwordHash) ?? null;
+		const hash = classifyImportedHash(rawHash, text(user.passwordAlgorithm), false);
+		const alreadyReset = user.mustResetPassword === true;
+		return finishUser({
+			email,
+			name: text(user.name) ?? '',
+			emailVerified: bool(user.emailVerified) ?? false,
+			disabled: bool(user.disabled) ?? false,
+			hash,
+			forceReset: alreadyReset,
+			metadata: record(user.metadata) ?? {}
+		});
+	});
+	const groups = (Array.isArray(root.groups) ? root.groups : []).flatMap((entry) => {
+		const group = record(entry);
+		const name = text(group?.name)?.trim();
+		if (!name) return [];
+		return [
+			{
+				name,
+				members: Array.isArray(group?.members)
+					? group.members.flatMap((member) => {
+							if (typeof member === 'string') return [member.trim().toLowerCase()].filter(Boolean);
+							const row = record(member);
+							const email = text(row?.email)?.trim().toLowerCase();
+							return email ? [email] : [];
+						})
+					: []
+			}
+		];
+	});
+	const clients = (Array.isArray(root.clients) ? root.clients : []).flatMap((entry) => {
+		const client = record(entry);
+		const name = text(client?.name)?.trim();
+		if (!name) return [];
+		return [
+			{
+				name,
+				redirectUris: Array.isArray(client?.redirectUris)
+					? client.redirectUris.filter((uri): uri is string => typeof uri === 'string')
+					: [],
+				public: bool(client?.public) ?? false
+			}
+		];
+	});
+	const oauthProviders = (
+		Array.isArray(root.oauthProviders) ? root.oauthProviders : []
+	).flatMap((entry) => {
+		const provider = record(entry);
+		const id = text(provider?.provider);
+		if (!id || !(userPoolOAuthProviders as readonly string[]).includes(id)) return [];
+		return [
+			{
+				provider: id as UserPoolExportOAuthProvider['provider'],
+				clientId: text(provider?.clientId) ?? '',
+				scopes: Array.isArray(provider?.scopes)
+					? provider.scopes.filter((scope): scope is string => typeof scope === 'string')
+					: [],
+				enabled: bool(provider?.enabled) ?? false
+			}
+		];
+	});
+	return { format: 'skiff', users, groups, clients, oauthProviders };
+}
+
+function normalizeAuth0Import(raw: unknown): NormalizedPoolImport {
+	const list = Array.isArray(raw)
+		? raw
+		: Array.isArray(record(raw)?.users)
+			? (record(raw)!.users as unknown[])
+			: null;
+	if (!list) throw new ValidationError('The Auth0 export has no users array.');
+	return {
+		format: 'auth0',
+		users: list.map((entry) => {
+			const user = record(entry) ?? {};
+			const email = importEmail(text(user.email));
+			const custom = record(user.custom_password_hash);
+			const customHash = record(custom?.hash);
+			const declared = text(custom?.algorithm);
+			const rawHash =
+				text(customHash?.value) ??
+				text(user.password_hash) ??
+				text(user.passwordHash) ??
+				null;
+			return finishUser({
+				email,
+				name: text(user.name) ?? text(user.nickname) ?? '',
+				emailVerified: bool(user.email_verified) ?? false,
+				disabled: bool(user.blocked) ?? false,
+				hash: classifyImportedHash(rawHash, declared, false),
+				metadata: record(user.user_metadata) ?? {}
+			});
+		}),
+		groups: [],
+		clients: [],
+		oauthProviders: []
+	};
+}
+
+function normalizeCognitoImport(raw: unknown): NormalizedPoolImport {
+	const root = record(raw);
+	const list = Array.isArray(root?.Users) ? (root!.Users as unknown[]) : null;
+	if (!list)
+		throw new ValidationError('The Cognito export has no Users array. Export users from the user pool as JSON or CSV.');
+	return {
+		format: 'cognito',
+		users: list.map((entry) => {
+			const user = record(entry) ?? {};
+			const attributes = new Map<string, string>();
+			if (Array.isArray(user.Attributes))
+				for (const attribute of user.Attributes) {
+					const row = record(attribute);
+					const name = text(row?.Name);
+					const value = text(row?.Value);
+					if (name && value !== undefined) attributes.set(name, value);
+				}
+			const email = importEmail(attributes.get('email') ?? text(user.email) ?? text(user.Username));
+			return finishUser({
+				email,
+				name: attributes.get('name') ?? attributes.get('given_name') ?? '',
+				emailVerified: attributes.get('email_verified') === 'true',
+				disabled: user.Enabled === false || user.UserStatus === 'ARCHIVED',
+				hash: classifyImportedHash(text(user.password_hash) ?? null, undefined, false),
+				metadata: { sub: attributes.get('sub') }
+			});
+		}),
+		groups: [],
+		clients: [],
+		oauthProviders: []
+	};
+}
+
+function cognitoCsvUser(entry: Record<string, string>): NormalizedImportUser {
+	const email = importEmail(entry.email ?? entry['cognito:username'] ?? entry.username);
+	return finishUser({
+		email,
+		name: entry.name ?? entry.given_name ?? '',
+		emailVerified: (entry.email_verified ?? '').toLowerCase() === 'true',
+		disabled: (entry.enabled ?? '').toLowerCase() === 'false',
+		hash: classifyImportedHash(entry.password_hash ?? null, undefined, false),
+		metadata: entry.sub ? { sub: entry.sub } : {}
+	});
+}
+
+function normalizeFirebaseImport(raw: unknown): NormalizedPoolImport {
+	const root = record(raw);
+	const list = Array.isArray(raw)
+		? raw
+		: Array.isArray(root?.users)
+			? (root!.users as unknown[])
+			: null;
+	if (!list) throw new ValidationError('The Firebase export has no users array.');
+	return {
+		format: 'firebase',
+		users: list.map((entry) => {
+			const user = record(entry) ?? {};
+			const email = importEmail(text(user.email));
+			const hash = firebaseHash(user);
+			return finishUser({
+				email,
+				name: text(user.displayName) ?? '',
+				emailVerified: bool(user.emailVerified) ?? false,
+				disabled: bool(user.disabled) ?? false,
+				hash,
+				forceReset: hash.mustReset,
+				resetReason: hash.reason,
+				unsupportedHash: hash.unsupported,
+				metadata: {}
+			});
+		}),
+		groups: [],
+		clients: [],
+		oauthProviders: []
+	};
+}
+
+interface ClassifiedHash {
+	hash: string | null;
+	algorithm: UserPoolPasswordAlgorithm;
+	mustReset: boolean;
+	reason?: string;
+	unsupported?: { email: string; algorithm: string; reason: string };
+}
+/** Classify a stored hash. A hash this engine cannot verify becomes a forced reset. */
+function classifyImportedHash(
+	rawHash: string | null,
+	declared: string | undefined,
+	forceReset: boolean
+): ClassifiedHash {
+	if (!rawHash || forceReset)
+		return {
+			hash: null,
+			algorithm: 'none',
+			mustReset: true,
+			reason: forceReset ? 'The export marks this account for a password reset.' : 'No password hash was exported.'
+		};
+	const algorithm = userPoolPasswordAlgorithm(rawHash);
+	if (algorithm !== 'none')
+		return { hash: rawHash, algorithm, mustReset: false };
+	const name = (declared ?? 'unknown').trim().toLowerCase();
+	return {
+		hash: null,
+		algorithm: 'none',
+		mustReset: true,
+		reason: `Unsupported password hash (${name}). The account must set a new password.`
+	};
+}
+
+function firebaseHash(user: Record<string, unknown>): ClassifiedHash {
+	const raw = text(user.passwordHash) ?? null;
+	if (!raw) return { hash: null, algorithm: 'none', mustReset: true, reason: 'No password hash was exported.' };
+	// A modern Firebase export may carry an encoded hash directly; keep it when we understand it.
+	const direct = userPoolPasswordAlgorithm(raw);
+	if (direct !== 'none') return { hash: raw, algorithm: direct, mustReset: false };
+	const declared = (text(user.hashAlgorithm) ?? '').toUpperCase();
+	const salt = text(user.salt);
+	const params = record(user.hashParameters);
+	if (declared !== 'SCRYPT' || !salt)
+		return {
+			hash: null,
+			algorithm: 'none',
+			mustReset: true,
+			reason: `Unsupported Firebase hash (${declared || 'unknown'}). The account must set a new password.`,
+			unsupported: {
+				email: text(user.email) ?? '',
+				algorithm: declared || 'unknown',
+				reason: 'Firebase hashes are not encoded as a verifiable value.'
+			}
+		};
+	if (params?.base64_signer_key || params?.base64_salt_separator)
+		return {
+			hash: null,
+			algorithm: 'none',
+			mustReset: true,
+			reason: 'Firebase SCRYPT uses a signer key that cannot be imported. The account must set a new password.',
+			unsupported: {
+				email: text(user.email) ?? '',
+				algorithm: 'SCRYPT',
+				reason: 'Firebase signer key is not representable in the portable scrypt hash.'
+			}
+		};
+	const memCost = number(params?.mem_cost);
+	const rounds = number(params?.rounds);
+	const N =
+		rounds !== undefined && (rounds & (rounds - 1)) === 0
+			? rounds
+			: memCost !== undefined && memCost <= 20
+				? 2 ** memCost
+				: undefined;
+	const wrapped = N
+		? scryptHashFromParts(
+				{ N, r: number(params?.blockSize), p: number(params?.parallelization) },
+				Buffer.from(salt, 'base64'),
+				Buffer.from(raw, 'base64')
+			)
+		: null;
+	if (wrapped) return { hash: wrapped, algorithm: 'scrypt', mustReset: false };
+	return {
+		hash: null,
+		algorithm: 'none',
+		mustReset: true,
+		reason: 'Unsupported Firebase SCRYPT parameters. The account must set a new password.',
+		unsupported: {
+			email: text(user.email) ?? '',
+			algorithm: 'SCRYPT',
+			reason: 'The SCRYPT cost or key length is not supported.'
+		}
+	};
+}
+
+function finishUser(input: {
+	email: { email: string } | { invalid: string };
+	name: string;
+	emailVerified: boolean;
+	disabled: boolean;
+	hash: ClassifiedHash;
+	forceReset?: boolean;
+	resetReason?: string;
+	unsupportedHash?: { email: string; algorithm: string; reason: string };
+	metadata: Record<string, unknown>;
+}): NormalizedImportUser {
+	const address = 'email' in input.email ? input.email.email : '';
+	const invalidReason = 'invalid' in input.email ? input.email.invalid : undefined;
+	const mustReset = input.hash.mustReset || input.forceReset === true;
+	const unsupported = input.unsupportedHash ?? (mustReset && input.hash.algorithm === 'none' && !invalidReason
+		? {
+				email: address,
+				algorithm: 'unknown',
+				reason: input.resetReason ?? input.hash.reason ?? 'The password hash is not supported.'
+			}
+		: undefined);
+	return {
+		email: address,
+		name: input.name.slice(0, 120),
+		emailVerified: input.emailVerified,
+		disabled: input.disabled,
+		passwordHash: input.hash.hash,
+		passwordAlgorithm: input.hash.algorithm,
+		mustResetPassword: mustReset,
+		...(mustReset ? { resetReason: input.resetReason ?? input.hash.reason } : {}),
+		...(unsupported ? { unsupportedHash: unsupported } : {}),
+		...(invalidReason ? { invalidReason } : {}),
+		metadata: input.metadata
+	};
+}
+
+/** Minimal RFC 4180 CSV reader, enough for a Cognito export with quoted commas. */
+function parseCsv(source: string): Array<Record<string, string>> {
+	const rows: string[][] = [];
+	let row: string[] = [];
+	let field = '';
+	let quoted = false;
+	for (let index = 0; index < source.length; index += 1) {
+		const char = source[index]!;
+		if (quoted) {
+			if (char === '"') {
+				if (source[index + 1] === '"') {
+					field += '"';
+					index += 1;
+				} else quoted = false;
+			} else field += char;
+			continue;
+		}
+		if (char === '"') {
+			quoted = true;
+			continue;
+		}
+		if (char === ',') {
+			row.push(field);
+			field = '';
+			continue;
+		}
+		if (char === '\n' || char === '\r') {
+			if (char === '\r' && source[index + 1] === '\n') index += 1;
+			row.push(field);
+			if (row.some((value) => value.trim() !== '')) rows.push(row);
+			row = [];
+			field = '';
+			continue;
+		}
+		field += char;
+	}
+	if (field !== '' || row.length > 0) {
+		row.push(field);
+		if (row.some((value) => value.trim() !== '')) rows.push(row);
+	}
+	if (rows.length < 2) return [];
+	const headers = rows[0]!.map((value) => value.trim().toLowerCase());
+	return rows.slice(1).map((values) => {
+		const entry: Record<string, string> = {};
+		for (let index = 0; index < headers.length; index += 1)
+			entry[headers[index]!] = (values[index] ?? '').trim();
+		return entry;
+	});
 }

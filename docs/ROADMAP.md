@@ -239,7 +239,7 @@
 - [x] G5: cosign signature policy at deploy, CVE scanning (D159)
 - [x] G6: S3 storage + Valkey cache, single replica (D159)
 
-## Identity and access ([IAM.md](./IAM.md), D168, D181–D197)
+## Identity and access ([IAM.md](./IAM.md), D168, D181–D207)
 - [x] Permission catalog with metadata, principal v2, named system principals, the lint guard, the owner/admin split and audit actor columns (D181)
 - [x] Scoped bindings engine: platform/org/project/environment/resource scopes, custom roles, groups, guests, explain and who-can, Settings → Access and project Access tabs (D182)
 - [x] Service accounts and org-bound access keys (SHA-256, expiry, CIDR, restrictions, last-used) with REST and CLI, and an MCP service-account list (D183)
@@ -258,16 +258,23 @@
 - [x] Platform IAM roles, platform-scope bindings (users and groups) and platform guardrails (D187)
 - [x] Skiff Access: the `access` protection mode, ordered policies, the agent's `forward_auth` and host-bound login (D188)
 - [x] Skiff Access service tokens evaluated before login, user-pool session/bearer identity with groups, SSO attribution and per-policy version revocation (D192)
+- [x] Skiff Access named machine tokens: `access_service_tokens`, list/create/revoke, last-used tracking, Settings → Access policies → Machines, with legacy rule matchers still working (D203)
 - [x] User pools and OIDC clients with discovery/JWKS; the native engine with password, magic link, reset, verification, invites and the OAuth code flow; attachments, `env.AUTH` and pool events (D189)
 - [x] Pool passkeys, TOTP MFA and groups: WebAuthn registration/sign-in with counter checks, sealed TOTP secrets with recovery codes and replay protection, pool-local groups in the `groups` claim, and Settings → Identity plus the hosted account page (D194)
-- [ ] Identity process: split the pool engine into `skiff-identity.service` with a SQLite file per pool
-- [ ] Pool auth extras: social login, breached-password checks and lockout
-- [ ] Pool import and export (Auth0, Cognito, Firebase)
-- [ ] B2B in pools: organisations, per-tenant federation, SCIM in and the Keycloak engine
-- [ ] SAML encrypted assertions; the dashboard binding editor's inline simulation diff
+- [x] Pool social login: Google, GitHub, Microsoft and Apple through sealed per-pool OAuth clients, server-side state/PKCE and verified-email linking; hosted login buttons and Settings → Identity (D200)
+- [x] Storage STS (RustFS `AssumeRoleWithWebIdentity`): short-lived per-attachment S3 credentials at activation, with the sealed static key as fallback (D201)
+- [x] SAML encrypted assertions: a separate sealed SP encryption key, `use="encryption"` in SP metadata, a 30-day previous-certificate rollover and the Settings → SSO toggle (D202)
+- [ ] SAML encrypted-key rollover: the previous certificate stays published but only the current private key decrypts, so an IdP must import the new certificate before using the old one
+- [x] Identity process scaffold: `skiff-identity.service` with its own SQLite file, Litestream unit, agent bridge, node selection and `auth.<sitesDomain>` Caddy routes (D206)
+- [ ] Identity process completeness: project client secrets and the passkey/social/OTP/account/invite pages, move existing pool rows, and add per-pool placement/HA
+- [x] Pool import/export: `skiff.user-pool/v1` JSON, Auth0/Cognito/Firebase imports, dry run, duplicate skip, hash portability and forced resets (D204)
+- [x] Pool auth extras: email OTP, Have I Been Pwned checks, per-pool+email lockout and suspicious-sign-in mail (D204)
+- [ ] B2B in pools: organisations, per-tenant federation, SCIM in and the Keycloak engine (on demand)
+- [ ] The dashboard binding editor's inline simulation diff
 - [ ] A Caddy-side Skiff Access decision cache (S6)
-- [x] Storage STS (RustFS `AssumeRoleWithWebIdentity`)
-- [ ] Per-repository pipeline service accounts; Better Auth `apikey` migration (S1)
+- [x] Per-repository pipeline service accounts: `pipeline-<repo>` with managed roles and reconciled project bindings (D205)
+- [ ] Better Auth `apikey` migration (S1, deliberately deferred, D207)
+- [ ] Automatic cloud-provider setup (AWS OIDC provider, GCP pool/provider, Azure federated credential and role)
 - [ ] Scope-filtered MCP `tools/list`
 
 ## Later / maybe

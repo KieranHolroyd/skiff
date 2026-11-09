@@ -60,7 +60,13 @@ export const actions: Actions = {
 			return fail(429, { error: 'Too many sign-in attempts. Wait a minute and try again.' });
 
 		try {
-			const result = await core.userPoolEngine.signIn(params.id, email, password);
+			const result = await core.userPoolEngine.signIn(params.id, email, password, {
+				ip: client,
+				userAgent: event.request.headers.get('user-agent'),
+				country:
+					event.request.headers.get('cf-ipcountry') ??
+					event.request.headers.get('x-country-code')
+			});
 			if (result.mfaRequired) {
 				return {
 					mfaRequired: true,

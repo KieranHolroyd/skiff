@@ -208,7 +208,10 @@ export class DeploymentService {
 			else if (this.ctx.registry.signaturePolicy() === 'enforce')
 				throw new ValidationError(`${image} could not be pinned to a digest, so its signature cannot be checked.`);
 		}
-		let prepared = await this.ctx.releases.prepare(principal, entries, { precompress: options.precompress });
+		let prepared = await this.ctx.releases.prepare(principal, entries, {
+			precompress: options.precompress,
+			project,
+		});
 		// Release GC runs concurrently and may have removed a reused release row while we awaited.
 		// Re-check synchronously right before `create` (also synchronous) so nothing can slip between.
 		for (let attempt = 0; attempt < 3; attempt++) {

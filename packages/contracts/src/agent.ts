@@ -9,6 +9,7 @@ import { databaseStudioPrincipalResultSchema, databaseStudioPrincipalTaskSchema 
 import { accessModes, deploymentStatuses, nodeStatuses, runtimes } from './model.ts';
 import { domainKinds } from './domain.ts';
 import { mailDesiredSchema } from './email.ts';
+import { IDENTITY_CAPABILITY, identityDesiredSchema } from './identity.ts';
 import { workloadDesiredSchema, workloadStatuses } from './workload.ts';
 import { STORAGE_STS_CAPABILITY } from './object-storage.ts';
 import { databaseMetricBucketSchema, databaseSnapshotSchema } from './database.ts';
@@ -289,6 +290,12 @@ export const desiredStateSchema = z.object({
 	 * secrets: the agent fetches keys and credential hashes from `/api/agent/email-state`.
 	 */
 	mail: mailDesiredSchema.nullable().default(null),
+	/**
+	 * Present only on the node that runs `skiff-identity` (docs/IAM.md §11.2): the pool projection
+	 * the agent pushes to the identity process. Carries ids, hosts and non-secret client metadata;
+	 * never a client secret, signing key or user.
+	 */
+	identity: identityDesiredSchema.nullable().default(null),
 	/** Custom domains this node serves; TLS is on-demand and authorized by the control plane. */
 	domains: z.array(z.object({
 		host: z.string(),
@@ -308,6 +315,8 @@ export type DesiredState = z.infer<typeof desiredStateSchema>;
  * - `functions`: renders and runs `runtime: "function"` workloads (D110).
  * - `brokers`: runs `broker` workloads with the helper's fixed profile and purges `brokerPurges` (D111).
  * - `mail`: runs `skiff-mail` and bridges it to the control plane when `mail` is set (docs/EMAIL.md).
+ * - `identity`: runs the separate `skiff-identity` user-pool process and pushes its projection
+ *   (docs/IAM.md §11.2).
  * - `node-tasks`: leases one-shot queue and function test tasks (`node-task.ts`, D124).
  * - `container-console`: runs the console front for inspect, files and shells (D127).
  * - `app-volumes`: measures `appVolumes`, runs `appVolumeTasks` and purges `appVolumePurges`.
@@ -328,6 +337,7 @@ export const nodeCapabilities = [
 	'functions',
 	'brokers',
 	'mail',
+	IDENTITY_CAPABILITY,
 	'node-tasks',
 	'container-console',
 	'app-volumes',

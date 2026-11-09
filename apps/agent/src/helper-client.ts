@@ -324,6 +324,15 @@ export class HelperClient
 		return { found: result.found === true, changed: result.changed === true };
 	}
 
+	/** `systemctl start skiff-identity.service` (and its Litestream unit) on the identity node. */
+	async identityStart(): Promise<void> {
+		await this.request('POST', '/v1/identity/start', undefined, STUDIO_TIMEOUT_MS);
+	}
+
+	async identityStop(): Promise<void> {
+		await this.request('POST', '/v1/identity/stop', undefined, STUDIO_TIMEOUT_MS);
+	}
+
 	/**
 	 * Install a signed release's agent and helper (D99). Downloads and verifies on the node, so it
 	 * may take minutes on a slow link. The helper restarts both services after it answers.

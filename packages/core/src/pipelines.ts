@@ -175,11 +175,19 @@ export class PipelineService {
 			schedulesJson: '[]',
 			minIsolationJson: JSON.stringify(parsed.minIsolation ?? {}),
 			statusToken: parsed.statusToken ? this.ctx.secrets.seal(principal.orgId, parsed.statusToken) : null,
+			serviceAccountId: null,
 			createdBy: principal.userId,
 			createdAt: now,
 			updatedAt: now,
 		};
 		this.ctx.db.insert(pipelineRepositories).values(row).run();
+		// IAM.md §7.2: every repository gets its own least-privilege pipeline identity.
+		this.ctx.serviceAccounts.ensurePipelineAccount({
+			orgId: row.orgId,
+			repositoryId: row.id,
+			repositoryName: row.name,
+			createdBy: principal.userId,
+		});
 		// Adding it by hand undoes an earlier removal for automatic setup.
 		const ignoreKey = this.ctx.git.autoSetupKey(row.orgId, row.cloneUrl);
 		if (ignoreKey) this.setIgnored(row.orgId, ignoreKey, false);
@@ -225,6 +233,7 @@ export class PipelineService {
 	async deleteRepository(principal: Principal, name: string): Promise<void> {
 		const row = this.requireRepository(principal, name);
 		this.ctx.iam.require(principal, 'build:create', { type: 'pipelineRepository', id: row.id });
+		const serviceAccountId = row.serviceAccountId;
 		const objectKeys = [
 			...this.ctx.db.select({ key: pipelineArtifacts.objectKey }).from(pipelineArtifacts).where(eq(pipelineArtifacts.repositoryId, row.id)).all(),
 			...this.ctx.db.select({ key: pipelineCaches.objectKey }).from(pipelineCaches).where(eq(pipelineCaches.repositoryId, row.id)).all(),
@@ -262,6 +271,8 @@ export class PipelineService {
 			this.ctx.db.delete(pipelineRepositories).where(eq(pipelineRepositories.id, row.id)).run();
 		});
 		for (const key of objectKeys) await this.ctx.objectStore.delete(key).catch(() => undefined);
+		// The account outlives the repository, but its grants to this repository's scopes must not.
+		if (serviceAccountId) this.ctx.serviceAccounts.removePipelineAccountBindings(row.orgId, serviceAccountId);
 		// A removed repository must not come back on its next push through the App or a namespace hook.
 		const ignoreKey = this.ctx.git.autoSetupKey(row.orgId, row.cloneUrl);
 		const identity = this.ctx.git.identity(row.orgId, row.cloneUrl);
@@ -581,11 +592,18 @@ export class PipelineService {
 			schedulesJson: '[]',
 			minIsolationJson: '{}',
 			statusToken: null,
+			serviceAccountId: null,
 			createdBy: source.createdBy,
 			createdAt: now,
 			updatedAt: now,
 		};
 		this.ctx.db.insert(pipelineRepositories).values(row).run();
+		this.ctx.serviceAccounts.ensurePipelineAccount({
+			orgId,
+			repositoryId: row.id,
+			repositoryName: row.name,
+			createdBy: source.createdBy,
+		});
 		this.autoSetupChecked.delete(cacheKey);
 		this.ctx.audit.record({
 			action: 'pipeline.repository.auto_create',
@@ -1256,6 +1274,13 @@ export class PipelineService {
 				set: { environment: parsed.environment },
 			})
 			.run();
+		// The service account is granted deploy rights on exactly the linked projects (§7.2).
+		this.ctx.serviceAccounts.ensurePipelineAccount({
+			orgId: repository.orgId,
+			repositoryId: repository.id,
+			repositoryName: repository.name,
+			createdBy: principal.userId,
+		});
 		this.audit(principal, 'pipeline.project.link', repository.id, { repository: name, project: slug, environment: parsed.environment });
 		return {
 			projectSlug: project.slug,
@@ -1274,6 +1299,13 @@ export class PipelineService {
 			.delete(pipelineProjectLinks)
 			.where(and(eq(pipelineProjectLinks.repositoryId, repository.id), eq(pipelineProjectLinks.projectId, project.id)))
 			.run();
+		// Reconcile the account's bindings so the removed target is no longer deployable (§7.2).
+		this.ctx.serviceAccounts.ensurePipelineAccount({
+			orgId: repository.orgId,
+			repositoryId: repository.id,
+			repositoryName: repository.name,
+			createdBy: principal.userId,
+		});
 		this.audit(principal, 'pipeline.project.unlink', repository.id, { repository: name, project: slug });
 	}
 

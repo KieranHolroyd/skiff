@@ -17,9 +17,41 @@ import {
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from './errors.ts';
-import { newId } from './util.ts';
+import { newId, sha256Hex } from './util.ts';
 
 const DAY_MS = 86_400_000;
+
+/**
+ * The internal actor that provisions per-repository pipeline accounts (IAM.md I3, §7.2). It is not
+ * reachable from a surface; its fixed, empty permission set only names the actor in audit rows.
+ */
+const PIPELINE_PROVISIONER = 'system:pipeline-provision';
+
+/**
+ * The three managed roles a pipeline account is bound to. They are ordinary custom roles, so an
+ * owner can inspect every grant in Settings → Access. The permission sets are re-asserted whenever
+ * an account is ensured, which keeps a hand-edited role from silently widening a pipeline.
+ */
+const PIPELINE_ROLE_NAMES = {
+	repository: 'pipeline-repository',
+	deploy: 'pipeline-deploy',
+	image: 'pipeline-image',
+} as const;
+
+/** `pipeline:*` at one `pipelineRepository` scope. */
+const PIPELINE_REPOSITORY_PERMISSIONS: readonly Permission[] = [
+	'pipeline:read',
+	'pipeline:dispatch',
+	'pipeline:cancel',
+	'pipeline:manage',
+	'pipeline:approve',
+];
+
+/** Exactly what a trusted run needs to deploy a linked project. */
+const PIPELINE_DEPLOY_PERMISSIONS: readonly Permission[] = ['deployment:create', 'project:update'];
+
+/** Push only the repository's own image namespace; pull is not needed for a push. */
+const PIPELINE_IMAGE_PERMISSIONS: readonly Permission[] = ['image:push'];
 /** Impersonation tokens last at most one hour (IAM.md I13, §7.2). */
 export const MAX_IMPERSONATION_TTL_SECONDS = 60 * 60;
 const DEFAULT_IMPERSONATION_TTL_SECONDS = 60 * 60;
@@ -80,6 +112,17 @@ export interface ServiceAccountUpdate {
 	description?: string;
 	ownerGroupId?: string | null;
 	disabled?: boolean;
+}
+
+/**
+ * The minimum identity a repository's trusted jobs act as (IAM.md §7.2). `repositoryId` is the
+ * `pipeline_repositories.id`; `createdBy` only records who caused the account to be generated.
+ */
+export interface PipelineAccountInput {
+	orgId: string;
+	repositoryId: string;
+	repositoryName: string;
+	createdBy: string;
 }
 
 /** The result of a user minting a token for a service account (IAM.md §7.2). */
@@ -181,6 +224,125 @@ export class ServiceAccountService {
 		return this.#views(principal.orgId).filter(
 			(account) => !account.disabled && account.unusedDays >= (options.minDays ?? SERVICE_ACCOUNT_UNUSED_DAYS),
 		);
+	}
+
+	// ---------------------------------------------------------------- pipelines (IAM.md §7.2)
+
+	/**
+	 * The service account a repository's trusted jobs act as, created on first use. The account is
+	 * `pipeline-<repo>` (shortened with a stable hash when the name would exceed the slug limit),
+	 * owned by the org, and bound to the least privilege the jobs need:
+	 *
+	 *   - `pipeline:*` at this repository's `pipelineRepository` scope;
+	 *   - `deployment:create` and `project:update` at each currently linked project;
+	 *   - `image:push` at this repository's own registry repository (`<org>/<repo>`).
+	 *
+	 * Every call reconciles the bindings to the current links, so adding or removing a deploy target
+	 * is enough; the engine also calls this before a deploy to backfill repositories created before
+	 * the column existed. Only bindings this provisioner created are pruned, so a deliberate grant
+	 * made in Settings → Access is left alone. Returns the `service_accounts.id`.
+	 */
+	ensurePipelineAccount(input: PipelineAccountInput): string {
+		const { orgId, repositoryId, repositoryName } = input;
+		const account = this.#ensurePipelineAccountRow(input);
+		const orgSlug = this.#orgSlug(orgId);
+		const repositoryRole = this.#ensureManagedRole(
+			orgId,
+			PIPELINE_ROLE_NAMES.repository,
+			PIPELINE_REPOSITORY_PERMISSIONS,
+			input.createdBy,
+		);
+		const deployRole = this.#ensureManagedRole(
+			orgId,
+			PIPELINE_ROLE_NAMES.deploy,
+			PIPELINE_DEPLOY_PERMISSIONS,
+			input.createdBy,
+		);
+		const imageRole = this.#ensureManagedRole(
+			orgId,
+			PIPELINE_ROLE_NAMES.image,
+			PIPELINE_IMAGE_PERMISSIONS,
+			input.createdBy,
+		);
+		const projectIds = new Set(this.#linkedProjectIds(repositoryId));
+		const imageRepository = orgSlug ? `${orgSlug}/${repositoryName}` : null;
+
+		this.#ensureBinding(orgId, account.id, repositoryRole.id, 'pipelineRepository', repositoryId);
+		if (imageRepository)
+			this.#ensureBinding(orgId, account.id, imageRole.id, 'repository', imageRepository);
+		for (const projectId of projectIds)
+			this.#ensureBinding(orgId, account.id, deployRole.id, 'project', projectId);
+		this.#pruneManagedBindings(orgId, account.id, {
+			repositoryId,
+			imageRepository,
+			projectIds,
+			roles: {
+				repository: repositoryRole.id,
+				deploy: deployRole.id,
+				image: imageRole.id,
+			},
+		});
+
+		// A corrected managed role changes every account using it, so clear the org cache. Ordinary
+		// provisioning only changes this account's own bindings; forget just its cached grants.
+		if (repositoryRole.changed || deployRole.changed || imageRole.changed) this.ctx.iam.touch(orgId);
+		else this.ctx.iam.forget(orgId, 'serviceAccount', account.id);
+
+		if (account.created) {
+			this.ctx.audit.record({
+				principal: pipelineProvisioner(orgId),
+				action: 'service_account.create',
+				resource: 'service_account',
+				resourceId: account.id,
+				args: {
+					name: account.name,
+					repositoryId,
+					repositoryName,
+					reason: 'per-repository pipeline account (IAM.md §7.2)',
+				},
+				result: 'ok',
+			});
+		}
+		return account.id;
+	}
+
+	/**
+	 * Whether a pipeline account may still act. The engine checks this before a deploy so that
+	 * disabling the account in Settings → Access is a real off-switch for the repository.
+	 */
+	pipelineAccountEnabled(orgId: string, serviceAccountId: string): boolean {
+		const row = this.ctx.sqlite
+			.query<{ disabled_at: number | null }, [string, string]>(
+				'SELECT disabled_at FROM service_accounts WHERE id = ? AND org_id = ?',
+			)
+			.get(serviceAccountId, orgId);
+		return row?.disabled_at === null;
+	}
+
+	/**
+	 * Remove the bindings this provisioner made for one account. Called when a repository is
+	 * deleted; the account itself stays (disabled-like history without keys) so recreating the
+	 * repository with the same name can reuse it.
+	 */
+	removePipelineAccountBindings(orgId: string, serviceAccountId: string): number {		const result = this.ctx.sqlite.run(
+			`DELETE FROM iam_bindings
+			  WHERE org_id = ? AND principal_type = 'serviceAccount' AND principal_id = ?
+			    AND created_by = ?
+			    AND role_id IN (
+			      SELECT id FROM iam_roles WHERE org_id = ? AND name IN (?, ?, ?)
+			    )`,
+			[
+				orgId,
+				serviceAccountId,
+				PIPELINE_PROVISIONER,
+				orgId,
+				PIPELINE_ROLE_NAMES.repository,
+				PIPELINE_ROLE_NAMES.deploy,
+				PIPELINE_ROLE_NAMES.image,
+			],
+		);
+		if (result.changes > 0) this.ctx.iam.forget(orgId, 'serviceAccount', serviceAccountId);
+		return result.changes;
 	}
 
 	// ---------------------------------------------------------------- maintenance
@@ -350,6 +512,206 @@ export class ServiceAccountService {
 
 	// ---------------------------------------------------------------- internals
 
+	/**
+	 * Find or create the account row and link it to the repository. A name collision with another
+	 * repository's account (two repository names that slugify the same) gets a stable hashed
+	 * suffix rather than sharing an identity.
+	 */
+	#ensurePipelineAccountRow(input: PipelineAccountInput): { id: string; name: string; created: boolean } {
+		const { orgId, repositoryId, repositoryName, createdBy } = input;
+		const row = this.ctx.sqlite
+			.query<{ service_account_id: string | null }, [string, string]>(
+				'SELECT service_account_id FROM pipeline_repositories WHERE id = ? AND org_id = ?',
+			)
+			.get(repositoryId, orgId);
+		const linked = row?.service_account_id ?? null;
+		if (linked) {
+			const account = this.ctx.sqlite
+				.query<{ name: string }, [string, string]>('SELECT name FROM service_accounts WHERE id = ? AND org_id = ?')
+				.get(linked, orgId);
+			if (account) return { id: linked, name: account.name, created: false };
+		}
+
+		for (let attempt = 0; attempt < 20; attempt++) {
+			const name = pipelineAccountName(repositoryName, attempt);
+			const existing = this.ctx.sqlite
+				.query<{ id: string; description: string }, [string, string]>(
+					'SELECT id, description FROM service_accounts WHERE org_id = ? AND name = ?',
+				)
+				.get(orgId, name);
+			if (existing) {
+				const other = this.ctx.sqlite
+					.query<{ id: string }, [string, string]>(
+						'SELECT id FROM pipeline_repositories WHERE service_account_id = ? AND id != ?',
+					)
+					.get(existing.id, repositoryId);
+				// Reuse only an account this provisioner made (or one already linked to this
+				// repository). A person's own `pipeline-…` account is left alone and the generated
+				// name gets its hashed suffix instead.
+				const ours = existing.description.startsWith('Pipeline account for ');
+				if (other || !ours) continue;
+				this.ctx.sqlite.run('UPDATE pipeline_repositories SET service_account_id = ? WHERE id = ? AND org_id = ?', [
+					existing.id,
+					repositoryId,
+					orgId,
+				]);
+				return { id: existing.id, name, created: false };
+			}
+			const id = newId('sa_');
+			this.ctx.sqlite.run(
+				`INSERT INTO service_accounts
+				   (id, org_id, name, description, owner_group_id, disabled_at, created_by, created_at)
+				 VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)`,
+				[
+					id,
+					orgId,
+					name,
+					`Pipeline account for ${repositoryName} (IAM.md §7.2).`,
+					createdBy,
+					this.ctx.now(),
+				],
+			);
+			this.ctx.sqlite.run('UPDATE pipeline_repositories SET service_account_id = ? WHERE id = ? AND org_id = ?', [
+				id,
+				repositoryId,
+				orgId,
+			]);
+			return { id, name, created: true };
+		}
+		throw new ConflictError('Could not allocate a unique pipeline service-account name.');
+	}
+
+	/** The org slug registry namespaces use (`<slug>/<repository>`), or null before org setup. */
+	#orgSlug(orgId: string): string | null {
+		try {
+			return (
+				this.ctx.sqlite
+					.query<{ slug: string }, [string]>('SELECT slug FROM organization WHERE id = ? LIMIT 1')
+					.get(orgId)?.slug ?? null
+			);
+		} catch {
+			return null;
+		}
+	}
+
+	#linkedProjectIds(repositoryId: string): string[] {
+		return this.ctx.sqlite
+			.query<{ project_id: string }, [string]>('SELECT project_id FROM pipeline_project_links WHERE repository_id = ?')
+			.all(repositoryId)
+			.map((row) => row.project_id);
+	}
+
+	/**
+	 * A managed custom role with exactly `permissions`. An existing row with the reserved name is
+	 * corrected rather than duplicated, so a dashboard edit cannot widen a pipeline by accident.
+	 */
+	#ensureManagedRole(
+		orgId: string,
+		name: string,
+		permissions: readonly Permission[],
+		createdBy: string,
+	): { id: string; changed: boolean } {
+		const expected = [...permissions].sort();
+		const row = this.ctx.sqlite
+			.query<{ id: string; permissions_json: string }, [string, string]>(
+				'SELECT id, permissions_json FROM iam_roles WHERE org_id = ? AND name = ?',
+			)
+			.get(orgId, name);
+		if (row) {
+			if (samePermissions(row.permissions_json, expected)) return { id: row.id, changed: false };
+			this.ctx.sqlite.run('UPDATE iam_roles SET permissions_json = ?, updated_at = ? WHERE id = ?', [
+				JSON.stringify(expected),
+				this.ctx.now(),
+				row.id,
+			]);
+			return { id: row.id, changed: true };
+		}
+		const id = newId('role_');
+		const now = this.ctx.now();
+		this.ctx.sqlite.run(
+			`INSERT INTO iam_roles
+			   (id, org_id, name, description, permissions_json, built_in, created_by, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+			[id, orgId, name, `Managed by pipeline provisioning (${name}).`, JSON.stringify(expected), createdBy, now, now],
+		);
+		return { id, changed: false };
+	}
+
+	#ensureBinding(
+		orgId: string,
+		serviceAccountId: string,
+		roleId: string,
+		scopeType: string,
+		scopeId: string,
+	): boolean {
+		const existing = this.ctx.sqlite
+			.query<{ id: string }, [string, string, string, string, string]>(
+				`SELECT id FROM iam_bindings
+				  WHERE org_id = ? AND principal_type = 'serviceAccount' AND principal_id = ?
+				    AND role_id = ? AND scope_type = ? AND scope_id = ?
+				  LIMIT 1`,
+			)
+			.get(orgId, serviceAccountId, roleId, scopeType, scopeId);
+		if (existing) return false;
+		this.ctx.sqlite.run(
+			`INSERT INTO iam_bindings
+			   (id, org_id, principal_type, principal_id, role_id, scope_type, scope_id, scope_parent_id,
+			    condition_json, expires_at, reason, created_by, created_at)
+			 VALUES (?, ?, 'serviceAccount', ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?)`,
+			[
+				newId('bind_'),
+				orgId,
+				serviceAccountId,
+				roleId,
+				scopeType,
+				scopeId,
+				'Per-repository pipeline account (IAM.md §7.2).',
+				PIPELINE_PROVISIONER,
+				this.ctx.now(),
+			],
+		);
+		return true;
+	}
+
+	/** Drop provisioned bindings that no longer match the repository's current links. */
+	#pruneManagedBindings(
+		orgId: string,
+		serviceAccountId: string,
+		keep: {
+			repositoryId: string;
+			imageRepository: string | null;
+			projectIds: ReadonlySet<string>;
+			roles: { repository: string; deploy: string; image: string };
+		},
+	): number {
+		const rows = this.ctx.sqlite
+			.query<{ id: string; role_id: string; scope_type: string; scope_id: string | null }, [string, string, string, string, string, string]>(
+				`SELECT id, role_id, scope_type, scope_id FROM iam_bindings
+				  WHERE org_id = ? AND principal_type = 'serviceAccount' AND principal_id = ?
+				    AND created_by = ? AND role_id IN (?, ?, ?)`,
+			)
+			.all(orgId, serviceAccountId, PIPELINE_PROVISIONER, keep.roles.repository, keep.roles.deploy, keep.roles.image);
+		let removed = 0;
+		for (const row of rows) {
+			const retained =
+				(row.role_id === keep.roles.repository &&
+					row.scope_type === 'pipelineRepository' &&
+					row.scope_id === keep.repositoryId) ||
+				(row.role_id === keep.roles.image &&
+					keep.imageRepository !== null &&
+					row.scope_type === 'repository' &&
+					row.scope_id === keep.imageRepository) ||
+				(row.role_id === keep.roles.deploy &&
+					row.scope_type === 'project' &&
+					row.scope_id !== null &&
+					keep.projectIds.has(row.scope_id));
+			if (retained) continue;
+			this.ctx.sqlite.run('DELETE FROM iam_bindings WHERE id = ?', [row.id]);
+			removed++;
+		}
+		return removed;
+	}
+
 	#row(principal: Principal, id: string): ServiceAccountRow {
 		const row = this.ctx.sqlite
 			.query<ServiceAccountRow, [string, string]>(
@@ -445,6 +807,49 @@ function view(row: ServiceAccountRow, now: number): ServiceAccountView {
 		lastUsedAt,
 		unusedDays,
 		unused: unusedDays >= SERVICE_ACCOUNT_UNUSED_DAYS,
+	};
+}
+
+/**
+ * `pipeline-<repo>` within the 40-character service-account slug limit. A long or non-slug
+ * repository name keeps a stable hash suffix, and `attempt` disambiguates two names that slugify
+ * the same without ever sharing an account.
+ */
+function pipelineAccountName(repositoryName: string, attempt = 0): string {
+	const slug =
+		repositoryName
+			.trim()
+			.toLowerCase()
+			.replace(/[^a-z0-9]+/g, '-')
+			.replace(/^-+|-+$/g, '') || 'repo';
+	const base = `pipeline-${slug}`;
+	if (attempt === 0 && base.length <= SLUG_MAX && SLUG_PATTERN.test(base)) return base;
+	const suffix = sha256Hex(attempt === 0 ? repositoryName : `${repositoryName}:${attempt}`).slice(0, 8);
+	const stem = base.slice(0, SLUG_MAX - suffix.length - 1).replace(/-+$/g, '') || 'pipeline';
+	return `${stem}-${suffix}`;
+}
+
+/** Whether a role's stored JSON names exactly the expected permission set. */
+function samePermissions(json: string, expected: readonly string[]): boolean {
+	try {
+		const value: unknown = JSON.parse(json);
+		if (!Array.isArray(value) || value.length !== expected.length) return false;
+		const stored = new Set(value.filter((entry): entry is string => typeof entry === 'string'));
+		return stored.size === expected.length && expected.every((permission) => stored.has(permission));
+	} catch {
+		return false;
+	}
+}
+
+/** The in-process actor for provisioning a repository's pipeline account. */
+function pipelineProvisioner(orgId: string): Principal {
+	return {
+		kind: 'system',
+		userId: PIPELINE_PROVISIONER,
+		orgId,
+		role: 'viewer',
+		permissions: new Set<Permission>(),
+		credential: 'system',
 	};
 }
 

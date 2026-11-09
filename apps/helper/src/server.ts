@@ -105,6 +105,9 @@ export interface HelperRuntime {
 	stopMail?(): Promise<void>;
 	/** Copy the submission host's certificate from Caddy's storage for `skiff-mail`. */
 	copyMailTls?(host: string): Promise<{ found: boolean; changed: boolean }>;
+	/** `systemctl start/stop skiff-identity.service` (docs/IAM.md §11.2). Optional for older runtimes. */
+	startIdentity?(): Promise<void>;
+	stopIdentity?(): Promise<void>;
 	/** Restore a custom-format dump into a managed database. */
 	restoreDatabase(id: string, body: ReadableStream<Uint8Array> | null): Promise<void>;
 	/** Write the 0400 pgBackRest config for PITR (docs/PITR.md). */
@@ -307,6 +310,16 @@ export function createHandler(
 				const body = assertRecord(await readJson(request, maxBodyBytes), 'request');
 				if (!runtime.copyMailTls) return json({ error: 'not_supported' }, 501);
 				return json({ ok: true, ...(await runtime.copyMailTls(assertMailHost(body.host))) });
+			}
+
+			// --- identity (docs/IAM.md §11.2): one fixed unit plus its Litestream companion ------
+			if (path === '/v1/identity/start' || path === '/v1/identity/stop') {
+				if (method !== 'POST') return methodNotAllowed('POST');
+				assertNoVerbInput({ search: url.search, body: await readText(request, maxBodyBytes) });
+				const verb = path === '/v1/identity/start' ? runtime.startIdentity : runtime.stopIdentity;
+				if (!verb) return json({ error: 'not_supported' }, 501);
+				await verb.call(runtime);
+				return json({ ok: true });
 			}
 
 			// --- volumes (D72, D76): read-only inventory and mount verification -----------------

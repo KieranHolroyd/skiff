@@ -4,6 +4,7 @@ export * from './iam/authorize.ts';
 export * from './iam/platform.ts';
 export * from './iam/system.ts';
 export * from './user-pool.ts';
+export * from './identity.ts';
 export * from './slugs.ts';
 export * from './semver.ts';
 export * from './features.ts';

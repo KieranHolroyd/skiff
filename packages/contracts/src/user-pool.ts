@@ -107,7 +107,9 @@ export const userPoolCreateSchema = z.object({
 	 */
 	requireEmailVerification: z.boolean().optional(),
 	/** Advertise (and, for later slices, enforce) TOTP MFA for every pool user. */
-	mfaRequired: z.boolean().optional()
+	mfaRequired: z.boolean().optional(),
+	/** Ask Have I Been Pwned (k-anonymity) before accepting a new password. */
+	breachCheckEnabled: z.boolean().optional()
 });
 export type UserPoolCreate = z.input<typeof userPoolCreateSchema>;
 
@@ -118,6 +120,7 @@ export const userPoolUpdateSchema = z.object({
 	theme: userPoolThemeSchema.optional(),
 	requireEmailVerification: z.boolean().optional(),
 	mfaRequired: z.boolean().optional(),
+	breachCheckEnabled: z.boolean().optional(),
 	disabled: z.boolean().optional()
 });
 export type UserPoolUpdate = z.input<typeof userPoolUpdateSchema>;
@@ -245,6 +248,8 @@ export interface UserPoolView {
 	requireEmailVerification: boolean;
 	/** The pool asks every user to enrol TOTP MFA. Enrolment is per user and remains opt-in when false. */
 	mfaRequired: boolean;
+	/** New passwords are checked against Have I Been Pwned's k-anonymity range API. */
+	breachCheckEnabled: boolean;
 	theme: UserPoolTheme;
 	disabled: boolean;
 	disabledAt: number | null;
@@ -391,6 +396,145 @@ export interface UserPoolPasskeyAuthenticationChallenge {
 	challengeId: string;
 	expiresAt: number;
 	options: UserPoolPasskeyAuthenticationOptionsJSON;
+}
+
+// ---------------------------------------------------------------- import / export
+
+/** Version of the pool JSON export. Import refuses a file from a newer major schema. */
+export const USER_POOL_EXPORT_VERSION = 1;
+export const USER_POOL_EXPORT_SCHEMA = 'skiff.user-pool';
+
+/**
+ * Algorithms the importer can keep usable. `bcrypt` and `argon2id` are verified by `Bun.password`;
+ * `scrypt` is the platform's own portable wrapper (`scrypt$N$r$p$salt$hash`). Anything else forces
+ * a password reset on the imported account.
+ */
+export const userPoolPasswordAlgorithms = ['argon2id', 'bcrypt', 'scrypt', 'none'] as const;
+export type UserPoolPasswordAlgorithm = (typeof userPoolPasswordAlgorithms)[number];
+
+/** Formats `POST /api/v1/user-pools/:id/import` accepts. `auto` sniffs the document. */
+export const userPoolImportFormats = ['auto', 'skiff', 'auth0', 'cognito', 'firebase'] as const;
+export type UserPoolImportFormatId = (typeof userPoolImportFormats)[number];
+/** The concrete format a report names (never `auto`). */
+export type UserPoolImportFormat = Exclude<UserPoolImportFormatId, 'auto'>;
+
+/**
+ * One user in a pool export. `passwordHash` is the encoded hash (argon2id/bcrypt/our scrypt
+ * wrapper); it is a credential-equivalent and the endpoint requires `userPool:manage-users`.
+ */
+export interface UserPoolExportUser {
+	id: string;
+	email: string;
+	name: string;
+	emailVerified: boolean;
+	disabled: boolean;
+	passwordHash: string | null;
+	passwordAlgorithm: UserPoolPasswordAlgorithm;
+	/** The account cannot sign in with its password until a reset; set by an unsupported import. */
+	mustResetPassword: boolean;
+	metadata: Record<string, unknown>;
+	createdAt: number;
+	updatedAt: number;
+}
+
+/** A group and its members, keyed by email so an export can be imported into another pool. */
+export interface UserPoolExportGroup {
+	id: string;
+	name: string;
+	createdAt: number;
+	members: string[];
+}
+
+/**
+ * An OIDC client. The sealed secret is never exported: a confidential client gets a fresh secret
+ * exactly once when the export is imported.
+ */
+export interface UserPoolExportClient {
+	id: string;
+	name: string;
+	clientId: string;
+	redirectUris: string[];
+	public: boolean;
+	createdAt: number;
+	/** Always null. Present so a reader can see that no secret is in the file. */
+	clientSecret: null;
+	secretHandling: 'regenerated-on-import';
+}
+
+/** A social provider's public configuration. The client secret is re-entered after an import. */
+export interface UserPoolExportOAuthProvider {
+	provider: UserPoolOAuthProvider;
+	clientId: string;
+	scopes: string[];
+	enabled: boolean;
+	createdAt: number;
+	/** Always true. The sealed secret never leaves the instance. */
+	secretOmitted: true;
+}
+
+/** Pool settings and theme, without the issuer/key ids that belong to one instance. */
+export interface UserPoolExportMetadata {
+	id: string;
+	name: string;
+	description: string;
+	engine: UserPoolEngineId;
+	signupMode: UserPoolSignupMode;
+	requireEmailVerification: boolean;
+	mfaRequired: boolean;
+	breachCheckEnabled: boolean;
+	theme: UserPoolTheme;
+}
+
+/** The versioned pool export document (`GET /api/v1/user-pools/:id/export`). */
+export interface UserPoolExport {
+	schema: typeof USER_POOL_EXPORT_SCHEMA;
+	version: typeof USER_POOL_EXPORT_VERSION;
+	exportedAt: string;
+	pool: UserPoolExportMetadata;
+	users: UserPoolExportUser[];
+	groups: UserPoolExportGroup[];
+	clients: UserPoolExportClient[];
+	oauthProviders: UserPoolExportOAuthProvider[];
+}
+
+/** The request body for an import. `data` is the parsed export or provider document. */
+export const userPoolImportSchema = z.object({
+	format: z.enum(userPoolImportFormats).default('auto'),
+	dryRun: z.boolean().default(false),
+	data: z.unknown()
+});
+export type UserPoolImportRequest = z.input<typeof userPoolImportSchema>;
+
+export interface UserPoolImportUserOutcome {
+	email: string;
+	action: 'create' | 'skip' | 'invalid';
+	reason?: string;
+	passwordAlgorithm: UserPoolPasswordAlgorithm;
+	/** True when the stored hash is unusable and the account must set a new password. */
+	mustResetPassword: boolean;
+}
+
+/**
+ * What a dry run or an apply did. Counts are present in both; `clientSecrets` is returned exactly
+ * once by an apply because every exported client secret is omitted.
+ */
+export interface UserPoolImportReport {
+	format: UserPoolImportFormat;
+	dryRun: boolean;
+	users: {
+		total: number;
+		create: number;
+		skip: number;
+		invalid: number;
+		mustResetPassword: number;
+		unsupportedHashes: Array<{ email: string; algorithm: string; reason: string }>;
+	};
+	groups: { total: number; create: number; skip: number };
+	clients: { total: number; create: number; skip: number };
+	oauthProviders: { total: number; create: number; skip: number; needsSecret: number };
+	outcomes: UserPoolImportUserOutcome[];
+	/** Apply only: a fresh secret for each confidential client created by the import. */
+	clientSecrets: Array<{ name: string; clientId: string; clientSecret: string }>;
 }
 
 /** Friendly aliases for consumers that speak the OIDC spec names. */

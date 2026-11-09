@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import type { DesiredState, RouteSpec } from '@skiff/contracts';
+import type { DesiredState, IdentityDesired, RouteSpec } from '@skiff/contracts';
 import {
 	compileAwaitingDeployRoute,
 	compileCaddyConfig,
@@ -291,6 +291,50 @@ export function compileUserPoolIssuerRoutes(
 	}));
 }
 
+/**
+ * Per-pool routes for the separate identity process (docs/IAM.md §11.2). Only pools assigned to
+ * this node are proxied; every other issuer path keeps the control-plane fallback below. Both
+ * `/<pool>/…` and the mail-link shape `/pool/<pool>/…` are accepted, path preserved, because the
+ * engine builds links from `platformOrigin` and an older control plane may use either.
+ */
+export function compileIdentityIssuerRoutes(identity: IdentityDesired): CaddyRoute[] {
+	const host = normalizeHost(identity.host);
+	const upstream = identity.upstream.replace(/^https?:\/\//, '');
+	return identity.pools.flatMap((pool) => {
+		const id = pool.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+		return [
+			{
+				'@id': `identity:${pool.id}`,
+				match: [
+					{
+						host: [host],
+						path_regexp: {
+							name: `skiff_identity_${pool.id.replace(/[^A-Za-z0-9_]/g, '_')}`,
+							pattern: `^(?:pool/)?${id}(/|$)`,
+						},
+					},
+				],
+				terminal: true,
+				handle: [
+					{ handler: 'encode', encodings: { zstd: {}, gzip: {} } },
+					{
+						handler: 'reverse_proxy',
+						upstreams: [{ dial: upstream }],
+						headers: {
+							request: {
+								set: {
+									'X-Forwarded-Host': ['{http.request.host}'],
+									'X-Forwarded-Proto': ['{http.request.scheme}'],
+								},
+							},
+						},
+					},
+				],
+			},
+		];
+	});
+}
+
 /** Only the loopback may carry the internal gateway; a public listener would expose private S3. */
 export function isLoopbackListen(listen: string): boolean {
 	return /^(127\.0\.0\.1|\[::1\]|localhost):\d{1,5}$/.test(listen);
@@ -432,6 +476,13 @@ export function buildCaddyConfig(options: CompileAgentConfigOptions): Record<str
 	if (options.platform) {
 		const issuerRoutes = compileUserPoolIssuerRoutes(options.state.contentDomain, options.platform);
 		if (issuerRoutes.length > 0) server.routes = [...issuerRoutes, ...server.routes];
+	}
+
+	// The separate identity process owns its assigned pools before the control-plane fallback
+	// (IAM.md §11.2). Unassigned pools still reach the platform routes above, which is the dev path.
+	if (options.state.identity) {
+		const identityRoutes = compileIdentityIssuerRoutes(options.state.identity);
+		if (identityRoutes.length > 0) server.routes = [...identityRoutes, ...server.routes];
 	}
 
 	// Functions (D110): swap the compiled static/worker route for assets-first routing with the

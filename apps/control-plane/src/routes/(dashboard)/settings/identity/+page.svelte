@@ -1,12 +1,19 @@
 <script lang="ts">
+	import DownloadIcon from '@lucide/svelte/icons/download';
 	import FingerprintIcon from '@lucide/svelte/icons/fingerprint';
 	import GlobeIcon from '@lucide/svelte/icons/globe';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import PowerIcon from '@lucide/svelte/icons/power';
 	import TrashIcon from '@lucide/svelte/icons/trash';
+	import UploadIcon from '@lucide/svelte/icons/upload';
 	import UsersIcon from '@lucide/svelte/icons/users';
-	import type { UserPoolClientCreated, UserPoolClientView, UserPoolView } from '@skiff/contracts';
+	import type {
+		UserPoolClientCreated,
+		UserPoolClientView,
+		UserPoolImportReport,
+		UserPoolView
+	} from '@skiff/contracts';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
@@ -14,9 +21,11 @@
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
+	import * as Dialog from '#lib/components/ui/dialog/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
+	import { Spinner } from '#lib/components/ui/spinner/index.js';
 	import { Textarea } from '#lib/components/ui/textarea/index.js';
 	import EmptyState from '../../_lib/EmptyState.svelte';
 	import Panel from '../../_lib/Panel.svelte';
@@ -34,6 +43,13 @@
 		| null
 		| { poolId: string; client: UserPoolClientView; clientSecret: string | null }
 	>(null);
+	let importOpen = $state(false);
+	let importTarget = $state<UserPoolView | null>(null);
+	let importText = $state('');
+	let importFormat = $state<'auto' | 'skiff' | 'auth0' | 'cognito' | 'firebase'>('auto');
+	let importReport = $state<UserPoolImportReport | null>(null);
+	let importError = $state('');
+	let importBusy = $state(false);
 
 	function discoveryUrl(pool: UserPoolView): string {
 		return `${data.discoveryBase}/${pool.id}/.well-known/openid-configuration`;
@@ -51,6 +67,61 @@
 			poolId: pool.id,
 			mfaRequired: String(!pool.mfaRequired)
 		});
+	}
+
+	function toggleBreachCheck(pool: UserPoolView) {
+		void runAction('?/setPoolBreachCheck', {
+			poolId: pool.id,
+			breachCheckEnabled: String(!pool.breachCheckEnabled)
+		});
+	}
+
+	function exportPool(pool: UserPoolView) {
+		window.location.assign(`/api/v1/user-pools/${pool.id}/export`);
+	}
+
+	function openImport(pool: UserPoolView) {
+		importTarget = pool;
+		importText = '';
+		importFormat = 'auto';
+		importReport = null;
+		importError = '';
+		importOpen = true;
+	}
+
+	async function readImportFile(event: Event) {
+		const input = event.currentTarget as HTMLInputElement | null;
+		const file = input?.files?.[0];
+		if (!file) return;
+		importText = await file.text();
+	}
+
+	async function runImport(dryRun: boolean) {
+		if (!importTarget || !importText.trim()) {
+			importError = 'Choose a file or paste an export.';
+			return;
+		}
+		importBusy = true;
+		importError = '';
+		const result = await runAction(
+			'?/importPool',
+			{
+				poolId: importTarget.id,
+				format: importFormat,
+				dryRun: String(dryRun),
+				data: importText
+			},
+			{ toast: false }
+		);
+		importBusy = false;
+		if (result.type === 'success') {
+			importReport = (result.data as { report?: UserPoolImportReport } | undefined)?.report ?? null;
+			return;
+		}
+		if (result.type === 'failure') {
+			const message = (result.data as { message?: unknown } | undefined)?.message;
+			importError = typeof message === 'string' ? message : 'The import did not work. Try again.';
+		} else importError = 'The import did not work. Try again.';
 	}
 
 	function removeGroup(pool: UserPoolView, groupId: string, name: string) {
@@ -154,6 +225,9 @@
 									<Badge variant={pool.mfaRequired ? 'success' : 'neutral'}>
 										{pool.mfaRequired ? 'MFA required' : 'MFA optional'}
 									</Badge>
+									<Badge variant={pool.breachCheckEnabled ? 'success' : 'neutral'}>
+										{pool.breachCheckEnabled ? 'Breach check on' : 'Breach check off'}
+									</Badge>
 									<Badge variant="secondary" class="font-mono">{pool.engine}</Badge>
 								</p>
 								<p class="max-w-2xl text-xs text-pretty text-muted-foreground">
@@ -172,6 +246,9 @@
 								</Button>
 								<Button size="sm" variant="outline" onclick={() => toggleMfa(pool)}>
 									{pool.mfaRequired ? 'Make MFA optional' : 'Require MFA'}
+								</Button>
+								<Button size="sm" variant="outline" onclick={() => toggleBreachCheck(pool)}>
+									{pool.breachCheckEnabled ? 'Stop breach checks' : 'Check breached passwords'}
 								</Button>
 							{/if}
 						</div>
@@ -475,6 +552,28 @@
 							<div class="space-y-3 rounded-lg border bg-muted/20 p-3">
 								<div class="flex flex-wrap items-center justify-between gap-2">
 									<p class="flex items-center gap-2 text-sm font-medium">
+										<UploadIcon class="size-4 text-muted-foreground" />
+										Export and import
+									</p>
+									<div class="flex flex-wrap items-center gap-2">
+										<Button size="sm" variant="outline" onclick={() => exportPool(pool)}>
+											<DownloadIcon />Export JSON
+										</Button>
+										<Button size="sm" variant="outline" onclick={() => openImport(pool)}>
+											<UploadIcon />Import users
+										</Button>
+									</div>
+								</div>
+								<p class="text-xs text-muted-foreground">
+									Export includes password hashes so accounts keep their passwords. Client and
+									provider secrets are never included. Imports accept Auth0, Cognito, Firebase and
+									Skiff exports; an unsupported hash forces a password reset.
+								</p>
+							</div>
+
+							<div class="space-y-3 rounded-lg border bg-muted/20 p-3">
+								<div class="flex flex-wrap items-center justify-between gap-2">
+									<p class="flex items-center gap-2 text-sm font-medium">
 										<UsersIcon class="size-4 text-muted-foreground" />
 										Groups
 										<Badge variant="secondary" class="tabular-nums">
@@ -585,7 +684,7 @@
 	<Panel
 		title="Remaining"
 		icon={FingerprintIcon}
-		description="Hosted sign-in, users, sessions, passkeys, TOTP MFA and social login are live. These pieces are still to come."
+		description="Hosted sign-in, users, sessions, passkeys, TOTP MFA, social login, email OTP, import/export and account security are live. These pieces are still to come."
 	>
 		<div class="space-y-4">
 			<div class="rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm">
@@ -597,34 +696,129 @@
 			</div>
 			<ul class="grid gap-3 sm:grid-cols-2">
 				<li class="rounded-lg border p-3">
-					<p class="text-sm font-medium">Email OTP</p>
-					<p class="mt-1 text-xs text-muted-foreground">
-						A one-time code by mail alongside the existing magic link.
-					</p>
-				</li>
-				<li class="rounded-lg border p-3">
-					<p class="text-sm font-medium">Email OTP</p>
-					<p class="mt-1 text-xs text-muted-foreground">
-						A one-time code by mail alongside the existing magic link.
-					</p>
-				</li>
-				<li class="rounded-lg border p-3">
-					<p class="text-sm font-medium">Import and export</p>
-					<p class="mt-1 text-xs text-muted-foreground">
-						JSON export (including password hashes) and imports from Auth0, Cognito and Firebase.
-					</p>
-				</li>
-				<li class="rounded-lg border p-3">
 					<p class="text-sm font-medium">Identity process</p>
 					<p class="mt-1 text-xs text-muted-foreground">
 						One static service per pool on its own disk, with Litestream and the
 						<code class="font-mono">auth.&lt;sitesDomain&gt;</code> edge route.
 					</p>
 				</li>
+				<li class="rounded-lg border p-3">
+					<p class="text-sm font-medium">B2B organisations</p>
+					<p class="mt-1 text-xs text-muted-foreground">
+						Pool-level organisations, membership and per-tenant branding are not built.
+					</p>
+				</li>
 			</ul>
 		</div>
 	</Panel>
 </div>
+
+<Dialog.Root bind:open={importOpen}>
+	<Dialog.Content class="sm:max-w-2xl">
+		<Dialog.Header>
+			<Dialog.Title>Import users into {importTarget?.name ?? 'pool'}</Dialog.Title>
+			<Dialog.Description>
+				Auth0, Cognito, Firebase or a Skiff pool export. Run a dry run first; nothing is
+				written until you apply.
+			</Dialog.Description>
+		</Dialog.Header>
+		<div class="grid gap-4">
+			<div class="grid gap-3 sm:grid-cols-2">
+				<Field.Field>
+					<Field.Label for="import-format">Format</Field.Label>
+					<NativeSelect.Root id="import-format" bind:value={importFormat} class="w-full">
+						<NativeSelect.Option value="auto">Detect automatically</NativeSelect.Option>
+						<NativeSelect.Option value="skiff">Skiff pool export</NativeSelect.Option>
+						<NativeSelect.Option value="auth0">Auth0 users</NativeSelect.Option>
+						<NativeSelect.Option value="cognito">Cognito users</NativeSelect.Option>
+						<NativeSelect.Option value="firebase">Firebase users</NativeSelect.Option>
+					</NativeSelect.Root>
+				</Field.Field>
+				<Field.Field>
+					<Field.Label for="import-file">File</Field.Label>
+					<Input
+						id="import-file"
+						type="file"
+						accept=".json,.csv,application/json,text/csv"
+						onchange={readImportFile}
+					/>
+				</Field.Field>
+			</div>
+			<Field.Field>
+				<Field.Label for="import-text">Or paste the export</Field.Label>
+				<Textarea
+					id="import-text"
+					bind:value={importText}
+					class="min-h-48 font-mono text-xs"
+					placeholder={'{ "users": [ … ] }'}
+				/>
+			</Field.Field>
+			{#if importError}
+				<p class="text-xs whitespace-pre-wrap text-destructive" role="alert">{importError}</p>
+			{/if}
+			{#if importReport}
+				<div class="space-y-2 rounded-lg border bg-muted/20 p-3 text-xs">
+					<p class="text-sm font-medium">
+						{importReport.dryRun ? 'Dry run' : 'Import complete'} · {importReport.format}
+					</p>
+					<p>
+						Users: {importReport.users.total} found, {importReport.users.create} to import,
+						{importReport.users.skip} skipped, {importReport.users.invalid} invalid,
+						{importReport.users.mustResetPassword} must reset.
+					</p>
+					<p>
+						Groups: {importReport.groups.create} new · Clients: {importReport.clients.create} new
+						· Providers: {importReport.oauthProviders.create} new
+						({importReport.oauthProviders.needsSecret} need a secret)
+					</p>
+					{#if importReport.users.unsupportedHashes.length > 0}
+						<div class="max-h-32 overflow-y-auto rounded bg-background p-2">
+							<p class="font-medium">Unsupported hashes (forced reset)</p>
+							<ul class="mt-1 space-y-1 text-muted-foreground">
+								{#each importReport.users.unsupportedHashes as entry (entry.email + entry.algorithm)}
+									<li>{entry.email || '(no email)'} · {entry.algorithm} — {entry.reason}</li>
+								{/each}
+							</ul>
+						</div>
+					{/if}
+					{#if importReport.clientSecrets.length > 0}
+						<div class="space-y-1 rounded border border-success/30 bg-success/5 p-2">
+							<p class="font-medium">Copy these new client secrets now</p>
+							{#each importReport.clientSecrets as client (client.clientId)}
+								<div class="flex flex-wrap items-center gap-2">
+									<span class="font-mono">{client.name}:</span>
+									<code class="break-all font-mono">{client.clientSecret}</code>
+									<CopyButton value={client.clientSecret} label="Copy client secret" />
+								</div>
+							{/each}
+						</div>
+					{/if}
+				</div>
+			{/if}
+		</div>
+		<Dialog.Footer>
+			<Dialog.Close
+				>{#snippet child({ props })}<Button {...props} variant="outline">Close</Button
+					>{/snippet}</Dialog.Close
+			>
+			<Button
+				type="button"
+				variant="outline"
+				disabled={importBusy || !importText.trim()}
+				onclick={() => void runImport(true)}
+			>
+				{#if importBusy}<Spinner />{/if}Dry run
+			</Button>
+			<Button
+				type="button"
+				disabled={importBusy || !importReport || importReport.dryRun === false}
+				onclick={() => void runImport(false)}
+			>
+				{#if importBusy}<Spinner />{/if}Apply import
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
 
 {#if data.canCreate}
 	<FormDialog

@@ -22,9 +22,18 @@ export interface PreparedRelease {
 export class ReleaseService {
 	constructor(private readonly ctx: CoreContext) {}
 
-	async prepare(principal: Principal, entries: FileEntry[], options: { precompress?: boolean } = {}): Promise<PreparedRelease> {
-		// TODO(I2): take the project so this is a project-scoped deployment:create check.
-		this.ctx.iam.require(principal, 'deployment:create', { type: 'org' });
+	async prepare(
+		principal: Principal,
+		entries: FileEntry[],
+		options: { precompress?: boolean; project?: { id: string } } = {},
+	): Promise<PreparedRelease> {
+		// A deploy always names its project, so the check is project-scoped. The org-scope fallback
+		// stays for callers that have no project yet (none today).
+		this.ctx.iam.require(
+			principal,
+			'deployment:create',
+			options.project ? { type: 'project', id: options.project.id } : { type: 'org' },
+		);
 		let config: ParsedConfig;
 		try {
 			config = parseSiteConfig(entryMap(entries));

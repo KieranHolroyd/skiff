@@ -26,6 +26,9 @@ importers:
       '@skiff/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@skiff/identity':
+        specifier: workspace:*
+        version: link:../identity
       '@skiff/mail':
         specifier: workspace:*
         version: link:../../packages/mail
@@ -249,6 +252,21 @@ importers:
         version: link:../../packages/docs
 
   apps/helper: {}
+
+  apps/identity:
+    dependencies:
+      '@skiff/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@skiff/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@skiff/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
 
   packages/contracts:
     dependencies:

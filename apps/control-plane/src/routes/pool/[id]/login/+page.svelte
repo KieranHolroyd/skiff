@@ -166,6 +166,15 @@
 			<button class="pool-link-button" type="submit" formaction="?/reset">
 				Forgot password?
 			</button>
+			<a
+				class="pool-link-button"
+				href={`/pool/${data.pool.id}/otp?${new URLSearchParams({
+					...(data.email ? { email: data.email } : {}),
+					...(data.returnTo ? { return_to: data.returnTo } : {})
+				}).toString()}`}
+			>
+				Email me a one-time code
+			</a>
 		</div>
 	</form>
 

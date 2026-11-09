@@ -97,3 +97,28 @@ export function truncateAll(sqlite: Database): void {
 	for (const { name } of tables) sqlite.run(`DELETE FROM "${name}"`);
 	sqlite.run('PRAGMA foreign_keys = ON');
 }
+
+/**
+ * The identity process's own database (docs/IAM.md §11.2, I27). One file per node, not per pool,
+ * so a pool can move between nodes by syncing one projection; the auth tables are the existing
+ * `user_pool_*` migrations. It is separate from the control plane's `skiff.db`, which must never
+ * hold tenant users, and Litestream replicates it independently (`scripts/litestream-identity.yml`).
+ *
+ * `identity_pools` is the sync marker: the node's agent pushes the non-secret projection from
+ * desired state, and the app mirrors it into `user_pools`/`user_pool_clients`, which is what
+ * `UserPoolService` and `UserPoolEngineService` already read. Keeping the marker table makes the
+ * last applied host/issuer/generation visible to an operator without inferring it from auth rows.
+ */
+export function openIdentityDb(options: OpenOptions) {
+	const opened = createDb(options);
+	opened.sqlite.run(`
+CREATE TABLE IF NOT EXISTS identity_pools (
+  pool_id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  host TEXT NOT NULL,
+  issuer TEXT NOT NULL,
+  generation INTEGER NOT NULL,
+  synced_at INTEGER NOT NULL
+)`);
+	return opened;
+}

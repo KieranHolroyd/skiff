@@ -158,6 +158,59 @@ export const actions: Actions = {
 		}
 	},
 
+	/** Toggle the Have I Been Pwned check for new and reset passwords. */
+	setPoolBreachCheck: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const poolId = formString(data, 'poolId');
+		if (!poolId) return fail(400, { message: 'Missing user pool id.' });
+		try {
+			const enabled = formBoolean(data, 'breachCheckEnabled');
+			await core.userPools.update(principal, poolId, { breachCheckEnabled: enabled });
+			return { success: enabled ? 'Breached-password checks are on.' : 'Breached-password checks are off.' };
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	/**
+	 * Import a pool export or an Auth0/Cognito/Firebase user export. A dry run returns the same
+	 * report without touching a row; the dialog shows it and asks before applying.
+	 */
+	importPool: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const poolId = formString(data, 'poolId');
+		if (!poolId) return fail(400, { message: 'Missing user pool id.' });
+		const upload = data.get('file');
+		let payload = formString(data, 'data');
+		if (upload instanceof File && upload.size > 0) payload = await upload.text();
+		if (!payload.trim()) return fail(400, { message: 'Choose a file or paste an export.' });
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(payload) as unknown;
+		} catch {
+			// Cognito's CSV export is text; the service recognises it. Anything else fails there.
+			parsed = payload;
+		}
+		const format = formString(data, 'format');
+		try {
+			const report = await core.userPools.importPool(principal, poolId, {
+				format: (format || 'auto') as 'auto' | 'skiff' | 'auth0' | 'cognito' | 'firebase',
+				dryRun: formBoolean(data, 'dryRun'),
+				data: parsed
+			});
+			return {
+				success: report.dryRun
+					? `Dry run: ${report.users.create} user(s) would be imported, ${report.users.skip} skipped.`
+					: `Imported ${report.users.create} user(s); ${report.users.mustResetPassword} must reset their password.`,
+				report
+			};
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
 	/** Store one social provider. The secret field is optional: blank keeps the sealed one. */
 	saveOAuthProvider: async ({ request, locals }) => {
 		const principal = locals.principal!;

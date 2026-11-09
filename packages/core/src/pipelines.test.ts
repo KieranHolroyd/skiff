@@ -4,7 +4,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDb } from '@skiff/db';
-import type { PipelineClaimRequestInput, PipelineJobClaim, PipelineResolveClaim } from '@skiff/contracts';
+import type { PipelineClaimRequestInput, PipelineJobClaim, PipelineResolveClaim, Principal } from '@skiff/contracts';
+import { zipSync } from 'fflate';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
@@ -749,5 +750,176 @@ describe('resource-scoped access', () => {
 		expect(core.pipelines.listRuns(guest, visible.name)).toEqual([]);
 		expect(() => core.pipelines.getRepository(guest, hidden.name)).toThrow(/build:read/);
 		expect(() => core.pipelines.listRuns(guest, hidden.name)).toThrow(/build:read/);
+	});
+});
+
+describe('per-repository pipeline service accounts (IAM §7.2)', () => {
+	/** The organization row is normally written by Better Auth; this suite has no auth tables. */
+	function ensureOrg(suffix: string) {
+		opened.sqlite.run(
+			'CREATE TABLE IF NOT EXISTS organization (id TEXT PRIMARY KEY, name TEXT, slug TEXT, createdAt TEXT)',
+		);
+		opened.sqlite.run(
+			"INSERT OR REPLACE INTO organization (id, name, slug, createdAt) VALUES ('org_1', 'Acme', ?, '2026-01-01T00:00:00.000Z')",
+			[`acme-${suffix}`],
+		);
+	}
+
+	async function project(slug: string) {
+		await core.projects.create(owner, {
+			name: slug,
+			slug,
+			runtime: 'static',
+			placement: 'edge',
+			productionAccess: 'public',
+			previewAccess: 'platform',
+		});
+		return core.projects.requireRow(owner, slug);
+	}
+
+	async function deployJob(repositoryName: string) {
+		const { runIds } = await dispatchInline(
+			repositoryName,
+			'on: workflow_dispatch\njobs:\n  deploy: { runs-on: linux, steps: [{ run: echo }] }\n',
+		);
+		return { job: (await claimJob())!, runId: runIds[0]! };
+	}
+
+	function bindingsFor(serviceAccountId: string) {
+		return opened.sqlite
+			.query<{ role_id: string; scope_type: string; scope_id: string | null }, [string]>(
+				`SELECT role_id, scope_type, scope_id FROM iam_bindings
+				  WHERE principal_type = 'serviceAccount' AND principal_id = ?`,
+			)
+			.all(serviceAccountId);
+	}
+
+	function rolePermissions(roleId: string): string[] {
+		const row = opened.sqlite
+			.query<{ permissions_json: string }, [string]>('SELECT permissions_json FROM iam_roles WHERE id = ?')
+			.get(roleId);
+		return row ? (JSON.parse(row.permissions_json) as string[]) : [];
+	}
+
+	test('repository creation seeds pipeline-<repo> and least-privilege bindings', async () => {
+		ensureOrg('seed');
+		const r = repo();
+		const row = core.pipelines.requireRepository(owner, r.name);
+		expect(row.serviceAccountId).toBeTruthy();
+
+		const account = opened.sqlite
+			.query<{ id: string; name: string }, [string]>('SELECT id, name FROM service_accounts WHERE id = ?')
+			.get(row.serviceAccountId!);
+		expect(account?.name).toBe(`pipeline-${r.name}`);
+
+		const bindings = bindingsFor(row.serviceAccountId!);
+		const repositoryBinding = bindings.find((binding) => binding.scope_type === 'pipelineRepository');
+		expect(repositoryBinding?.scope_id).toBe(r.id);
+		expect(new Set(rolePermissions(repositoryBinding!.role_id))).toEqual(
+			new Set(['pipeline:read', 'pipeline:dispatch', 'pipeline:cancel', 'pipeline:manage', 'pipeline:approve']),
+		);
+
+		const imageBinding = bindings.find((binding) => binding.scope_type === 'repository');
+		expect(imageBinding?.scope_id).toBe(`acme-seed/${r.name}`);
+		expect(rolePermissions(imageBinding!.role_id)).toEqual(['image:push']);
+
+		const p = await project(`shop-${++counter}`);
+		core.pipelines.linkProject(owner, r.name, p.slug, { environment: null });
+		const linked = bindingsFor(row.serviceAccountId!).find(
+			(binding) => binding.scope_type === 'project' && binding.scope_id === p.id,
+		);
+		expect(linked).toBeTruthy();
+		expect(new Set(rolePermissions(linked!.role_id))).toEqual(new Set(['deployment:create', 'project:update']));
+
+		// Removing the deploy target removes the provisioned project binding with it.
+		core.pipelines.unlinkProject(owner, r.name, p.slug);
+		expect(bindingsFor(row.serviceAccountId!).some((binding) => binding.scope_type === 'project')).toBe(false);
+	});
+
+	test('a trusted run deploys as the service account with actingFor the creator', async () => {
+		ensureOrg('deploy');
+		const r = repo();
+		const p = await project(`deploy-${++counter}`);
+		core.pipelines.linkProject(owner, r.name, p.slug, { environment: null });
+		const { job, runId } = await deployJob(r.name);
+		const serviceAccountId = core.pipelines.requireRepository(owner, r.name).serviceAccountId!;
+
+		// A job principal gets the account's bindings, not the creator's role. The empty permission
+		// set proves the old `system`/owner fallback is gone.
+		const jobPrincipal: Principal = { kind: 'job', userId: job.jobId, orgId: 'org_1', role: 'owner', permissions: new Set() };
+		expect(core.ctx.iam.can(jobPrincipal, 'deployment:create', { type: 'project', id: p.id })).toBe(true);
+
+		const start = await engine.startDeploy(engine.authenticateJob(job.token), {
+			project: p.slug,
+			archive: true,
+			promote: false,
+		});
+		expect(start.uploadUrl).toBeTruthy();
+		const zip = zipSync({ 'index.html': new TextEncoder().encode('<h1>pipeline</h1>') });
+		await store.put(`pipelines/${r.id}/${runId}/deploys/${start.deployId}.zip`, zip);
+		const result = await engine.finalizeDeploy(engine.authenticateJob(job.token), start.deployId);
+		expect(result.deploymentId).toBeTruthy();
+
+		const audit = opened.sqlite
+			.query<{ actor_id: string; credential_id: string | null; acting_for_type: string | null; acting_for_id: string | null }, []>(
+				"SELECT actor_id, credential_id, acting_for_type, acting_for_id FROM audit_log WHERE action = 'pipeline.deploy' ORDER BY rowid DESC LIMIT 1",
+			)
+			.get();
+		expect(audit?.actor_id).toBe(serviceAccountId);
+		expect(audit?.credential_id).toBe('job');
+		expect(audit?.acting_for_type).toBe('user');
+		expect(audit?.acting_for_id).toBe('user_1');
+	});
+
+	test('a removed creator no longer blocks the repository automation', async () => {
+		ensureOrg('removed');
+		const r = repo();
+		const p = await project(`removed-${++counter}`);
+		core.pipelines.linkProject(owner, r.name, p.slug, { environment: null });
+		const { job, runId } = await deployJob(r.name);
+
+		// Simulate a leaver: the run still names them, but they hold no membership or bindings.
+		opened.sqlite.run("UPDATE pipeline_runs SET created_by = 'user_left' WHERE id = ?", [runId]);
+		core.ctx.iam.removeUserBindings('org_1', 'user_left');
+
+		const start = await engine.startDeploy(engine.authenticateJob(job.token), {
+			project: p.slug,
+			archive: true,
+			promote: false,
+		});
+		const zip = zipSync({ 'index.html': new TextEncoder().encode('<h1>still ships</h1>') });
+		await store.put(`pipelines/${r.id}/${runId}/deploys/${start.deployId}.zip`, zip);
+		const result = await engine.finalizeDeploy(engine.authenticateJob(job.token), start.deployId);
+		expect(result.deploymentId).toBeTruthy();
+
+		const audit = opened.sqlite
+			.query<{ acting_for_id: string | null }, []>(
+				"SELECT acting_for_id FROM audit_log WHERE action = 'pipeline.deploy' ORDER BY rowid DESC LIMIT 1",
+			)
+			.get();
+		expect(audit?.acting_for_id).toBe('user_left');
+	});
+
+	test('a project that is not a deploy target is denied even though the run is trusted', async () => {
+		ensureOrg('unlinked');
+		const r = repo();
+		const linked = await project(`linked-${++counter}`);
+		const unlinked = await project(`unlinked-${++counter}`);
+		core.pipelines.linkProject(owner, r.name, linked.slug, { environment: null });
+		const { job } = await deployJob(r.name);
+		const serviceAccountId = core.pipelines.requireRepository(owner, r.name).serviceAccountId!;
+		const account: Principal = {
+			kind: 'serviceAccount',
+			userId: serviceAccountId,
+			orgId: 'org_1',
+			role: 'viewer',
+			permissions: new Set(),
+		};
+		expect(core.ctx.iam.can(account, 'deployment:create', { type: 'project', id: linked.id })).toBe(true);
+		expect(core.ctx.iam.can(account, 'deployment:create', { type: 'project', id: unlinked.id })).toBe(false);
+
+		await expect(
+			engine.startDeploy(engine.authenticateJob(job.token), { project: unlinked.slug, archive: true, promote: false }),
+		).rejects.toThrow(/not linked/);
 	});
 });

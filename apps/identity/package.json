@@ -1,0 +1,25 @@
+{
+	"name": "@skiff/identity",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"description": "Skiff's standalone user-pool identity process (skiff-identity).",
+	"exports": {
+		".": "./src/index.ts",
+		"./process": "./src/process.ts"
+	},
+	"scripts": {
+		"dev": "bun --watch src/process.ts",
+		"check": "tsc -p . --noEmit",
+		"test": "bun test"
+	},
+	"dependencies": {
+		"@skiff/contracts": "workspace:*",
+		"@skiff/core": "workspace:*",
+		"@skiff/db": "workspace:*",
+		"zod": "^4.6.7"
+	},
+	"engines": {
+		"bun": ">=1.4"
+	}
+}

@@ -34,6 +34,7 @@ import { DatabasePitrRunner } from './database-pitr.ts';
 import { DatabaseCredentialRunner } from './database-credentials.ts';
 import { StudioPrincipalRunner } from './studio/principal.ts';
 import { MailBridge } from './mail-bridge.ts';
+import { IdentityBridge } from './identity-bridge.ts';
 import { NodeUpdateRunner } from './node-update.ts';
 import { DatabasePoolerRestartRunner } from './database-pooler-restarts.ts';
 import { DatabaseReplicationRunner } from './database-replication.ts';
@@ -118,6 +119,8 @@ class AgentRuntime {
 	private readonly helper: HelperClient;
 	/** Email (docs/EMAIL.md): runs and feeds skiff-mail when this node is the mail node. */
 	private readonly mail: MailBridge;
+	/** User pools (IAM.md §11.2): runs skiff-identity when this node is the identity node. */
+	private readonly poolIdentity: IdentityBridge;
 	private readonly workloads: WorkloadRuntime;
 	/** Workload JWT delivery and the loopback metadata endpoint (IAM.md I18). */
 	private readonly identity: WorkloadIdentityBroker;
@@ -235,6 +238,11 @@ class AgentRuntime {
 			controlUrl: config.controlUrl,
 			nodeToken: config.nodeToken,
 			socketPath: process.env.SKIFF_MAIL_SOCKET?.trim() || '/run/skiff/mail.sock',
+			helper: this.helper,
+			log,
+		});
+		this.poolIdentity = new IdentityBridge({
+			socketPath: process.env.SKIFF_IDENTITY_SOCKET?.trim() || '/run/skiff/identity.sock',
 			helper: this.helper,
 			log,
 		});
@@ -414,6 +422,7 @@ class AgentRuntime {
 				this.applyStudio(cached.state.studio);
 				this.applyConsole(cached.state.containerConsole);
 				this.mail.apply(cached.state.mail);
+				this.poolIdentity.apply(cached.state.identity);
 				log('info', `Loaded cached desired state v${cached.state.version}`);
 			}
 		}
@@ -512,6 +521,7 @@ class AgentRuntime {
 		this.consoleFront?.stop();
 		this.identity.stop();
 		await this.mail.close();
+		await this.poolIdentity.close();
 		this.serviceForwarder.close();
 		await this.replicaLinks.close();
 		this.server?.stop(true);
@@ -663,6 +673,7 @@ class AgentRuntime {
 		this.applyStudio(state.studio);
 		this.applyConsole(state.containerConsole);
 		this.mail.apply(state.mail);
+		this.poolIdentity.apply(state.identity);
 		try {
 			await this.store.write(state, etagHeader);
 		} catch (error) {
@@ -1694,6 +1705,14 @@ if (import.meta.main) {
 		const { runMailProcess } = await import('@skiff/mail/process');
 		await runMailProcess().catch((error: unknown) => {
 			console.error(`[skiff-agent mail] fatal: ${errorText(error)}`);
+			process.exit(1);
+		});
+	} else if (subcommand('identity') >= 0) {
+		// The separate user-pool identity process (docs/IAM.md §11.2), run by skiff-identity.service
+		// in its own cgroup. Same signed binary as skiff-mail; no agent config or node token.
+		const { runIdentityProcess } = await import('@skiff/identity/process');
+		await runIdentityProcess().catch((error: unknown) => {
+			console.error(`[skiff-agent identity] fatal: ${errorText(error)}`);
 			process.exit(1);
 		});
 	} else if (subcommand('studio') >= 0) {

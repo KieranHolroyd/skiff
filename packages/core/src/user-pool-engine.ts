@@ -44,8 +44,18 @@
  * email is the only value used to find or create a pool user, and an address the provider does not
  * mark verified is never linked. Provider client secrets are sealed like every other pool secret.
  *
- * TODO(I27): email OTP, breached-password checks, lockout, suspicious sign-in mail, import/export
- * and the identity process remain for a later slice.
+ * Email OTP is a second way into the same account: a six-digit code is mailed, stored only as a
+ * hash, expires in ten minutes, allows five attempts and is rate limited per address and IP. An
+ * unknown address gets the same answer as a known one. Passwords are optionally checked against
+ * Have I Been Pwned's k-anonymity range API (fail open on network errors), repeated wrong passwords
+ * lock one pool+email pair out for a growing backoff, and a sign-in from a new device or country
+ * mails the account owner without ever blocking the sign-in.
+ *
+ * Pool export/import (IAM.md I29) lives in `user-pools.ts`: users with their password hashes,
+ * groups, clients with every secret omitted, and provider configuration with no secrets. Auth0,
+ * Cognito, Firebase and Skiff's own exports are accepted; an unusable hash forces a reset.
+ *
+ * TODO(I27): the identity process and B2B remain for a later slice.
  */
 import { createRequire } from 'node:module';
 import {
@@ -53,6 +63,7 @@ import {
 	createHmac,
 	createPublicKey,
 	randomBytes,
+	scrypt as scryptCallback,
 	timingSafeEqual,
 	verify as verifySignature
 } from 'node:crypto';
@@ -72,7 +83,9 @@ import {
 	type UserPoolPasskeyRegistrationChallenge,
 	type UserPoolPasskeyRegistrationOptionsJSON,
 	type UserPoolPasskeyView,
+	type UserPoolPasswordAlgorithm,
 	type UserPoolRecoveryCodes,
+	type UserPoolExportUser,
 	type UserPoolSocialProviderView,
 	type UserPoolTotpEnrolment,
 	type UserPoolTotpStatus
@@ -89,6 +102,7 @@ import {
 } from './errors.ts';
 import { newId, parseJson, randomToken, safeEqual, sha256Hex } from './util.ts';
 import {
+	userPoolBreachCheckKey,
 	userPoolMfaRequiredKey,
 	userPoolRequireEmailVerificationKey,
 	userPoolSigningPurpose
@@ -125,6 +139,22 @@ export const USER_POOL_RESET_EMAIL_LIMIT = 3;
 export const USER_POOL_VERIFY_EMAIL_LIMIT = 3;
 export const USER_POOL_REQUEST_IP_LIMIT = 20;
 
+/** Email OTP: a six-digit sign-in code, shorter lived than a link and limited per address. */
+export const USER_POOL_OTP_TTL_SECONDS = 10 * 60;
+export const USER_POOL_OTP_MAX_ATTEMPTS = 5;
+export const USER_POOL_OTP_EMAIL_LIMIT = 5;
+
+/**
+ * Password lockout: after this many failures one pool+email pair waits, and each further failure
+ * doubles the wait up to an hour. The counter is per pool+email, never per pool alone.
+ */
+export const USER_POOL_LOCKOUT_THRESHOLD = 5;
+export const USER_POOL_LOCKOUT_BASE_SECONDS = 60;
+export const USER_POOL_LOCKOUT_MAX_SECONDS = 60 * 60;
+
+/** Have I Been Pwned's range API is best-effort: never wait longer than this and never block. */
+export const USER_POOL_BREACH_CHECK_TIMEOUT_MS = 3000;
+
 /** TOTP MFA: a pending sign-in is short lived, a code may be tried five times, and codes are 30s. */
 export const USER_POOL_MFA_CHALLENGE_TTL_SECONDS = 5 * 60;
 export const USER_POOL_MFA_MAX_ATTEMPTS = 5;
@@ -143,11 +173,21 @@ export const USER_POOL_OAUTH_CALLBACK_LIMIT = 30;
 export const USER_POOL_OAUTH_STATE_CAP = 10_000;
 
 /** The hosted page each kind of mail points at. */
-export type UserPoolMailPurpose = 'verify_email' | 'magic_link' | 'password_reset' | 'invite';
+export type UserPoolMailPurpose =
+	| 'verify_email'
+	| 'magic_link'
+	| 'password_reset'
+	| 'invite'
+	| 'email_otp'
+	| 'suspicious_sign_in';
+
+/** The mail purposes that carry a single-use link token. */
+type UserPoolLinkPurpose = 'verify_email' | 'magic_link' | 'password_reset' | 'invite';
 
 /**
  * One transactional message for a pool's end user. `link` is the single-use URL; it is present so
- * the development fallback can print it, and must never be written to a production log.
+ * the development fallback can print it, and must never be written to a production log. `code` is
+ * only set for an email OTP, where the six-digit value is the credential.
  */
 export interface UserPoolMailMessage {
 	orgId: string;
@@ -158,6 +198,7 @@ export interface UserPoolMailMessage {
 	subject: string;
 	text: string;
 	link: string;
+	code?: string;
 }
 
 /** The mail seam `createCore` wires; tests inject a capture hook. */
@@ -240,6 +281,26 @@ export interface UserPoolSignInResult extends UserPoolSessionContext {
 	mfaToken?: string;
 	/** When the MFA challenge expires, present only when `mfaRequired` is true. */
 	mfaExpiresAt?: number;
+}
+
+/** Request context a hosted page can pass so a new device or country can be noticed. */
+export interface UserPoolSignInContext {
+	ip?: string | null;
+	userAgent?: string | null;
+	/** Two-letter country from a trusted edge header, when the deployment can provide one. */
+	country?: string | null;
+}
+
+/** One user row as an export or import carries it, including the encoded password hash. */
+export interface UserPoolImportUserRecord {
+	email: string;
+	name: string;
+	emailVerified: boolean;
+	disabled: boolean;
+	passwordHash: string;
+	metadata: Record<string, unknown>;
+	createdAt?: number;
+	updatedAt?: number;
 }
 
 /** The result of starting a social sign-in: where to send the browser. */
@@ -806,6 +867,27 @@ function normalizeEmail(raw: string): string {
 	return email;
 }
 
+function otpHash(code: string): string {
+	return sha256Hex(`skiff-pool-otp:${code}`);
+}
+
+/** The settings key for one pool+email lockout; the address is hashed, never stored in the key. */
+function lockoutKey(poolId: string, address: string): string {
+	return `user_pool.${poolId}.lockout.${sha256Hex(address).slice(0, 40)}`;
+}
+
+/** The settings key for the last device/country seen for one user. */
+function signInStateKey(poolId: string, userId: string): string {
+	return `user_pool.${poolId}.signin.${userId}`;
+}
+
+function parseMetadata(json: string): Record<string, unknown> {
+	const value = parseJson<unknown>(json, {});
+	return value && typeof value === 'object' && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: {};
+}
+
 function validatePassword(password: string): void {
 	if (password.length < USER_POOL_PASSWORD_MIN_LENGTH)
 		throw new ValidationError(`Passwords must be at least ${USER_POOL_PASSWORD_MIN_LENGTH} characters.`);
@@ -830,6 +912,142 @@ function generateRecoveryCodes(count = USER_POOL_RECOVERY_CODE_COUNT): string[] 
 
 function sha256Base64Url(value: string): string {
 	return createHash('sha256').update(value).digest('base64url');
+}
+
+/** Prefix of the portable scrypt hash the importer stores: `scrypt$N$r$p$salt$hash`. */
+const SCRYPT_HASH_PREFIX = 'scrypt$';
+
+/**
+ * Wrap a scrypt hash so it survives an export/import round trip without a second dependency.
+ * `N` is the CPU/memory cost (a power of two), `r` the block size, `p` the parallelisation.
+ */
+export function encodeScryptHash(
+	N: number,
+	r: number,
+	p: number,
+	salt: Buffer,
+	hash: Buffer
+): string {
+	return `${SCRYPT_HASH_PREFIX}${N}$${r}$${p}$${salt.toString('base64url')}$${hash.toString('base64url')}`;
+}
+
+/** Parse the wrapper, or null when the value is not one this engine wrote. */
+function parseScryptHash(
+	value: string
+): { N: number; r: number; p: number; salt: Buffer; hash: Buffer } | null {
+	if (!value.startsWith(SCRYPT_HASH_PREFIX)) return null;
+	const parts = value.slice(SCRYPT_HASH_PREFIX.length).split('$');
+	if (parts.length !== 5) return null;
+	const [cost, block, parallel, salt, hash] = parts;
+	const N = Number(cost);
+	const r = Number(block);
+	const p = Number(parallel);
+	if (!Number.isInteger(N) || N < 2 || (N & (N - 1)) !== 0) return null;
+	if (!Number.isInteger(r) || r < 1) return null;
+	if (!Number.isInteger(p) || p < 1) return null;
+	try {
+		const saltBytes = Buffer.from(salt!, 'base64url');
+		const hashBytes = Buffer.from(hash!, 'base64url');
+		if (saltBytes.length === 0 || hashBytes.length === 0) return null;
+		return { N, r, p, salt: saltBytes, hash: hashBytes };
+	} catch {
+		return null;
+	}
+}
+
+/** Verify a password against the portable scrypt wrapper, in constant time. */
+function verifyScryptPassword(password: string, value: string): Promise<boolean> {
+	const parsed = parseScryptHash(value) ?? parsePasslibScryptHash(value);
+	if (!parsed) return Promise.resolve(false);
+	return new Promise((resolve) => {
+		// A malicious or accidental N can exhaust memory; cap it with maxmem so the call fails
+		// rather than crashing the process.
+		scryptCallback(
+			password,
+			parsed.salt,
+			parsed.hash.length,
+			{ N: parsed.N, r: parsed.r, p: parsed.p, maxmem: 256 * 1024 * 1024 },
+			(error, derived) => {
+				if (error || !derived) return resolve(false);
+				resolve(
+					derived.length === parsed.hash.length && timingSafeEqual(derived, parsed.hash)
+				);
+			}
+		);
+	});
+}
+
+/** Decode standard or passlib "adapted" base64 (`.` for `+`, padding optional). */
+function decodeScryptBase64(value: string): Buffer | null {
+	const normalized = value.replace(/\./g, '+').replace(/-/g, '+').replace(/_/g, '/');
+	const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
+	try {
+		const bytes = Buffer.from(padded, 'base64');
+		return bytes.length > 0 ? bytes : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Passlib/Auth0's `$scrypt$ln=16,r=8,p=1$salt$hash` form, which an Auth0 custom password hash
+ * export uses. Salt and hash may be adapted base64.
+ */
+function parsePasslibScryptHash(
+	value: string
+): { N: number; r: number; p: number; salt: Buffer; hash: Buffer } | null {
+	if (!value.startsWith('$scrypt$')) return null;
+	const parts = value.slice('$scrypt$'.length).split('$');
+	if (parts.length !== 3) return null;
+	const [paramText, saltText, hashText] = parts;
+	const params = new Map<string, number>();
+	for (const pair of (paramText ?? '').split(',')) {
+		const [key, raw] = pair.split('=');
+		const parsed = Number(raw);
+		if (key && Number.isInteger(parsed)) params.set(key.trim(), parsed);
+	}
+	const ln = params.get('ln');
+	const N = ln !== undefined && ln >= 1 && ln <= 20 ? 2 ** ln : undefined;
+	const r = params.get('r') ?? 8;
+	const p = params.get('p') ?? 1;
+	if (!N || !Number.isInteger(r) || r < 1 || !Number.isInteger(p) || p < 1) return null;
+	const salt = decodeScryptBase64(saltText ?? '');
+	const hash = decodeScryptBase64(hashText ?? '');
+	if (!salt || !hash) return null;
+	return { N, r, p, salt, hash };
+}
+
+/** Whether a stored password hash is usable by this engine, for export/report metadata. */
+export function userPoolPasswordAlgorithm(hash: string | null | undefined): UserPoolPasswordAlgorithm {
+	if (!hash) return 'none';
+	if (hash.startsWith('$argon2')) return 'argon2id';
+	if (/^\$2[aby]\$/.test(hash)) return 'bcrypt';
+	if (parseScryptHash(hash) || parsePasslibScryptHash(hash)) return 'scrypt';
+	return 'none';
+}
+
+/** Verify a stored hash, including imported bcrypt and scrypt forms. */
+async function verifyStoredPassword(password: string, hash: string): Promise<boolean> {
+	if (hash.startsWith(SCRYPT_HASH_PREFIX) || hash.startsWith('$scrypt$'))
+		return verifyScryptPassword(password, hash);
+	try {
+		return await Bun.password.verify(password, hash);
+	} catch {
+		return false;
+	}
+}
+
+/** Build the scrypt wrapper from standard scrypt parameters and base64 salt/hash. */
+export function scryptHashFromParts(
+	params: { N?: number; r?: number; p?: number; rounds?: number; blockSize?: number; parallelization?: number },
+	salt: Buffer,
+	hash: Buffer
+): string | null {
+	const N = params.N ?? params.rounds;
+	const r = params.r ?? params.blockSize ?? 8;
+	const p = params.p ?? params.parallelization ?? 1;
+	if (!Number.isInteger(N) || !N || N < 2 || (N & (N - 1)) !== 0) return null;
+	return encodeScryptHash(N, r, p, salt, hash);
 }
 
 function appendQuery(uri: string, values: Record<string, string | null | undefined>): string {
@@ -950,6 +1168,17 @@ function oauthFetch(): typeof fetch {
 	return injectedOAuthFetch ?? fetch;
 }
 
+let injectedBreachFetch: typeof fetch | undefined;
+
+/** Replace the Have I Been Pwned HTTP transport (tests). Production uses the global fetch. */
+export function setUserPoolBreachCheckFetch(fetcher: typeof fetch | null): void {
+	injectedBreachFetch = fetcher ?? undefined;
+}
+
+function breachFetch(): typeof fetch {
+	return injectedBreachFetch ?? fetch;
+}
+
 function webAuthnAnchors(): string[] {
 	const anchors: string[] = [import.meta.url];
 	const add = (path: string | undefined): void => {
@@ -1050,6 +1279,8 @@ export class UserPoolEngineService {
 	private readonly mfaChallenges = new Map<string, MfaChallengeRecord>();
 	/** Outstanding social-login state and PKCE verifiers, keyed by the SHA-256 of `state`. */
 	private readonly oauthStates = new Map<string, OAuthStateRecord>();
+	/** Wrong email-OTP attempts for one pool+address, reset by the next request. */
+	private readonly otpAttempts = new Map<string, { attempts: number; expiresAt: number }>();
 
 	constructor(private readonly ctx: CoreContext) {}
 
@@ -1086,6 +1317,7 @@ export class UserPoolEngineService {
 		}
 
 		const now = this.ctx.now();
+		await this.assertPasswordNotBreached(pool, password);
 		const passwordHash = await Bun.password.hash(password, { algorithm: 'argon2id' });
 		const id = newId('upu_');
 		const displayName = (name ?? '').trim().slice(0, 120);
@@ -1128,17 +1360,40 @@ export class UserPoolEngineService {
 	 * Verify an email + password pair and start a pool session. An invite-only pool (or an open
 	 * pool that opted in) refuses an unverified address; an open pool lets it in and reports the
 	 * pending verification so the hosted page can nag.
+	 *
+	 * Five wrong passwords for one pool+email lock that pair out for a growing backoff. Unknown
+	 * addresses are counted the same way, so a locked-out answer never proves an account exists.
+	 * A successful sign-in from a new device or country mails the owner but never blocks.
 	 */
-	async signIn(poolId: string, email: string, password: string): Promise<UserPoolSignInResult> {
+	async signIn(
+		poolId: string,
+		email: string,
+		password: string,
+		options: UserPoolSignInContext = {}
+	): Promise<UserPoolSignInResult> {
 		const pool = this.requireEnabledPool(poolId);
 		const address = normalizeEmail(email);
+		const lockedUntil = this.lockoutUntil(pool.id, address);
+		if (lockedUntil > this.ctx.now()) {
+			const minutes = Math.max(1, Math.ceil((lockedUntil - this.ctx.now()) / 60_000));
+			throw new RateLimitError(
+				`Too many failed sign-in attempts. Try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`
+			);
+		}
 		const user = this.findUser(pool.id, address);
 
 		// One message for missing users, wrong passwords and disabled accounts: no account oracle.
 		const refusal = new UnauthorizedError('That email and password do not match an account in this pool.');
-		if (!user) throw refusal;
-		const valid = await Bun.password.verify(password, user.password_hash);
-		if (!valid || user.disabled_at !== null) throw refusal;
+		if (!user) {
+			this.recordPasswordFailure(pool.id, address);
+			throw refusal;
+		}
+		const valid = await verifyStoredPassword(password, user.password_hash);
+		if (!valid || user.disabled_at !== null) {
+			if (user.disabled_at === null) this.recordPasswordFailure(pool.id, address);
+			throw refusal;
+		}
+		this.clearPasswordFailures(pool.id, address);
 		if (this.emailVerificationRequired(pool) && user.email_verified_at === null)
 			throw new CoreError('email_unverified', 'Verify your email address before signing in.', 403);
 
@@ -1166,6 +1421,8 @@ export class UserPoolEngineService {
 			};
 		}
 
+		// A new device/country is informational: mail is best effort and never blocks the session.
+		this.noteSignIn(pool, user, options);
 		return this.startSession(pool, user, 'password');
 	}
 
@@ -1203,6 +1460,84 @@ export class UserPoolEngineService {
 				[now, now, user.id, pool.id]
 			);
 		return this.startSession(pool, this.requireUser(pool.id, user.id), 'magic_link');
+	}
+
+	/**
+	 * Mail a six-digit sign-in code. Like a magic link, the answer is the same for a known and an
+	 * unknown address and the limiter is charged in both cases. Only the code's hash is stored.
+	 */
+	async requestEmailOtp(
+		poolId: string,
+		email: string,
+		options: { ip?: string | null } = {}
+	): Promise<void> {
+		const pool = this.requireEnabledPool(poolId);
+		const address = normalizeEmail(email);
+		if (
+			!this.allowRequest(`otp:ip:${pool.id}:${options.ip ?? 'unknown'}`, USER_POOL_REQUEST_IP_LIMIT) ||
+			!this.allowRequest(`otp:email:${pool.id}:${address}`, USER_POOL_OTP_EMAIL_LIMIT)
+		)
+			return;
+		const user = this.findUser(pool.id, address);
+		if (!user || user.disabled_at !== null) return;
+		this.otpAttempts.delete(`otp-verify:${pool.id}:${address}`);
+		const issued = this.issueOtpToken(pool.id, user.id);
+		await this.sendOtpMail(pool, user, issued.code, issued.expiresAt);
+	}
+
+	/**
+	 * Verify a mailed code and start a session. The code is single use and expires after ten
+	 * minutes; five wrong answers retire it (a new request starts a new budget). Unknown addresses,
+	 * expired codes and reused codes all answer with the same refusal.
+	 */
+	async verifyEmailOtp(
+		poolId: string,
+		email: string,
+		code: string,
+		options: UserPoolSignInContext = {}
+	): Promise<UserPoolSignInResult> {
+		const pool = this.requireEnabledPool(poolId);
+		const address = normalizeEmail(email);
+		const refusal = new UnauthorizedError('That code is not valid or has expired.');
+		const key = `otp-verify:${pool.id}:${address}`;
+		const now = this.ctx.now();
+		const state = this.otpAttempts.get(key);
+		if (state && state.expiresAt > now && state.attempts >= USER_POOL_OTP_MAX_ATTEMPTS)
+			throw new RateLimitError('Too many incorrect codes. Request a new code.');
+
+		const normalized = code.replace(/[\s-]/g, '');
+		const user = this.findUser(pool.id, address);
+		if (!user || user.disabled_at !== null || !/^\d{6}$/.test(normalized)) {
+			this.recordOtpFailure(key, now);
+			throw refusal;
+		}
+		const row = this.ctx.sqlite
+			.query<EmailTokenRow, [string, string, string]>(
+				`SELECT * FROM user_pool_email_tokens
+				  WHERE token_hash = ? AND pool_id = ? AND purpose = ?`
+			)
+			.get(otpHash(normalized), pool.id, 'email_otp');
+		if (!row || row.used_at !== null || row.expires_at <= now || row.user_id !== user.id) {
+			this.recordOtpFailure(key, now);
+			throw refusal;
+		}
+		const used = this.ctx.sqlite.run(
+			'UPDATE user_pool_email_tokens SET used_at = ? WHERE token_hash = ? AND used_at IS NULL',
+			[now, row.token_hash]
+		);
+		if (used.changes === 0) {
+			this.recordOtpFailure(key, now);
+			throw refusal;
+		}
+		this.otpAttempts.delete(key);
+		if (user.email_verified_at === null) {
+			this.ctx.sqlite.run(
+				'UPDATE user_pool_users SET email_verified_at = ?, updated_at = ? WHERE id = ? AND pool_id = ?',
+				[now, now, user.id, pool.id]
+			);
+		}
+		this.noteSignIn(pool, user, options);
+		return this.startSession(pool, this.requireUser(pool.id, user.id), 'email_otp');
 	}
 
 	// ---------------------------------------------------------------- social login (OAuth)
@@ -1618,6 +1953,16 @@ export class UserPoolEngineService {
 		);
 	}
 
+	/** Whether new passwords are checked against Have I Been Pwned for this pool. */
+	breachCheckEnabled(poolId: string): boolean {
+		this.requirePool(poolId);
+		return (
+			this.ctx.sqlite
+				.query<{ value: string }, [string]>('SELECT value FROM settings WHERE key = ?')
+				.get(userPoolBreachCheckKey(poolId))?.value === '1'
+		);
+	}
+
 	/** The user's MFA state; never the secret and never a recovery code. */
 	totpStatus(poolId: string, userId: string): UserPoolTotpStatus {
 		this.requireUser(poolId, userId);
@@ -1808,9 +2153,10 @@ export class UserPoolEngineService {
 	async resetPassword(poolId: string, token: string, newPassword: string): Promise<UserPoolSignInResult> {
 		const pool = this.requireEnabledPool(poolId);
 		validatePassword(newPassword);
-		// Hash before consuming: a hashing failure must not burn the link.
-		const passwordHash = await Bun.password.hash(newPassword, { algorithm: 'argon2id' });
+		await this.assertPasswordNotBreached(pool, newPassword);
 		const user = this.consumeEmailToken(pool.id, token, 'password_reset');
+		// Hash after the checks but before revocation: a failure must not burn the link.
+		const passwordHash = await Bun.password.hash(newPassword, { algorithm: 'argon2id' });
 		const now = this.ctx.now();
 		this.ctx.sqlite.transaction(() => {
 			this.ctx.sqlite.run(
@@ -1824,6 +2170,7 @@ export class UserPoolEngineService {
 				[now, pool.id, user.id]
 			);
 		})();
+		this.clearPasswordFailures(pool.id, user.email);
 		return this.startSession(pool, this.requireUser(pool.id, user.id), 'password_reset');
 	}
 
@@ -1858,6 +2205,7 @@ export class UserPoolEngineService {
 			| 'totp'
 			| 'recovery_code'
 			| 'oauth'
+			| 'email_otp'
 	): UserPoolSignInResult {
 		const now = this.ctx.now();
 		const token = randomToken(32);
@@ -2001,6 +2349,61 @@ export class UserPoolEngineService {
 			.query<UserRow, [string]>('SELECT * FROM user_pool_users WHERE pool_id = ? ORDER BY created_at')
 			.all(poolId)
 			.map(userView);
+	}
+
+	/** Every user row with its encoded password hash, for the pool export. */
+	listUsersForExport(poolId: string): UserPoolExportUser[] {
+		this.requirePool(poolId);
+		return this.ctx.sqlite
+			.query<UserRow, [string]>('SELECT * FROM user_pool_users WHERE pool_id = ? ORDER BY created_at')
+			.all(poolId)
+			.map((row) => {
+				const metadata = parseMetadata(row.metadata_json);
+				return {
+					id: row.id,
+					email: row.email,
+					name: row.name,
+					emailVerified: row.email_verified_at !== null,
+					disabled: row.disabled_at !== null,
+					passwordHash: row.password_hash,
+					passwordAlgorithm: userPoolPasswordAlgorithm(row.password_hash),
+					mustResetPassword: metadata.mustResetPassword === true,
+					metadata,
+					createdAt: row.created_at,
+					updatedAt: row.updated_at
+				};
+			});
+	}
+
+	/**
+	 * Insert one imported user with a hash the caller already prepared. Duplicate addresses must be
+	 * filtered by the importer; the unique index is the final guard.
+	 */
+	importUserRecord(poolId: string, record: UserPoolImportUserRecord): UserPoolUserView {
+		const pool = this.requirePool(poolId);
+		const address = normalizeEmail(record.email);
+		const existing = this.findUser(pool.id, address);
+		if (existing) throw new ConflictError('An account with that email already exists.');
+		const now = this.ctx.now();
+		const id = newId('upu_');
+		this.ctx.sqlite.run(
+			`INSERT INTO user_pool_users
+			   (id, pool_id, email, email_verified_at, password_hash, name, metadata_json, created_at, updated_at, disabled_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			[
+				id,
+				pool.id,
+				address,
+				record.emailVerified ? now : null,
+				record.passwordHash,
+				(record.name ?? '').trim().slice(0, 120),
+				JSON.stringify(record.metadata ?? {}),
+				record.createdAt ?? now,
+				record.updatedAt ?? now,
+				record.disabled ? now : null
+			]
+		);
+		return userView(this.requireUser(pool.id, id));
 	}
 
 	listInvites(poolId: string): UserPoolInviteView[] {
@@ -2967,6 +3370,172 @@ export class UserPoolEngineService {
 	}
 
 	/**
+	 * Issue a six-digit code for one user. Any earlier unused code is voided and only the hash is
+	 * stored; the raw code exists only in the mail.
+	 */
+	private issueOtpToken(
+		poolId: string,
+		userId: string,
+		now = this.ctx.now()
+	): { code: string; expiresAt: number } {
+		const code = String(randomBytes(4).readUInt32BE(0) % 1_000_000).padStart(6, '0');
+		const expiresAt = now + USER_POOL_OTP_TTL_SECONDS * 1000;
+		this.ctx.sqlite.transaction(() => {
+			this.ctx.sqlite.run(
+				`UPDATE user_pool_email_tokens SET used_at = ?
+				  WHERE pool_id = ? AND user_id = ? AND purpose = 'email_otp' AND used_at IS NULL`,
+				[now, poolId, userId]
+			);
+			this.ctx.sqlite.run(
+				`INSERT INTO user_pool_email_tokens (token_hash, pool_id, user_id, purpose, created_at, expires_at, used_at)
+				 VALUES (?, ?, ?, 'email_otp', ?, ?, NULL)`,
+				[otpHash(code), poolId, userId, now, expiresAt]
+			);
+		})();
+		return { code, expiresAt };
+	}
+
+	/** Charge one wrong code against the current OTP request, keeping the map free of stale keys. */
+	private recordOtpFailure(key: string, now: number): void {
+		const state = this.otpAttempts.get(key);
+		const current =
+			state && state.expiresAt > now ? state : { attempts: 0, expiresAt: now + USER_POOL_OTP_TTL_SECONDS * 1000 };
+		current.attempts += 1;
+		this.otpAttempts.set(key, current);
+		if (this.otpAttempts.size > 10_000) {
+			for (const [entry, value] of this.otpAttempts)
+				if (value.expiresAt <= now) this.otpAttempts.delete(entry);
+		}
+	}
+
+	/**
+	 * Password lockout state. The key is a hash of the address so a settings dump never becomes an
+	 * email list, and the counter is renewed only by a successful sign-in (not by the clock).
+	 */
+	private lockoutUntil(poolId: string, address: string): number {
+		const row = this.ctx.sqlite
+			.query<{ value: string }, [string]>('SELECT value FROM settings WHERE key = ?')
+			.get(lockoutKey(poolId, address));
+		if (!row) return 0;
+		const parsed = parseJson<unknown>(row.value, null);
+		if (!parsed || typeof parsed !== 'object') return 0;
+		const lockedUntil = (parsed as { lockedUntil?: unknown }).lockedUntil;
+		return typeof lockedUntil === 'number' ? lockedUntil : 0;
+	}
+
+	private recordPasswordFailure(poolId: string, address: string): void {
+		const now = this.ctx.now();
+		const key = lockoutKey(poolId, address);
+		const previous = this.ctx.sqlite
+			.query<{ value: string }, [string]>('SELECT value FROM settings WHERE key = ?')
+			.get(key)?.value;
+		const parsed = previous ? parseJson<unknown>(previous, null) : null;
+		const attempts =
+			parsed && typeof parsed === 'object' && typeof (parsed as { attempts?: unknown }).attempts === 'number'
+				? ((parsed as { attempts: number }).attempts ?? 0)
+				: 0;
+		// Each failure advances the counter; a lock that has elapsed does not reset it, so the next
+		// wrong password waits twice as long. A successful sign-in deletes the row entirely.
+		const nextAttempts = attempts + 1;
+		const over = Math.max(0, nextAttempts - USER_POOL_LOCKOUT_THRESHOLD);
+		const lockedUntil =
+			nextAttempts >= USER_POOL_LOCKOUT_THRESHOLD
+				? now +
+					Math.min(
+						USER_POOL_LOCKOUT_MAX_SECONDS,
+						USER_POOL_LOCKOUT_BASE_SECONDS * 2 ** Math.min(over, 16)
+					) *
+						1000
+				: null;
+		this.ctx.sqlite.run(
+			`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+			 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+			[key, JSON.stringify({ attempts: nextAttempts, lockedUntil }), now]
+		);
+	}
+
+	private clearPasswordFailures(poolId: string, address: string): void {
+		this.ctx.sqlite.run('DELETE FROM settings WHERE key = ?', [lockoutKey(poolId, address)]);
+	}
+
+	/**
+	 * Have I Been Pwned's k-anonymity range API. Only the first five SHA-1 hex characters leave
+	 * the process. A network failure, timeout or non-2xx answer is a pass: the check must never
+	 * stop a sign-up or reset when the API is unreachable.
+	 */
+	private async assertPasswordNotBreached(pool: UserPoolRow, password: string): Promise<void> {
+		if (!this.breachCheckEnabled(pool.id)) return;
+		let prefix: string;
+		let suffix: string;
+		try {
+			const digest = createHash('sha1').update(password).digest('hex').toUpperCase();
+			prefix = digest.slice(0, 5);
+			suffix = digest.slice(5);
+		} catch {
+			// A platform without SHA-1 (FIPS) cannot use this API; fail open like a network error.
+			return;
+		}
+		let response: Response;
+		try {
+			response = await breachFetch()(`https://api.pwnedpasswords.com/range/${prefix}`, {
+				headers: {
+					'add-padding': 'true',
+					'user-agent': 'skiff-identity'
+				},
+				signal: AbortSignal.timeout(USER_POOL_BREACH_CHECK_TIMEOUT_MS)
+			});
+		} catch {
+			return;
+		}
+		if (!response.ok) return;
+		let body: string;
+		try {
+			body = await response.text();
+		} catch {
+			return;
+		}
+		const hit = body.split('\n').some((line) => {
+			const [candidate] = line.trim().split(':');
+			return candidate?.toUpperCase() === suffix;
+		});
+		if (hit)
+			throw new ValidationError(
+				'That password has appeared in a known data breach. Choose a different one.'
+			);
+	}
+
+	/** Remember the last device/country and mail the owner when it changes. Never blocks. */
+	private noteSignIn(pool: UserPoolRow, user: UserRow, options: UserPoolSignInContext): void {
+		const fingerprint = options.userAgent
+			? sha256Hex(options.userAgent.trim().slice(0, 512)).slice(0, 32)
+			: null;
+		const country = options.country ? options.country.trim().toUpperCase().slice(0, 2) : null;
+		if (!fingerprint && !country) return;
+		const key = signInStateKey(pool.id, user.id);
+		const previous = parseJson<unknown>(
+			this.ctx.sqlite
+				.query<{ value: string }, [string]>('SELECT value FROM settings WHERE key = ?')
+				.get(key)?.value ?? 'null',
+			null
+		);
+		const last =
+			previous && typeof previous === 'object'
+				? (previous as { device?: unknown; country?: unknown })
+				: null;
+		const changed =
+			last &&
+			((fingerprint !== null && typeof last.device === 'string' && last.device !== fingerprint) ||
+				(country !== null && typeof last.country === 'string' && last.country !== country));
+		this.ctx.sqlite.run(
+			`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+			 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+			[key, JSON.stringify({ device: fingerprint, country }), this.ctx.now()]
+		);
+		if (!changed) return;
+		void this.sendSuspiciousSignInMail(pool, user, country);
+	}
+
+	/**
 	 * Store a fresh single-use token for one purpose. Any earlier unused token for the same purpose
 	 * is voided, so only the newest link in a mailbox works and a reset cannot be replayed.
 	 */
@@ -3025,12 +3594,13 @@ export class UserPoolEngineService {
 	private async sendLinkMail(
 		pool: UserPoolRow,
 		user: UserRow,
-		purpose: Exclude<UserPoolMailPurpose, 'invite'>,
+		purpose: 'verify_email' | 'magic_link' | 'password_reset',
 		token: string
-	): Promise<void> {		const link = this.poolLink(pool.id, purpose, token);
+	): Promise<void> {
+		const link = this.poolLink(pool.id, purpose, token);
 		const ttlMinutes = Math.round(EMAIL_TOKEN_TTL[purpose] / 60);
 		const copy: Record<
-			Exclude<UserPoolMailPurpose, 'invite'>,
+			'verify_email' | 'magic_link' | 'password_reset',
 			{ subject: string; intro: string }
 		> = {
 			verify_email: {
@@ -3064,6 +3634,61 @@ export class UserPoolEngineService {
 		});
 	}
 
+	/** Mail a six-digit code. The hosted form link never carries the code, so a log-safe URL is enough. */
+	private async sendOtpMail(
+		pool: UserPoolRow,
+		user: UserRow,
+		code: string,
+		expiresAt: number
+	): Promise<void> {
+		const link = this.otpPageLink(pool.id, user.email);
+		const minutes = Math.round(USER_POOL_OTP_TTL_SECONDS / 60);
+		await this.sendMail({
+			orgId: pool.org_id,
+			poolId: pool.id,
+			poolName: pool.name,
+			to: user.email,
+			purpose: 'email_otp',
+			subject: `Your ${pool.name} sign-in code`,
+			text: [
+				`Use this code to sign in to ${pool.name}:`,
+				'',
+				code,
+				'',
+				`It can be used once and expires in ${minutes} minutes.`,
+				`Enter it at ${link}`,
+				'',
+				`If this was not you, ignore this mail. It expires ${new Date(expiresAt).toISOString()}.`
+			].join('\n'),
+			link,
+			code
+		});
+	}
+
+	/** Tell an account owner about a new device or country. No action is required, and no token. */
+	private async sendSuspiciousSignInMail(
+		pool: UserPoolRow,
+		user: UserRow,
+		country: string | null
+	): Promise<void> {
+		const link = this.otpPageLink(pool.id, user.email);
+		await this.sendMail({
+			orgId: pool.org_id,
+			poolId: pool.id,
+			poolName: pool.name,
+			to: user.email,
+			purpose: 'suspicious_sign_in',
+			subject: `New sign-in to ${pool.name}`,
+			text: [
+				`Your ${pool.name} account was just used to sign in from a device or location we have not seen before${country ? ` (${country})` : ''}.`,
+				'',
+				'If this was you, nothing is needed.',
+				`If it was not, reset your password at ${this.poolPageLink(pool.id, 'login')} and contact an administrator.`
+			].join('\n'),
+			link
+		});
+	}
+
 	private async sendInviteMail(
 		pool: UserPoolRow,
 		email: string,
@@ -3089,9 +3714,18 @@ export class UserPoolEngineService {
 		});
 	}
 
+	private poolPageLink(poolId: string, page: 'login' | 'otp'): string {
+		const origin = this.ctx.config.platformOrigin.replace(/\/+$/, '');
+		return `${origin}/pool/${encodeURIComponent(poolId)}/${page}`;
+	}
+
+	private otpPageLink(poolId: string, email: string): string {
+		return `${this.poolPageLink(poolId, 'otp')}?email=${encodeURIComponent(email)}`;
+	}
+
 	private poolLink(
 		poolId: string,
-		purpose: UserPoolMailPurpose,
+		purpose: UserPoolLinkPurpose,
 		token: string
 	): string {
 		const origin = this.ctx.config.platformOrigin.replace(/\/+$/, '');
@@ -3377,7 +4011,7 @@ export function createUserPoolMailer(ctx: CoreContext): UserPoolMailer {
 			// Documented development fallback: the only place a pool link is ever logged.
 			if (process.env.NODE_ENV !== 'production' && process.env.NODE_ENV !== 'test') {
 				console.info(
-					`[user-pool:dev] ${message.purpose} mail for ${message.poolName} to ${message.to}: ${message.link}`
+					`[user-pool:dev] ${message.purpose} mail for ${message.poolName} to ${message.to}: ${message.link}${message.code ? ` (code ${message.code})` : ''}`
 				);
 				return;
 			}
@@ -3391,7 +4025,6 @@ export function createUserPoolMailer(ctx: CoreContext): UserPoolMailer {
 }
 
 function userView(row: UserRow): UserPoolUserView {
-	const metadata = parseJson<unknown>(row.metadata_json, {});
 	return {
 		id: row.id,
 		poolId: row.pool_id,
@@ -3399,10 +4032,7 @@ function userView(row: UserRow): UserPoolUserView {
 		name: row.name,
 		emailVerified: row.email_verified_at !== null,
 		disabled: row.disabled_at !== null,
-		metadata:
-			metadata && typeof metadata === 'object' && !Array.isArray(metadata)
-				? (metadata as Record<string, unknown>)
-				: {},
+		metadata: parseMetadata(row.metadata_json),
 		createdAt: row.created_at,
 		updatedAt: row.updated_at
 	};

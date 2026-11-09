@@ -66,6 +66,7 @@ import { HELPER_UNIT, ensureHelper } from '../systemd/helper.ts';
 import { ensureStorageUnits, STORAGE_PATH_UNIT } from '../systemd/storage.ts';
 import { STUDIO_UNIT, studioUnit } from '../systemd/studio.ts';
 import { MAIL_UNIT, mailUnit } from '../systemd/mail.ts';
+import { IDENTITY_LITESTREAM_UNIT, IDENTITY_UNIT, identityLitestreamUnit, identityUnit } from '../systemd/identity.ts';
 import { agentUnit, CADDY_ACCESS_LOG, detectCaddyAdminSocket } from '../systemd/agent.ts';
 import { CLI_COMMANDS, ensureHostCommands, RELEASE_COMMANDS } from './commands.ts';
 import { ensureMasterKey, finishMasterKeyMigration, revertMasterKeyMigration, type EnsureMasterKeyResult } from './master-key.ts';
@@ -1007,7 +1008,7 @@ function writeUnits(release: string): void {
 	});
 	const agent = agentUnit({ optDir: OPT_DIR, etcDir: ETC_DIR, varDir: VAR_DIR, runDir: RUN_DIR });
 	if (options.dryRun) {
-		log(`would write ${Object.keys(controlUnits).join(', ')}, skiff-agent.service and ${STUDIO_UNIT}`);
+		log(`would write ${Object.keys(controlUnits).join(', ')}, skiff-agent.service, ${STUDIO_UNIT} and ${IDENTITY_UNIT}`);
 		if (masterKey?.store.kind === 'sealed' || masterKey?.action === 'seal-existing')
 			log(`would point both control-plane units at the sealed master key (${MASTER_KEY_DROP_IN} drop-ins)`);
 		return;
@@ -1021,6 +1022,9 @@ function writeUnits(release: string): void {
 	writeFileSync(join(SYSTEMD_DIR, STUDIO_UNIT), studioUnit({ optDir: OPT_DIR, runDir: RUN_DIR, socketGroup: 'caddy' }));
 	// Static, like the studio: the mail node's agent starts it (docs/EMAIL.md).
 	writeFileSync(join(SYSTEMD_DIR, MAIL_UNIT), mailUnit({ optDir: OPT_DIR, runDir: RUN_DIR, socketGroup: 'caddy' }));
+	// Static, like mail: the identity node's agent starts it (docs/IAM.md §11.2).
+	writeFileSync(join(SYSTEMD_DIR, IDENTITY_UNIT), identityUnit({ optDir: OPT_DIR, runDir: RUN_DIR, socketGroup: 'caddy' }));
+	writeFileSync(join(SYSTEMD_DIR, IDENTITY_LITESTREAM_UNIT), identityLitestreamUnit());
 	// The privileged runtime helper ships in the active release so a `current` swap upgrades it.
 	ensureHelper({
 		systemdDir: SYSTEMD_DIR,
@@ -1127,8 +1131,15 @@ function installCliCommands(): void {
 	ensureHostCommands({ optDir: OPT_DIR, bunBin: BUN_BIN }, { log });
 }
 
-const BACKUP_UNITS = ['skiff-litestream.service', 'skiff-restore-drill.service', 'skiff-restore-drill.timer', 'skiff-alert@.service'];
+const BACKUP_UNITS = [
+	'skiff-litestream.service',
+	'skiff-litestream-identity.service',
+	'skiff-restore-drill.service',
+	'skiff-restore-drill.timer',
+	'skiff-alert@.service',
+];
 const LITESTREAM_CONFIG = join(ETC_DIR, 'litestream.yml');
+const LITESTREAM_IDENTITY_CONFIG = join(ETC_DIR, 'litestream-identity.yml');
 
 /**
  * Backups (DESIGN §10): Litestream → R2 plus the monthly restore drill, both alerting through
@@ -1156,6 +1167,10 @@ function installBackups(env: Map<string, string>): void {
 	renameSync(`${LITESTREAM_CONFIG}.tmp`, LITESTREAM_CONFIG);
 	run('chown', ['root:skiff', LITESTREAM_CONFIG], { allowFailure: true });
 	run('chmod', ['0640', LITESTREAM_CONFIG], { allowFailure: true });
+	copyFileSync(join(SOURCE, 'scripts', 'litestream-identity.yml'), `${LITESTREAM_IDENTITY_CONFIG}.tmp`);
+	renameSync(`${LITESTREAM_IDENTITY_CONFIG}.tmp`, LITESTREAM_IDENTITY_CONFIG);
+	run('chown', ['root:skiff', LITESTREAM_IDENTITY_CONFIG], { allowFailure: true });
+	run('chmod', ['0640', LITESTREAM_IDENTITY_CONFIG], { allowFailure: true });
 	for (const name of BACKUP_UNITS) {
 		let body = readFileSync(join(SOURCE, 'scripts', 'systemd', name), 'utf8');
 		if (litestream) body = body.replaceAll('/usr/local/bin/litestream', litestream);
