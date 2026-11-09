@@ -19,6 +19,10 @@ import { backupTargetCommand } from './commands/backup-target.ts';
 import { blueprintCommand } from './commands/blueprint.ts';
 import { logDrainCommand } from './commands/log-drain.ts';
 import { iamCommand } from './commands/iam.ts';
+import { serviceAccountsCommand } from './commands/service-accounts.ts';
+import { accessKeysCommand } from './commands/access-keys.ts';
+import { userPoolsCommand } from './commands/user-pools.ts';
+import { accessPoliciesCommand } from './commands/access-policies.ts';
 import { registryCommand } from './commands/registry.ts';
 import { auditCommand } from './commands/audit.ts';
 import { volumeCommand } from './commands/volume.ts';
@@ -97,6 +101,19 @@ const commands: Record<string, (argv: string[]) => Promise<void>> = {
 	'log-drain': logDrainCommand,
 	'log-drains': logDrainCommand,
 	iam: iamCommand,
+	sa: serviceAccountsCommand,
+	'service-account': serviceAccountsCommand,
+	'service-accounts': serviceAccountsCommand,
+	key: accessKeysCommand,
+	keys: accessKeysCommand,
+	'access-key': accessKeysCommand,
+	'access-keys': accessKeysCommand,
+	pool: userPoolsCommand,
+	pools: userPoolsCommand,
+	'user-pool': userPoolsCommand,
+	'user-pools': userPoolsCommand,
+	'access-policy': accessPoliciesCommand,
+	'access-policies': accessPoliciesCommand,
 	registry: registryCommand,
 	images: registryCommand,
 	audit: auditCommand,
@@ -150,6 +167,10 @@ Commands:
   backup-target [list|add|test|remove]       Where backups are written (\`skif backup-target --help\`)
   log-drain [list|create|test|update|…]      Forward logs to a webhook or OTLP receiver (\`skif log-drain --help\`)
   iam [roles|bindings|groups|bind|…]         Roles, bindings and groups, and why access is allowed (\`skif iam --help\`)
+  sa [list|create|disable|enable|delete]     Service accounts: org-owned machine principals (\`skif sa --help\`)
+  key [list|create|revoke]                   Access keys; the secret is printed once (\`skif key --help\`)
+  pool [list|create|disable|clients]         Managed user pools and their OIDC clients (\`skif pool --help\`)
+  access-policy [list|create|assign]         Skiff Access allow/deny policies (\`skif access-policy --help\`)
   registry [status|login|repos|credentials|deploy]  The platform registry, private registry logins, image deploys (\`skif registry --help\`)
   audit [--from] [--to] [--all]              Org audit log, newest first, with a date range and paging
   volume [list|show|snapshot|restore|…]      Persistent app volumes and their snapshots (\`skif volume --help\`)

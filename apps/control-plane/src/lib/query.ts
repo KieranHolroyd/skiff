@@ -34,10 +34,35 @@ export class HttpError extends Error {
 	}
 }
 
+/**
+ * A 403 `step_up_required` (STEP-UP.md §6). Carries the permission and level the server named so
+ * the future VerifyDialog can verify and retry; today the message says verification is unavailable.
+ */
+export class StepUpRequiredHttpError extends HttpError {
+	constructor(
+		readonly permission: string,
+		readonly level: 'window' | 'always',
+		message = 'Verify it’s you to continue. Step-up verification is not available in this build yet.'
+	) {
+		super(403, message);
+		this.name = 'StepUpRequiredHttpError';
+	}
+}
+
 async function failure(response: Response, fallback: string): Promise<HttpError> {
 	let message = `${fallback} (${response.status}).`;
 	try {
-		const body = (await response.json()) as { message?: unknown };
+		const body = (await response.json()) as {
+			message?: unknown;
+			error?: unknown;
+			permission?: unknown;
+			level?: unknown;
+		};
+		if (body?.error === 'step_up_required' && typeof body.permission === 'string')
+			return new StepUpRequiredHttpError(
+				body.permission,
+				body.level === 'always' ? 'always' : 'window'
+			);
 		if (typeof body?.message === 'string' && body.message) message = body.message;
 	} catch {
 		// Not JSON; keep the status message.

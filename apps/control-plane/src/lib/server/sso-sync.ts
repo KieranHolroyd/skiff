@@ -67,7 +67,7 @@ function oidcConfig(row: ProviderRow, clientSecret: string): string {
 		tokenEndpointAuthentication: 'client_secret_basic',
 		scopes: JSON.parse(row.scopes_json) as string[],
 		// The plugin maps email/name itself; the groups claim is exposed under `extraFields` for
-		// `provisionUser` and the future group mapping (IAM.md I19, §8.3).
+		// `provisionUser`, which applies `sso_group_mappings` (IAM.md I19, §8.3).
 		mapping: {
 			email: row.claim_email,
 			name: row.claim_name,
@@ -140,7 +140,9 @@ export function syncSsoProviders(): number {
 
 	// A provider deleted in Settings has no row above; remove its plugin copy too.
 	try {
-		const existing = sqlite.query<{ providerId: string }, []>('SELECT providerId FROM "ssoProvider"').all();
+		const existing = sqlite
+			.query<{ providerId: string }, []>('SELECT providerId FROM "ssoProvider"')
+			.all();
 		for (const row of existing) if (!keep.has(row.providerId)) deletePluginRow(row.providerId);
 	} catch {
 		// No plugin table yet.

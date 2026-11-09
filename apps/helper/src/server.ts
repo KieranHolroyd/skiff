@@ -62,6 +62,8 @@ export interface HelperRuntime {
 	stop(id: string): Promise<void>;
 	/** Restart a socket-activated workload's service, then its socket (FN5). Idempotent. */
 	restart(id: string): Promise<void>;
+	/** Replace one workload's identity token file without re-applying it (IAM.md I18). */
+	setIdentity?(id: string, token: string): Promise<void>;
 	logs(id: string, options?: LogReadOptions): Promise<HelperLogResult>;
 	/** Remove a purged database's or storage instance's unit and `<stateDir>/<id>` data dir (D59, S8). */
 	purge(id: string): Promise<void>;
@@ -558,6 +560,18 @@ export function createHandler(
 					return json({ ok: true });
 				}
 				return methodNotAllowed('GET, DELETE');
+			}
+
+			// --- workload identity (IAM.md I18): rotate one token file without restarting a unit ---
+			const identityMatch = /^\/v1\/workloads\/([^/]+)\/identity$/.exec(path);
+			if (identityMatch) {
+				if (method !== 'POST') return methodNotAllowed('POST');
+				const id = decodeWorkloadId(identityMatch[1]!);
+				const body = assertRecord(await readJson(request, maxBodyBytes), 'request');
+				const token = assertString(body.token, 'request.token', { max: 16_384 });
+				if (!runtime.setIdentity) return json({ error: 'not_supported' }, 501);
+				await runtime.setIdentity(id, token);
+				return json({ ok: true, rotated: id });
 			}
 
 			// --- scale to zero and the runaway watchdog (FN4, FN5): fixed-unit lifecycle verbs ---

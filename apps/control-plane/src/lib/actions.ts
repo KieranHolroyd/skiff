@@ -2,12 +2,31 @@ import { applyAction, deserialize, type ActionResult } from '$app/forms';
 import { invalidateAll } from '$app/navigation';
 import { toast } from 'svelte-sonner';
 
+/** The message shown when the server needs a fresh step-up verification (STEP-UP.md §6). */
+const STEP_UP_MESSAGE =
+	'Verify it’s you to continue. Step-up verification is not available in this build yet.';
+
+/** A form failure that asked for step-up, which the future VerifyDialog will handle. */
+function isStepUpFailure(data: unknown): boolean {
+	return (
+		typeof data === 'object' &&
+		data !== null &&
+		(data as { code?: unknown }).code === 'step_up_required'
+	);
+}
+
 /** Show the standard `{ success }` / `{ message }` payload of a dashboard action as a toast. */
 export function notify(result: ActionResult): void {
 	if (result.type === 'success') {
 		const message = (result.data as { success?: unknown } | undefined)?.success;
 		if (typeof message === 'string') toast.success(message);
 	} else if (result.type === 'failure') {
+		if (isStepUpFailure(result.data)) {
+			// The payload also carries `permission` and `level`; the dialog slice uses them to open
+			// the right method. Until it exists, say what happened rather than "try again".
+			toast.error(STEP_UP_MESSAGE);
+			return;
+		}
 		const message = (result.data as { message?: unknown } | undefined)?.message;
 		toast.error(typeof message === 'string' ? message : 'That did not work. Please try again.');
 	} else if (result.type === 'error') {

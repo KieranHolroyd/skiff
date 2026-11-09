@@ -3,11 +3,14 @@ import {
 	SSO_RECHECK_MS,
 	SSO_VERIFY_PREFIX,
 	emailDomain,
+	groupClaimValues,
+	groupIdsForClaims,
 	hasSsoVerificationRecord,
+	normalizeGroupClaim,
 	normalizeSsoDomain,
 	ssoDomainCheckDue,
 	ssoVerificationRecord,
-	verifiedDomainForEmail,
+	verifiedDomainForEmail
 } from './sso.ts';
 
 describe('normalizeSsoDomain', () => {
@@ -28,7 +31,7 @@ describe('normalizeSsoDomain', () => {
 			'*.example.com',
 			'localhost',
 			'127.0.0.1',
-			'',
+			''
 		])
 			expect(normalizeSsoDomain(value)).toBeNull();
 	});
@@ -52,7 +55,7 @@ describe('emailDomain', () => {
 describe('verifiedDomainForEmail', () => {
 	const domains = [
 		{ domain: 'example.com', verifiedAt: null },
-		{ domain: 'mail.example.com', verifiedAt: 1 },
+		{ domain: 'mail.example.com', verifiedAt: 1 }
 	];
 
 	test('only a verified row routes', () => {
@@ -84,8 +87,8 @@ describe('verification record', () => {
 		expect(
 			hasSsoVerificationRecord(
 				[['v=spf1 -all'], ['skiff-verify=other'], ['not-skiff-verify=abc123']],
-				'abc123',
-			),
+				'abc123'
+			)
 		).toBe(false);
 		expect(hasSsoVerificationRecord([], 'abc123')).toBe(false);
 	});
@@ -100,5 +103,67 @@ describe('ssoDomainCheckDue', () => {
 		const now = 100 * SSO_RECHECK_MS;
 		expect(ssoDomainCheckDue(now - SSO_RECHECK_MS + 1, now)).toBe(false);
 		expect(ssoDomainCheckDue(now - SSO_RECHECK_MS, now)).toBe(true);
+	});
+});
+
+describe('normalizeGroupClaim', () => {
+	test('trims and lowercases so an IdP casing change does not break the mapping', () => {
+		expect(normalizeGroupClaim('  Engineering ')).toBe('engineering');
+	});
+
+	test('rejects empty and over-long claims', () => {
+		expect(normalizeGroupClaim('   ')).toBeNull();
+		expect(normalizeGroupClaim('x'.repeat(201))).toBeNull();
+	});
+});
+
+describe('groupClaimValues', () => {
+	test('accepts the array shape most OIDC providers use, case-insensitively', () => {
+		expect(groupClaimValues(['Engineering', 'Platform', 'engineering'])).toEqual([
+			'engineering',
+			'platform'
+		]);
+	});
+
+	test('accepts comma, newline and JSON-array strings', () => {
+		expect(groupClaimValues('Engineering, Platform\nFinance')).toEqual([
+			'engineering',
+			'platform',
+			'finance'
+		]);
+		expect(groupClaimValues('["Engineering","Platform"]')).toEqual(['engineering', 'platform']);
+	});
+
+	test('a missing claim stays undefined, an empty one is an empty list', () => {
+		expect(groupClaimValues(undefined)).toBeUndefined();
+		expect(groupClaimValues(null)).toBeUndefined();
+		expect(groupClaimValues('  ')).toEqual([]);
+		expect(groupClaimValues([])).toEqual([]);
+	});
+
+	test('ignores non-string entries and over-long values', () => {
+		expect(groupClaimValues(['Engineering', 3, null, 'x'.repeat(201)])).toEqual(['engineering']);
+	});
+});
+
+describe('groupIdsForClaims', () => {
+	const mappings = [
+		{ claimValue: 'Engineering', groupId: 'grp_eng' },
+		{ claimValue: 'platform', groupId: 'grp_platform' },
+		{ claimValue: 'finance', groupId: 'grp_fin' },
+		{ claimValue: 'engineering', groupId: 'grp_eng' }
+	];
+
+	test('maps known claims to unique Skiff group ids', () => {
+		expect(groupIdsForClaims(['engineering', 'Platform'], mappings)).toEqual([
+			'grp_eng',
+			'grp_platform'
+		]);
+	});
+
+	test('an unmapped claim grants nothing', () => {
+		expect(groupIdsForClaims(['sales'], mappings)).toEqual([]);
+		expect(groupIdsForClaims(undefined, mappings)).toEqual([]);
+		expect(groupIdsForClaims([], mappings)).toEqual([]);
 	});
 });

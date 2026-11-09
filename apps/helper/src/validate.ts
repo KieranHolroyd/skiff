@@ -268,6 +268,11 @@ export interface WorkloadDesired {
 	 * `Pull=newer` and a writable, throwaway root from it; nothing about it comes from the wire.
 	 */
 	runner?: { provider: 'github' };
+	/**
+	 * Workload identity (IAM.md I18): mount `/run/skiff/identity/<id>/token` at
+	 * `/var/run/skiff/token`. Only the marker travels in desired state; the token is activation.
+	 */
+	identity?: true;
 }
 
 /**
@@ -681,6 +686,12 @@ export interface WorkloadActivation {
 	files: Record<string, string>;
 	/** Containers only (docs/REGISTRY.md R2): credentials written to the workload's auth file. */
 	registryAuth?: RegistryAuthEntry[];
+	/** The workload's short-lived JWT (IAM.md I18); written to its 0400 identity file. */
+	identity?: WorkloadIdentityActivation;
+}
+
+export interface WorkloadIdentityActivation {
+	token: string;
 }
 
 export interface RegistryAuthEntry {
@@ -1303,6 +1314,14 @@ export function parseWorkload(value: unknown): WorkloadDesired {
 		if (dataSizeMb !== null) throw new ValidationError('Runner workloads cannot keep a data directory');
 		workload.runner = { provider: 'github' };
 	}
+	if (record.identity !== undefined) {
+		if (record.identity !== true) throw new ValidationError('workload.identity must be true when present');
+		if (runtime === 'function') throw new ValidationError('Function workloads do not get a workload identity');
+		if (database || objectStorage || broker || registry)
+			throw new ValidationError('Managed services do not get a workload identity');
+		if (workload.runner) throw new ValidationError('Ephemeral runners do not get a workload identity');
+		workload.identity = true;
+	}
 	const volumes = parseWorkloadVolumes(record.volumes);
 	if (volumes.length > 0) workload.volumes = volumes;
 	const volumeId = record.volumeId === undefined ? undefined : assertId(record.volumeId, 'workload.volumeId');
@@ -1343,7 +1362,29 @@ export function parseActivation(value: unknown, workload?: WorkloadDesired): Wor
 	}
 
 	const registryAuth = parseRegistryAuth(record.registryAuth, workload);
-	return { workloadId, activationVersion, env, files, ...(registryAuth?.length ? { registryAuth } : {}) };
+	const identity = parseWorkloadIdentityActivation(record.identity, workload);
+	return {
+		workloadId,
+		activationVersion,
+		env,
+		files,
+		...(registryAuth?.length ? { registryAuth } : {}),
+		...(identity ? { identity } : {}),
+	};
+}
+
+/** The activation's workload JWT. Only a workload that opted in may receive one. */
+export function parseWorkloadIdentityActivation(
+	value: unknown,
+	workload?: WorkloadDesired,
+): WorkloadIdentityActivation | undefined {
+	if (value === undefined) return undefined;
+	const record = assertRecord(value, 'activation.identity');
+	if (workload && !workload.identity)
+		throw new ValidationError('activation.identity is only valid for a workload with identity enabled');
+	const token = assertString(record.token, 'activation.identity.token', { max: 16_384 });
+	if (token.split('.').length !== 3) throw new ValidationError('activation.identity.token must be a signed JWT');
+	return { token };
 }
 
 /**

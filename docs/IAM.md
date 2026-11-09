@@ -597,13 +597,16 @@ What is built now:
 - **I3** — service accounts and org-bound `access_keys` with SHA-256 hashes, expiry, CIDR and
   restriction, plus creation/revocation routes.
 - **I4** — the ES256 key ring with rotation and shared JWKS, federation trusts and RFC 8693 token
-  exchange. The registry realm and pipeline OIDC still use their old keys (next consumer).
-- **I5** — active-organization sessions, the header switcher and org-bound key metadata (the
-  workload-identity half is not built).
+  exchange. The registry realm and pipeline OIDC now sign with the ring; the old keys stay readable
+  for their TTL overlap and are removed later.
+- **I5** — active-organization sessions, the header switcher, org-bound key metadata, and workload
+  identity: one service account per workload, a 1-hour token delivered through activation, a
+  loopback metadata endpoint and `SKIFF_TOKEN_FILE`. Registry login and storage STS remain.
 - **I6** — OIDC sign-in through `@better-auth/sso`, provider sync, JIT membership, domain routing,
-  org auth policy and enforcement. Group mapping, SAML and SCIM remain.
-- **I7** — guardrail templates and CRUD, JIT access requests, usage rollup, access reviews, and the
-  `requireStepUp` contract (not yet wired into call sites).
+  org auth policy, SCIM 2.0 with deactivation and group mirroring, and SSO group mapping. SAML
+  remains.
+- **I7** — guardrail templates and CRUD, JIT access requests, usage rollup, access reviews, and
+  step-up enforcement behind `SKIFF_STEP_UP` (the verification plugin and dialog remain).
 - **I8** — platform roles at platform scope, D129 as a session condition, and seeded admin bindings.
 - **I9** — access policies, the `access` protection mode, the agent's `forward_auth` handler and the
   Settings page. Service tokens and user-pool identity are not enforced at the edge yet.

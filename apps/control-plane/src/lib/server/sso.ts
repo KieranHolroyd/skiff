@@ -7,12 +7,14 @@ import {
 	randomToken
 } from '@skiff/core';
 import type { Principal } from '@skiff/contracts';
-// The pure domain/TXT helpers live in core so they can be tested without SvelteKit or a database.
-// `@skiff/core` does not export this module yet: IAM.md's SSO slice keeps the engine out of the
-// core index until the Better Auth plugin lands, and this deep import is the one consumer.
+// The pure domain/TXT and group-claim helpers live in core so they can be tested without
+// SvelteKit or a database. They are also exported from `@skiff/core`; this deep import keeps the
+// settings service's dependency narrow.
 import {
+	MAX_GROUP_CLAIM_LENGTH,
 	SSO_RECHECK_MS,
 	hasSsoVerificationRecord,
+	normalizeGroupClaim,
 	normalizeSsoDomain,
 	ssoVerificationRecord,
 	verifiedDomainForEmail
@@ -31,9 +33,10 @@ import { syncSsoProviders } from './sso-sync';
  * `@better-auth/sso` reads for the actual OIDC sign-in. Settings never writes that table directly.
  *
  * What is real here: provider configuration, OIDC discovery at save time, domain TXT ownership
- * checks re-run daily, permission checks, email→provider routing for `/login`, and the callback URL
- * to register at the IdP. Sign-in and JIT provisioning run through Better Auth; group mapping, SAML
- * and SCIM are still to come.
+ * checks re-run daily, permission checks, email→provider routing for `/login`, the callback URL to
+ * register at the IdP, and the IdP-group → Skiff-group mapping used by JIT provisioning. Sign-in
+ * and JIT provisioning run through Better Auth; SAML is still to come, and SCIM lives in
+ * `auth.ts`/`core.scim`.
  */
 
 const MAX_NAME = 80;
@@ -74,6 +77,15 @@ interface DomainRow {
 	txt_token: string;
 	verified_at: number | null;
 	last_checked_at: number | null;
+}
+
+interface GroupMappingRow {
+	id: string;
+	org_id: string;
+	provider_id: string;
+	claim_value: string;
+	group_id: string;
+	created_at: number;
 }
 
 export interface SsoClaims {
@@ -118,6 +130,22 @@ export interface SsoProviderInput {
 	scopes?: readonly string[];
 	claims?: Partial<SsoClaims>;
 	enabled?: boolean;
+}
+
+export interface SsoGroupMappingView {
+	id: string;
+	providerId: string;
+	/** The normalised IdP claim value. */
+	claimValue: string;
+	groupId: string;
+	groupName: string;
+	createdAt: number;
+}
+
+export interface SsoGroupMappingInput {
+	providerId: string;
+	claimValue: string;
+	groupId: string;
 }
 
 export interface SsoDomainView {
@@ -351,6 +379,17 @@ function domainView(row: DomainRow): SsoDomainView {
 	};
 }
 
+function mappingView(row: GroupMappingRow & { group_name: string }): SsoGroupMappingView {
+	return {
+		id: row.id,
+		providerId: row.provider_id,
+		claimValue: row.claim_value,
+		groupId: row.group_id,
+		groupName: row.group_name,
+		createdAt: row.created_at
+	};
+}
+
 export class SsoService {
 	#now(): number {
 		return core.ctx.now();
@@ -429,7 +468,9 @@ export class SsoService {
 		const input = applyPreset(rawInput);
 		if (!input.issuer) throw new ValidationError('The issuer is required, or choose a preset.');
 		if (reservedId !== undefined && !PROVIDER_ID.test(reservedId))
-			throw new ValidationError('The reserved provider id is not valid. Reload the page and try again.');
+			throw new ValidationError(
+				'The reserved provider id is not valid. Reload the page and try again.'
+			);
 		// One provider per organisation in this slice: `sso_domains` has no provider id, so routing
 		// must be unambiguous. The plugin supports several; adding that needs a domain→provider link.
 		const existing = core.ctx.sqlite
@@ -589,6 +630,7 @@ export class SsoService {
 			principal.orgId,
 			id
 		]);
+		this.removeGroupMappingsForProvider(principal.orgId, id);
 		syncSsoProviders();
 		this.#audit(principal, 'sso.provider.delete', id, { name: row.name, issuer: row.issuer });
 	}
@@ -670,6 +712,108 @@ export class SsoService {
 		]);
 		syncSsoProviders();
 		this.#audit(principal, 'sso.domain.delete', domain, { domain });
+	}
+
+	// ------------------------------------------------------------ group mapping (I19, §8.3)
+
+	listGroupMappings(principal: Principal): SsoGroupMappingView[] {
+		this.#requireRead(principal);
+		try {
+			return core.ctx.sqlite
+				.query<GroupMappingRow & { group_name: string }, [string]>(
+					`SELECT m.*, g.name AS group_name
+					 FROM sso_group_mappings m
+					 JOIN iam_groups g ON g.id = m.group_id AND g.org_id = m.org_id
+					 WHERE m.org_id = ?
+					 ORDER BY m.claim_value COLLATE NOCASE`
+				)
+				.all(principal.orgId)
+				.map(mappingView);
+		} catch (error) {
+			// The migration may not be embedded in this build yet; the page still renders.
+			if (String(error).includes('no such table')) return [];
+			throw error;
+		}
+	}
+
+	/** Map one IdP group claim value to one Skiff group. A re-save updates the target group. */
+	saveGroupMapping(principal: Principal, input: SsoGroupMappingInput): SsoGroupMappingView {
+		this.#requireManage(principal);
+		this.#provider(principal.orgId, input.providerId);
+		const claimValue = normalizeGroupClaim(input.claimValue);
+		if (!claimValue)
+			throw new ValidationError(
+				`Enter an IdP group name (at most ${MAX_GROUP_CLAIM_LENGTH} characters).`
+			);
+		const group = core.ctx.sqlite
+			.query<{ id: string; source: string }, [string, string]>(
+				'SELECT id, source FROM iam_groups WHERE id = ? AND org_id = ?'
+			)
+			.get(input.groupId, principal.orgId);
+		if (!group)
+			throw new ValidationError('Choose a group in this organisation, or create one first.');
+		if (group.source === 'scim')
+			throw new ValidationError(
+				'That group is managed by SCIM. Map the IdP claim to a local group instead.'
+			);
+		const now = this.#now();
+		const existing = core.ctx.sqlite
+			.query<GroupMappingRow, [string, string, string]>(
+				'SELECT * FROM sso_group_mappings WHERE org_id = ? AND provider_id = ? AND claim_value = ?'
+			)
+			.get(principal.orgId, input.providerId, claimValue);
+		const id = existing?.id ?? newId('sgm_');
+		core.ctx.sqlite.run(
+			`INSERT INTO sso_group_mappings (id, org_id, provider_id, claim_value, group_id, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?)
+			 ON CONFLICT (org_id, provider_id, claim_value)
+			 DO UPDATE SET group_id = excluded.group_id`,
+			[id, principal.orgId, input.providerId, claimValue, input.groupId, now]
+		);
+		this.#audit(principal, 'sso.group_mapping.save', id, {
+			providerId: input.providerId,
+			claimValue,
+			groupId: input.groupId
+		});
+		return mappingView(
+			core.ctx.sqlite
+				.query<GroupMappingRow & { group_name: string }, [string, string]>(
+					`SELECT m.*, g.name AS group_name
+					 FROM sso_group_mappings m JOIN iam_groups g ON g.id = m.group_id
+					 WHERE m.id = ? AND m.org_id = ?`
+				)
+				.get(id, principal.orgId)!
+		);
+	}
+
+	removeGroupMapping(principal: Principal, id: string): void {
+		this.#requireManage(principal);
+		const row = core.ctx.sqlite
+			.query<GroupMappingRow, [string, string]>(
+				'SELECT * FROM sso_group_mappings WHERE id = ? AND org_id = ?'
+			)
+			.get(id, principal.orgId);
+		if (!row) throw new NotFoundError('SSO group mapping');
+		core.ctx.sqlite.run('DELETE FROM sso_group_mappings WHERE id = ? AND org_id = ?', [
+			id,
+			principal.orgId
+		]);
+		this.#audit(principal, 'sso.group_mapping.delete', id, {
+			providerId: row.provider_id,
+			claimValue: row.claim_value,
+			groupId: row.group_id
+		});
+	}
+
+	/**
+	 * Remove every mapping for a provider. Called when the provider is deleted so a later provider
+	 * that reuses the id cannot inherit old access rules.
+	 */
+	removeGroupMappingsForProvider(orgId: string, providerId: string): number {
+		return core.ctx.sqlite.run(
+			'DELETE FROM sso_group_mappings WHERE org_id = ? AND provider_id = ?',
+			[orgId, providerId]
+		).changes;
 	}
 
 	/**

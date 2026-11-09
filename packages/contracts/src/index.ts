@@ -24,6 +24,7 @@ export * from './assistant.ts';
 export * from './model.ts';
 export * from './api.ts';
 export * from './workload.ts';
+export * from './workload-identity.ts';
 export * from './cron.ts';
 export * from './function.ts';
 export * from './env.ts';

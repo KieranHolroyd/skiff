@@ -1,10 +1,10 @@
-import { createPrivateKey, createPublicKey, generateKeyPairSync, randomUUID, sign } from 'node:crypto';
+import { createPrivateKey, createPublicKey, randomUUID } from 'node:crypto';
 
 type JsonWebKey = Record<string, unknown>;
 import { eq } from 'drizzle-orm';
 import { settings } from '@skiff/db';
 import type { CoreContext } from './context.ts';
-import { decrypt, encrypt } from './util.ts';
+import { decrypt } from './util.ts';
 
 /**
  * OIDC ID tokens for pipeline jobs (docs/PIPELINES.md W9): `POST /api/pipeline/oidc-token` gives a
@@ -12,13 +12,15 @@ import { decrypt, encrypt } from './util.ts';
  * by pointing a federated identity at Skiff's issuer. Discovery and keys are public at
  * `<issuer>/.well-known/openid-configuration` and `<issuer>/jwks`.
  *
- * This is deliberately separate from registry auth: the registry realm signs its own ES256 tokens
- * against an X.509 certificate zot trusts (docs/REGISTRY.md §4.1).
+ * Tokens are signed by the ring's `oidc` purpose (I15), but keep the path-based issuer so clouds
+ * already configured against it keep working (D162). The old settings key stays published in the
+ * JWKS during the overlap; it is never used to sign again and is only read here.
  *
  * The `sub` claim follows GitHub's shape so existing trust policies translate directly:
  * `repo:<org>/<repository>:environment:<env>`, `…:pull_request`, or `…:ref:<ref>`.
  */
 
+/** Legacy (D162) key, sealed directly with the master key. Read-only until the overlap ends. */
 const SETTING_KEY = 'pipelines.oidc.signing_key';
 const TOKEN_TTL_SECONDS = 10 * 60;
 
@@ -47,53 +49,39 @@ export interface PipelineOidcClaims {
 	trust: string;
 }
 
-function base64url(input: Buffer | string): string {
-	return Buffer.from(input).toString('base64url');
-}
-
 export class PipelineOidc {
-	private cached: { kid: string; privateKey: ReturnType<typeof createPrivateKey>; publicJwk: JsonWebKey } | null = null;
-
 	constructor(private readonly ctx: CoreContext) {}
 
 	issuer(): string {
 		return `${this.ctx.config.platformOrigin}/api/pipeline/oidc`;
 	}
 
-	/** Load the signing key, creating it on first use (sealed with the master key in settings). */
-	private key() {
-		if (this.cached) return this.cached;
+	/**
+	 * The pre-ring (D162) key, read-only. It is no longer created or used to sign; it stays
+	 * published so tokens minted before the move keep verifying and clouds that already trust it
+	 * survive the overlap. Remove once the last old token TTL has passed.
+	 */
+	private legacyKey(): { kid: string; publicJwk: JsonWebKey } | null {
 		const row = this.ctx.db.select().from(settings).where(eq(settings.key, SETTING_KEY)).get();
-		let stored: StoredKey | null = null;
+		if (!row) return null;
 		try {
-			stored = row ? (JSON.parse(row.value) as StoredKey) : null;
+			const stored = JSON.parse(row.value) as StoredKey;
+			const pem = new TextDecoder().decode(decrypt(this.ctx.config.masterKey, stored.ciphertext, stored.nonce));
+			const publicJwk = createPublicKey(createPrivateKey(pem)).export({ format: 'jwk' }) as JsonWebKey;
+			return { kid: stored.kid, publicJwk };
 		} catch {
-			stored = null;
+			return null;
 		}
-		if (!stored) {
-			const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
-			const pem = privateKey.export({ format: 'pem', type: 'pkcs8' }).toString();
-			const sealed = encrypt(this.ctx.config.masterKey, new TextEncoder().encode(pem));
-			stored = { kid: randomUUID(), nonce: sealed.nonce, ciphertext: sealed.ciphertext, createdAt: this.ctx.now() };
-			this.ctx.db
-				.insert(settings)
-				.values({ key: SETTING_KEY, value: JSON.stringify(stored), updatedAt: this.ctx.now() })
-				.onConflictDoNothing()
-				.run();
-			// Another process may have won the insert; always use what is stored.
-			const again = this.ctx.db.select().from(settings).where(eq(settings.key, SETTING_KEY)).get();
-			if (again) stored = JSON.parse(again.value) as StoredKey;
-		}
-		const pem = new TextDecoder().decode(decrypt(this.ctx.config.masterKey, stored.ciphertext, stored.nonce));
-		const privateKey = createPrivateKey(pem);
-		const publicJwk = createPublicKey(privateKey).export({ format: 'jwk' }) as JsonWebKey;
-		this.cached = { kid: stored.kid, privateKey, publicJwk };
-		return this.cached;
 	}
 
+	/** The ring's `oidc` keys plus the legacy key while old tokens may still be in flight. */
 	jwks(): { keys: JsonWebKey[] } {
-		const { kid, publicJwk } = this.key();
-		return { keys: [{ ...publicJwk, kid, alg: 'ES256', use: 'sig' }] };
+		const keys: JsonWebKey[] = this.ctx.signingKeys.jwks('oidc');
+		const legacy = this.legacyKey();
+		if (legacy && !keys.some((key) => key.kid === legacy.kid)) {
+			keys.push({ ...legacy.publicJwk, kid: legacy.kid, alg: 'ES256', use: 'sig' });
+		}
+		return { keys };
 	}
 
 	discovery(): Record<string, unknown> {
@@ -122,16 +110,12 @@ export class PipelineOidc {
 	}
 
 	mint(claims: PipelineOidcClaims, audience: string | undefined): { token: string; expiresAt: number } {
-		const { kid, privateKey } = this.key();
 		const now = Math.floor(this.ctx.now() / 1000);
 		const exp = now + TOKEN_TTL_SECONDS;
 		const payload = {
-			iss: this.issuer(),
 			aud: audience ?? this.ctx.config.platformOrigin,
 			sub: PipelineOidc.subject(claims),
-			iat: now,
 			nbf: now - 5,
-			exp,
 			jti: randomUUID(),
 			repository: `${claims.org}/${claims.repository}`,
 			repository_id: claims.repositoryId,
@@ -151,9 +135,8 @@ export class PipelineOidc {
 			...(claims.environment ? { environment: claims.environment } : {}),
 			trust: claims.trust,
 		};
-		const header = base64url(JSON.stringify({ alg: 'ES256', typ: 'JWT', kid }));
-		const body = base64url(JSON.stringify(payload));
-		const signature = sign('sha256', Buffer.from(`${header}.${body}`), { key: privateKey, dsaEncoding: 'ieee-p1363' });
-		return { token: `${header}.${body}.${base64url(signature)}`, expiresAt: exp * 1000 };
+		// Signed by the ring's `oidc` purpose, but keeps the path-based issuer (D162) as an alias.
+		const token = this.ctx.signingKeys.signSync('oidc', payload, TOKEN_TTL_SECONDS, { issuer: this.issuer() });
+		return { token, expiresAt: exp * 1000 };
 	}
 }

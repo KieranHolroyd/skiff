@@ -225,6 +225,13 @@ CPUWeight=${cpuWeight}
 `;
 }
 
+/** Payload of the environment variable that points a workload at its token (IAM.md I18). */
+export const IDENTITY_TOKEN_ENV = 'SKIFF_TOKEN_FILE';
+/** Where a workload sees the token inside its sandbox. */
+export const IDENTITY_TOKEN_MOUNT = '/var/run/skiff/token';
+/** systemd credential name; the process renderer points `%d/<name>` at it. */
+export const IDENTITY_CREDENTIAL = 'skiff-identity';
+
 /**
  * systemd's ExecStart parser understands double quotes and C escapes, plus `$`/`%` expansion.
  * Quote every argv element and escape the four characters that have meaning, so an argument that
@@ -369,6 +376,8 @@ export interface ProcessUnitOptions {
 	 * a credential, and the app's own `NODE_OPTIONS`, which the preload is prepended to.
 	 */
 	nodeListen?: { path: string; userNodeOptions?: string };
+	/** Workload identity (IAM.md I18): the 0400 token file, passed as a credential. */
+	identityPath?: string | null;
 }
 
 /**
@@ -430,6 +439,13 @@ export function renderProcessUnit(options: ProcessUnitOptions): string {
 		lines.push(
 			`Environment="NODE_OPTIONS=--require=%d/${NODE_LISTEN_CREDENTIAL}${user ? ` ${escapeUnitEnvironmentValue(user)}` : ''}"`,
 		);
+	}
+	if (options.identityPath) {
+		// systemd copies the file into the unit's credential directory, owned by the service user.
+		// The activation's SKIFF_TOKEN_FILE is removed from the env file (it names the mount path a
+		// container uses), so this assignment is the process app's source of truth.
+		lines.push(`LoadCredential=${IDENTITY_CREDENTIAL}:${options.identityPath}`);
+		lines.push(`Environment=${IDENTITY_TOKEN_ENV}=%d/${IDENTITY_CREDENTIAL}`);
 	}
 	lines.push(`ExecStart=${renderExecStart(options.command)}`);
 	lines.push('Restart=on-failure');
@@ -668,6 +684,8 @@ export interface ContainerUnitOptions {
 	replica?: DatabaseUnitOptions['replica'];
 	/** Registry credentials for the pull (docs/REGISTRY.md R2): a root-only `auth.json`. */
 	authFile?: string | null;
+	/** Workload identity (IAM.md I18): host directory mounted read-only at `/var/run/skiff`. */
+	identityDir?: string | null;
 }
 
 /**
@@ -750,6 +768,12 @@ export function renderContainerUnit(options: ContainerUnitOptions): string {
 			if (secret.delivery === 'file')
 				lines.push(`Environment=${secret.name}_FILE=/run/skiff-secrets/${secret.name}`);
 		}
+	}
+	if (options.identityDir) {
+		// `U` hands the directory (and its 0400 token) to the container's own uid on every start,
+		// because a rootless `auto` user namespace range is not guaranteed to be the same one next
+		// time. Mounting the directory keeps an atomic token rewrite visible to the running app.
+		lines.push(`Volume=${options.identityDir}:/var/run/skiff:ro,Z,U`);
 	}
 	lines.push('DropCapability=all');
 	lines.push('NoNewPrivileges=true');

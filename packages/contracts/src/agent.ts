@@ -298,6 +298,8 @@ export type DesiredState = z.infer<typeof desiredStateSchema>;
  * - `share-mounts`: mounts `shareMounts`, unmounts `shareUnmounts` and reports both.
  * - `disk-mounts`: mounts `diskMounts` by filesystem UUID, unmounts `diskUnmounts`, reports both.
  * - `volume-profiles`: benchmarks `volumeProfileTasks` through the helper and reports results.
+ * - `workload-identity`: delivers a workload JWT file and serves the node-local metadata endpoint
+ *   (docs/IAM.md I18).
  */
 export const nodeCapabilities = [
 	'studio-principal',
@@ -313,6 +315,7 @@ export const nodeCapabilities = [
 	'share-mounts',
 	'volume-profiles',
 	'disk-mounts',
+	'workload-identity',
 ] as const;
 export type NodeCapability = (typeof nodeCapabilities)[number];
 

@@ -12,16 +12,23 @@ import {
 	FUNCTIONS_PYTHON_CAPABILITY,
 	BUN_DEFAULT_COMMAND,
 	PROCESS_NODE_CAPABILITY,
+	WORKLOAD_IDENTITY_AUDIENCE,
+	WORKLOAD_IDENTITY_CAPABILITY,
+	WORKLOAD_IDENTITY_MOUNT_PATH,
+	WORKLOAD_IDENTITY_TOKEN_ENV,
+	WORKLOAD_IDENTITY_URL_ENV,
 	workloadEnvIssues,
+	workloadIdentityUrl,
+	type GithubRunnerPoolView,
 	workloadReplicaId,
 	workloadSpecSchema,
 	placementSpecSchema,
 	workloadVariablesSchema,
-	type GithubRunnerPoolView,
 	type NodeCapacityView,
 	type Principal,
 	type WorkloadActivation,
 	type WorkloadDesired,
+	type WorkloadIdentityResponse,
 	type WorkloadRuntime,
 	type WorkloadSpec,
 	type WorkloadSpecInput,
@@ -36,6 +43,7 @@ import { ConflictError, CoreError, NotFoundError, ValidationError } from './erro
 import { resolvePlacement, type PlacementCandidate } from './placement.ts';
 import { planReplicas } from './replicas.ts';
 import { effectiveRuntime, storedRuntime, workloadRuntimeOf } from './runtime-tier.ts';
+import { workloadGetsIdentity } from './iam/workload-identity.ts';
 import { parseJson, newId, sha256Hex } from './util.ts';
 import { nodeDiskFreeBytes } from './app-volumes.ts';
 import type { ProjectRow } from './projects.ts';
@@ -530,6 +538,7 @@ export class WorkloadService {
 
 		// Apps whose database is moving stay listed but stopped, so the agent keeps their state (D97).
 		const quiesced = this.ctx.moves.quiescedProjectIds();
+		const identityNode = this.nodeHasCapability(nodeId, WORKLOAD_IDENTITY_CAPABILITY);
 		return rows.flatMap(({ workload, project, deployment }) => {
 			const spec = this.specOf(project, workload);
 			const release = this.ctx.db
@@ -581,6 +590,8 @@ export class WorkloadService {
 				...(worker ? { ingress: 'none' as const } : {}),
 				...(spec.runner ? { runner: { provider: 'github' as const } } : {}),
 				...(spec.function ? { function: spec.function } : {}),
+				// A marker only; the token arrives through activation. Old agents never see it.
+				...(identityNode && workloadGetsIdentity(spec) ? { identity: true as const } : {}),
 			};
 			// A spread workload carries only the copies assigned to this node (C4).
 			const assigned = replicaRows.filter((row) => row.workloadId === workload.id);
@@ -720,22 +731,7 @@ export class WorkloadService {
 		const { workloadId, replica } = parseWorkloadReplicaId(desiredId);
 		const row = this.ctx.db.select().from(workloads).where(eq(workloads.id, workloadId)).get();
 		if (!row) throw new NotFoundError('Workload');
-		// A spread copy (C4) lives on its own node; a copy re-placed by failover keeps its index.
-		const spreadCopy =
-			row.nodeId !== nodeId &&
-			this.ctx.db
-				.select({ id: workloadReplicas.id })
-				.from(workloadReplicas)
-				.where(
-					and(
-						eq(workloadReplicas.workloadId, workloadId),
-						eq(workloadReplicas.replicaIndex, replica),
-						eq(workloadReplicas.nodeId, nodeId),
-					),
-				)
-				.get();
-		if (row.nodeId !== nodeId && !spreadCopy)
-			throw new CoreError('forbidden', 'This workload is placed on another node.', 403);
+		this.assertWorkloadOnNode(row, workloadId, replica, nodeId);
 		const spec = this.specOf(this.requireProject(row.projectId), row);
 		if (replica >= spec.replicas) throw new NotFoundError('Workload replica');
 		// Attached database, storage and broker connection values sit under the spec's own env and secrets (D56, S4, D111).
@@ -776,23 +772,92 @@ export class WorkloadService {
 		if (!row) return activation;
 		const project = this.requireProject(row.projectId);
 		const spec = this.specOf(project, row);
-		if (!spec.runner) return activation;
-		try {
-			const env = await this.ctx.githubRunners.mintJitConfig({
-				orgId: row.orgId,
-				projectId: row.projectId,
-				projectSlug: project.slug,
-				workloadId: row.id,
-				replica,
-				runner: spec.runner,
-			});
-			if (row.message?.startsWith(RUNNER_MESSAGE_PREFIX)) this.ctx.githubRunners.noteFailure(row.id, null);
-			return { ...activation, env: { ...activation.env, ...env } };
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			this.ctx.githubRunners.noteFailure(row.id, `${RUNNER_MESSAGE_PREFIX}${message}`.slice(0, 500));
-			throw error;
+		if (spec.runner) {
+			try {
+				const env = await this.ctx.githubRunners.mintJitConfig({
+					orgId: row.orgId,
+					projectId: row.projectId,
+					projectSlug: project.slug,
+					workloadId: row.id,
+					replica,
+					runner: spec.runner,
+				});
+				if (row.message?.startsWith(RUNNER_MESSAGE_PREFIX)) this.ctx.githubRunners.noteFailure(row.id, null);
+				return { ...activation, env: { ...activation.env, ...env } };
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				this.ctx.githubRunners.noteFailure(row.id, `${RUNNER_MESSAGE_PREFIX}${message}`.slice(0, 500));
+				throw error;
+			}
 		}
+		if (!workloadGetsIdentity(spec) || !this.nodeHasCapability(nodeId, WORKLOAD_IDENTITY_CAPABILITY))
+			return activation;
+		const identity = await this.ctx.workloadIdentity.activation(row.id, WORKLOAD_IDENTITY_AUDIENCE);
+		const identityUrl = workloadIdentityUrl(spec.runtime);
+		return {
+			...activation,
+			env: {
+				...activation.env,
+				// Platform values win over the user's environment: the token file is the workload's,
+				// and the metadata endpoint is how it refreshes it.
+				[WORKLOAD_IDENTITY_TOKEN_ENV]: WORKLOAD_IDENTITY_MOUNT_PATH,
+				...(identityUrl ? { [WORKLOAD_IDENTITY_URL_ENV]: identityUrl } : {}),
+			},
+			identity,
+		};
+	}
+
+	/**
+	 * Mint a token for one workload on this node, for the agent's metadata endpoint. The node token
+	 * has already proved which node is asking, and this checks the workload is placed there.
+	 */
+	async identityFor(
+		nodeId: string,
+		desiredId: string,
+		audience: string = WORKLOAD_IDENTITY_AUDIENCE,
+	): Promise<WorkloadIdentityResponse> {
+		const { workloadId, replica } = parseWorkloadReplicaId(desiredId);
+		const row = this.ctx.db.select().from(workloads).where(eq(workloads.id, workloadId)).get();
+		if (!row) throw new NotFoundError('Workload');
+		this.assertWorkloadOnNode(row, workloadId, replica, nodeId);
+		const project = this.requireProject(row.projectId);
+		const spec = this.specOf(project, row);
+		if (replica >= spec.replicas) throw new NotFoundError('Workload replica');
+		if (!workloadGetsIdentity(spec) || !this.nodeHasCapability(nodeId, WORKLOAD_IDENTITY_CAPABILITY))
+			throw new ValidationError('This workload does not use workload identity.');
+		return this.ctx.workloadIdentity.response(row.id, audience);
+	}
+
+	/** A spread copy (C4) lives on its own node; a copy re-placed by failover keeps its index. */
+	private assertWorkloadOnNode(
+		row: WorkloadRow,
+		workloadId: string,
+		replica: number,
+		nodeId: string,
+	): void {
+		if (row.nodeId === nodeId) return;
+		const spreadCopy = this.ctx.db
+			.select({ id: workloadReplicas.id })
+			.from(workloadReplicas)
+			.where(
+				and(
+					eq(workloadReplicas.workloadId, workloadId),
+					eq(workloadReplicas.replicaIndex, replica),
+					eq(workloadReplicas.nodeId, nodeId),
+				),
+			)
+			.get();
+		if (!spreadCopy) throw new CoreError('forbidden', 'This workload is placed on another node.', 403);
+	}
+
+	/** Does this node's agent advertise a capability? An agent that predates capabilities has none. */
+	private nodeHasCapability(nodeId: string, capability: string): boolean {
+		const row = this.ctx.db
+			.select({ capabilitiesJson: nodes.capabilitiesJson })
+			.from(nodes)
+			.where(eq(nodes.id, nodeId))
+			.get();
+		return nodeCapabilities(row?.capabilitiesJson ?? null).includes(capability);
 	}
 
 	/** Apply the agent's actual-state report from a heartbeat. */
@@ -1150,6 +1215,9 @@ export function activationVersion(spec: WorkloadSpec, databases = ''): string {
 			// A binding or compatibility change must restart the host, so the function spec is part of
 			// the activation hash (D110). Omitted for every other tier, keeping existing versions.
 			...(spec.function ? { function: spec.function } : {}),
+			// An override changes the service account the token names, so it must re-apply. The token
+			// itself is never hashed: a refresh must not restart the workload.
+			...(spec.identity ? { identity: spec.identity } : {}),
 		}),
 	);
 }

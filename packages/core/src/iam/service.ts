@@ -17,7 +17,9 @@ import {
 	compileGrants,
 	authorize,
 	isPermission,
+	requireStepUp,
 	roles,
+	stepUpLevel,
 	type Binding,
 	type CompiledGrants,
 	type Condition,
@@ -32,6 +34,7 @@ import {
 import type { CoreContext } from '../context.ts';
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../errors.ts';
 import { newId } from '../util.ts';
+import { stepUpAppliesTo, stepUpEnabled } from './step-up.ts';
 
 const ROLE_NAME = /^[a-z][a-z0-9-]{1,39}$/;
 const PRINCIPAL_TYPES = ['user', 'group', 'serviceAccount'] as const;
@@ -227,6 +230,11 @@ export class IamService {
 		const decision = this.decide(principal, permission, resource);
 		if (!decision.allow)
 			throw new ForbiddenError(permission, decision.reason, decision.via);
+		// Step-up (STEP-UP.md §3, §6): a session-backed person must have verified recently enough
+		// for a sensitive permission. Kept behind the flag while no verification UI exists, and
+		// limited to `user` principals: tokens cannot show a dialog and follow §7's token rule.
+		if (stepUpEnabled() && stepUpAppliesTo(principal) && stepUpLevel(permission) !== 'none')
+			requireStepUp(principal, permission, this.ctx.now());
 	}
 
 	explain(principal: Principal, permission: Permission, resource: ResourceRef): Decision {

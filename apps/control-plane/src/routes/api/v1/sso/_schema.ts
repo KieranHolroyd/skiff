@@ -38,7 +38,21 @@ export const domainCreateSchema = z.object({
 	domain: z.string().trim().min(1).max(253)
 });
 
-export const authMethodSchema = z.enum(['password', 'passkey', 'github', 'gitlab', 'magic-link', 'sso']);
+/** IAM.md I19: map one IdP group claim value to one Skiff group. */
+export const groupMappingSchema = z.object({
+	providerId: z.string().trim().min(1).max(128),
+	claimValue: z.string().trim().min(1).max(200),
+	groupId: z.string().trim().min(1).max(128)
+});
+
+export const authMethodSchema = z.enum([
+	'password',
+	'passkey',
+	'github',
+	'gitlab',
+	'magic-link',
+	'sso'
+]);
 
 /** IAM.md I21: every field optional for a partial update. */
 export const authPolicyUpdateSchema = z.object({

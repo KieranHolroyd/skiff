@@ -4,6 +4,7 @@ import { storageAdminSchema, workloadObjectStorageSchema } from './object-storag
 import { workloadBrokerSchema } from './broker.ts';
 import { githubRunnerSchema } from './github-runner.ts';
 import { MAX_REGISTRY_AUTH_ENTRIES, imageDigestSchema, registryAuthEntrySchema, workloadRegistrySchema } from './registry.ts';
+import { workloadIdentityActivationSchema, workloadIdentitySpecSchema } from './workload-identity.ts';
 import {
 	FUNCTION_PYTHON_MIN_MEMORY_MB,
 	FUNCTION_STATEFUL_REPLICA_MESSAGE,
@@ -188,6 +189,12 @@ export const workloadSpecSchema = z
 		/** GitHub Actions runner profile (plan 21); container workers only. */
 		runner: githubRunnerSchema.optional(),
 		/**
+		 * Workload identity (IAM.md I18, §7.4): the service account this workload runs as. Absent
+		 * means the control plane creates and uses `wl-<project>-<env>`; an override must name an
+		 * existing service account in the same org.
+		 */
+		identity: workloadIdentitySpecSchema.optional(),
+		/**
 		 * Functions only (D110): the resolved manifest. The control plane validates a bundle into
 		 * this; the agent renders a workerd config from it and the helper starts the pinned binary.
 		 */
@@ -236,6 +243,18 @@ export const workloadSpecSchema = z
 			});
 		if (spec.runner && spec.runtime !== 'container')
 			ctx.addIssue({ code: 'custom', path: ['runner'], message: 'Runners use the container runtime.' });
+		if (spec.identity && spec.runtime === 'function')
+			ctx.addIssue({
+				code: 'custom',
+				path: ['identity'],
+				message: 'Workload identity is for process and container workloads.',
+			});
+		if (spec.identity && spec.runner)
+			ctx.addIssue({
+				code: 'custom',
+				path: ['identity'],
+				message: 'Ephemeral CI runners do not get a workload identity.',
+			});
 		if (spec.runner && spec.ingress !== 'none')
 			ctx.addIssue({ code: 'custom', path: ['ingress'], message: 'Runners are workers; set ingress to "none".' });
 		if (spec.runner && spec.data)
@@ -515,6 +534,12 @@ export const workloadDesiredSchema = z.object({
 	 */
 	runner: z.object({ provider: z.literal('github') }).optional(),
 	/**
+	 * Workload identity is enabled for this app (IAM.md I18). The helper mounts
+	 * `/run/skiff/identity/<id>/token` at `/var/run/skiff/token` and exports `SKIFF_TOKEN_FILE`.
+	 * Only a marker travels here; the token itself arrives through activation.
+	 */
+	identity: z.literal(true).optional(),
+	/**
 	 * Functions only (D110): the resolved manifest and the pinned workerd build. The agent renders
 	 * a workerd config from it; the helper writes that config and starts the binary.
 	 */
@@ -559,6 +584,11 @@ export const workloadActivationSchema = z.object({
 	 * to the workload's 0400 auth file and points `AuthFile=` at it; absent when none apply.
 	 */
 	registryAuth: z.array(registryAuthEntrySchema).max(MAX_REGISTRY_AUTH_ENTRIES).optional(),
+	/**
+	 * Process and container apps only: a short-lived workload JWT for Skiff's API. The agent hands
+	 * it to the helper, which writes the 0400 file; it never reaches desired state, logs or audit.
+	 */
+	identity: workloadIdentityActivationSchema.optional(),
 });
 export type WorkloadActivation = z.infer<typeof workloadActivationSchema>;
 

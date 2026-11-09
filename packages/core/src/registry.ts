@@ -38,8 +38,8 @@ import { CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { buildSystemPrincipal } from './iam/system.ts';
 import { MANIFEST_ACCEPT } from './oci-client.ts';
 import { OidcError, refMatches, verifyGithubOidc, verifyGitlabOidc } from './registry-oidc.ts';
-import { generateRegistrySigningKey, signRegistryToken, type RegistryAccess, type RegistrySigningKey } from './registry-token.ts';
-import { hmac, newId, parseJson, randomToken, safeEqual, sha256Hex } from './util.ts';
+import { certificateFromPrivateKeyPem, type RegistryAccess } from './registry-token.ts';
+import { hmac, newId, parseJson, randomBytes, randomToken, safeEqual, sha256Hex } from './util.ts';
 
 /**
  * The platform container registry (docs/REGISTRY.md G1).
@@ -56,7 +56,15 @@ import { hmac, newId, parseJson, randomToken, safeEqual, sha256Hex } from './uti
  */
 
 const CONFIG_KEY = 'registry.config';
+/**
+ * Legacy (D155): the registry key and certificate sealed in `settings` before the ring. The realm
+ * no longer signs with it, but the row stays readable so tokens minted before I15 remain valid
+ * until their 5-minute TTL lapses. Remove it (and any migration/cleanup) one release after the ring
+ * move; see docs/IAM.md §7.3.
+ */
 const SIGNING_KEY = 'registry.signingKey';
+/** The certificate zot is given, cached by the active ring `kid` (a rotation rewrites it). */
+const CERTIFICATE_KEY = `${SIGNING_KEY}.certificate`;
 const PLATFORM_KEY_ORG = 'platform';
 /** Basic auth forbids ":" in a username (RFC 7617), so the kind and id are joined with ".". */
 const WORKLOAD_USER_PREFIX = 'workload.';
@@ -268,7 +276,7 @@ export class RegistryService {
 		if (config.enabled && !config.nodeId) throw new ValidationError('Choose the node the registry runs on.');
 		if (!config.workloadId) config.workloadId = newId(REGISTRY_ID_PREFIX);
 		if (!config.eventsSecret) config.eventsSecret = randomToken(24);
-		if (config.enabled) this.signingKey();
+		if (config.enabled) this.signingCertificate();
 		this.saveConfig(config);
 		this.ctx.projects.bump();
 		const { s3: s3Input, cosignKeys: _keys, ...audited } = input;
@@ -429,14 +437,38 @@ export class RegistryService {
 		};
 	}
 
-	/** The token signing key, created on first use and sealed with the platform key. */
-	private signingKey(): RegistrySigningKey {
-		const row = this.ctx.db.select().from(settings).where(eq(settings.key, SIGNING_KEY)).get();
-		if (row) return JSON.parse(this.ctx.secrets.open(PLATFORM_KEY_ORG, row.value)) as RegistrySigningKey;
-		const key = generateRegistrySigningKey('skiff-registry-token', this.ctx.now());
-		const value = this.ctx.secrets.seal(PLATFORM_KEY_ORG, JSON.stringify(key));
-		this.ctx.db.insert(settings).values({ key: SIGNING_KEY, value, updatedAt: this.ctx.now() }).run();
-		return key;
+	/**
+	 * zot's verification certificate, derived from the ring's active `registry` key. zot reads an
+	 * X.509 certificate rather than a JWKS, so a rotation regenerates the self-signed certificate
+	 * and the activation version changes. The certificate is cached by `kid` so repeated desired
+	 * state renders are byte-identical until the active key actually moves.
+	 *
+	 * zot trusts one certificate, so the old certificate cannot stay beside the new one. Registry
+	 * tokens live five minutes: a token minted just before the switch may fail until the client
+	 * fetches a new one. A lossless switch needs zot to accept a certificate bundle (follow-up).
+	 */
+	private signingCertificate(): { kid: string; certificatePem: string } {
+		const active = this.ctx.signingKeys.activeSync('registry');
+		const row = this.ctx.db.select().from(settings).where(eq(settings.key, CERTIFICATE_KEY)).get();
+		if (row) {
+			try {
+				const stored = JSON.parse(row.value) as { kid?: string; certificatePem?: string };
+				if (stored.kid === active.kid && stored.certificatePem) {
+					return { kid: active.kid, certificatePem: stored.certificatePem };
+				}
+			} catch {
+				// A malformed cache is regenerated below.
+			}
+		}
+		const { kid, privateKeyPem } = this.ctx.signingKeys.activePrivateKeyPem('registry');
+		const certificatePem = certificateFromPrivateKeyPem(privateKeyPem, 'skiff-registry-token', this.ctx.now());
+		const value = JSON.stringify({ kid, certificatePem });
+		this.ctx.db
+			.insert(settings)
+			.values({ key: CERTIFICATE_KEY, value, updatedAt: this.ctx.now() })
+			.onConflictDoUpdate({ target: settings.key, set: { value, updatedAt: this.ctx.now() } })
+			.run();
+		return { kid, certificatePem };
 	}
 
 	// ------------------------------------------------------------------- desired state (node)
@@ -452,7 +484,7 @@ export class RegistryService {
 	private activationVersionOf(config: RegistryConfig): string {
 		return sha256Hex(
 			JSON.stringify({
-				cert: this.signingKey().certificatePem,
+				cert: this.signingCertificate().certificatePem,
 				events: this.eventsUrl(config),
 				host: this.host(),
 				keepTags: config.keepTags,
@@ -543,7 +575,7 @@ export class RegistryService {
 			workloadId: id,
 			activationVersion: this.activationVersionOf(config),
 			env: {
-				SKIFF_REGISTRY_TOKEN_CERT: this.signingKey().certificatePem,
+				SKIFF_REGISTRY_TOKEN_CERT: this.signingCertificate().certificatePem,
 				SKIFF_REGISTRY_EVENTS_URL: this.eventsUrl(config),
 				...(this.trustOn(config) ? { SKIFF_REGISTRY_ADMIN_HTPASSWD: this.adminHtpasswd(config)! } : {}),
 				...(config.s3
@@ -569,15 +601,33 @@ export class RegistryService {
 		};
 	}
 
+	/**
+	 * Mint a Docker token with the ring's `registry` purpose (D155 moved onto the ring, I15).
+	 * `iss` is the platform origin, as before, and the key's `kid` is now the ring `kid`.
+	 */
+	private mintRegistryToken(
+		subject: string,
+		access: RegistryAccess[],
+		ttlSeconds: number,
+	): { token: string; expiresIn: number; issuedAt: string } {
+		const iat = Math.floor(this.ctx.now() / 1000);
+		const token = this.ctx.signingKeys.signSync(
+			'registry',
+			{
+				sub: subject,
+				aud: this.host(),
+				nbf: iat - 30,
+				jti: randomBytes(12).toString('hex'),
+				access,
+			},
+			ttlSeconds,
+		);
+		return { token, expiresIn: ttlSeconds, issuedAt: new Date(iat * 1000).toISOString() };
+	}
+
 	/** A token the control plane uses itself: pull (and optionally delete) on one repository. */
 	internalToken(repository: string, actions: string[] = ['pull']): string {
-		return signRegistryToken(this.signingKey(), {
-			issuer: this.ctx.config.platformOrigin,
-			service: this.host(),
-			subject: 'skiff-control-plane',
-			access: [{ type: 'repository', name: repository, actions }],
-			ttlSeconds: 120,
-		}).token;
+		return this.mintRegistryToken('skiff-control-plane', [{ type: 'repository', name: repository, actions }], 120).token;
 	}
 
 	/**
@@ -616,13 +666,7 @@ export class RegistryService {
 		} else {
 			throw new CoreError('unauthorized', 'Sign in with your Skiff API key as the password.', 401);
 		}
-		const signed = signRegistryToken(this.signingKey(), {
-			issuer: this.ctx.config.platformOrigin,
-			service: this.host(),
-			subject,
-			access,
-			ttlSeconds: TOKEN_TTL_SECONDS,
-		});
+		const signed = this.mintRegistryToken(subject, access, TOKEN_TTL_SECONDS);
 		return { token: signed.token, access_token: signed.token, expires_in: signed.expiresIn, issued_at: signed.issuedAt };
 	}
 
@@ -691,13 +735,7 @@ export class RegistryService {
 			}
 			return [{ type: 'repository', name: parsed.name, actions: [...new Set(actions)] }];
 		});
-		const signed = signRegistryToken(this.signingKey(), {
-			issuer: this.ctx.config.platformOrigin,
-			service: this.host(),
-			subject,
-			access,
-			ttlSeconds: TOKEN_TTL_SECONDS,
-		});
+		const signed = this.mintRegistryToken(subject, access, TOKEN_TTL_SECONDS);
 		return { token: signed.token, access_token: signed.token, expires_in: signed.expiresIn, issued_at: signed.issuedAt };
 	}
 

@@ -181,6 +181,7 @@ const handleRequest: Handle = async ({ event, resolve }) => {
 		event.locals.principal = principalFromSession(session.user.id, event.request, {
 			name: session.user.name ?? undefined,
 			activeOrganizationId: session.session.activeOrganizationId,
+			session: session.session,
 		});
 	} else if (event.request.headers.get('authorization')) {
 		event.locals.principal = await principalFromRequest(event.request);

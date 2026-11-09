@@ -58,7 +58,7 @@ export function emailDomain(email: string): string | null {
  */
 export function verifiedDomainForEmail<T extends { domain: string; verifiedAt: number | null }>(
 	email: string,
-	domains: Iterable<T>,
+	domains: Iterable<T>
 ): T | null {
 	const domain = emailDomain(email);
 	if (!domain) return null;
@@ -78,7 +78,10 @@ export function ssoVerificationRecord(token: string): string {
  * Whether any TXT record at the domain carries this verification token. Each record arrives as its
  * character-strings; they are joined first because a resolver (or Bun) may split one value.
  */
-export function hasSsoVerificationRecord(records: readonly (readonly string[])[], token: string): boolean {
+export function hasSsoVerificationRecord(
+	records: readonly (readonly string[])[],
+	token: string
+): boolean {
 	const expected = ssoVerificationRecord(token);
 	for (const record of records) {
 		if (record.join('').trim() === expected) return true;
@@ -87,6 +90,88 @@ export function hasSsoVerificationRecord(records: readonly (readonly string[])[]
 }
 
 /** A row is due when it has never been checked, or its last check is a day old. */
-export function ssoDomainCheckDue(lastCheckedAt: number | null, now: number, interval = SSO_RECHECK_MS): boolean {
+export function ssoDomainCheckDue(
+	lastCheckedAt: number | null,
+	now: number,
+	interval = SSO_RECHECK_MS
+): boolean {
 	return lastCheckedAt === null || now - lastCheckedAt >= interval;
+}
+
+// ---------------------------------------------------------------- IdP group mapping (I19, §8.3)
+
+/** A claim value longer than this is not a group name; ignore it rather than store it. */
+export const MAX_GROUP_CLAIM_LENGTH = 200;
+
+/**
+ * Normalise one IdP group claim for storage and comparison. Directory services disagree about
+ * whitespace and case (`Engineering`, ` engineering `), and a mapping that silently stops matching
+ * after an IdP rename defeats the point of syncing groups. Matching is therefore case-insensitive;
+ * the display value from the IdP is not used anywhere, only the Skiff group id is.
+ */
+export function normalizeGroupClaim(value: string): string | null {
+	const claim = value.trim().toLowerCase();
+	if (!claim || claim.length > MAX_GROUP_CLAIM_LENGTH) return null;
+	return claim;
+}
+
+/**
+ * Read the groups claim from an IdP's userinfo/ID token into normalised, de-duplicated values.
+ *
+ * Accepts an array (Okta, Entra, most OIDC providers), a comma- or newline-separated string
+ * (Auth0 and custom mappers), and a JSON array encoded as a string (some SAML/OIDC bridges).
+ * `undefined`/`null` stays `undefined` rather than becoming an empty list: a missing claim must
+ * not be treated as "the user is in no groups", or a misconfigured claim name would wipe access.
+ */
+export function groupClaimValues(raw: unknown): string[] | undefined {
+	if (raw === undefined || raw === null) return undefined;
+	let values: unknown[];
+	if (Array.isArray(raw)) values = raw;
+	else if (typeof raw === 'string') {
+		const trimmed = raw.trim();
+		if (!trimmed) return [];
+		if (trimmed.startsWith('[')) {
+			try {
+				const parsed: unknown = JSON.parse(trimmed);
+				values = Array.isArray(parsed) ? parsed : [parsed];
+			} catch {
+				values = trimmed.split(',');
+			}
+		} else values = trimmed.split(/[,\n]/);
+	} else values = [raw];
+
+	const out: string[] = [];
+	for (const value of values) {
+		if (typeof value !== 'string') continue;
+		const claim = normalizeGroupClaim(value);
+		if (claim && !out.includes(claim)) out.push(claim);
+	}
+	return out;
+}
+
+/** The group a mapping row points at, as stored in `sso_group_mappings`. */
+export interface GroupClaimMapping {
+	claimValue: string;
+	groupId: string;
+}
+
+/**
+ * Resolve the IdP claims a user presented against the organisation's mappings. Returns unique
+ * Skiff group ids; unknown claims are ignored, so adding a new IdP group never grants access
+ * until an administrator maps it. Local groups are not involved here — only membership rows.
+ */
+export function groupIdsForClaims(
+	claims: readonly string[] | undefined,
+	mappings: readonly GroupClaimMapping[]
+): string[] {
+	if (!claims || claims.length === 0) return [];
+	const wanted = new Set(
+		claims.map(normalizeGroupClaim).filter((claim): claim is string => claim !== null)
+	);
+	const out: string[] = [];
+	for (const mapping of mappings) {
+		const claim = normalizeGroupClaim(mapping.claimValue);
+		if (claim && wanted.has(claim) && !out.includes(mapping.groupId)) out.push(mapping.groupId);
+	}
+	return out;
 }

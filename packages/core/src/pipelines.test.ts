@@ -535,21 +535,33 @@ describe('commit statuses', () => {
 });
 
 describe('OIDC ID tokens (W9)', () => {
-	test('trusted jobs get an ES256 token that verifies against the JWKS; untrusted get none', async () => {
+	test('trusted jobs get a ring-signed ES256 token that verifies against the JWKS; untrusted get none', async () => {
 		const { createPublicKey, verify } = await import('node:crypto');
 		const r = repo();
 		await dispatchInline(r.name, 'on: workflow_dispatch\njobs:\n  deploy: { runs-on: linux, environment: prod, steps: [{ run: echo }] }\n');
 		const job = (await claimJob())!;
 		const { token } = engine.mintOidcToken(engine.authenticateJob(job.token), 'sts.amazonaws.com');
-		const [header, body, signature] = token.split('.');
-		const key = createPublicKey({ key: engine.oidc.jwks().keys[0] as never, format: 'jwk' });
-		expect(verify('sha256', Buffer.from(`${header}.${body}`), { key, dsaEncoding: 'ieee-p1363' }, Buffer.from(signature!, 'base64url'))).toBe(
+		const [headerPart, body, signature] = token.split('.');
+		const header = JSON.parse(Buffer.from(headerPart!, 'base64url').toString()) as { alg: string; kid: string };
+		const active = await core.ctx.signingKeys.active('oidc');
+		expect(header).toMatchObject({ alg: 'ES256', kid: active.kid });
+
+		const key = createPublicKey({ key: engine.oidc.jwks().keys.find((candidate) => candidate.kid === active.kid) as never, format: 'jwk' });
+		expect(verify('sha256', Buffer.from(`${headerPart}.${body}`), { key, dsaEncoding: 'ieee-p1363' }, Buffer.from(signature!, 'base64url'))).toBe(
 			true,
 		);
 		const claims = JSON.parse(Buffer.from(body!, 'base64url').toString());
 		expect(claims.iss).toBe('https://control.test/api/pipeline/oidc');
 		expect(claims.aud).toBe('sts.amazonaws.com');
 		expect(claims.sub).toBe(`repo:org_1/${r.name}:environment:prod`);
+
+		// The ring verifies the path-based issuer, and both public JWKS documents publish the kid.
+		await expect(
+			core.ctx.signingKeys.verify('oidc', token, { issuer: 'https://control.test/api/pipeline/oidc' }),
+		).resolves.toMatchObject({ iss: 'https://control.test/api/pipeline/oidc', sub: `repo:org_1/${r.name}:environment:prod` });
+		expect(core.ctx.signingKeys.jwks('oidc').map((entry) => entry.kid)).toContain(active.kid);
+		expect(core.ctx.signingKeys.jwksAll().keys.map((entry) => entry.kid)).toContain(active.kid);
+		expect(engine.oidc.jwks().keys.map((entry) => entry.kid)).toContain(active.kid);
 		expect(engine.oidc.discovery().jwks_uri).toBe('https://control.test/api/pipeline/oidc/jwks');
 		finish(job);
 
@@ -559,6 +571,45 @@ describe('OIDC ID tokens (W9)', () => {
 		const untrusted = (await claimJob())!;
 		expect(() => engine.mintOidcToken(engine.authenticateJob(untrusted.token), undefined)).toThrow('Untrusted');
 		finish(untrusted);
+	});
+
+	test('the alias JWKS keeps the legacy settings key, and a legacy-signed token still verifies', async () => {
+		const { createPublicKey, generateKeyPairSync, sign, verify } = await import('node:crypto');
+		const { encrypt } = await import('./util.ts');
+		const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+		const pem = privateKey.export({ format: 'pem', type: 'pkcs8' }).toString();
+		const sealed = encrypt(new Uint8Array(32).fill(7), new TextEncoder().encode(pem));
+		const stored = { kid: 'legacy-pipeline-kid', nonce: sealed.nonce, ciphertext: sealed.ciphertext, createdAt: clock };
+		opened.sqlite.run('INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', [
+			'pipelines.oidc.signing_key',
+			JSON.stringify(stored),
+			clock,
+		]);
+		try {
+			const keys = engine.oidc.jwks().keys;
+			const legacy = keys.find((candidate) => candidate.kid === 'legacy-pipeline-kid');
+			expect(legacy).toBeDefined();
+			// The legacy key is an alias-only key: it is never published at the platform JWKS.
+			expect(core.ctx.signingKeys.jwksAll().keys.map((entry) => entry.kid)).not.toContain('legacy-pipeline-kid');
+
+			const now = Math.floor(clock / 1000);
+			const header = Buffer.from(JSON.stringify({ alg: 'ES256', typ: 'JWT', kid: 'legacy-pipeline-kid' })).toString('base64url');
+			const body = Buffer.from(
+				JSON.stringify({
+					iss: 'https://control.test/api/pipeline/oidc',
+					aud: 'sts.amazonaws.com',
+					sub: 'repo:org_1/app:ref:refs/heads/main',
+					iat: now,
+					nbf: now - 5,
+					exp: now + 600,
+				}),
+			).toString('base64url');
+			const signature = sign('sha256', Buffer.from(`${header}.${body}`), { key: privateKey, dsaEncoding: 'ieee-p1363' });
+			const publicKey = createPublicKey({ key: legacy as never, format: 'jwk' });
+			expect(verify('sha256', Buffer.from(`${header}.${body}`), { key: publicKey, dsaEncoding: 'ieee-p1363' }, signature)).toBe(true);
+		} finally {
+			opened.sqlite.run('DELETE FROM settings WHERE key = ?', ['pipelines.oidc.signing_key']);
+		}
 	});
 });
 

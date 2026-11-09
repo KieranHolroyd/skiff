@@ -74,8 +74,10 @@ import { configurePrunePlatformIam } from './operations/prune.ts';
 import { ServiceAccountService } from './service-accounts.ts';
 import { AccessKeyService } from './access-keys.ts';
 import { SigningKeyService } from './iam/keys.ts';
+import { WorkloadIdentityService } from './iam/workload-identity.ts';
 import { TokenService } from './iam/sts.ts';
 import { AccessPolicyService } from './iam/access-policies.ts';
+import { ScimTokenService } from './iam/scim.ts';
 import { UserPoolService } from './user-pools.ts';
 
 export * from './config.ts';
@@ -89,9 +91,12 @@ export * from './orgs.ts';
 export * from './iam/service.ts';
 export * from './iam/governance.ts';
 export * from './iam/auth-policy.ts';
+export * from './iam/sso.ts';
 export * from './iam/keys.ts';
+export * from './iam/workload-identity.ts';
 export * from './iam/sts.ts';
 export * from './iam/access-policies.ts';
+export * from './iam/scim.ts';
 export * from './user-pools.ts';
 export * from './platform-iam.ts';
 export * from './service-accounts.ts';
@@ -271,12 +276,16 @@ export interface Core {
 	accessKeys: AccessKeyService;
 	/** The platform signing-key ring: one issuer and one JWKS for every token (IAM.md I15). */
 	signingKeys: SigningKeyService;
+	/** Per-workload service accounts and tokens (IAM.md I18, §7.4). */
+	workloadIdentity: WorkloadIdentityService;
 	/** RFC 8693 token exchange against federation trusts (IAM.md I16–I17). */
 	sts: TokenService;
 	/** Skiff Access policies (IAM.md I25). */
 	accessPolicies: AccessPolicyService;
 	/** Managed user pools: OIDC clients and discovery for tenant apps (IAM.md I26–I29). */
 	userPools: UserPoolService;
+	/** SCIM bearer tokens and directory reconciliation (IAM.md I20). */
+	scim: ScimTokenService;
 	/** Email: Skiff's self-hosted SES (docs/EMAIL.md). */
 	email: EmailService;
 	/** Log drains: forward stored log lines to webhooks and OTLP receivers (DESIGN §8). */
@@ -288,7 +297,7 @@ function defaultEmailOptions(): EmailServiceOptions {
 	return {
 		cloudflare: cloudflare ? new HttpCloudflareClient(cloudflare) : null,
 		cloudflareZoneName: cloudflare?.zoneName ?? null,
-		mailDomain: process.env.SKIFF_MAIL_DOMAIN?.trim() || null,
+		mailDomain: process.env.SKIFF_MAIL_DOMAIN?.trim() || null
 	};
 }
 
@@ -303,7 +312,7 @@ export function createCore(options: CoreOptions): Core {
 		config: options.config,
 		objectStore: options.config.objectStore,
 		notifiers: options.config.notifiers ?? [],
-		now: options.config.now ?? (() => Date.now()),
+		now: options.config.now ?? (() => Date.now())
 	} as unknown as CoreContext;
 
 	ctx.policies = new PlatformPolicyService(ctx);
@@ -322,9 +331,11 @@ export function createCore(options: CoreOptions): Core {
 	ctx.serviceAccounts = new ServiceAccountService(ctx);
 	ctx.accessKeys = new AccessKeyService(ctx);
 	ctx.signingKeys = new SigningKeyService(ctx);
+	ctx.workloadIdentity = new WorkloadIdentityService(ctx);
 	ctx.sts = new TokenService(ctx);
 	ctx.accessPolicies = new AccessPolicyService(ctx);
 	ctx.userPools = new UserPoolService(ctx);
+	ctx.scim = new ScimTokenService(ctx);
 	ctx.quota = new QuotaService(ctx);
 	ctx.projects = new ProjectService(ctx);
 	ctx.releases = new ReleaseService(ctx);
@@ -463,9 +474,11 @@ export function createCore(options: CoreOptions): Core {
 		serviceAccounts: ctx.serviceAccounts,
 		accessKeys: ctx.accessKeys,
 		signingKeys: ctx.signingKeys,
+		workloadIdentity: ctx.workloadIdentity,
 		sts: ctx.sts,
 		accessPolicies: ctx.accessPolicies,
 		userPools: ctx.userPools,
-		logDrains: new LogDrainService(ctx, options.version),
+		scim: ctx.scim,
+		logDrains: new LogDrainService(ctx, options.version)
 	};
 }

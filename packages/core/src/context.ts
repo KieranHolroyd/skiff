@@ -65,9 +65,11 @@ import type { PlatformIamService } from './platform-iam.ts';
 import type { ServiceAccountService } from './service-accounts.ts';
 import type { AccessKeyService } from './access-keys.ts';
 import type { SigningKeyService } from './iam/keys.ts';
+import type { WorkloadIdentityService } from './iam/workload-identity.ts';
 import type { TokenService } from './iam/sts.ts';
 import type { AccessPolicyService } from './iam/access-policies.ts';
 import type { UserPoolService } from './user-pools.ts';
+import type { ScimTokenService } from './iam/scim.ts';
 import type { ServerErrorService } from './server-errors.ts';
 
 /**
@@ -179,12 +181,16 @@ export interface CoreContext {
 	accessKeys: AccessKeyService;
 	/** The platform signing-key ring: one issuer and one JWKS for every token (IAM.md I15). */
 	signingKeys: SigningKeyService;
+	/** Per-workload service accounts and tokens (IAM.md I18, §7.4). */
+	workloadIdentity: WorkloadIdentityService;
 	/** RFC 8693 token exchange against federation trusts (IAM.md I16–I17). */
 	sts: TokenService;
 	/** Skiff Access policies: identity-aware proxy rules for content hosts (IAM.md I25). */
 	accessPolicies: AccessPolicyService;
 	/** Managed user pools: OIDC clients and discovery for tenant apps (IAM.md I26–I29). */
 	userPools: UserPoolService;
+	/** SCIM bearer tokens and directory reconciliation (IAM.md I20). */
+	scim: ScimTokenService;
 	/** Functions: Workers-compatible workloads on workerd (D110). */
 	functions: FunctionService;
 }

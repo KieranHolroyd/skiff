@@ -50,6 +50,7 @@ import {
 	renderSocketUnit,
 	serviceUnitName,
 	socketUnitName,
+	IDENTITY_TOKEN_ENV,
 	type UnitSecretFile,
 	type UnitVolumeMount,
 } from './units.ts';
@@ -268,6 +269,8 @@ export interface SystemdDriverOptions {
 	rootAuthFile?: string;
 	/** Root-owned runtime directory for env files and sockets, normally /run/skiff-workloads. */
 	runtimeDir: string;
+	/** Root for per-workload identity tokens, normally /run/skiff/identity (IAM.md I18). */
+	identityDir?: string;
 	/** Persistent container data root, normally /var/lib/skiff-workloads. */
 	stateDir: string;
 	/** Disk registry written by the root applier, normally /etc/skiff/volumes.json (D76). */
@@ -339,6 +342,7 @@ export class SystemdDriver {
 	private readonly registriesConfDir: string;
 	private readonly rootAuthFile: string;
 	private readonly runtimeDir: string;
+	private readonly identityDir: string;
 	private readonly stateDir: string;
 	private readonly volumeRegistryFile: string;
 	private readonly volumeRegistryOverride: VolumeRegistry | null;
@@ -372,6 +376,7 @@ export class SystemdDriver {
 		this.registriesConfDir = assertAbsolutePath(options.registriesConfDir ?? '/etc/containers/registries.conf.d', 'registriesConfDir');
 		this.rootAuthFile = assertAbsolutePath(options.rootAuthFile ?? '/run/containers/0/auth.json', 'rootAuthFile');
 		this.runtimeDir = assertAbsolutePath(options.runtimeDir, 'runtimeDir');
+		this.identityDir = assertAbsolutePath(options.identityDir ?? '/run/skiff/identity', 'identityDir');
 		this.stateDir = assertAbsolutePath(options.stateDir, 'stateDir');
 		this.volumeRegistryFile = assertAbsolutePath(
 			options.volumeRegistryFile ?? DEFAULT_VOLUMES_FILE,
@@ -623,6 +628,22 @@ export class SystemdDriver {
 
 		const envFile = join(workloadRuntimeDir, 'env');
 		const env = { ...workload.env, ...activation.env };
+		// Workload identity (IAM.md I18): the helper is the only writer of the 0400 file. The token
+		// is never in desired state or an env file; the file is the workload's one copy.
+		let identityPath: string | null = null;
+		let identityDirectory: string | null = null;
+		if (workload.identity) {
+			if (!activation.identity?.token)
+				throw new ValidationError('activation.identity is required for a workload with identity enabled');
+			identityDirectory = join(this.identityDir, workload.id);
+			identityPath = join(identityDirectory, 'token');
+			await this.writeIdentity(identityPath, activation.identity.token);
+			// A process app reads the systemd credential path instead of the container mount, and an
+			// EnvironmentFile entry would override the unit's Environment= line.
+			if (workload.runtime === 'process') delete env[IDENTITY_TOKEN_ENV];
+		} else if (activation.identity) {
+			throw new ValidationError('activation.identity is only valid for a workload with identity enabled');
+		}
 		// The studio principal's password (track G) goes only into the Valkey/Redis server config.
 		const studioPassword = takeStudioPrincipalEnv(env);
 		// The database profile pins its data inside the /data mount; never the image's VOLUME. Each
@@ -672,6 +693,7 @@ export class SystemdDriver {
 				envNames: Object.keys(env),
 				volumeMounts,
 				...(nodeListen ? { nodeListen } : {}),
+				...(identityPath ? { identityPath } : {}),
 			});
 			changed = (await this.writeIfChanged(paths.service, service, 0o644)) || changed;
 
@@ -837,6 +859,7 @@ export class SystemdDriver {
 				serverConfigPath: serverConfigPath?.path ?? null,
 				volumeMounts,
 				apparmorProfile: this.apparmorProfile,
+				...(identityDirectory ? { identityDir: identityDirectory } : {}),
 				...(replica ? { replica: replica.paths } : {}),
 			});
 			changed = (await this.writeIfChanged(paths.container, container, 0o644)) || changed;
@@ -2396,6 +2419,29 @@ END $$;`];
 		}
 	}
 
+	/**
+	 * Replace one workload's identity token without re-applying its unit (IAM.md I18). The agent
+	 * calls this at 50% of the token's lifetime. Ownership is preserved, so a container's `:U`
+	 * hand-over survives every rotation.
+	 */
+	async setIdentity(id: string, token: string): Promise<void> {
+		assertId(id, 'workload id');
+		await this.writeIdentity(join(this.identityDir, id, 'token'), token);
+	}
+
+	private async writeIdentity(path: string, token: string): Promise<void> {
+		if (typeof token !== 'string' || token.length === 0 || token.length > 16_384 || token.includes('\0'))
+			throw new ValidationError('The workload identity token is malformed');
+		const directory = dirname(path);
+		await fs.mkdir(directory, { recursive: true, mode: 0o750 });
+		await fs.chmod(directory, 0o750).catch(() => undefined);
+		const existing = await fs.lstat(path).catch(() => null);
+		if (existing && !existing.isFile())
+			throw new ValidationError(`The identity path ${path} is not a regular file`);
+		await this.writeAtomic(path, token, 0o400);
+		if (existing) await this.chown(path, existing.uid, existing.gid);
+	}
+
 	/** Stop both drivers, remove generated units and scrub the runtime secret directory. */
 	async remove(id: string): Promise<void> {
 		assertId(id, 'workload id');
@@ -2411,6 +2457,7 @@ END $$;`];
 		}
 		if (changed) await this.daemonReload();
 		await fs.rm(join(this.runtimeDir, id), { recursive: true, force: true });
+		await fs.rm(join(this.identityDir, id), { recursive: true, force: true });
 	}
 
 	/**

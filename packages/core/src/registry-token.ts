@@ -29,6 +29,16 @@ export function generateRegistrySigningKey(commonName: string, now = Date.now())
 	return { privateKeyPem, certificatePem: selfSignedCertificate(privateKeyPem, spki, commonName, now) };
 }
 
+/**
+ * Build zot's self-signed certificate from an existing PKCS#8 key. The registry passes the active
+ * ring key (purpose `registry`) so zot trusts exactly the key that signs the realm's tokens.
+ */
+export function certificateFromPrivateKeyPem(privateKeyPem: string, commonName: string, now = Date.now()): string {
+	const publicKey = createPublicKey(createPrivateKey(privateKeyPem));
+	const spki = publicKey.export({ type: 'spki', format: 'der' });
+	return selfSignedCertificate(privateKeyPem, spki, commonName, now);
+}
+
 function base64url(input: Buffer | string): string {
 	return Buffer.from(input).toString('base64url');
 }

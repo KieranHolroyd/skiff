@@ -72,6 +72,8 @@ export interface HelperApi {
 	stop(id: string): Promise<void>;
 	/** Restart a socket-activated workload's service, then its socket (FN5 watchdog). */
 	restart(id: string): Promise<void>;
+	/** Rotate one workload's 0400 identity token file without restarting it (IAM.md I18). */
+	setIdentity?(id: string, token: string): Promise<void>;
 	logs(id: string, options?: LogReadOptions): Promise<HelperLogResult>;
 	/** Delete a purged database's unit and data dir (D59). Idempotent. */
 	purge(id: string): Promise<void>;
@@ -730,6 +732,15 @@ export class HelperClient
 			'POST',
 			`/v1/workloads/${encodeURIComponent(id)}/restart`,
 			undefined,
+			LIFECYCLE_TIMEOUT_MS,
+		);
+	}
+
+	async setIdentity(id: string, token: string): Promise<void> {
+		await this.request(
+			'POST',
+			`/v1/workloads/${encodeURIComponent(id)}/identity`,
+			{ token },
 			LIFECYCLE_TIMEOUT_MS,
 		);
 	}

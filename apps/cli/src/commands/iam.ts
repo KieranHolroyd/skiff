@@ -648,7 +648,7 @@ export function whoCanTable(result: IamWhoCan): string {
 
 // ---------------------------------------------------------------- requests and small helpers
 
-async function requestJson(
+export async function requestJson(
 	client: ApiClient,
 	method: string,
 	path: string,
@@ -741,12 +741,12 @@ function roleName(roleId: string, roles: IamRoleView[]): string {
 	return roles.find((role) => role.id === roleId)?.name ?? roleId;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
+export function asRecord(value: unknown): Record<string, unknown> | undefined {
 	return value !== null && typeof value === 'object' && !Array.isArray(value)
 		? (value as Record<string, unknown>)
 		: undefined;
 }
 
-function stringValue(value: unknown): string | undefined {
+export function stringValue(value: unknown): string | undefined {
 	return typeof value === 'string' ? value : undefined;
 }

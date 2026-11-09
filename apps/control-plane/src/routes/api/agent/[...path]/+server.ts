@@ -85,6 +85,18 @@ const handler: RequestHandler = async (event) => {
 			return core.workloads.activationFor(node.id, activation[1]!);
 		}
 
+		// Workload identity (IAM.md I18): the node's agent mints a token for one of its workloads,
+		// either for the file it delivers (aud=skiff) or for the metadata endpoint's other audiences.
+		const identity = /^workloads\/([^/]+)\/identity$/.exec(action);
+		if (identity) {
+			if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
+			const node = core.nodes.authenticate(token);
+			const audience = url.searchParams.get('audience')?.trim() || 'skiff';
+			return json(await core.workloads.identityFor(node.id, identity[1]!, audience), 200, {
+				'cache-control': 'no-store',
+			});
+		}
+
 		// Event notifications (D122): the broker's node publishes pending deliveries and acks them.
 		if (action === 'events/lease') {
 			if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405);

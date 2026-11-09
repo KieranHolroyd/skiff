@@ -5,12 +5,14 @@
 	import ExternalLinkIcon from '@lucide/svelte/icons/external-link';
 	import FingerprintIcon from '@lucide/svelte/icons/fingerprint';
 	import GlobeIcon from '@lucide/svelte/icons/globe';
+	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import PowerIcon from '@lucide/svelte/icons/power';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import TrashIcon from '@lucide/svelte/icons/trash';
+	import UsersIcon from '@lucide/svelte/icons/users';
 	import { toast } from 'svelte-sonner';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
@@ -81,6 +83,30 @@
 		breakGlassUserIds: string[];
 	}
 
+	interface ScimTokenView {
+		id: string;
+		createdBy: string;
+		createdAt: number;
+		lastUsedAt: number | null;
+		revokedAt: number | null;
+	}
+
+	interface GroupMappingView {
+		id: string;
+		providerId: string;
+		claimValue: string;
+		groupId: string;
+		groupName: string;
+		createdAt: number;
+	}
+
+	interface GroupView {
+		id: string;
+		name: string;
+		source: string;
+		members: number;
+	}
+
 	let { data }: PageProps = $props();
 
 	let providerOpen = $state(false);
@@ -88,6 +114,12 @@
 	let domainOpen = $state(false);
 	let verifying = $state<string | null>(null);
 	let savingPolicy = $state(false);
+	let scimToken = $state<string | null>(null);
+	let creatingToken = $state(false);
+	let mappingOpen = $state(false);
+	let mappingProvider = $state('');
+	let mappingClaim = $state('');
+	let mappingGroup = $state('');
 
 	const DEFAULT_SCOPES = 'openid profile email';
 	const DEFAULT_CLAIMS = { email: 'email', name: 'name', groups: 'groups' };
@@ -151,10 +183,13 @@
 	] as const;
 
 	const ssoAvailable = $derived(
-		data.providers.some((provider) => provider.enabled) && data.domains.some((domain) => domain.verified)
+		data.providers.some((provider) => provider.enabled) &&
+			data.domains.some((domain) => domain.verified)
 	);
 	const hours = $derived(
-		(data.policy as PolicyView).sessionMaxAge ? (data.policy as PolicyView).sessionMaxAge! / 3600 : ''
+		(data.policy as PolicyView).sessionMaxAge
+			? (data.policy as PolicyView).sessionMaxAge! / 3600
+			: ''
 	);
 	const minutes = $derived(
 		(data.policy as PolicyView).idleTimeout ? (data.policy as PolicyView).idleTimeout! / 60 : ''
@@ -214,6 +249,58 @@
 		await runAction('?/verifyDomain', { domain: domain.domain });
 		verifying = null;
 	}
+
+	async function mintScimToken(rotate: boolean) {
+		creatingToken = true;
+		const result = await runAction(
+			rotate ? '?/rotateScimToken' : '?/createScimToken',
+			{},
+			{
+				toast: false
+			}
+		);
+		creatingToken = false;
+		if (result.type === 'success') {
+			const issued = (result.data as { scimToken?: unknown; success?: unknown }).scimToken;
+			if (typeof issued === 'string') scimToken = issued;
+			toast.success(String((result.data as { success?: unknown }).success ?? 'Token created.'));
+		} else if (result.type === 'failure')
+			toast.error(
+				String((result.data as { message?: unknown }).message ?? 'Could not create the token.')
+			);
+		else toast.error('Something went wrong. Please try again.');
+	}
+
+	function revokeScimToken(token: ScimTokenView) {
+		askConfirm({
+			title: 'Revoke this SCIM token?',
+			description:
+				'Your identity provider cannot provision or deprovision users and groups with it any more. Create a replacement token afterwards.',
+			confirmLabel: 'Revoke token',
+			tone: 'danger',
+			action: '?/revokeScimToken',
+			fields: { tokenId: token.id }
+		});
+	}
+
+	function openMapping() {
+		mappingProvider = data.providers[0]?.id ?? '';
+		mappingClaim = '';
+		mappingGroup = data.groups[0]?.id ?? '';
+		mappingOpen = true;
+	}
+
+	function removeMapping(mapping: GroupMappingView) {
+		askConfirm({
+			title: `Stop mapping “${mapping.claimValue}”?`,
+			description:
+				'Members already synced from this claim keep their group membership until the next sign-in, when the mapping set is replaced.',
+			confirmLabel: 'Remove mapping',
+			tone: 'danger',
+			action: '?/removeGroupMapping',
+			fields: { mappingId: mapping.id }
+		});
+	}
 </script>
 
 <svelte:head><title>SSO · Settings · Skiff</title></svelte:head>
@@ -243,7 +330,9 @@
 							</DropdownMenu.Item>
 						{/each}
 						<DropdownMenu.Separator />
-						<DropdownMenu.Item onSelect={() => openProvider(null)}>Other OpenID Connect</DropdownMenu.Item>
+						<DropdownMenu.Item onSelect={() => openProvider(null)}
+							>Other OpenID Connect</DropdownMenu.Item
+						>
 					</DropdownMenu.Content>
 				</DropdownMenu.Root>
 			{/if}
@@ -254,8 +343,8 @@
 				{#if data.canManage}
 					<p class="text-sm font-medium">Choose your identity provider</p>
 					<p class="mt-0.5 text-xs text-muted-foreground">
-						Skiff fills in the issuer, scopes and claims, and shows the steps and the redirect URI for
-						that provider’s console. It checks the provider’s discovery document when you save.
+						Skiff fills in the issuer, scopes and claims, and shows the steps and the redirect URI
+						for that provider’s console. It checks the provider’s discovery document when you save.
 					</p>
 					<div class="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
 						{#each SSO_PRESETS as preset (preset.id)}
@@ -479,6 +568,210 @@
 	</Panel>
 
 	<Panel
+		title="SCIM provisioning"
+		icon={KeyRoundIcon}
+		count={data.scimTokens.length}
+		description="Let your identity provider create, update and deactivate users and groups. A deactivated user is signed out and their sessions, connected apps and access keys are revoked immediately."
+		flush
+	>
+		{#snippet actions()}
+			{#if data.canManage}
+				<Button
+					size="sm"
+					variant={data.scimTokens.some((token: ScimTokenView) => token.revokedAt === null)
+						? 'outline'
+						: 'default'}
+					onclick={() =>
+						mintScimToken(data.scimTokens.some((token: ScimTokenView) => token.revokedAt === null))}
+					disabled={creatingToken}
+				>
+					<RefreshCwIcon />
+					{data.scimTokens.some((token: ScimTokenView) => token.revokedAt === null)
+						? creatingToken
+							? 'Rotating…'
+							: 'Rotate token'
+						: creatingToken
+							? 'Creating…'
+							: 'Create token'}
+				</Button>
+			{/if}
+		{/snippet}
+
+		<div class="border-b bg-muted/30 px-4 py-3">
+			<p class="text-xs text-muted-foreground">
+				SCIM 2.0 base URL. Paste it and the bearer token into your provider's provisioning settings.
+			</p>
+			<div class="mt-1 flex items-center gap-1">
+				<code class="truncate rounded bg-background px-1.5 py-0.5 font-mono text-xs"
+					>{data.scimEndpoint}</code
+				>
+				<CopyButton value={data.scimEndpoint} iconOnly label="Copy SCIM endpoint" />
+			</div>
+		</div>
+
+		{#if scimToken}
+			<div
+				class="border-b border-amber-300 bg-amber-50 px-4 py-3 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100"
+			>
+				<p class="text-sm font-medium">Copy this token now. It is shown once.</p>
+				<div class="mt-1 flex items-center gap-1">
+					<code
+						class="min-w-0 flex-1 truncate rounded bg-background/70 px-1.5 py-0.5 font-mono text-xs"
+						>{scimToken}</code
+					>
+					<CopyButton value={scimToken} iconOnly label="Copy SCIM token" />
+					<Button size="sm" variant="ghost" onclick={() => (scimToken = null)}>Done</Button>
+				</div>
+			</div>
+		{/if}
+
+		{#if data.scimTokens.length === 0}
+			<div class="p-4">
+				<EmptyState
+					icon={KeyRoundIcon}
+					compact
+					title="No SCIM token"
+					description="Create a token to let Okta, Entra ID or another directory provision this organisation."
+				>
+					{#if data.canManage}
+						<Button size="sm" onclick={() => mintScimToken(false)} disabled={creatingToken}>
+							<PlusIcon />Create token
+						</Button>
+					{/if}
+				</EmptyState>
+			</div>
+		{:else}
+			<Table.Root>
+				<Table.Header class="bg-muted/45">
+					<Table.Row>
+						<Table.Head class="pl-4">Token</Table.Head>
+						<Table.Head class="hidden lg:table-cell">Last used</Table.Head>
+						<Table.Head>State</Table.Head>
+						<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
+					</Table.Row>
+				</Table.Header>
+				<Table.Body>
+					{#each data.scimTokens as token (token.id)}
+						<Table.Row>
+							<Table.Cell class="pl-4">
+								<p class="font-mono text-xs">Token …{token.id.slice(-6)}</p>
+								<p class="mt-0.5 text-xs text-muted-foreground">
+									Created {formatRelative(token.createdAt)}
+								</p>
+							</Table.Cell>
+							<Table.Cell class="hidden text-xs text-muted-foreground lg:table-cell">
+								{token.lastUsedAt ? formatRelative(token.lastUsedAt) : 'Never'}
+							</Table.Cell>
+							<Table.Cell>
+								<StatusBadge
+									status={token.revokedAt === null ? 'active' : 'revoked'}
+									label={token.revokedAt === null ? 'Active' : 'Revoked'}
+									tone={token.revokedAt === null ? 'success' : 'neutral'}
+								/>
+							</Table.Cell>
+							<Table.Cell class="pr-4">
+								{#if data.canManage && token.revokedAt === null}
+									<div class="flex justify-end">
+										<Button size="sm" variant="outline" onclick={() => revokeScimToken(token)}>
+											<TrashIcon />Revoke
+										</Button>
+									</div>
+								{/if}
+							</Table.Cell>
+						</Table.Row>
+					{/each}
+				</Table.Body>
+			</Table.Root>
+		{/if}
+
+		{#snippet footer()}
+			<span>
+				SCIM users become members with the {data.defaultSsoRole === 'none' ? 'default' : 'viewer'}
+				role. Groups appear in IAM with source <span class="font-mono">scim</span>, and their
+				membership is read-only here. {#if !data.canManage}Org owners and admins manage SCIM.{/if}
+			</span>
+		{/snippet}
+	</Panel>
+
+	<Panel
+		title="Group mapping"
+		icon={UsersIcon}
+		count={data.groupMappings.length}
+		description="IdP groups become Skiff groups on each SSO sign-in, so roles follow the directory. Local and SCIM-managed membership is left alone."
+		flush
+	>
+		{#snippet actions()}
+			{#if data.canManage}
+				<Button
+					size="sm"
+					onclick={openMapping}
+					disabled={data.providers.length === 0 || data.groups.length === 0}
+				>
+					<PlusIcon />Add mapping
+				</Button>
+			{/if}
+		{/snippet}
+
+		{#if data.groupMappings.length === 0}
+			<div class="p-4">
+				<EmptyState
+					icon={UsersIcon}
+					compact
+					title="No group mapping"
+					description={data.providers.length === 0
+						? 'Add an identity provider first, then map its groups to Skiff groups.'
+						: data.groups.length === 0
+							? 'Create a group under IAM first, then map an IdP group claim to it.'
+							: 'Without a mapping, every SSO user gets the default role and no group-derived access.'}
+				/>
+			</div>
+		{:else}
+			<Table.Root>
+				<Table.Header class="bg-muted/45">
+					<Table.Row>
+						<Table.Head class="pl-4">IdP group claim</Table.Head>
+						<Table.Head>Skiff group</Table.Head>
+						<Table.Head class="hidden lg:table-cell">Added</Table.Head>
+						<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
+					</Table.Row>
+				</Table.Header>
+				<Table.Body>
+					{#each data.groupMappings as mapping (mapping.id)}
+						<Table.Row>
+							<Table.Cell class="pl-4">
+								<p class="font-mono text-sm">{mapping.claimValue}</p>
+							</Table.Cell>
+							<Table.Cell>
+								<p class="text-sm font-medium">{mapping.groupName}</p>
+								<p class="mt-0.5 font-mono text-xs text-muted-foreground">{mapping.groupId}</p>
+							</Table.Cell>
+							<Table.Cell class="hidden text-xs text-muted-foreground lg:table-cell">
+								{formatRelative(mapping.createdAt)}
+							</Table.Cell>
+							<Table.Cell class="pr-4">
+								{#if data.canManage}
+									<div class="flex justify-end">
+										<Button size="sm" variant="outline" onclick={() => removeMapping(mapping)}>
+											<TrashIcon />Remove
+										</Button>
+									</div>
+								{/if}
+							</Table.Cell>
+						</Table.Row>
+					{/each}
+				</Table.Body>
+			</Table.Root>
+		{/if}
+
+		{#snippet footer()}
+			<span>
+				Matching is case-insensitive. The groups claim comes from the provider's claim mapping
+				above. A missing claim is ignored; an empty claim clears previously synced membership.
+			</span>
+		{/snippet}
+	</Panel>
+
+	<Panel
 		title="Authentication policy"
 		icon={ShieldCheckIcon}
 		description="Enforced for every member of this organisation, on top of the owner rules. Owners always need a second factor."
@@ -497,7 +790,9 @@
 						);
 					else if (result.type === 'failure')
 						toast.error(
-							String((result.data as { message?: unknown } | undefined)?.message ?? 'Could not save')
+							String(
+								(result.data as { message?: unknown } | undefined)?.message ?? 'Could not save'
+							)
 						);
 				};
 			}}
@@ -511,7 +806,9 @@
 						checked={(data.policy as PolicyView).requireSso}
 						disabled={!data.canManage}
 					/>
-					<Field.Label for="policy-require-sso" class="font-medium">Require single sign-on</Field.Label>
+					<Field.Label for="policy-require-sso" class="font-medium"
+						>Require single sign-on</Field.Label
+					>
 					<Field.Description>
 						Refuse password, magic links, GitHub and passkeys for members. Break-glass owners below
 						keep them. Needs an enabled provider and a verified domain.
@@ -525,7 +822,9 @@
 						checked={(data.policy as PolicyView).require2fa}
 						disabled={!data.canManage}
 					/>
-					<Field.Label for="policy-require-2fa" class="font-medium">Require a second factor</Field.Label>
+					<Field.Label for="policy-require-2fa" class="font-medium"
+						>Require a second factor</Field.Label
+					>
 					<Field.Description>
 						Every member must use a passkey or authenticator app. The owner rule stays on even when
 						this is off.
@@ -536,8 +835,8 @@
 			<Field.Set class="mt-5">
 				<Field.Legend variant="label">Allowed sign-in methods</Field.Legend>
 				<Field.Description>
-					Methods not selected are refused, including on an existing session. Single sign-on requires a
-					provider and a verified domain{#if !ssoAvailable}<span class="text-amber-600">
+					Methods not selected are refused, including on an existing session. Single sign-on
+					requires a provider and a verified domain{#if !ssoAvailable}<span class="text-amber-600">
 							(a provider or domain is still missing)</span
 						>{/if}.
 				</Field.Description>
@@ -602,16 +901,16 @@
 					class="font-mono text-sm"
 				/>
 				<Field.Description>
-					One IPv4 address or CIDR per line. Empty means any network. Sessions from other addresses are
-					refused.
+					One IPv4 address or CIDR per line. Empty means any network. Sessions from other addresses
+					are refused.
 				</Field.Description>
 			</Field.Field>
 
 			<Field.Set class="mt-5">
 				<Field.Legend variant="label">Break-glass owners</Field.Legend>
 				<Field.Description>
-					Owners who keep their non-SSO methods when SSO is required. Pick at least one with a passkey or
-					authenticator app before turning enforcement on.
+					Owners who keep their non-SSO methods when SSO is required. Pick at least one with a
+					passkey or authenticator app before turning enforcement on.
 				</Field.Description>
 				{#if data.owners.length === 0}
 					<p class="mt-2 text-sm text-muted-foreground">This organisation has no owners.</p>
@@ -641,7 +940,8 @@
 
 			<p class="mt-5 text-xs text-muted-foreground">
 				New SSO users get the
-				<span class="font-medium">{data.defaultSsoRole === 'none' ? 'no organisation role' : 'viewer role'}</span
+				<span class="font-medium"
+					>{data.defaultSsoRole === 'none' ? 'no organisation role' : 'viewer role'}</span
 				>{#if data.defaultSsoRole === 'none'}
 					(server started with <span class="font-mono">SKIFF_SSO_DEFAULT_ROLE=none</span>){/if}.
 			</p>
@@ -657,23 +957,14 @@
 	<Panel
 		title="Not yet"
 		icon={FingerprintIcon}
-		description="Sign-in, JIT provisioning and the auth policy above are live. These follow."
+		description="Sign-in, JIT provisioning, group mapping and SCIM are live. SAML follows in the same plugin."
 	>
 		<ul class="grid gap-3 text-sm sm:grid-cols-2">
 			<li class="flex items-start justify-between gap-3 rounded-md border p-3">
 				<span>
-					<span class="font-medium">Group mapping</span>
+					<span class="font-medium">SAML 2.0</span>
 					<span class="mt-0.5 block text-xs text-muted-foreground">
-						Map IdP groups to Skiff groups, so roles follow the directory.
-					</span>
-				</span>
-				<Badge variant="neutral">Not yet</Badge>
-			</li>
-			<li class="flex items-start justify-between gap-3 rounded-md border p-3">
-				<span>
-					<span class="font-medium">SAML and SCIM</span>
-					<span class="mt-0.5 block text-xs text-muted-foreground">
-						The same plugin adds SAML 2.0, and a separate plugin adds user and group provisioning.
+						The same plugin accepts SAML providers; the dashboard form still speaks OIDC only.
 					</span>
 				</span>
 				<Badge variant="neutral">Not yet</Badge>
@@ -756,9 +1047,7 @@
 				{#if activePreset.fields.length > 0}
 					<div class="grid gap-4 sm:grid-cols-2">
 						{#each activePreset.fields as field (field.key)}
-							<Field.Field
-								class={activePreset.fields.length === 1 ? 'sm:col-span-2' : undefined}
-							>
+							<Field.Field class={activePreset.fields.length === 1 ? 'sm:col-span-2' : undefined}>
 								<Field.Label for={`sso-preset-${field.key}`}>
 									{field.label}{#if field.optional}<span class="font-normal text-muted-foreground">
 											(optional)</span
@@ -796,12 +1085,16 @@
 				<div class="rounded-md border px-3 py-2 text-xs">
 					{#if resolved && 'config' in resolved}
 						<p class="text-muted-foreground">
-							Issuer <span class="font-mono text-foreground break-all">{resolved.config.issuer}</span>
+							Issuer <span class="font-mono break-all text-foreground"
+								>{resolved.config.issuer}</span
+							>
 						</p>
 					{:else if resolved && 'error' in resolved}
 						<p class="text-destructive">{resolved.error}</p>
 					{:else}
-						<p class="text-muted-foreground">The issuer appears here as you fill in the fields above.</p>
+						<p class="text-muted-foreground">
+							The issuer appears here as you fill in the fields above.
+						</p>
 					{/if}
 					<p class="mt-1 text-muted-foreground">{activePreset.groups}</p>
 				</div>
@@ -894,7 +1187,9 @@
 						>
 						<CopyButton value={redirectUri} iconOnly label="Copy redirect URI" />
 					</div>
-					<Field.Description>Register this at the IdP as the client’s redirect (callback) URI.</Field.Description>
+					<Field.Description
+						>Register this at the IdP as the client’s redirect (callback) URI.</Field.Description
+					>
 				</Field.Field>
 			{/if}
 
@@ -918,7 +1213,9 @@
 							spellcheck="false"
 							class="font-mono text-sm"
 						/>
-						<Field.Description>Space or comma separated. `openid` is always requested.</Field.Description>
+						<Field.Description
+							>Space or comma separated. `openid` is always requested.</Field.Description
+						>
 					</Field.Field>
 					<Field.Set>
 						<Field.Legend variant="label">Claim mapping</Field.Legend>
@@ -983,6 +1280,57 @@
 			<Field.Description>
 				A bare hostname, not a URL or an email address. After adding, publish the TXT value shown in
 				the list and press Verify.
+			</Field.Description>
+		</Field.Field>
+	</FormDialog>
+
+	<FormDialog
+		bind:open={mappingOpen}
+		icon={UsersIcon}
+		title="Map an IdP group"
+		description="The claim value is matched case-insensitively on each SSO sign-in. It becomes this Skiff group's membership."
+		action="?/saveGroupMapping"
+		submitLabel="Save mapping"
+	>
+		<Field.Field>
+			<Field.Label for="mapping-provider">Identity provider</Field.Label>
+			<NativeSelect.Root
+				id="mapping-provider"
+				name="providerId"
+				bind:value={mappingProvider}
+				class="w-full"
+			>
+				{#each data.providers as provider (provider.id)}
+					<NativeSelect.Option value={provider.id}>{provider.name}</NativeSelect.Option>
+				{/each}
+			</NativeSelect.Root>
+		</Field.Field>
+		<Field.Field>
+			<Field.Label for="mapping-claim">IdP group name</Field.Label>
+			<Input
+				id="mapping-claim"
+				name="claimValue"
+				bind:value={mappingClaim}
+				placeholder="Engineering"
+				required
+				maxlength={200}
+				autocapitalize="off"
+				spellcheck="false"
+				class="font-mono text-sm"
+			/>
+			<Field.Description>The exact value the IdP sends in its groups claim.</Field.Description>
+		</Field.Field>
+		<Field.Field>
+			<Field.Label for="mapping-group">Skiff group</Field.Label>
+			<NativeSelect.Root id="mapping-group" name="groupId" bind:value={mappingGroup} class="w-full">
+				{#each data.groups as group (group.id)}
+					<NativeSelect.Option value={group.id}>
+						{group.name}{group.source === 'local' ? '' : ` (${group.source})`}
+					</NativeSelect.Option>
+				{/each}
+			</NativeSelect.Root>
+			<Field.Description>
+				Roles bound to this group apply while the user is in the IdP group.
 			</Field.Description>
 		</Field.Field>
 	</FormDialog>

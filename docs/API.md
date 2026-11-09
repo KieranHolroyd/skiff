@@ -37,7 +37,7 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | GET | `/blueprints/apply/:operationId` | creator or `project:read` | `{ run }` with every step's status |
 | GET | `/blueprints` | `project:read` | `{ stacks }`: managed keys, last status, applied hash |
 | GET | `/blueprints/:name` | `project:read` | `{ stack, lastRun }` |
-| POST | `/projects/:slug/access` | `project:update` | `{ scope: production\|previews, mode: public\|password\|platform, password? }`; each scope has its own password. `password` is required to switch a scope to `password` and may be omitted to keep the current one; leaving password mode clears only that scope's |
+| POST | `/projects/:slug/access` | `project:update` | `{ scope: production\|previews, mode: public\|password\|platform\|access, password?, policyId? }`; each scope has its own password. `password` is required to switch a scope to `password` and may be omitted to keep the current one; leaving password mode clears only that scope's. `policyId` is required for `access` (Skiff Access) |
 | POST | `/projects/:slug/deploy` | `deployment:create` | inline files (`deploy_files`); the URL slug is the target (`project` in the body is optional and must match); `environment` selects a named environment. Process/container projects run one workload, so only the latest deployment is active |
 | GET | `/projects/:slug/deployments` | `deployment:read` | |
 | GET | `/projects/:slug/deployments/:id` | `deployment:read` | id or short id |
@@ -502,6 +502,122 @@ Resource arguments are query parameters: `resourceType` (default `org`), `resour
 | DELETE | `/iam/groups/:id/members` | `iam:manage-groups` | `{ userId }` |
 | GET | `/iam/explain?permission&resourceType&…` | `iam:read` | The caller's decision plus every grant considered (IAM.md I12) |
 | GET | `/iam/who-can?permission&resourceType&…` | `iam:read` | `{ permission, principals: [{ principalType, principalId, via }] }`; expands groups |
+
+### Service accounts
+
+Org-owned machine principals (`sa_…`), bound to roles like any other principal ([IAM.md](./IAM.md) I13, §7.2).
+Disabling is the normal off-switch; delete is refused while a binding still uses the account.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| GET | `/service-accounts` | `serviceAccount:read` | `{ serviceAccounts }`, sorted by name |
+| POST | `/service-accounts` | `serviceAccount:create` | `{ name, description?, ownerGroupId? }` → 201 with the new view. `name` is a slug, unique per org |
+| GET | `/service-accounts/:id` | `serviceAccount:read` | `{ serviceAccount }` |
+| PATCH | `/service-accounts/:id` | `serviceAccount:update` | `{ name?, description?, ownerGroupId?, disabled? }` → `{ serviceAccount }`; disabling bumps the org's IAM version |
+| DELETE | `/service-accounts/:id` | `serviceAccount:delete` | `{ ok: true }`; 409 while a binding still references it |
+
+### Access keys
+
+A key belongs to one org and one principal; the raw `skif_…` key is returned exactly once, from
+`POST`, and only its hash and visible `start` are stored ([IAM.md](./IAM.md) I14, §7.2).
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| GET | `/access-keys` | `accessKey:read` (own) / `accessKey:read-all` (org) | `?principalId` filters; without `read-all` only the caller's own keys are visible → `{ accessKeys }` |
+| POST | `/access-keys` | `accessKey:create` (user) / `serviceAccount:manage-keys` (service account) | `{ name, principalType? (user\|serviceAccount), principalId?, permissions?, resources?, expiresInSeconds?, allowedCidrs? }` → 201 `{ accessKey, key }`; `key` is shown once and never again |
+| DELETE | `/access-keys/:id` | `accessKey:revoke` (own) / `accessKey:revoke-any` (another's) | revoke at once → `{ ok: true }`; revoking twice is idempotent |
+
+### Guardrails, access requests, reviews and usage
+
+Governance surfaces ([IAM.md](./IAM.md) §9.2–§9.5). A guardrail is a deny rule that beats every
+allow; a request is just-in-time access for at most eight hours; a review is a campaign that
+snapshots bindings.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| GET | `/iam/guardrails` | `iam:read` | `{ guardrails, templates, can: { manage } }`; includes read-only platform rows and the built-in templates |
+| POST | `/iam/guardrails` | `iam:manage-guardrails` | `{ template? }` or `{ name, permissions }`, plus `selector?`, `scope?`, `condition?`, `enabled?` → 201. `office-only` is listed but unavailable (needs a negated IP condition) |
+| PATCH | `/iam/guardrails/:id` | `iam:manage-guardrails` | any of `{ name, permissions, selector, scope, condition, enabled }` → the view |
+| DELETE | `/iam/guardrails/:id` | `iam:manage-guardrails` | `{ deleted: true }` |
+| GET | `/iam/access-requests` | member | the caller's requests plus the ones they may decide, `?status=pending\|approved\|denied\|cancelled\|expired` → `{ requests, limits: { maxDurationSeconds, requestTtlSeconds } }` |
+| POST | `/iam/access-requests` | member | `{ roleId, scope, durationSeconds (60–28,800), reason (3–500), changeRef? }` → 201; one pending request per role and scope |
+| POST | `/iam/access-requests/:id/approve` \| `/deny` | `iam:manage-bindings` at the scope, never the requester | decides it → the request view; approval creates a binding that expires on its own |
+| POST | `/iam/access-requests/:id/cancel` | the requester | ends a pending request or an approved grant early → the request view |
+| GET | `/iam/access-reviews` | `iam:read` or `iam:review` | `?status=open\|completed` → `{ reviews, can: { review } }`; each review carries its items |
+| POST | `/iam/access-reviews` | `iam:review` at the scope | `{ scope, name?, defaultDecision? (keep\|revoke), dueAt? (epoch ms) }` → 201; org resources only |
+| PATCH | `/iam/access-reviews/:id/items/:itemId` | `iam:review` | `{ decision: keep\|revoke\|shorten }` → the review with its items; the campaign id checks ownership |
+| POST | `/iam/access-reviews/:id/complete` | `iam:review` | applies every decision (undecided items follow `defaultDecision`) → the review |
+| GET | `/iam/usage` | own usage; `iam:read` for `?principalId` | `{ usage: [{ principalType, principalId, permission, scopeType, scopeId, lastUsedAt, count30d }], windowDays: 30 }`, newest first |
+
+### SSO providers, domains and org auth policy
+
+OIDC sign-in per organisation ([IAM.md](./IAM.md) I19–I21, §8.3–§8.5). Client secrets are
+write-only; a blank `clientSecret` on update keeps the stored one.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| GET | `/sso/providers` | `sso:read` | `{ providers }` with issuer, endpoints, scopes, claim map, `hasClientSecret` and `callbackUrl` |
+| POST | `/sso/providers` | `sso:manage` | `{ name, issuer? \| preset: { id, values? }, clientId, clientSecret, discoveryUrl?, scopes?, claims?, enabled? }` → 201; 409 for a second provider on the same issuer |
+| GET | `/sso/providers/:id` | `sso:read` | one provider (no secret) |
+| PATCH | `/sso/providers/:id` | `sso:manage` | partial update; `clientSecret` omitted keeps the current one |
+| DELETE | `/sso/providers/:id` | `sso:manage` | `{ ok: true }`; sign-in through it stops at once |
+| GET | `/sso/domains` | `sso:read` | `{ domains }`; re-checks any domain whose last check is a day old before answering |
+| POST | `/sso/domains` | `sso:manage` | `{ domain }` → 201 with the TXT record to publish (`txtRecordName`, `txtRecordValue`); 409 when another org claimed it |
+| POST | `/sso/domains/:domain/verify` | `sso:manage` | re-reads the TXT record now → the domain view |
+| DELETE | `/sso/domains/:domain` (also `?domain=` on the collection) | `sso:manage` | `{ ok: true }`; email routing stops immediately |
+| GET | `/sso/policy` | `sso:read` | `{ policy }`: `requireSso`, `require2fa`, `allowedMethods`, `sessionMaxAge`, `idleTimeout`, `ipAllowlist`, `breakGlassUserIds` |
+| PUT | `/sso/policy` | `sso:manage` | a partial of those fields; session limits are seconds, `null` turns a limit off |
+| GET | `/sso/presets` | signed in | `{ presets }`: the ready-made IdP set-ups and the values each needs (D180) |
+| GET | `/sso/resolve?email=` | public | email → `{ provider: { id, name, orgId, domain } \| null }`; only a verified domain routes |
+
+### Access policies (Skiff Access)
+
+Ordered allow/deny rules for the `access` protection mode ([IAM.md](./IAM.md) I25, §11.1). A matching
+deny beats every allow; no match denies. Rules match an org group, any member, an email or domain,
+an SSO provider, a user pool and its groups, a CIDR, or a service-token header.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| GET | `/access-policies` | `accessPolicy:read` at each policy's scope | `?projectId` narrows to policies that apply to that project; returns the array directly |
+| POST | `/access-policies` | `accessPolicy:create` at the scope | `{ name, description?, scope: { type: org\|project\|environment, id?, projectId? }, enabled?, rules: [{ idx, action: allow\|deny, matcher }] }` → 201 |
+| GET | `/access-policies/:id` | `accessPolicy:read` at its scope | one policy |
+| PATCH | `/access-policies/:id` | `accessPolicy:update` at its scope | `{ name?, description?, enabled?, rules? }` (rules replace the ordered list) |
+| DELETE | `/access-policies/:id` | `accessPolicy:delete` at its scope | `{ ok: true }`; refused while a project or environment still assigns it |
+| POST | `/projects/:slug/access` | `project:update` | assign one with `{ scope: production\|previews, mode: "access", policyId }`; this is the same route as the other protection modes. Named-environment assignment exists only in the dashboard |
+
+### User pools and OIDC clients
+
+A pool is an org resource: a hosted OIDC provider for one app's own users ([IAM.md](./IAM.md)
+I26–I29, §11.2). The native engine is a seam only — no users, sessions or hosted sign-in yet.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| GET | `/user-pools` | `userPool:read` (org or per pool) | `{ pools }`; an org grant sees every pool |
+| POST | `/user-pools` | `userPool:create` | `{ name, description?, engine? (skiff-identity), signupMode? (invite\|open), theme? }` → 201 with the pool; 409 for a duplicate name |
+| GET | `/user-pools/:id` | `userPool:read` on the pool | `{ pool }` with issuer and active signing `kid` |
+| PATCH | `/user-pools/:id` | `userPool:update` on the pool | `{ name?, description?, signupMode?, theme?, disabled? }` → `{ pool }`; disabling keeps clients and keys |
+| DELETE | `/user-pools/:id` | `userPool:delete` on the pool | `{ ok: true }`; removes the clients and signing key |
+| GET | `/user-pools/:id/clients` | `userPool:read` on the pool | `{ clients }`: public `clientId`, redirect allowlist, no secret |
+| POST | `/user-pools/:id/clients` | `userPool:credentials` on the pool | `{ name, redirectUris, public? }` → 201 `{ client, clientSecret }`; `clientSecret` is `null` for a public (PKCE) client and is shown once |
+| DELETE | `/user-pools/:id/clients/:clientId` | `userPool:credentials` on the pool | `{ ok: true }`; `:clientId` may be the row id or the public OIDC `client_id` |
+| GET | `/user-pools/:id/.well-known/openid-configuration` | public | OpenID Connect Discovery for the pool; 404 while the pool is disabled |
+| GET | `/user-pools/:id/.well-known/jwks.json` | public | the pool's `pool:<id>` signing keys; 404 while disabled |
+
+### STS token exchange and platform discovery
+
+RFC 8693 token exchange ([IAM.md](./IAM.md) I15–I17, §7.3). The subject token is the credential, so
+the endpoint takes no session or API key. Tokens are ES256, 15 minutes by default (at most 1 hour),
+narrowed by the matching federation trust's restriction and the optional `scope`.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| POST | `/api/iam/token` (not under `/api/v1`) | none; the subject token is the credential | form-urlencoded (JSON accepted): `grant_type=urn:ietf:params:oauth:grant-type:token-exchange`, `subject_token`, `subject_token_type?` (`access_token\|jwt\|id_token`), `audience?`, `scope?`, `trust_id?` → `{ access_token, issued_token_type, token_type: "Bearer", expires_in }`; 400 with RFC 8693 `error`/`error_description`. `cache-control: no-store` |
+| GET | `/.well-known/jwks.json` (platform origin) | public | every signing-key purpose except `pool:*`; 5-minute cache |
+| GET | `/.well-known/openid-configuration` (platform origin) | public | issuer, `jwks_uri`, `token_endpoint`, token-exchange grant, subject token types and the claims Skiff mints |
+
+There is no federation-trust CRUD route yet: trusts are read by the token service from the
+database, and `/api/v1/federation-trusts` (listed as planned in [IAM.md](./IAM.md) §12) does not
+exist.
 
 ## Objects (local store only)
 

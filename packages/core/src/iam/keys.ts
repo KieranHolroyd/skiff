@@ -3,8 +3,9 @@
  *
  * Every token Skiff mints is signed by one ring, keyed by purpose (`sts`, `registry`, `oidc`,
  * `workload`, `pool:<id>`), so there is one issuer and one public JWKS. Keys are ES256 (P-256)
- * generated with WebCrypto, and only the public JWK is stored in the clear: the private JWK is
- * sealed with the platform master key (the same `encrypt` helper `secrets.ts` uses).
+ * generated with WebCrypto (or Node crypto on the synchronous path), and only the public JWK is
+ * stored in the clear: the private JWK is sealed with the platform master key (the same `encrypt`
+ * helper `secrets.ts` uses).
  *
  * Rotation is next → active → retired:
  *
@@ -20,13 +21,18 @@
  * hour, plus a 24-hour margin). `verify` still accepts a retired key so a token signed moments
  * before rotation validates.
  *
- * TODO(I4 follow-up): the registry realm (`registry-token.ts`, sealed in `settings`) and pipeline
- * OIDC (`pipeline-oidc.ts`, sealed directly with the master key) are the next consumers. This task
- * deliberately leaves both on their existing keys; moving them onto `signingKeys.sign('registry'…)`
- * and `signingKeys.sign('oidc'…)` is the follow-up, alongside the `/.well-known` alias for
- * `/api/pipeline/oidc/*` (docs/IAM.md §7.3).
+ * The registry realm and pipeline OIDC are ring consumers too (I15). Their APIs predate the ring
+ * and are synchronous (`RegistryService.issueToken`, `PipelineOidc.mint`), so the ring offers a
+ * synchronous signer beside the async one: both read the same `signing_keys` rows, seal keys the
+ * same way and produce ES256 tokens. `activePrivateKeyPem` exists only so the registry can derive
+ * zot's X.509 certificate from the active ring key (zot reads a certificate, not a JWKS).
+ *
+ * Pipeline OIDC keeps its `<origin>/api/pipeline/oidc` issuer as an alias (§7.3, D162), so `sign`
+ * and `signSync` accept an issuer override. Its old settings key stays published in its JWKS until
+ * the overlap ends.
  */
 import type { Database } from 'bun:sqlite';
+import { createHash, createPrivateKey, sign as cryptoSign, generateKeyPairSync } from 'node:crypto';
 import type { Principal } from '@skiff/contracts';
 import type { CoreContext } from '../context.ts';
 import { ValidationError } from '../errors.ts';
@@ -64,6 +70,11 @@ export interface JwtClaims {
 	iat: number;
 	exp: number;
 	[key: string]: unknown;
+}
+
+/** Optional overrides for minting. Pipeline OIDC keeps its legacy path-based issuer (§7.3). */
+export interface SignOptions {
+	issuer?: string;
 }
 
 export class SigningKeyError extends Error {
@@ -123,6 +134,8 @@ export class SigningKeyService {
 	readonly #sqlite: Database;
 	/** Decrypted private keys, keyed by `kid`. Rotation drops only the affected purpose. */
 	readonly #privateKeys = new Map<string, CryptoKey>();
+	/** The same keys as Node `KeyObject`s, for the synchronous signer. */
+	readonly #nodeKeys = new Map<string, ReturnType<typeof createPrivateKey>>();
 
 	constructor(private readonly ctx: CoreContext) {
 		this.#sqlite = ctx.sqlite;
@@ -137,6 +150,11 @@ export class SigningKeyService {
 
 	/** Create the first key for a purpose, or promote a waiting `next` when there is no active. */
 	async ensure(purpose: string): Promise<SigningKeyRecord> {
+		return this.ensureSync(purpose);
+	}
+
+	/** The synchronous form of `ensure` (registry and pipeline OIDC predate the async ring API). */
+	ensureSync(purpose: string): SigningKeyRecord {
 		const active = this.row(purpose, 'active');
 		if (active) return view(active);
 
@@ -150,7 +168,7 @@ export class SigningKeyService {
 			return view(this.requireRow(next.kid));
 		}
 
-		const generated = await this.generate();
+		const generated = this.generateSync();
 		// Another caller may have created an active key while this one generated. Use theirs.
 		const raced = this.row(purpose, 'active');
 		if (raced) return view(raced);
@@ -261,8 +279,26 @@ export class SigningKeyService {
 
 	/** The key that signs now; creates or repairs the ring on first use. */
 	async active(purpose: string): Promise<SigningKeyRecord> {
+		return this.activeSync(purpose);
+	}
+
+	/** The synchronous form of `active`. */
+	activeSync(purpose: string): SigningKeyRecord {
 		const row = this.row(purpose, 'active');
-		return row ? view(row) : this.ensure(purpose);
+		return row ? view(row) : this.ensureSync(purpose);
+	}
+
+	/**
+	 * The active private key as PKCS#8 PEM. Only for consumers that need X.509 — the registry
+	 * derives zot's self-signed certificate from it; nothing else should export private material.
+	 */
+	activePrivateKeyPem(purpose: string): { kid: string; privateKeyPem: string } {
+		const key = this.activeSync(purpose);
+		const privateKey = this.nodeKey(key);
+		return {
+			kid: key.kid,
+			privateKeyPem: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+		};
 	}
 
 	/** One key by purpose and kid. Retired keys remain resolvable so their tokens still verify. */
@@ -330,11 +366,15 @@ export class SigningKeyService {
 
 	// ---------------------------------------------------------------- tokens
 
-	/** Sign an ES256 JWT with the purpose's active key. `iss` is always the platform origin. */
+	/**
+	 * Sign an ES256 JWT with the purpose's active key. `iss` defaults to the platform origin;
+	 * pipeline OIDC passes its path-based issuer so existing cloud trusts keep working (§7.3).
+	 */
 	async sign(
 		purpose: string,
 		claims: { sub: string; aud: string | string[]; [claim: string]: unknown },
 		ttlSeconds: number,
+		options: SignOptions = {},
 	): Promise<string> {
 		if (!Number.isFinite(ttlSeconds) || ttlSeconds <= 0)
 			throw new ValidationError('A token TTL must be a positive number of seconds.');
@@ -343,7 +383,7 @@ export class SigningKeyService {
 		const iat = Math.floor(this.ctx.now() / 1000);
 		const payload = {
 			...claims,
-			iss: this.issuer(),
+			iss: options.issuer ?? this.issuer(),
 			iat,
 			exp: iat + Math.floor(ttlSeconds),
 		};
@@ -355,6 +395,36 @@ export class SigningKeyService {
 			new TextEncoder().encode(input),
 		);
 		return `${input}.${base64url(new Uint8Array(signature))}`;
+	}
+
+	/**
+	 * The synchronous signer, for callers whose public API predates the ring (the registry realm
+	 * and pipeline OIDC). Same keys, same claims, same ES256 encoding as `sign`.
+	 */
+	signSync(
+		purpose: string,
+		claims: { sub: string; aud: string | string[]; [claim: string]: unknown },
+		ttlSeconds: number,
+		options: SignOptions = {},
+	): string {
+		if (!Number.isFinite(ttlSeconds) || ttlSeconds <= 0)
+			throw new ValidationError('A token TTL must be a positive number of seconds.');
+		const key = this.activeSync(purpose);
+		const privateKey = this.nodeKey(key);
+		const iat = Math.floor(this.ctx.now() / 1000);
+		const payload = {
+			...claims,
+			iss: options.issuer ?? this.issuer(),
+			iat,
+			exp: iat + Math.floor(ttlSeconds),
+		};
+		const header = { alg: ALG, typ: 'JWT', kid: key.kid };
+		const input = `${base64url(JSON.stringify(header))}.${base64url(JSON.stringify(payload))}`;
+		const signature = cryptoSign('sha256', Buffer.from(input), {
+			key: privateKey,
+			dsaEncoding: 'ieee-p1363',
+		});
+		return `${input}.${signature.toString('base64url')}`;
 	}
 
 	/**
@@ -422,9 +492,26 @@ export class SigningKeyService {
 		};
 	}
 
-	private async privateKey(key: SigningKeyRecord): Promise<CryptoKey> {
-		const cached = this.#privateKeys.get(key.kid);
-		if (cached) return cached;
+	/** Synchronous generation, for the sync signer; `rotate` keeps the async path. */
+	private generateSync(): GeneratedKey {
+		const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+		const privateJwk = privateKey.export({ format: 'jwk' }) as Record<string, unknown>;
+		const publicJwk = publicMembers(publicKey.export({ format: 'jwk' }) as Record<string, unknown>);
+		// RFC 7638 thumbprint: a stable, public kid derived from the key itself.
+		const thumbprint = createHash('sha256')
+			.update(JSON.stringify({ crv: publicJwk.crv, kty: publicJwk.kty, x: publicJwk.x, y: publicJwk.y }))
+			.digest('base64url');
+		const kid = `k_${thumbprint}`;
+		const sealed = encrypt(this.ctx.config.masterKey, new TextEncoder().encode(JSON.stringify(privateJwk)));
+		return {
+			kid,
+			publicJwk,
+			privateSealed: JSON.stringify({ nonce: sealed.nonce, ciphertext: sealed.ciphertext }),
+		};
+	}
+
+	/** The decrypted private JWK for one key. */
+	private privateJwk(key: SigningKeyRecord): Record<string, unknown> {
 		const row = this.requireRow(key.kid);
 		let sealed: { nonce: string; ciphertext: string };
 		try {
@@ -437,14 +524,32 @@ export class SigningKeyService {
 		const jwk = new TextDecoder().decode(
 			decrypt(this.ctx.config.masterKey, sealed.ciphertext, sealed.nonce),
 		);
+		try {
+			return JSON.parse(jwk) as Record<string, unknown>;
+		} catch {
+			throw new SigningKeyError(`Signing key "${key.kid}" does not decrypt to a JWK.`);
+		}
+	}
+
+	private async privateKey(key: SigningKeyRecord): Promise<CryptoKey> {
+		const cached = this.#privateKeys.get(key.kid);
+		if (cached) return cached;
 		const privateKey = await crypto.subtle.importKey(
 			'jwk',
-			JSON.parse(jwk) as never,
+			this.privateJwk(key) as never,
 			{ name: 'ECDSA', namedCurve: 'P-256' },
 			false,
 			['sign'],
 		);
 		this.#privateKeys.set(key.kid, privateKey);
+		return privateKey;
+	}
+
+	private nodeKey(key: SigningKeyRecord): ReturnType<typeof createPrivateKey> {
+		const cached = this.#nodeKeys.get(key.kid);
+		if (cached) return cached;
+		const privateKey = createPrivateKey({ key: this.privateJwk(key) as never, format: 'jwk' });
+		this.#nodeKeys.set(key.kid, privateKey);
 		return privateKey;
 	}
 

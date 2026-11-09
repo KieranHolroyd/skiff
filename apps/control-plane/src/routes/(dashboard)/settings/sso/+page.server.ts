@@ -1,5 +1,6 @@
 import { error, fail } from '@sveltejs/kit';
 import { core } from '#lib/server/core.js';
+import { platformOrigin } from '#lib/server/config.js';
 import { sqlite } from '#lib/server/db.js';
 import { userHasSecondFactor } from '#lib/server/second-factor.js';
 import { reserveSsoProviderId, sso, ssoCallbackUrl } from '#lib/server/sso.js';
@@ -9,9 +10,9 @@ import { failStatus, formBoolean, formString, toFormFailure } from '../../_lib/e
 import type { Actions, PageServerLoad } from './$types';
 
 /**
- * Settings → SSO (IAM.md I19/I21, §8.3, §8.5). OIDC providers, the email domains that route to
- * them, and the org authentication policy (required SSO/2FA, methods, session limits, IP allowlist,
- * break-glass owners). Group mapping, SAML and SCIM are still shown as not yet built.
+ * Settings → SSO (IAM.md I19/I20/I21, §8.3–§8.5). OIDC providers, the email domains that route to
+ * them, group mapping, SCIM bearer tokens and the org authentication policy (required SSO/2FA,
+ * methods, session limits, IP allowlist, break-glass owners). SAML is still not built.
  *
  * Adding a provider starts from a preset (`#lib/sso-presets.ts`, D180) or a custom OIDC issuer.
  * The provider id is reserved at load time so the dialog can show the exact redirect URI to
@@ -53,6 +54,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 		owners,
 		policy: core.authPolicy.get(principal),
 		defaultSsoRole: ssoDefaultRole,
+		scimTokens: core.scim.list(principal),
+		scimEndpoint: `${platformOrigin}/api/auth/scim/v2`,
+		groupMappings: sso.listGroupMappings(principal),
+		// SCIM groups are authoritative from the directory, so they are not mapping targets.
+		groups: core.iam.listGroups(principal.orgId).filter((group) => group.source !== 'scim'),
 		canManage: core.iam.can(principal, 'sso:manage', resource)
 	};
 };
@@ -221,9 +227,7 @@ export const actions: Actions = {
 				)
 				.all(principal.orgId);
 			const ownerIds = new Set(owners.map((owner) => owner.id));
-			const usable = breakGlassUserIds.some(
-				(id) => ownerIds.has(id) && userHasSecondFactor(id)
-			);
+			const usable = breakGlassUserIds.some((id) => ownerIds.has(id) && userHasSecondFactor(id));
 			if (!usable)
 				return fail(400, {
 					message:
@@ -245,6 +249,71 @@ export const actions: Actions = {
 				breakGlassUserIds
 			});
 			return { success: 'Authentication policy saved.' };
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	createScimToken: async ({ locals }) => {
+		const principal = locals.principal!;
+		try {
+			const { token } = core.scim.create(principal);
+			return {
+				success: 'SCIM token created. Copy it now: it is not shown again.',
+				scimToken: token
+			};
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	rotateScimToken: async ({ locals }) => {
+		const principal = locals.principal!;
+		try {
+			const { token } = core.scim.rotate(principal);
+			return {
+				success: 'SCIM token rotated. The previous token stops working immediately.',
+				scimToken: token
+			};
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	revokeScimToken: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const id = formString(await request.formData(), 'tokenId');
+		if (!id) return fail(400, { message: 'Missing token id.' });
+		try {
+			core.scim.revoke(principal, id);
+			return { success: 'SCIM token revoked.' };
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	saveGroupMapping: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		try {
+			sso.saveGroupMapping(principal, {
+				providerId: formString(data, 'providerId'),
+				claimValue: formString(data, 'claimValue'),
+				groupId: formString(data, 'groupId')
+			});
+			return { success: 'Group mapping saved.' };
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	removeGroupMapping: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const id = formString(await request.formData(), 'mappingId');
+		if (!id) return fail(400, { message: 'Missing mapping id.' });
+		try {
+			sso.removeGroupMapping(principal, id);
+			return { success: 'Group mapping removed.' };
 		} catch (cause) {
 			return failure(cause);
 		}

@@ -65,6 +65,7 @@ import { handleSiteRequest, normalizeHost, UsedTokenCache } from './verify.ts';
 import { AccessDecisionCache } from './skiff-access.ts';
 import type { StudioFront } from './studio/front.ts';
 import { ConsoleFront, controlPlaneConsoleActivationFetcher } from './console-front.ts';
+import { WorkloadIdentityBroker, parseIdentityResponse } from './workload-identity.ts';
 
 const HEARTBEAT_INTERVAL_MS = 10_000;
 // Bun's default idle timeout on the control plane is 10 s (adapter-bun CONNECTION_IDLE_TIMEOUT),
@@ -118,6 +119,8 @@ class AgentRuntime {
 	/** Email (docs/EMAIL.md): runs and feeds skiff-mail when this node is the mail node. */
 	private readonly mail: MailBridge;
 	private readonly workloads: WorkloadRuntime;
+	/** Workload JWT delivery and the loopback metadata endpoint (IAM.md I18). */
+	private readonly identity: WorkloadIdentityBroker;
 	private readonly logDrain: WorkloadLogDrain;
 	private readonly storage: StorageRequester;
 	private readonly databaseStats: DatabaseStatsSampler;
@@ -223,6 +226,11 @@ class AgentRuntime {
 				)
 			: null;
 		this.helper = new HelperClient(config.helperSocket);
+		this.identity = new WorkloadIdentityBroker({
+			mint: (id, audience, signal) => this.fetchWorkloadIdentity(id, audience, signal),
+			helper: this.helper,
+			log,
+		});
 		this.mail = new MailBridge({
 			controlUrl: config.controlUrl,
 			nodeToken: config.nodeToken,
@@ -247,6 +255,10 @@ class AgentRuntime {
 			healthTimeoutMs: config.workloadHealthTimeoutMs,
 			statePath: join(config.dataDir, 'workloads-state.json'),
 			log,
+			onIdentity: (workload, identity) => {
+				if (identity) this.identity.hold(workload.id, identity);
+			},
+			ensureIdentity: (workload, signal) => this.identity.refresh([workload], signal),
 		});
 		this.databaseStats = new DatabaseStatsSampler({ source: this.workloads, log });
 		this.databaseBackups = new DatabaseBackupRunner({ helper: this.helper, log });
@@ -408,6 +420,7 @@ class AgentRuntime {
 
 		await this.checkCaddy();
 		await this.startServer();
+		this.identity.start();
 
 		if (this.config.caddyAccessLog) {
 			this.telemetry = new TelemetryClient({
@@ -454,6 +467,7 @@ class AgentRuntime {
 		this.loops = [
 			this.reconcileLoop(),
 			this.heartbeatLoop(),
+			this.identityLoop(),
 			this.telemetryLoop(),
 			this.databaseStatsLoop(),
 			this.databaseBackupLoop(),
@@ -496,6 +510,7 @@ class AgentRuntime {
 		await this.studioUpdates;
 		if (this.studioFront) (await this.studioFront.catch(() => null))?.stop();
 		this.consoleFront?.stop();
+		this.identity.stop();
 		await this.mail.close();
 		this.serviceForwarder.close();
 		await this.replicaLinks.close();
@@ -727,6 +742,30 @@ class AgentRuntime {
 		if (!parsed.success)
 			throw new Error(`workload activation failed validation: ${parsed.error.message}`);
 		return parsed.data;
+	}
+
+	/** A fresh workload token from the control plane, for the file or the metadata endpoint. */
+	private async fetchWorkloadIdentity(
+		id: string,
+		audience: string,
+		signal?: AbortSignal,
+	): Promise<ReturnType<typeof parseIdentityResponse>> {
+		const query = new URLSearchParams({ audience });
+		const response = await fetch(
+			`${this.config.controlUrl}/api/agent/workloads/${encodeURIComponent(id)}/identity?${query}`,
+			{
+				headers: {
+					authorization: `Bearer ${this.config.nodeToken}`,
+					accept: 'application/json',
+				},
+				...(signal ? { signal } : {}),
+			},
+		);
+		if (!response.ok) {
+			const text = await response.text().catch(() => '');
+			throw new Error(`workload identity -> ${response.status}${text ? `: ${text}` : ''}`);
+		}
+		return parseIdentityResponse(await response.json());
 	}
 
 	private async converge(state: DesiredState): Promise<void> {
@@ -1102,6 +1141,25 @@ class AgentRuntime {
 	}
 
 	// --- heartbeat -----------------------------------------------------------
+
+	/**
+	 * Workload identity (IAM.md I18). The runtime recovers a token during converge; this loop
+	 * rotates delivered tokens at 50% of their lifetime without touching desired state or restarting
+	 * a unit. `retain` drops workloads that left this node.
+	 */
+	private async identityLoop(): Promise<void> {
+		while (this.running) {
+			await sleep(30_000, this.shutdownController.signal).catch(() => undefined);
+			if (!this.running || !this.desired) continue;
+			this.identity.retain(new Set(this.desired.workloads.map((workload) => workload.id)));
+			try {
+				await this.identity.refresh(this.workloads.identityWorkloads(), this.shutdownController.signal);
+			} catch (error) {
+				if (!this.running) break;
+				log('warn', `Workload identity refresh failed: ${errorText(error)}`);
+			}
+		}
+	}
 
 	private async heartbeatLoop(): Promise<void> {
 		while (this.running) {

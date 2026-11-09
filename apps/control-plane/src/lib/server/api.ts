@@ -25,6 +25,14 @@ export async function readJson<T>(request: Request, schema: z.ZodType<T>): Promi
 export function errorResponse(error: unknown): Response {
 	if (error instanceof ZodError)
 		return json({ error: 'validation', issues: error.issues.map((issue) => ({ path: issue.path, message: issue.message })) }, 422);
+	// STEP-UP.md §6: a fresh verification is needed before this permission can be used. The client
+	// recognises the shape, verifies (later slice) and retries the same request once.
+	const stepUp = stepUpRequiredFrom(error);
+	if (stepUp)
+		return json(
+			{ error: 'step_up_required', permission: stepUp.permission, level: stepUp.level },
+			403
+		);
 	if (error instanceof ForbiddenError) return json({ error: 'forbidden', permission: error.permission, message: error.message }, 403);
 	// `@skiff/contracts`' requirePermission throws its own ForbiddenError, which is not a CoreError.
 	// Match it by name + permission so a missing permission is a 403 rather than a 500.
@@ -56,6 +64,22 @@ export function errorResponse(error: unknown): Response {
 	// Settings → Server errors; the id lets a caller quote the failure to an admin.
 	const errorId = reportRequestError(error, { source: 'api' });
 	return json({ error: 'internal', message: 'Internal server error', ...(errorId ? { errorId } : {}) }, 500);
+}
+
+/**
+ * `@skiff/contracts`' `StepUpRequiredError` is not a `CoreError`, so identify it by its class name
+ * and required `permission`/`level` fields (the same treatment as `forbiddenFromContracts`).
+ */
+function stepUpRequiredFrom(
+	error: unknown,
+): { permission: string; level: 'window' | 'always' } | null {
+	if (typeof error !== 'object' || error === null) return null;
+	const candidate = error as { name?: unknown; permission?: unknown; level?: unknown };
+	if (candidate.name !== 'StepUpRequiredError' || typeof candidate.permission !== 'string') return null;
+	return {
+		permission: candidate.permission,
+		level: candidate.level === 'always' ? 'always' : 'window',
+	};
 }
 
 /**

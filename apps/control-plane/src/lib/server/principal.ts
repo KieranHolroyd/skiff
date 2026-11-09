@@ -9,6 +9,7 @@ import { openSignup } from './config';
 import { core } from './core';
 import { sqlite } from './db';
 import { membershipRoleIn } from './org-membership';
+import { verificationFromSession } from './step-up';
 
 /** The request's client address, before it is hashed for audit or storage. */
 function clientIp(request: Request): string | undefined {
@@ -47,11 +48,13 @@ export function principalFromSession(
 		activeOrganizationId?: string | null;
 		/** A credential's bound org (an API key's `org_id`); it wins and never falls back. */
 		orgId?: string;
+		/** The Better Auth session row; its optional step-up fields become `Principal.verification`. */
+		session?: unknown;
 	} = {},
 ): Principal | undefined {
 	const membership = membershipFrom(userId, options);
 	if (!membership) return undefined;
-	return buildPrincipal({
+	const principal = buildPrincipal({
 		userId,
 		orgId: membership.orgId,
 		role: membership.role,
@@ -60,6 +63,13 @@ export function principalFromSession(
 		ipHash: hashIp(request),
 		platformAdmin: isPlatformAdminUser(sqlite, userId),
 	});
+	// STEP-UP.md §6: only a session row can carry a verification window. A key or MCP principal
+	// cannot show a dialog, so it stays undefined and the catalog's token rule decides (§7).
+	if (options.kind === undefined || options.kind === 'user') {
+		const verification = verificationFromSession(options.session);
+		if (verification) principal.verification = verification;
+	}
+	return principal;
 }
 
 function membershipFrom(
@@ -119,6 +129,7 @@ export async function principalFromRequest(request: Request): Promise<Principal 
 	return principalFromSession(session.user.id, request, {
 		name: session.user.name ?? undefined,
 		activeOrganizationId: session.session.activeOrganizationId,
+		session: session.session,
 	});
 }
 

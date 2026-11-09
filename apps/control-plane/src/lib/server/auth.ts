@@ -5,6 +5,7 @@ import { admin, jwt, magicLink, organization, twoFactor } from 'better-auth/plug
 import { passkey } from '@better-auth/passkey';
 import { apiKey } from '@better-auth/api-key';
 import { sso as ssoPlugin } from '@better-auth/sso';
+import { scim as scimPlugin } from '@better-auth/scim';
 import { createAccessControl } from 'better-auth/plugins/access';
 import { defaultStatements } from 'better-auth/plugins/organization/access';
 import { sveltekitCookies } from 'better-auth/svelte-kit';
@@ -173,6 +174,15 @@ function isSsoCallbackPath(path: string | undefined): boolean {
 	return Boolean(path && (path.startsWith('/sso/callback') || path.startsWith('/sso/saml2/sp/acs')));
 }
 
+/**
+ * A SCIM provisioning request. The bearer token is verified by `core.scim.verify` before the
+ * plugin runs; directory-driven user creation is the one other exception to invite-only sign-up
+ * (an administrator minted the token, so the IdP is trusted exactly like an SSO provider).
+ */
+function isScimPath(path: string | undefined): boolean {
+	return Boolean(path && path.includes('/scim/v2'));
+}
+
 const secure = platformOrigin.startsWith('https://');
 const platformHost = new URL(platformOrigin).hostname;
 
@@ -328,7 +338,11 @@ export const auth = betterAuth({
 						return { data: { ...user, role: 'admin' } };
 					}
 					if (openSignup) return;
-					if (isSsoCallbackPath((context as { path?: string } | undefined)?.path)) return;
+					if (
+						isSsoCallbackPath((context as { path?: string } | undefined)?.path) ||
+						isScimPath((context as { path?: string } | undefined)?.path)
+					)
+						return;
 					const invited = sqlite
 						.query<{ id: string }, [string, string]>(
 							"SELECT id FROM invitation WHERE lower(email) = ? AND status = 'pending' AND expiresAt > ?",
@@ -394,6 +408,16 @@ export const auth = betterAuth({
 				throw new APIError('FORBIDDEN', { message: `Your role does not include ${permission}.` });
 		}),
 		after: createAuthMiddleware(async (ctx) => {
+			// Reconcile what the SCIM plugin just wrote: members with the default role, immediate
+			// deprovisioning, and the `iam_groups` mirror. Idempotent, so a GET is harmless.
+			if (isScimPath(ctx.path)) {
+				try {
+					core.scim.syncFromScim();
+				} catch (error) {
+					console.error('[scim] could not reconcile directory state:', error);
+				}
+			}
+
 			const factor = factorProvedBy(ctx.path);
 			if (!factor) return;
 			if (ctx.context.returned instanceof APIError) {
@@ -437,9 +461,39 @@ export const auth = betterAuth({
 			organizationProvisioning: { disabled: true },
 			domainVerification: { enabled: false },
 			providersLimit: 0,
-			provisionUser: async ({ user, provider }) => {
-				provisionSsoUser({ user, provider });
+			// Group claims can change between sign-ins (someone joins or leaves a team at the IdP),
+			// so JIT provisioning runs every time and replaces only `source = 'sso'` membership.
+			provisionUserOnEveryLogin: true,
+			provisionUser: async ({ user, provider, userInfo }) => {
+				provisionSsoUser({ user, provider, userInfo });
 			},
+		}),
+		// SCIM 2.0 provisioning (IAM.md I20, §8.4). The plugin serves `/api/auth/scim/v2` and owns
+		// its resource tables. Skiff supplies the per-organisation bearer credential and the
+		// behavioural layer: users become members, deactivation revokes everything, and groups
+		// mirror into `iam_groups` (`core.scim`, called from the after-hook below).
+		scimPlugin({
+			connections: [],
+			authentication: {
+				verifyBearerToken: async ({ token }) => {
+					const verified = core.scim.verify(token);
+					if (!verified) return null;
+					return {
+						connection: {
+							id: verified.orgId,
+							provisioningDomainId: verified.orgId,
+						},
+						credentialId: verified.tokenId,
+						scopes: [
+							'scim.users.read',
+							'scim.users.write',
+							'scim.groups.read',
+							'scim.groups.write',
+						] as const,
+					};
+				},
+			},
+			compatibility: { microsoftEntra: { acceptLegacyGroupSchema: true } },
 		}),
 		// Stable signing key for access/ID tokens + /jwks (required by mcp()).
 		jwt(),

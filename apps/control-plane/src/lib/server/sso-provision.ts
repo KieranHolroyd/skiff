@@ -2,24 +2,24 @@
  * JIT provisioning for SSO sign-ins (IAM.md I19, §8.3, I21).
  *
  * Better Auth's `@better-auth/sso` plugin creates the user and session. Organisation provisioning
- * in the plugin is disabled, because Skiff owns memberships, the default role and (later) group
- * mapping. This callback runs once per new SSO user, in the same request as the callback:
+ * in the plugin is disabled, because Skiff owns memberships, the default role and group mapping.
+ * This callback runs on every sign-in (`provisionUserOnEveryLogin`), because IdP group membership
+ * changes between sign-ins and roles follow the directory:
  *
- * - add a `member` row for the provider's organisation;
- * - the default role is `viewer`, or no membership at all when `SKIFF_SSO_DEFAULT_ROLE=none`;
- * - make that org the new session's active org, because the session was created before the member
- *   row existed.
+ * - add a `member` row for the provider's organisation if the user is not one yet;
+ * - the default role is `viewer`, or no membership at all when `SKIFF_SSO_DEFAULT_ROLE=none`
+ *   (unless a group mapping applies, since then the group binding is the point);
+ * - map the provider's groups claim through `sso_group_mappings` and replace the user's
+ *   `source = 'sso'` group membership. Local membership rows and `source = 'scim'` rows are never
+ *   touched;
+ * - make that org the new session's active org, because the session may have been created before
+ *   the member row existed.
  *
- * Group mapping and SCIM are deliberately not here yet: the IdP groups claim is copied into the
- * plugin provider's `mapping.extraFields` for the future `sso_group_mappings` work, but no roles are
- * derived from it.
- *
- * TODO(I19): read the groups claim from `provisionUser`'s `userInfo`, map `sso_group_mappings` to
- * `iam_groups`, and assign bindings instead of the flat default role.
- * TODO(I20): SCIM user/group provisioning and deprovisioning (Better Auth `scim` plugin).
+ * A missing groups claim (`undefined`) leaves the last synced membership alone. An empty claim
+ * (`[]`) is a real assertion that the user is in no IdP groups and clears the synced membership.
  */
 import type { Principal } from '@skiff/contracts';
-import { newId } from '@skiff/core';
+import { groupClaimValues, groupIdsForClaims, newId } from '@skiff/core';
 import { rememberOrganization } from './org-membership';
 import { sqlite } from './db';
 import { core } from './core';
@@ -48,8 +48,83 @@ function systemPrincipal(orgId: string): Principal {
 		userId: 'system:sso',
 		orgId,
 		role: 'owner',
-		permissions: new Set(),
+		permissions: new Set()
 	};
+}
+
+/** The provider's configured groups claim and the org's mappings, resolved once per sign-in. */
+function mappedGroupIds(
+	orgId: string,
+	providerId: string,
+	userInfo: Record<string, unknown> | undefined
+): {
+	groups: string[] | undefined;
+	groupIds: string[];
+} {
+	const provider = sqlite
+		.query<{ claim_groups: string }, [string, string]>(
+			'SELECT claim_groups FROM sso_providers WHERE org_id = ? AND id = ?'
+		)
+		.get(orgId, providerId);
+	if (!provider) return { groups: undefined, groupIds: [] };
+	const groups = userInfo ? groupClaimValues(userInfo[provider.claim_groups]) : undefined;
+	if (groups === undefined) return { groups, groupIds: [] };
+	let mappings: Array<{ claimValue: string; groupId: string }> = [];
+	try {
+		mappings = sqlite
+			.query<{ claim_value: string; group_id: string }, [string, string]>(
+				`SELECT m.claim_value, m.group_id
+				 FROM sso_group_mappings m
+				 JOIN iam_groups g ON g.id = m.group_id AND g.org_id = m.org_id
+				 WHERE m.org_id = ? AND m.provider_id = ?`
+			)
+			.all(orgId, providerId)
+			.map((row) => ({ claimValue: row.claim_value, groupId: row.group_id }));
+	} catch (error) {
+		// A build without the mapping migration must still sign the user in with the default role.
+		if (!String(error).includes('no such table')) throw error;
+	}
+	return { groups, groupIds: groupIdsForClaims(groups, mappings) };
+}
+
+/**
+ * Replace the IdP-sourced half of a user's group membership. A local membership for the same
+ * group wins (the primary key already makes that row unique), and `source = 'scim'` rows are
+ * owned by the SCIM reconciler.
+ */
+function syncSsoGroups(
+	orgId: string,
+	userId: string,
+	providerId: string,
+	groups: string[] | undefined,
+	groupIds: string[]
+): void {
+	if (groups === undefined) return;
+	const now = core.ctx.now();
+	sqlite.transaction(() => {
+		sqlite.run(
+			`DELETE FROM iam_group_members
+			 WHERE user_id = ? AND source = 'sso'
+			   AND group_id IN (SELECT id FROM iam_groups WHERE org_id = ?)`,
+			[userId, orgId]
+		);
+		for (const groupId of groupIds)
+			sqlite.run(
+				`INSERT INTO iam_group_members (group_id, user_id, source, created_at)
+				 VALUES (?, ?, 'sso', ?) ON CONFLICT (group_id, user_id) DO NOTHING`,
+				[groupId, userId, now]
+			);
+		// Group membership changes the compiled grants, so the IAM version must move.
+		core.iam.touch(orgId);
+	})();
+	core.ctx.audit.record({
+		principal: systemPrincipal(orgId),
+		action: 'sso.groups.sync',
+		resource: 'member',
+		resourceId: userId,
+		args: { orgId, providerId, claims: groups, groupIds },
+		result: 'ok'
+	});
 }
 
 /**
@@ -59,12 +134,15 @@ function systemPrincipal(orgId: string): Principal {
 export function provisionSsoUser(input: {
 	user: SsoUser;
 	provider: SsoProviderRef;
+	userInfo?: Record<string, unknown>;
 }): void {
 	const orgId = input.provider.organizationId;
 	if (!orgId) return;
 	const actor = systemPrincipal(orgId);
 	try {
-		if (ssoDefaultRole === 'none') {
+		const { groups, groupIds } = mappedGroupIds(orgId, input.provider.providerId, input.userInfo);
+
+		if (ssoDefaultRole === 'none' && groupIds.length === 0) {
 			core.ctx.audit.record({
 				principal: actor,
 				action: 'sso.jit.skipped',
@@ -73,9 +151,9 @@ export function provisionSsoUser(input: {
 				args: {
 					orgId,
 					providerId: input.provider.providerId,
-					reason: 'SKIFF_SSO_DEFAULT_ROLE=none',
+					reason: 'SKIFF_SSO_DEFAULT_ROLE=none'
 				},
-				result: 'ok',
+				result: 'ok'
 			});
 			return;
 		}
@@ -89,12 +167,20 @@ export function provisionSsoUser(input: {
 			sqlite.run(
 				`INSERT INTO member (id, organizationId, userId, role, createdAt)
 				 VALUES (?, ?, ?, ?, ?)`,
-				[newId('mem_'), orgId, input.user.id, ssoDefaultRole, new Date().toISOString()]
+				[
+					newId('mem_'),
+					orgId,
+					input.user.id,
+					ssoDefaultRole === 'none' ? 'viewer' : ssoDefaultRole,
+					new Date().toISOString()
+				]
 			);
 			// Give the engine the base-role binding immediately, so the first request after the
 			// callback sees the same access as any other member.
 			core.iam.syncMembers(orgId);
 		}
+
+		syncSsoGroups(orgId, input.user.id, input.provider.providerId, groups, groupIds);
 
 		rememberOrganization(input.user.id, orgId);
 		// The session was created before this callback, so its organization hook had no membership
@@ -116,8 +202,10 @@ export function provisionSsoUser(input: {
 				issuer: input.provider.issuer ?? null,
 				email: input.user.email ?? null,
 				role: existing?.role ?? ssoDefaultRole,
+				groups: groups ?? null,
+				groupIds
 			},
-			result: 'ok',
+			result: 'ok'
 		});
 	} catch (error) {
 		// Never turn a successful authentication into a 500: the session exists, and an operator can
@@ -131,7 +219,7 @@ export function provisionSsoUser(input: {
 				resourceId: input.user.id,
 				args: { orgId, providerId: input.provider.providerId },
 				result: 'error',
-				error: (error as Error).message,
+				error: (error as Error).message
 			});
 		} catch {
 			// A broken audit table must not take sign-in down either.

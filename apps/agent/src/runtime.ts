@@ -77,6 +77,16 @@ export interface WorkloadRuntimeOptions {
 	statePath?: string | null;
 	/** How long after an apply a stopped runner is assumed to be still starting (default 20 s). */
 	runnerSettleMs?: number;
+	/**
+	 * Workload identity (IAM.md I18): remember the token an activation carried. Called before the
+	 * helper applies the workload, so the metadata endpoint can serve it immediately.
+	 */
+	onIdentity?: (workload: WorkloadDesired, identity: WorkloadActivation['identity']) => void | Promise<void>;
+	/**
+	 * After an agent restart the desired state is unchanged, so no activation is fetched. This
+	 * recovers a missing identity token/file for a workload that already has one.
+	 */
+	ensureIdentity?: (workload: WorkloadDesired, signal: AbortSignal) => Promise<void>;
 }
 
 interface AppliedWorkload {
@@ -129,6 +139,8 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 	private readonly retryDelayMs: number;
 	private readonly statePath: string | null;
 	private readonly runnerSettleMs: number;
+	private readonly onIdentity: WorkloadRuntimeOptions['onIdentity'];
+	private readonly ensureIdentity: WorkloadRuntimeOptions['ensureIdentity'];
 
 	private readonly applied = new Map<string, AppliedWorkload>();
 	private readonly reports = new Map<string, WorkloadRuntimeReport>();
@@ -180,6 +192,8 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 		this.retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
 		this.statePath = options.statePath ?? null;
 		this.runnerSettleMs = options.runnerSettleMs ?? RUNNER_SETTLE_MS;
+		this.onIdentity = options.onIdentity;
+		this.ensureIdentity = options.ensureIdentity;
 	}
 
 	/** True when a previous converge left work behind and the retry window has passed. */
@@ -190,6 +204,11 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 	/** Reports for the heartbeat, in stable id order. */
 	currentReports(): WorkloadRuntimeReport[] {
 		return [...this.reports.values()].sort((a, b) => a.id.localeCompare(b.id));
+	}
+
+	/** Desired workloads with workload identity enabled, for the token refresh loop. */
+	identityWorkloads(): WorkloadDesired[] {
+		return [...this.desiredById.values()].filter((workload) => workload.identity);
 	}
 
 	/**
@@ -622,6 +641,7 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 
 			if (previous && previous.fingerprint === fingerprint && previous.activationVersion === workload.activationVersion) {
 				// Unchanged: reconcile the actual status instead of restarting a healthy unit.
+				if (workload.identity) await this.ensureIdentity?.(workload, signal);
 				if (workload.database) await this.recoverMonitor(workload, signal);
 				if (workload.objectStorage) await this.recoverStorageAdmin(workload, signal);
 				const status = await this.helper.status(id);
@@ -657,6 +677,10 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 				throw new Error(`activation is for workload ${activation.workloadId}, not ${id}`);
 			if (activation.activationVersion !== workload.activationVersion)
 				throw new Error('activation version does not match the desired workload');
+
+			// Remember the token before the helper applies the unit, so the metadata endpoint can
+			// serve it as soon as the workload starts. The helper writes the 0400 file itself.
+			if (activation.identity) await this.onIdentity?.(workload, activation.identity);
 
 			// `monitor`, `databaseSetup` and `storageAdmin` are for this process only: the helper
 			// never sees them.
@@ -1109,6 +1133,9 @@ export function workloadFingerprint(workload: WorkloadDesired): string {
 		// Node.js apps (D125) get a different default command and the fd-3 preload.
 		...(workload.engine ? { engine: workload.engine } : {}),
 		...(workload.runner ? { runner: workload.runner.provider } : {}),
+		// Turning workload identity on changes the rendered unit (mount/credential), so it must
+		// re-apply even though the activation version did not move.
+		...(workload.identity ? { identity: true } : {}),
 		// A disk move must re-render the unit and restart the container (D169).
 		...(workload.volumeId ? { volumeId: workload.volumeId } : {}),
 		// Only present for databases, so existing app fingerprints (and units) stay unchanged.
