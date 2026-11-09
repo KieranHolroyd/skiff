@@ -2,8 +2,8 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import { DEFAULT_FEATURES, mailStateSchema, type EmailEvent } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import { DEFAULT_FEATURES, mailStateSchema, type EmailEvent } from '@yoal/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
@@ -14,7 +14,7 @@ import { verifyPassword } from './util.ts';
 
 /** Email (docs/EMAIL.md): domains, sending, the mail node bridge, suppression and reputation. */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-email-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-email-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 let clock = Date.parse('2026-11-07T10:00:00Z');
@@ -63,8 +63,8 @@ const core: Core = createCore({
 	version: '0.1.0',
 	config: {
 		dataDir: dir,
-		platformOrigin: 'https://control.skiff.test',
-		contentDomain: 'skiff.test',
+		platformOrigin: 'https://control.yoal.test',
+		contentDomain: 'yoal.test',
 		objectStore: store,
 		masterKey: new Uint8Array(32).fill(7),
 		siteCookieSecret: 'site-cookie-secret-123',
@@ -73,7 +73,7 @@ const core: Core = createCore({
 		now: () => clock,
 		features: { ...DEFAULT_FEATURES },
 	},
-	email: { dns, cloudflare, cloudflareZoneName: 'skiff.test' },
+	email: { dns, cloudflare, cloudflareZoneName: 'yoal.test' },
 });
 
 const admin = buildPrincipal({ kind: 'user', userId: 'user_1', orgId: 'org_1', role: 'owner', platformAdmin: true });
@@ -123,39 +123,39 @@ describe('mail node', () => {
 		core.nodes.heartbeat(nodeToken, { nodeId, agentVersion: '0.1.0', actualStateVersion: 1, status: 'online', caddyOk: true, releases: [], capabilities: ['functions', 'mail'] });
 		await expect(core.email.configure(tenant, { nodeId })).rejects.toThrow(/platform admin/);
 		const settings = await core.email.configure(admin, { nodeId });
-		expect(settings).toMatchObject({ nodeId, mailDomain: 'skiff.test', hostnames: { helo: 'mx1.skiff.test', bounce: 'bounces.skiff.test' } });
+		expect(settings).toMatchObject({ nodeId, mailDomain: 'yoal.test', hostnames: { helo: 'mx1.yoal.test', bounce: 'bounces.yoal.test' } });
 	});
 
 	test('platform records are published to Cloudflare', () => {
 		const published = [...zone.values()].map((record) => `${record.type} ${record.name} ${record.content}`);
-		expect(published).toContain('A mx1.skiff.test 203.0.113.10');
-		expect(published).toContain('TXT _spf.skiff.test v=spf1 ip4:203.0.113.10 -all');
-		expect(published).toContain('MX bounces.skiff.test mx.skiff.test');
-		expect(published).toContain('TXT bounces.skiff.test v=spf1 include:_spf.skiff.test -all');
+		expect(published).toContain('A mx1.yoal.test 203.0.113.10');
+		expect(published).toContain('TXT _spf.yoal.test v=spf1 ip4:203.0.113.10 -all');
+		expect(published).toContain('MX bounces.yoal.test mx.yoal.test');
+		expect(published).toContain('TXT bounces.yoal.test v=spf1 include:_spf.yoal.test -all');
 	});
 
 	test('desired state carries the mail section only for the mail node, without secrets', async () => {
 		const state = await core.nodes.desiredState(nodeToken);
-		expect(state.mail).toMatchObject({ hostnames: { mx: 'mx.skiff.test' } });
+		expect(state.mail).toMatchObject({ hostnames: { mx: 'mx.yoal.test' } });
 		expect(JSON.stringify(state.mail)).not.toContain('PRIVATE KEY');
 		expect(core.email.desiredForNode('node_other')).toBeNull();
 		expect(() => core.email.stateForNode('node_other')).toThrow(/not the mail node/);
 	});
 
 	test('the mail domain follows the content domain unless a custom one is set', async () => {
-		expect(core.email.settings()).toMatchObject({ mailDomain: 'skiff.test', mailDomainSource: 'content', contentDomain: 'skiff.test' });
+		expect(core.email.settings()).toMatchObject({ mailDomain: 'yoal.test', mailDomainSource: 'content', contentDomain: 'yoal.test' });
 		const before = core.email.settings().generation;
-		const custom = await core.email.configure(admin, { mailDomain: 'https://Mail.Skiff.test/' });
-		expect(custom).toMatchObject({ mailDomain: 'mail.skiff.test', mailDomainSource: 'custom', hostnames: { helo: 'mx1.mail.skiff.test', submission: 'smtp.mail.skiff.test' } });
+		const custom = await core.email.configure(admin, { mailDomain: 'https://Mail.Yoal.test/' });
+		expect(custom).toMatchObject({ mailDomain: 'mail.yoal.test', mailDomainSource: 'custom', hostnames: { helo: 'mx1.mail.yoal.test', submission: 'smtp.mail.yoal.test' } });
 		expect(custom.generation).toBe(before + 1);
-		expect((await core.nodes.desiredState(nodeToken)).mail).toMatchObject({ hostnames: { mx: 'mx.mail.skiff.test' } });
-		expect([...zone.values()].map((record) => `${record.type} ${record.name} ${record.content}`)).toContain('A mx1.mail.skiff.test 203.0.113.10');
+		expect((await core.nodes.desiredState(nodeToken)).mail).toMatchObject({ hostnames: { mx: 'mx.mail.yoal.test' } });
+		expect([...zone.values()].map((record) => `${record.type} ${record.name} ${record.content}`)).toContain('A mx1.mail.yoal.test 203.0.113.10');
 		await expect(core.email.configure(admin, { mailDomain: 'not a domain' })).rejects.toThrow(/not a domain name/);
 		await expect(core.email.configure(tenant, { mailDomain: 'mail.example.com' })).rejects.toThrow(/platform admin/);
 		// Naming the content domain is the default, not a custom setting.
-		expect(await core.email.configure(admin, { mailDomain: 'skiff.test' })).toMatchObject({ mailDomain: 'skiff.test', mailDomainSource: 'content' });
-		await core.email.configure(admin, { mailDomain: 'mail.skiff.test' });
-		expect(await core.email.configure(admin, { mailDomain: null })).toMatchObject({ mailDomain: 'skiff.test', mailDomainSource: 'content' });
+		expect(await core.email.configure(admin, { mailDomain: 'yoal.test' })).toMatchObject({ mailDomain: 'yoal.test', mailDomainSource: 'content' });
+		await core.email.configure(admin, { mailDomain: 'mail.yoal.test' });
+		expect(await core.email.configure(admin, { mailDomain: null })).toMatchObject({ mailDomain: 'yoal.test', mailDomainSource: 'content' });
 	});
 });
 
@@ -167,7 +167,7 @@ describe('domains', () => {
 		expect(dkim.name).toBe('skf202611._domainkey.example.com');
 		expect(dkim.value).toMatch(/^v=DKIM1; k=rsa; p=[A-Za-z0-9+/=]{300,}$/);
 		expect(dkim.ok).toBe(false);
-		expect(domain.records.find((record) => record.purpose === 'spf')!.value).toBe('v=spf1 include:_spf.skiff.test ~all');
+		expect(domain.records.find((record) => record.purpose === 'spf')!.value).toBe('v=spf1 include:_spf.yoal.test ~all');
 
 		txt.set(dkim.name, [dkim.value]);
 		txt.set('example.com', ['v=spf1 include:_spf.google.com -all']);
@@ -175,24 +175,24 @@ describe('domains', () => {
 		expect(checked.status).toBe('verified');
 		const spf = checked.records.find((record) => record.purpose === 'spf')!;
 		expect(spf.ok).toBe(false);
-		expect(spf.note).toContain('v=spf1 include:_spf.google.com include:_spf.skiff.test -all');
+		expect(spf.note).toContain('v=spf1 include:_spf.google.com include:_spf.yoal.test -all');
 	});
 
 	test('a domain in the platform zone gets its records created through Cloudflare', async () => {
-		const domain = await core.email.createDomain(admin, { name: 'app.skiff.test' });
+		const domain = await core.email.createDomain(admin, { name: 'app.yoal.test' });
 		expect(domain.status).toBe('verified');
 		expect(domain.records.find((record) => record.purpose === 'dkim')!.managed).toBe(true);
-		expect(txt.get('_dmarc.app.skiff.test')).toEqual(['v=DMARC1; p=none; rua=mailto:dmarc@app.skiff.test']);
+		expect(txt.get('_dmarc.app.yoal.test')).toEqual(['v=DMARC1; p=none; rua=mailto:dmarc@app.yoal.test']);
 	});
 
 	test('"set up for me" writes the records of a domain added without them', async () => {
-		const added = await core.email.createDomain(admin, { name: 'later.skiff.test', autoDns: false });
+		const added = await core.email.createDomain(admin, { name: 'later.yoal.test', autoDns: false });
 		expect(added.status).toBe('pending');
-		expect(core.email.managesDns('later.skiff.test')).toBe(true);
-		const { domain, written } = await core.email.publishDomain(admin, 'later.skiff.test');
+		expect(core.email.managesDns('later.yoal.test')).toBe(true);
+		const { domain, written } = await core.email.publishDomain(admin, 'later.yoal.test');
 		expect(written).toEqual(['dkim', 'spf', 'dmarc']);
 		expect(domain.status).toBe('verified');
-		expect((await core.email.publishDomain(admin, 'later.skiff.test')).written).toEqual([]);
+		expect((await core.email.publishDomain(admin, 'later.yoal.test')).written).toEqual([]);
 		expect(core.email.managesDns('example.com')).toBe(false);
 		await expect(core.email.publishDomain(tenant, 'example.com')).rejects.toThrow(/Cloudflare zone/);
 		await expect(core.email.publishDomain(viewer, 'example.com')).rejects.toThrow();
@@ -200,7 +200,7 @@ describe('domains', () => {
 
 	test('one org per domain; the platform names are reserved; viewers cannot add domains', async () => {
 		await expect(core.email.createDomain(admin, { name: 'example.com' })).rejects.toThrow(/another organisation/);
-		await expect(core.email.createDomain(admin, { name: 'bounces.skiff.test' })).rejects.toThrow(/platform/);
+		await expect(core.email.createDomain(admin, { name: 'bounces.yoal.test' })).rejects.toThrow(/platform/);
 		await expect(core.email.createDomain(viewer, { name: 'other.com' })).rejects.toThrow();
 	});
 
@@ -294,7 +294,7 @@ describe('the mail node state', () => {
 		expect(() => core.email.createCredential(tenantKey, { name: 'ci' })).toThrow(/person/);
 		const created = core.email.createCredential(tenant, { name: 'ci', allowedFromDomains: ['example.com'] });
 		expect(created.username).toMatch(/^skf_[0-9a-f]{32}$/);
-		expect(created.smtp).toEqual({ host: 'smtp.skiff.test', port: 587, secure: 'starttls' });
+		expect(created.smtp).toEqual({ host: 'smtp.yoal.test', port: 587, secure: 'starttls' });
 		const node = core.email.stateForNode(nodeId).credentials.find((entry) => entry.username === created.username)!;
 		expect(verifyPassword(created.password, node.hash)).toBe(true);
 		expect(node.allowedFromDomains).toEqual(['example.com']);
@@ -307,8 +307,8 @@ describe('the mail node state', () => {
 		const row = core.projects.requireRow(tenant, project.slug);
 		expect(core.email.attach(tenant, row)).toEqual({ envPrefix: 'SMTP', envNames: ['SMTP_HOST', 'SMTP_PORT', 'SMTP_SECURE', 'SMTP_USER', 'SMTP_PASSWORD', 'SMTP_URL'] });
 		const env = core.email.consumerEnv(row.id);
-		expect(env.SMTP_HOST).toBe('smtp.skiff.test');
-		expect(env.SMTP_URL).toMatch(/^smtp:\/\/skf_[0-9a-f]+:[^@]+@smtp\.skiff\.test:587$/);
+		expect(env.SMTP_HOST).toBe('smtp.yoal.test');
+		expect(env.SMTP_URL).toMatch(/^smtp:\/\/skf_[0-9a-f]+:[^@]+@smtp\.yoal\.test:587$/);
 		expect(() => core.email.attach(tenant, row)).toThrow(/already has/);
 		core.email.detach(tenant, row);
 		expect(core.email.consumerEnv(row.id)).toEqual({});

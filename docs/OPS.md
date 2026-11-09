@@ -1,4 +1,4 @@
-# Skiff — Operations
+# Yoal — Operations
 
 Version: v1. This is the runbook for the single-VPS install: install, upgrade, recovery from a
 stuck or failed update, restore, backups, monitoring, the monthly restore drill, and master-key
@@ -14,49 +14,49 @@ D107 (clustering and HA, [CLUSTERING.md](./CLUSTERING.md)), D25 (object store), 
 
 | Path | Owner / mode | Purpose |
 |---|---|---|
-| `/opt/skiff/current` | symlink | Active release. Atomic swap is the upgrade/rollback primitive. |
-| `/opt/skiff/previous` | symlink | Last known-good release, kept until the next successful update (`skiff-update-self rollback` target). |
-| `/var/lib/skiff/update/` | `skiff:skiff 0750` | Dashboard update requests (the control plane writes `request`). |
-| `/var/lib/skiff-update/status.json` | `root:skiff 0640` | Updater progress/outcome, read by the dashboard. |
-| `/var/lib/skiff-update/update.log` | `root:skiff 0640` | JSON Lines update log (phases, commands, build output), tailed by the dashboard. |
-| `/var/lib/skiff/platform-config/` | `skiff:skiff 0750` | Dashboard settings requests (Settings → Backups / Notifications, §4.3). |
-| `/var/lib/skiff-config/status.json` | `root:skiff 0640` | `skiff-platform-config` progress/outcome, read by the dashboard. |
-| `/etc/skiff/skiff.env.previous` | `root:skiff 0640` | The env file before the last dashboard change (automatic revert). |
-| `/opt/skiff/update-state.json` | `root:root 0600` | Self-updater state: last switch + its DB snapshot, in-flight switch, commits that failed. |
-| `/opt/skiff/releases/<version>/control-plane` | `root:root 0755` | SvelteKit build, bundled Bun runtime, units, scripts, migrations. |
-| `/opt/skiff/releases/<version>/agent` | `root:root 0755` | `skiff-agent` compiled binary. |
-| `/opt/skiff/helper/skiff-helper` | `root:root 0755` | Privileged runtime helper installed from the active release (one binary, swapped by the updater). |
-| `/etc/skiff/helper.env` | `root:skiff 0640` | Helper environment (socket groups, release roots, AppArmor mode). |
-| `/opt/skiff/releases/<version>/caddy/caddy` | `root:root 0755` | Caddy 2.11.8 + `caddy-dns/cloudflare`, shipped in signed releases (source builds have none). The updater copies it over the binary the running Caddy unit executes (§4.1, *Caddy is part of the release*). |
-| `/usr/bin/caddy` (+ `.skiff-previous`) | `root:root 0755` | The binary the apt `caddy.service` runs. Installed by the official Caddy package; replaced by the release's Caddy on each signed update, with the previous copy kept beside it. |
-| `/etc/systemd/system/caddy.service.d/skiff-admin-socket.conf` | `root:root 0644` | Installer drop-in for the packaged unit: `SupplementaryGroups=skiff` (read release artifacts) and `chmod 0660` on the admin socket after start. |
-| `/etc/skiff/skiff.env` | `root:skiff 0640` | Runtime environment and secrets (see §2). |
-| `/etc/skiff/master.key.cred` | `root:root 0400` | Master key sealed with `systemd-creds` (TPM2 + host key, or the host key alone), delivered via `LoadCredentialEncrypted=`. Opens only on this machine; the recovery kit (§6.2) is the copy that survives losing it. |
-| `/etc/skiff/master.key` | `root:root 0400` | Plaintext master key, delivered via `LoadCredential=`, never sourced by shell. Only on hosts without `systemd-creds` (systemd < 250), or briefly as `master.key.pre-seal` while an upgrade seals an existing key. |
-| `/etc/systemd/system/skiff-control-plane{,-standby}.service.d/skiff-master-key.conf` | `root:root 0644` | Present when the key is sealed: clears the unit's `LoadCredential=` and sets `LoadCredentialEncrypted=master-key:/etc/skiff/master.key.cred`. A drop-in so an older stage-0 updater that rewrites the unit body cannot undo it. |
-| `/etc/skiff/setup-token` | `root:skiff 0640` | Single-use setup URL token. |
-| `/etc/skiff/litestream.yml` | `root:skiff 0640` | R2 replication config. |
+| `/opt/yoal/current` | symlink | Active release. Atomic swap is the upgrade/rollback primitive. |
+| `/opt/yoal/previous` | symlink | Last known-good release, kept until the next successful update (`yoal-update-self rollback` target). |
+| `/var/lib/yoal/update/` | `yoal:yoal 0750` | Dashboard update requests (the control plane writes `request`). |
+| `/var/lib/yoal-update/status.json` | `root:yoal 0640` | Updater progress/outcome, read by the dashboard. |
+| `/var/lib/yoal-update/update.log` | `root:yoal 0640` | JSON Lines update log (phases, commands, build output), tailed by the dashboard. |
+| `/var/lib/yoal/platform-config/` | `yoal:yoal 0750` | Dashboard settings requests (Settings → Backups / Notifications, §4.3). |
+| `/var/lib/yoal-config/status.json` | `root:yoal 0640` | `yoal-platform-config` progress/outcome, read by the dashboard. |
+| `/etc/yoal/yoal.env.previous` | `root:yoal 0640` | The env file before the last dashboard change (automatic revert). |
+| `/opt/yoal/update-state.json` | `root:root 0600` | Self-updater state: last switch + its DB snapshot, in-flight switch, commits that failed. |
+| `/opt/yoal/releases/<version>/control-plane` | `root:root 0755` | SvelteKit build, bundled Bun runtime, units, scripts, migrations. |
+| `/opt/yoal/releases/<version>/agent` | `root:root 0755` | `yoal-agent` compiled binary. |
+| `/opt/yoal/helper/yoal-helper` | `root:root 0755` | Privileged runtime helper installed from the active release (one binary, swapped by the updater). |
+| `/etc/yoal/helper.env` | `root:yoal 0640` | Helper environment (socket groups, release roots, AppArmor mode). |
+| `/opt/yoal/releases/<version>/caddy/caddy` | `root:root 0755` | Caddy 2.11.8 + `caddy-dns/cloudflare`, shipped in signed releases (source builds have none). The updater copies it over the binary the running Caddy unit executes (§4.1, *Caddy is part of the release*). |
+| `/usr/bin/caddy` (+ `.yoal-previous`) | `root:root 0755` | The binary the apt `caddy.service` runs. Installed by the official Caddy package; replaced by the release's Caddy on each signed update, with the previous copy kept beside it. |
+| `/etc/systemd/system/caddy.service.d/yoal-admin-socket.conf` | `root:root 0644` | Installer drop-in for the packaged unit: `SupplementaryGroups=yoal` (read release artifacts) and `chmod 0660` on the admin socket after start. |
+| `/etc/yoal/yoal.env` | `root:yoal 0640` | Runtime environment and secrets (see §2). |
+| `/etc/yoal/master.key.cred` | `root:root 0400` | Master key sealed with `systemd-creds` (TPM2 + host key, or the host key alone), delivered via `LoadCredentialEncrypted=`. Opens only on this machine; the recovery kit (§6.2) is the copy that survives losing it. |
+| `/etc/yoal/master.key` | `root:root 0400` | Plaintext master key, delivered via `LoadCredential=`, never sourced by shell. Only on hosts without `systemd-creds` (systemd < 250), or briefly as `master.key.pre-seal` while an upgrade seals an existing key. |
+| `/etc/systemd/system/yoal-control-plane{,-standby}.service.d/yoal-master-key.conf` | `root:root 0644` | Present when the key is sealed: clears the unit's `LoadCredential=` and sets `LoadCredentialEncrypted=master-key:/etc/yoal/master.key.cred`. A drop-in so an older stage-0 updater that rewrites the unit body cannot undo it. |
+| `/etc/yoal/setup-token` | `root:yoal 0640` | Single-use setup URL token. |
+| `/etc/yoal/litestream.yml` | `root:yoal 0640` | R2 replication config. |
 | `/etc/caddy/Caddyfile` | `root:caddy 0640` | Caddy bootstrap/wizard-managed config. |
 | `/etc/caddy/cloudflare.token` | `root:caddy 0640` | DNS-01 token, read with `{file./etc/caddy/cloudflare.token}`. |
-| `/etc/skiff/cloudflare.token` | `root:skiff 0640` | DNS-01 token saved from **Settings → Domains** (read by the edge agent). |
-| `/var/lib/skiff` | `skiff:skiff 0751` | Data root; other-traverse lets Caddy reach its own subdirectory without listing Skiff data. |
-| `/var/lib/skiff/data/skiff.db` | `skiff:skiff 0640` | SQLite (platform state). |
-| `/var/lib/skiff/clickhouse` | `skiff-clickhouse:skiff-clickhouse 0750` | Hot telemetry (ClickHouse data). Not backed up; see §3.6. |
-| `/opt/skiff/clickhouse/<version>/clickhouse` | `root:root 0755` | ClickHouse server binary (pinned, sha512-verified); the previous version is kept until the new one serves. |
-| `/etc/skiff/clickhouse/{config,users}.xml` | `root:skiff-clickhouse 0640` | Generated ClickHouse config; rewritten on every install/update (§3.6). |
-| `/var/lib/skiff/backups` | `skiff:skiff 0750` | Pre-upgrade / pre-restore snapshots. |
-| `/var/lib/skiff/drill` | `skiff:skiff 0750` | Restore-drill scratch dirs + `status.json`. |
-| `/var/lib/caddy` | `caddy:caddy` (package default) | Home of the packaged `caddy.service`: certificates and autosaved config under `.local/share/caddy` and `.config/caddy`. Skiff does not change its mode; the control plane never reads it. |
-| `/var/lib/skiff/agent` | `skiff:skiff 0750` | Edge agent state (`node.json`) and its release cache (`releases/<sha256>/`), served by Caddy through its `skiff` supplementary group. |
-| `/run/skiff` | `root:caddy 2770` (setgid) | Unix sockets only. |
-| `/run/skiff/control.sock` | `0660` | Control plane (Caddy reverse-proxies to it). |
-| `/run/skiff/agent.sock` | `0660` | Agent (`forward_auth` target for protected sites). |
+| `/etc/yoal/cloudflare.token` | `root:yoal 0640` | DNS-01 token saved from **Settings → Domains** (read by the edge agent). |
+| `/var/lib/yoal` | `yoal:yoal 0751` | Data root; other-traverse lets Caddy reach its own subdirectory without listing Yoal data. |
+| `/var/lib/yoal/data/yoal.db` | `yoal:yoal 0640` | SQLite (platform state). |
+| `/var/lib/yoal/clickhouse` | `yoal-clickhouse:yoal-clickhouse 0750` | Hot telemetry (ClickHouse data). Not backed up; see §3.6. |
+| `/opt/yoal/clickhouse/<version>/clickhouse` | `root:root 0755` | ClickHouse server binary (pinned, sha512-verified); the previous version is kept until the new one serves. |
+| `/etc/yoal/clickhouse/{config,users}.xml` | `root:yoal-clickhouse 0640` | Generated ClickHouse config; rewritten on every install/update (§3.6). |
+| `/var/lib/yoal/backups` | `yoal:yoal 0750` | Pre-upgrade / pre-restore snapshots. |
+| `/var/lib/yoal/drill` | `yoal:yoal 0750` | Restore-drill scratch dirs + `status.json`. |
+| `/var/lib/caddy` | `caddy:caddy` (package default) | Home of the packaged `caddy.service`: certificates and autosaved config under `.local/share/caddy` and `.config/caddy`. Yoal does not change its mode; the control plane never reads it. |
+| `/var/lib/yoal/agent` | `yoal:yoal 0750` | Edge agent state (`node.json`) and its release cache (`releases/<sha256>/`), served by Caddy through its `yoal` supplementary group. |
+| `/run/yoal` | `root:caddy 2770` (setgid) | Unix sockets only. |
+| `/run/yoal/control.sock` | `0660` | Control plane (Caddy reverse-proxies to it). |
+| `/run/yoal/agent.sock` | `0660` | Agent (`forward_auth` target for protected sites). |
 | `/var/lib/caddy/admin.sock` | `0660` | Caddy admin API; no TCP `:2019`. |
 
 Why the runtime directory is setgid: files created in a setgid directory inherit the
-directory's group. That lets the `skiff` processes create sockets owned by
-`caddy`, so Caddy can connect without joining the `skiff` group (and without being
-able to read the database or `/etc/skiff`). The agent gets the same group through
+directory's group. That lets the `yoal` processes create sockets owned by
+`caddy`, so Caddy can connect without joining the `yoal` group (and without being
+able to read the database or `/etc/yoal`). The agent gets the same group through
 `SupplementaryGroups=caddy` in its unit.
 
 The repository copies of the units live in [`scripts/systemd/`](../scripts/systemd). The
@@ -67,62 +67,62 @@ versioned together.
 
 ## 2. Environment reference
 
-`/etc/skiff/skiff.env` is read by systemd (`EnvironmentFile=`), not by a shell. Values are
+`/etc/yoal/yoal.env` is read by systemd (`EnvironmentFile=`), not by a shell. Values are
 `KEY=value`, comments start with `#`. Quote values containing spaces. Keep it `0640
-root:skiff`.
+root:yoal`.
 
 ### 2.1 Core
 
 | Variable | Default | Secret | Meaning |
 |---|---|---|---|
 | `NODE_ENV` | `production` | no | Must be `production` on a real install. |
-| `SKIFF_PLATFORM_ORIGIN` | `http://<server-ip>` without a domain | no | Canonical platform origin, e.g. `https://control.example.com` or `http://203.0.113.7`. Used for auth, MCP audience, CSRF, cookies and passkeys. Change it in **Settings → Domains** (§3.7), never by hand alone: the edge agent's `agent.env` must change with it. |
-| `SKIFF_CONTENT_DOMAIN` | `<ip-with-dashes>.sslip.io` without a domain | no | Wildcard content zone, e.g. `examplecloud.com`; sites are `<slug>.<domain>`. Changed with the platform origin in **Settings → Domains**; stored preview/storage hosts follow on the next boot (D105). |
-| `SKIFF_DATA_DIR` | `/var/lib/skiff/data` | no | SQLite database and local object store. |
-| `SKIFF_SETUP_TOKEN_FILE` | `/etc/skiff/setup-token` (production) | no | File containing the one-time setup token for `/setup` (D102). Must be readable by `skiff`; when it is missing or unreadable the control plane generates `$SKIFF_DATA_DIR/setup-token` instead and logs the link on every boot until an owner exists. |
-| `SKIFF_AGENT_SOCKET` | `/run/skiff/agent.sock` | no | Agent unix socket (`forward_auth` and local control-plane calls). |
-| `SKIFF_CADDY_ADMIN_SOCKET` | `/var/lib/caddy/admin.sock` | no | Caddy admin unix socket. |
-| `SKIFF_AGENT_VERSION` | empty | no | Optional desired agent version; normally set by the control plane. |
-| `SKIFF_RELEASE_CHANNEL` | `stable` | no | `stable` or `edge`. Edge is reported as a preflight warning (shorter support window). |
-| `SKIFF_UPDATE_METHOD` | `auto` | no | Initial choice on Settings → Updates: `auto`, `download` or `build`. Security-sensitive hosts can default it to `build`; the CLI still accepts `--source`. |
-| `SKIFF_EDGE_NODE_ID` | empty | no | Node identity for single-node mode. |
-| `SKIFF_CONTROL_URL` | — | no | Agent only (`/etc/skiff/agent.env`): control-plane origin, `http(s)://…`. |
-| `SKIFF_CONTROL_SOCKET` | `/run/skiff/control.sock` on the control-plane host | no | Agent only: send control-plane requests to this unix socket instead of through Caddy (D105). Set for the edge agent by the installer and by Settings → Domains; leave unset on worker nodes. |
-| `SKIFF_NODE_ID` | — | no | Agent only: node id from `skiff-agent join`. |
-| `SKIFF_NODE_TOKEN` | — | **yes** | Agent only: bearer token from the single-use join token. |
-| `SKIFF_CADDY_LISTEN` | `:443,:80` | no | Agent only: listeners Caddy should bind. |
-| `SKIFF_CADDY_ACCESS_LOG` | installer: `/var/log/caddy/skiff-access.log` | no | Agent only: Caddy JSON access log (0640, read via the `caddy` group). The agent adds it to the Caddy config and aggregates it into 1-minute buckets. |
-| `SKIFF_CERT_PROBE_ADDR` | loopback on the TLS listen port (when TLS is on) | no | Agent only: where the agent handshakes to read served certificate expiry (every 6 h) for the cert-expiry alert; `off` disables it. |
-| `SKIFF_LOG_DRAIN` | `1` | no | Agent only: drain workload stdout/stderr through the helper into the control plane for the dashboard's live Logs tab. `0` disables the drain. |
-| `SKIFF_LOG_DRAIN_INTERVAL_MS` | `2000` | no | Agent only: how often the log drain asks the helper for new journal lines (500–60000 ms). |
-| `SKIFF_MCP_ALLOW_DCR` | `1` | no | Keep legacy Dynamic Client Registration alongside CIMD. |
-| `SKIFF_OPEN_SIGNUP` | unset | no | `1` allows open sign-up (the first user becomes platform admin). Production is invite-only (D10): the owner is created by the setup wizard, and no sign-up method works before that (D102). |
-| `SKIFF_DEV_PASSWORD_LOGIN` | unset | no | Development only; refused in production. Opens sign-up (including public email+password sign-up) and turns off the owner second factor for headless tests. Password sign-in itself is always on (D103). |
-| `SKIFF_OWNER_2FA` | `1` (`0` only in dev password mode) | no | Org owners must prove a passkey or authenticator code per session before using the dashboard/API (D10). Password, GitHub and magic-link sign-ins are single-factor. |
-| `SKIFF_ACME_EMAIL` | empty | no | Agent only: ACME account email. Enables TLS/DNS-01 when set. |
-| `SKIFF_CLOUDFLARE_API_TOKEN` | empty | **yes** | Agent only: scoped DNS token for `caddy-dns/cloudflare` (Zone.Zone read + Zone.DNS edit on the content zone). |
-| `SKIFF_ACME_CA` | Let's Encrypt | no | Agent only: ACME directory URL (use the staging URL while testing). |
-| `SKIFF_TLS` | auto | no | Agent only: `1` forces TLS, `0` disables it (dev). Defaults to enabled when `SKIFF_ACME_EMAIL` is set. |
-| `SOCKET_PATH` | `/run/skiff/control.sock` | no | adapter-bun unix socket (D37), set by the unit. |
+| `YOAL_PLATFORM_ORIGIN` | `http://<server-ip>` without a domain | no | Canonical platform origin, e.g. `https://control.example.com` or `http://203.0.113.7`. Used for auth, MCP audience, CSRF, cookies and passkeys. Change it in **Settings → Domains** (§3.7), never by hand alone: the edge agent's `agent.env` must change with it. |
+| `YOAL_CONTENT_DOMAIN` | `<ip-with-dashes>.sslip.io` without a domain | no | Wildcard content zone, e.g. `examplecloud.com`; sites are `<slug>.<domain>`. Changed with the platform origin in **Settings → Domains**; stored preview/storage hosts follow on the next boot (D105). |
+| `YOAL_DATA_DIR` | `/var/lib/yoal/data` | no | SQLite database and local object store. |
+| `YOAL_SETUP_TOKEN_FILE` | `/etc/yoal/setup-token` (production) | no | File containing the one-time setup token for `/setup` (D102). Must be readable by `yoal`; when it is missing or unreadable the control plane generates `$YOAL_DATA_DIR/setup-token` instead and logs the link on every boot until an owner exists. |
+| `YOAL_AGENT_SOCKET` | `/run/yoal/agent.sock` | no | Agent unix socket (`forward_auth` and local control-plane calls). |
+| `YOAL_CADDY_ADMIN_SOCKET` | `/var/lib/caddy/admin.sock` | no | Caddy admin unix socket. |
+| `YOAL_AGENT_VERSION` | empty | no | Optional desired agent version; normally set by the control plane. |
+| `YOAL_RELEASE_CHANNEL` | `stable` | no | `stable` or `edge`. Edge is reported as a preflight warning (shorter support window). |
+| `YOAL_UPDATE_METHOD` | `auto` | no | Initial choice on Settings → Updates: `auto`, `download` or `build`. Security-sensitive hosts can default it to `build`; the CLI still accepts `--source`. |
+| `YOAL_EDGE_NODE_ID` | empty | no | Node identity for single-node mode. |
+| `YOAL_CONTROL_URL` | — | no | Agent only (`/etc/yoal/agent.env`): control-plane origin, `http(s)://…`. |
+| `YOAL_CONTROL_SOCKET` | `/run/yoal/control.sock` on the control-plane host | no | Agent only: send control-plane requests to this unix socket instead of through Caddy (D105). Set for the edge agent by the installer and by Settings → Domains; leave unset on worker nodes. |
+| `YOAL_NODE_ID` | — | no | Agent only: node id from `yoal-agent join`. |
+| `YOAL_NODE_TOKEN` | — | **yes** | Agent only: bearer token from the single-use join token. |
+| `YOAL_CADDY_LISTEN` | `:443,:80` | no | Agent only: listeners Caddy should bind. |
+| `YOAL_CADDY_ACCESS_LOG` | installer: `/var/log/caddy/yoal-access.log` | no | Agent only: Caddy JSON access log (0640, read via the `caddy` group). The agent adds it to the Caddy config and aggregates it into 1-minute buckets. |
+| `YOAL_CERT_PROBE_ADDR` | loopback on the TLS listen port (when TLS is on) | no | Agent only: where the agent handshakes to read served certificate expiry (every 6 h) for the cert-expiry alert; `off` disables it. |
+| `YOAL_LOG_DRAIN` | `1` | no | Agent only: drain workload stdout/stderr through the helper into the control plane for the dashboard's live Logs tab. `0` disables the drain. |
+| `YOAL_LOG_DRAIN_INTERVAL_MS` | `2000` | no | Agent only: how often the log drain asks the helper for new journal lines (500–60000 ms). |
+| `YOAL_MCP_ALLOW_DCR` | `1` | no | Keep legacy Dynamic Client Registration alongside CIMD. |
+| `YOAL_OPEN_SIGNUP` | unset | no | `1` allows open sign-up (the first user becomes platform admin). Production is invite-only (D10): the owner is created by the setup wizard, and no sign-up method works before that (D102). |
+| `YOAL_DEV_PASSWORD_LOGIN` | unset | no | Development only; refused in production. Opens sign-up (including public email+password sign-up) and turns off the owner second factor for headless tests. Password sign-in itself is always on (D103). |
+| `YOAL_OWNER_2FA` | `1` (`0` only in dev password mode) | no | Org owners must prove a passkey or authenticator code per session before using the dashboard/API (D10). Password, GitHub and magic-link sign-ins are single-factor. |
+| `YOAL_ACME_EMAIL` | empty | no | Agent only: ACME account email. Enables TLS/DNS-01 when set. |
+| `YOAL_CLOUDFLARE_API_TOKEN` | empty | **yes** | Agent only: scoped DNS token for `caddy-dns/cloudflare` (Zone.Zone read + Zone.DNS edit on the content zone). |
+| `YOAL_ACME_CA` | Let's Encrypt | no | Agent only: ACME directory URL (use the staging URL while testing). |
+| `YOAL_TLS` | auto | no | Agent only: `1` forces TLS, `0` disables it (dev). Defaults to enabled when `YOAL_ACME_EMAIL` is set. |
+| `SOCKET_PATH` | `/run/yoal/control.sock` | no | adapter-bun unix socket (D37), set by the unit. |
 | `PROTOCOL_HEADER` | `x-forwarded-proto` | no | Trust Caddy's forwarded protocol, set by the unit. |
 | `HOST_HEADER` | `x-forwarded-host` | no | Trust Caddy's forwarded host, set by the unit. |
 | `BODY_SIZE_LIMIT` | `520M` | no | adapter-bun request body cap, set by the unit. Its 512 KB default would reject artifact uploads with a bare 413; 520M covers the 500 MiB artifact limit, which the upload route enforces. |
-| `SKIFF_STORAGE_GATEWAY_PORT` | `8081` | no | Loopback port of the edge's internal S3 gateway (D82). The agent listens on `127.0.0.1:<port>`; the control plane connects there to browse bucket contents. Must match on both processes. |
-| `SKIFF_STORAGE_GATEWAY_URL` | — | no | Dev only: full URL of the S3 gateway, overriding `http://127.0.0.1:$SKIFF_STORAGE_GATEWAY_PORT`. Use it when the control plane is not on the edge host, pointing at a node's Caddy listener (e.g. `http://192.168.0.9:8080`); that node must hold the instance or be the edge. |
-| `SKIFF_DATABASE_GATEWAY_PORT` | `8082` | no | Loopback port of the edge's internal database gateway (D82, D96). The agent listens on `127.0.0.1:<port>` and routes each node's `n-<label>.studio.internal` host to that node's studio front; the control plane connects there for the studio's `/databases/:name/studio/api/*` calls. Set it on the control plane only: the edge agent gets the listen address in desired state. |
-| `SKIFF_STUDIO_PORT` | `8083` | no | Loopback port of the agent's studio front on every node (D96). The gateway routes studio hosts to `127.0.0.1:<port>`; the front forwards to `skiff-studio.service` over `/run/skiff/studio.sock`. Set it on the control plane only: every agent gets the port in desired state. |
-| `SKIFF_CONTAINER_CONSOLE_PORT` | `8084` | no | Loopback port of the agent's container console front on every node (D127). The internal gateway routes `n-<node>.console.internal` to it; the front checks the console token with the control plane and forwards to the helper's `/v1/containers/…` verbs. |
-| `SKIFF_CONTAINER_CONSOLE_PORT` | `8084` | no | Loopback port of the agent's container console front on every node. The gateway routes `n-<label>.console.internal` hosts to `127.0.0.1:<port>`; the front forwards the fixed container verbs to the helper over the helper socket. Set it on the control plane only: every agent gets the port in desired state. |
-| `SKIFF_STORAGE_OBJECT_MAX_BYTES` | `104857600` | no | Largest single object uploaded through the dashboard/API (100 MiB). Larger files need a presigned upload (public instances) or `skif storage objects put`. |
+| `YOAL_STORAGE_GATEWAY_PORT` | `8081` | no | Loopback port of the edge's internal S3 gateway (D82). The agent listens on `127.0.0.1:<port>`; the control plane connects there to browse bucket contents. Must match on both processes. |
+| `YOAL_STORAGE_GATEWAY_URL` | — | no | Dev only: full URL of the S3 gateway, overriding `http://127.0.0.1:$YOAL_STORAGE_GATEWAY_PORT`. Use it when the control plane is not on the edge host, pointing at a node's Caddy listener (e.g. `http://192.168.0.9:8080`); that node must hold the instance or be the edge. |
+| `YOAL_DATABASE_GATEWAY_PORT` | `8082` | no | Loopback port of the edge's internal database gateway (D82, D96). The agent listens on `127.0.0.1:<port>` and routes each node's `n-<label>.studio.internal` host to that node's studio front; the control plane connects there for the studio's `/databases/:name/studio/api/*` calls. Set it on the control plane only: the edge agent gets the listen address in desired state. |
+| `YOAL_STUDIO_PORT` | `8083` | no | Loopback port of the agent's studio front on every node (D96). The gateway routes studio hosts to `127.0.0.1:<port>`; the front forwards to `yoal-studio.service` over `/run/yoal/studio.sock`. Set it on the control plane only: every agent gets the port in desired state. |
+| `YOAL_CONTAINER_CONSOLE_PORT` | `8084` | no | Loopback port of the agent's container console front on every node (D127). The internal gateway routes `n-<node>.console.internal` to it; the front checks the console token with the control plane and forwards to the helper's `/v1/containers/…` verbs. |
+| `YOAL_CONTAINER_CONSOLE_PORT` | `8084` | no | Loopback port of the agent's container console front on every node. The gateway routes `n-<label>.console.internal` hosts to `127.0.0.1:<port>`; the front forwards the fixed container verbs to the helper over the helper socket. Set it on the control plane only: every agent gets the port in desired state. |
+| `YOAL_STORAGE_OBJECT_MAX_BYTES` | `104857600` | no | Largest single object uploaded through the dashboard/API (100 MiB). Larger files need a presigned upload (public instances) or `yoal storage objects put`. |
 
 ### 2.2 Secrets
 
 | Variable | Generated by | Meaning |
 |---|---|---|
 | `BETTER_AUTH_SECRET` | installer (48 random bytes, base64) | Better Auth signing/encryption key. Rotating it invalidates sessions. |
-| `SKIFF_SITE_COOKIE_SECRET` | installer (32 random bytes) | HMAC key for host-only protected-site cookies. |
-| `SKIFF_OBJECT_STORE_SECRET` | installer (32 random bytes) | Server-side encryption/derivation material for the object store layer. |
-| `/etc/skiff/master.key.cred` (or `master.key`) | installer (32 random bytes, base64) | KEK for per-org data keys and GitHub webhook secrets. Sealed with `systemd-creds encrypt --name=master-key` when the host has it (TPM2 without a PCR policy plus the host key `/var/lib/systemd/credential.secret`, else the host key alone), otherwise a root-only plaintext file. Either way the control plane reads it only as the `master-key` systemd credential (`SKIFF_MASTER_KEY_FILE=%d/master-key`). Rotate with `skiff-rotate-master-key` (§11). |
+| `YOAL_SITE_COOKIE_SECRET` | installer (32 random bytes) | HMAC key for host-only protected-site cookies. |
+| `YOAL_OBJECT_STORE_SECRET` | installer (32 random bytes) | Server-side encryption/derivation material for the object store layer. |
+| `/etc/yoal/master.key.cred` (or `master.key`) | installer (32 random bytes, base64) | KEK for per-org data keys and GitHub webhook secrets. Sealed with `systemd-creds encrypt --name=master-key` when the host has it (TPM2 without a PCR policy plus the host key `/var/lib/systemd/credential.secret`, else the host key alone), otherwise a root-only plaintext file. Either way the control plane reads it only as the `master-key` systemd credential (`YOAL_MASTER_KEY_FILE=%d/master-key`). Rotate with `yoal-rotate-master-key` (§11). |
 | `R2_ACCESS_KEY_ID` | installer flag / wizard | R2 access key. |
 | `R2_SECRET_ACCESS_KEY` | installer flag / wizard | R2 secret key. |
 
@@ -131,13 +131,13 @@ root:skiff`.
 | Variable | Example | Meaning |
 |---|---|---|
 | `R2_ACCOUNT_ID` | `abc123…` | Cloudflare account ID. |
-| `R2_BUCKET` | `skiff-prod` | Bucket for SQLite, artifacts and Parquet. |
+| `R2_BUCKET` | `yoal-prod` | Bucket for SQLite, artifacts and Parquet. |
 | `R2_ENDPOINT` | `https://<account>.r2.cloudflarestorage.com` | S3-compatible endpoint. Written by the installer from the account ID; Litestream requires the explicit URL. |
 
-Object key layout in the bucket is fixed: `skiff/sqlite` (Litestream replica, see
+Object key layout in the bucket is fixed: `yoal/sqlite` (Litestream replica, see
 `litestream.yml`), `releases/<sha256>.zip` (canonical release artifacts) and
 `telemetry/day=YYYY-MM-DD/…` (cold Parquet partitions). The installer still accepts the older
-`SKIFF_R2_*` names as input and writes the `R2_*` names above.
+`YOAL_R2_*` names as input and writes the `R2_*` names above.
 
 R2 credentials need Object Read & Write on the bucket. Use a bucket-scoped token, not an
 account-wide key. Presigned uploads use the same credentials through the control plane.
@@ -146,81 +146,81 @@ account-wide key. Presigned uploads use the same credentials through the control
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `SKIFF_RESTORE_DRILL_DIR` | `/var/lib/skiff/drill` | Scratch root for the monthly drill. |
-| `SKIFF_RESTORE_DRILL_KEEP` | `3` | Number of successful run directories kept. |
-| `SKIFF_DRILL_NO_QUIESCE` | `0` | `1` skips stopping services (best-effort comparison; can false-fail). |
-| `SKIFF_RESTORE_YES` | `0` | Non-interactive restore. `--yes` is equivalent. |
-| `SKIFF_HEALTH_TIMEOUT` | `60` | Seconds to wait for the control-plane socket after start/restore. |
-| `SKIFF_ENV_FILE` | `/etc/skiff/skiff.env` | Override for ops scripts. |
-| `SKIFF_LITESTREAM_CONFIG` | `/etc/skiff/litestream.yml` | Override for ops scripts. |
-| `SKIFF_APP_DIR` | `/opt/skiff/current/control-plane` | Bundled runtime/tools location. |
-| `SKIFF_BUN` | bundled Bun | Override runtime for the fingerprint/migration helpers. |
-| `SKIFF_VERSION` | `VERSION` of the source being installed | Installer: the version recorded for the release. Pick what is built with `SKIFF_REF`. |
-| `SKIFF_REPO` | `KieranHolroyd/skiff` | Installer (`install.sh`): repo the source tarball is downloaded from; recorded in the release's `meta.json` so the self-updater follows the same repo. |
-| `SKIFF_PUBLIC_HOST` | detected (`hostname -I`) | Installer (`--public-address`): this server's IPv4 for an install without a dashboard domain. Used for `http://<ip>` and `<ip>.sslip.io`. |
-| `SKIFF_ALERT_WEBHOOK` | unset | `skiff-alert` (backup/drill `OnFailure=`): webhook URL; SMTP settings are reused for email. Receives `{title, message, severity, key}`, except that a Discord or Slack URL gets that service's own payload. |
-| `SKIFF_ALERT_DISCORD_WEBHOOK` | unset | Discord channel webhook (`https://discord.com/api/webhooks/<id>/<token>`). Alerts are sent as embeds coloured by severity, with mentions disabled. Secret. |
-| `SKIFF_ALERT_SLACK_WEBHOOK` | unset | Slack incoming-webhook URL, or any Slack-compatible one (Mattermost, Rocket.Chat). Only `text` is sent. Secret. |
-| `SKIFF_ALERT_TELEGRAM_BOT_TOKEN` / `SKIFF_ALERT_TELEGRAM_CHAT_ID` | unset | Telegram bot token (from @BotFather; secret) and the chat, group (`-100…`) or `@channel` it posts to. Both are needed. |
-| `SKIFF_ALERT_NTFY_URL` / `SKIFF_ALERT_NTFY_TOKEN` | unset | ntfy topic URL (ntfy.sh or self-hosted), published as JSON with priority 3–5 by severity. The token is optional (`tk_…`, secret) and is for protected topics. |
-| `SKIFF_ALERT_SMS` | unset | Comma-separated E.164 numbers (at most 5) that get alerts by SMS through Twilio. Sent only when `SKIFF_TWILIO_*` is set too. Each new number is sent a test SMS before it is saved. |
-| `SKIFF_TWILIO_ACCOUNT_SID` / `SKIFF_TWILIO_AUTH_TOKEN` / `SKIFF_TWILIO_FROM` | unset | Twilio credentials for SMS alerts (Settings → Notifications → SMS), checked against Twilio's account endpoint before they are saved (no message is sent). `FROM` takes a Twilio number, a Messaging Service SID (`MG…`) or an alphanumeric sender ID. Each text is folded to GSM-7 and capped at 2 segments. |
-| `SKIFF_VAPID_PUBLIC_KEY` / `SKIFF_VAPID_PRIVATE_KEY` | generated | Web Push (VAPID, P-256, base64url) key pair for push alerts to the dashboard installed as an app (Settings → Notifications → Push notifications, D108). The installer generates it, and any `skiff-update-self` run adds it to hosts that lack it; `sudo skiff-platform-config push-keys` (or **Set up push** on that page) does the same and restarts the control plane. Never rotated automatically: a new pair orphans every subscribed device. Private key is a secret. |
-| `SKIFF_VAPID_SUBJECT` | platform origin | Optional `mailto:` or `https:` contact sent to push services in the VAPID token. Defaults to the dashboard origin over HTTPS, else `mailto:skiff@<content domain>`. |
-| `SKIFF_FORCE_OS` | `0` | Installer: override the Debian 13 check. |
-| `SKIFF_SYSTEMD_CREDS` | `systemd-creds` | Installer, `skiff-recovery-kit`, `skiff-rotate-master-key`: the `systemd-creds` binary used to seal and read the master key (tests point it at a fake). |
-| `SKIFF_MASTER_KEY_PATH` | `/etc/skiff/master.key` | `skiff-recovery-kit`, `skiff-rotate-master-key`: plaintext key path; the sealed store is the same path plus `.cred`. |
+| `YOAL_RESTORE_DRILL_DIR` | `/var/lib/yoal/drill` | Scratch root for the monthly drill. |
+| `YOAL_RESTORE_DRILL_KEEP` | `3` | Number of successful run directories kept. |
+| `YOAL_DRILL_NO_QUIESCE` | `0` | `1` skips stopping services (best-effort comparison; can false-fail). |
+| `YOAL_RESTORE_YES` | `0` | Non-interactive restore. `--yes` is equivalent. |
+| `YOAL_HEALTH_TIMEOUT` | `60` | Seconds to wait for the control-plane socket after start/restore. |
+| `YOAL_ENV_FILE` | `/etc/yoal/yoal.env` | Override for ops scripts. |
+| `YOAL_LITESTREAM_CONFIG` | `/etc/yoal/litestream.yml` | Override for ops scripts. |
+| `YOAL_APP_DIR` | `/opt/yoal/current/control-plane` | Bundled runtime/tools location. |
+| `YOAL_BUN` | bundled Bun | Override runtime for the fingerprint/migration helpers. |
+| `YOAL_VERSION` | `VERSION` of the source being installed | Installer: the version recorded for the release. Pick what is built with `YOAL_REF`. |
+| `YOAL_REPO` | `KieranHolroyd/yoal` | Installer (`install.sh`): repo the source tarball is downloaded from; recorded in the release's `meta.json` so the self-updater follows the same repo. |
+| `YOAL_PUBLIC_HOST` | detected (`hostname -I`) | Installer (`--public-address`): this server's IPv4 for an install without a dashboard domain. Used for `http://<ip>` and `<ip>.sslip.io`. |
+| `YOAL_ALERT_WEBHOOK` | unset | `yoal-alert` (backup/drill `OnFailure=`): webhook URL; SMTP settings are reused for email. Receives `{title, message, severity, key}`, except that a Discord or Slack URL gets that service's own payload. |
+| `YOAL_ALERT_DISCORD_WEBHOOK` | unset | Discord channel webhook (`https://discord.com/api/webhooks/<id>/<token>`). Alerts are sent as embeds coloured by severity, with mentions disabled. Secret. |
+| `YOAL_ALERT_SLACK_WEBHOOK` | unset | Slack incoming-webhook URL, or any Slack-compatible one (Mattermost, Rocket.Chat). Only `text` is sent. Secret. |
+| `YOAL_ALERT_TELEGRAM_BOT_TOKEN` / `YOAL_ALERT_TELEGRAM_CHAT_ID` | unset | Telegram bot token (from @BotFather; secret) and the chat, group (`-100…`) or `@channel` it posts to. Both are needed. |
+| `YOAL_ALERT_NTFY_URL` / `YOAL_ALERT_NTFY_TOKEN` | unset | ntfy topic URL (ntfy.sh or self-hosted), published as JSON with priority 3–5 by severity. The token is optional (`tk_…`, secret) and is for protected topics. |
+| `YOAL_ALERT_SMS` | unset | Comma-separated E.164 numbers (at most 5) that get alerts by SMS through Twilio. Sent only when `YOAL_TWILIO_*` is set too. Each new number is sent a test SMS before it is saved. |
+| `YOAL_TWILIO_ACCOUNT_SID` / `YOAL_TWILIO_AUTH_TOKEN` / `YOAL_TWILIO_FROM` | unset | Twilio credentials for SMS alerts (Settings → Notifications → SMS), checked against Twilio's account endpoint before they are saved (no message is sent). `FROM` takes a Twilio number, a Messaging Service SID (`MG…`) or an alphanumeric sender ID. Each text is folded to GSM-7 and capped at 2 segments. |
+| `YOAL_VAPID_PUBLIC_KEY` / `YOAL_VAPID_PRIVATE_KEY` | generated | Web Push (VAPID, P-256, base64url) key pair for push alerts to the dashboard installed as an app (Settings → Notifications → Push notifications, D108). The installer generates it, and any `yoal-update-self` run adds it to hosts that lack it; `sudo yoal-platform-config push-keys` (or **Set up push** on that page) does the same and restarts the control plane. Never rotated automatically: a new pair orphans every subscribed device. Private key is a secret. |
+| `YOAL_VAPID_SUBJECT` | platform origin | Optional `mailto:` or `https:` contact sent to push services in the VAPID token. Defaults to the dashboard origin over HTTPS, else `mailto:yoal@<content domain>`. |
+| `YOAL_FORCE_OS` | `0` | Installer: override the Debian 13 check. |
+| `YOAL_SYSTEMD_CREDS` | `systemd-creds` | Installer, `yoal-recovery-kit`, `yoal-rotate-master-key`: the `systemd-creds` binary used to seal and read the master key (tests point it at a fake). |
+| `YOAL_MASTER_KEY_PATH` | `/etc/yoal/master.key` | `yoal-recovery-kit`, `yoal-rotate-master-key`: plaintext key path; the sealed store is the same path plus `.cred`. |
 
 > **Not yet implemented:** the installer builds from the source tarball and does not consume the
-> signed release bundle, so there is no `SKIFF_RELEASE_URL` / minisign / cosign verification at
+> signed release bundle, so there is no `YOAL_RELEASE_URL` / minisign / cosign verification at
 > install time yet. `litestream.yml` is always rewritten by the installer.
 
-Units also set `SOCKET_PATH=/run/skiff/control.sock`, `PROTOCOL_HEADER=x-forwarded-proto`
+Units also set `SOCKET_PATH=/run/yoal/control.sock`, `PROTOCOL_HEADER=x-forwarded-proto`
 and `HOST_HEADER=x-forwarded-host` (D37), `BODY_SIZE_LIMIT=520M` (so artifact uploads
 are not capped at adapter-bun's 512 KB default), plus
-`SKIFF_MASTER_KEY_FILE=%d/master-key` (the systemd credential path).
+`YOAL_MASTER_KEY_FILE=%d/master-key` (the systemd credential path).
 
 ### 2.5 Feature flags
 
 Every feature ships on and its flag is a kill switch. Each flag is read once at startup from
-`SKIFF_FEATURE_<NAME>` in `/etc/skiff/skiff.env`; the resolved booleans are exposed by
+`YOAL_FEATURE_<NAME>` in `/etc/yoal/yoal.env`; the resolved booleans are exposed by
 `GET /api/setup/status` under `features` (never the raw environment). Accepted values are
 `1/true/on/yes` and `0/false/off/no`, case-insensitive. An unset **or malformed** value keeps
 the default below (on). Set `0` to turn a feature off, then restart
-`skiff-control-plane`.
+`yoal-control-plane`.
 
 | Variable | Default | Area | Meaning |
 |---|---|---|---|
-| `SKIFF_FEATURE_BACKUPS_RESTORE` | **on** | backups | Create, restore and delete managed database backups (shipped; the default keeps existing behaviour). Today `0` only refuses changes to the platform backup target. |
-| `SKIFF_FEATURE_PITR` | **on** | backups | Point-in-time recovery (WAL archiving and replay) for managed databases. |
-| `SKIFF_FEATURE_OBJECT_BROWSER` | **on** | storage | Browse, upload, download and delete objects in managed buckets (shipped). Today `0` only refuses storage share links and new versioning/lifecycle settings. |
-| `SKIFF_FEATURE_POOLER` | **on** | databases | PgBouncer sidecar and pooled connection port for a managed database (shipped). The flag is registered but nothing is gated on it yet. |
-| `SKIFF_FEATURE_FUNCTIONS` | **on** | workloads | Functions: Workers-compatible workloads on the pinned workerd runtime (D110). Set `0` to refuse new function projects and deploys; already-deployed functions keep serving. |
-| `SKIFF_FEATURE_BROKERS` | **on** | queues | Managed queue brokers (NATS with JetStream, D111, [BROKERS.md](./BROKERS.md)). Nothing runs until someone creates a broker; set `0` to hide the surfaces and refuse new brokers. |
-| `SKIFF_FEATURE_DB_STUDIO` | **on** | databases | Native database studio (D96): the Studio tab, `/api/v1/databases/:name/studio` and the session-only studio calls. Permission-gated (`database:console`; writes also need `database:update`). Set `0` as a kill switch: the tab and routes disappear and desired state stops listing studio sessions. |
-| `SKIFF_FEATURE_COMPOSE` | **on** | workloads | Level-4 compose stacks ([COMPOSE.md](./COMPOSE.md), D209): create `runtime: "compose"` projects and deploy a `docker-compose.yml` as a private container group with per-service routes. Set `0` to refuse new compose projects and deploys; already-running stacks keep serving. |
-| `SKIFF_FEATURE_CONTAINER_CONSOLE` | **on** | workloads | Container console for container projects (D127): the Overview, Shell and Files sections, `/projects/:slug/container/*` and the node console fronts. Permission-gated (`container:inspect`, `container:files`, `container:exec`). Set `0` as a kill switch: the sections disappear, tokens stop activating and desired state closes every front. |
-| `SKIFF_FEATURE_CONTAINER_CONSOLE` | **on** | workloads | Container console for container projects: Overview (state, live stats, processes, mounts, sandbox), a read-only file browser and an interactive shell. Permission-gated (`container:inspect`, `container:files`, `container:exec`; files and shells need a signed-in person) and audited. Set `0` as a kill switch: the project sections and routes disappear and desired state stops opening every node's console front. |
-| `SKIFF_FEATURE_DB_TLS` | **on** | databases | TLS-only managed database connections (`sslmode=require`). |
-| `SKIFF_FEATURE_ORG_NETWORKS` | **on** | networking | Private per-org networks connecting workloads and databases. |
-| `SKIFF_FEATURE_SERVICE_ENDPOINTS` | **on** | networking | Cross-node database attachments through consumer loopback endpoints (CLUSTERING.md C2). |
-| `SKIFF_FEATURE_MULTI_NODE_REPLICAS` | **on** | workloads | Spread HTTP workload replicas across nodes behind a load-balanced route (CLUSTERING.md C4). |
-| `SKIFF_FEATURE_DB_AUTO_PROMOTE` | off | databases | Let the failover controller (with `failover.enabled`) promote a Postgres read replica when its primary's node goes silent (CLUSTERING.md §9.3). Off until the object-store lease self-fences a partitioned primary. |
-| `SKIFF_FEATURE_APP_VOLUMES` | **on** | workloads | Persistent application volumes attached to deployed workloads. |
-| `SKIFF_FEATURE_JOBS` | **on** | automation | Scheduled one-off and cron jobs. |
-| `SKIFF_FEATURE_PREVIEW_DATA` | **on** | automation | Clone database and bucket data into previews (can copy production data). |
-| `SKIFF_FEATURE_AGENT_DATA_WRITE` | **on** | agents | Let MCP/agent tools mutate user data instead of read-only access. |
-| `SKIFF_FEATURE_QUOTAS` | **on** | platform | Enforce per-org project, storage and upload quotas. Set `0` only to lift limits temporarily. |
-| `SKIFF_FEATURE_UPGRADE_ROLLBACK` | **on** | platform | Reserved for dashboard-triggered automatic rollback after `/readyz` fails. The CLI updater rollback path is the tested default. |
-| `SKIFF_FEATURE_BLUEPRINTS` | **on** | automation | Plan and apply blueprint files (`skiff.blueprint.yaml`, OPERATIONS §12), including `--prune`. |
-| `SKIFF_FEATURE_MEDIA` | **on** | storage | Image/video uploads, transforms and delivery. |
+| `YOAL_FEATURE_BACKUPS_RESTORE` | **on** | backups | Create, restore and delete managed database backups (shipped; the default keeps existing behaviour). Today `0` only refuses changes to the platform backup target. |
+| `YOAL_FEATURE_PITR` | **on** | backups | Point-in-time recovery (WAL archiving and replay) for managed databases. |
+| `YOAL_FEATURE_OBJECT_BROWSER` | **on** | storage | Browse, upload, download and delete objects in managed buckets (shipped). Today `0` only refuses storage share links and new versioning/lifecycle settings. |
+| `YOAL_FEATURE_POOLER` | **on** | databases | PgBouncer sidecar and pooled connection port for a managed database (shipped). The flag is registered but nothing is gated on it yet. |
+| `YOAL_FEATURE_FUNCTIONS` | **on** | workloads | Functions: Workers-compatible workloads on the pinned workerd runtime (D110). Set `0` to refuse new function projects and deploys; already-deployed functions keep serving. |
+| `YOAL_FEATURE_BROKERS` | **on** | queues | Managed queue brokers (NATS with JetStream, D111, [BROKERS.md](./BROKERS.md)). Nothing runs until someone creates a broker; set `0` to hide the surfaces and refuse new brokers. |
+| `YOAL_FEATURE_DB_STUDIO` | **on** | databases | Native database studio (D96): the Studio tab, `/api/v1/databases/:name/studio` and the session-only studio calls. Permission-gated (`database:console`; writes also need `database:update`). Set `0` as a kill switch: the tab and routes disappear and desired state stops listing studio sessions. |
+| `YOAL_FEATURE_COMPOSE` | **on** | workloads | Level-4 compose stacks ([COMPOSE.md](./COMPOSE.md), D209): create `runtime: "compose"` projects and deploy a `docker-compose.yml` as a private container group with per-service routes. Set `0` to refuse new compose projects and deploys; already-running stacks keep serving. |
+| `YOAL_FEATURE_CONTAINER_CONSOLE` | **on** | workloads | Container console for container projects (D127): the Overview, Shell and Files sections, `/projects/:slug/container/*` and the node console fronts. Permission-gated (`container:inspect`, `container:files`, `container:exec`). Set `0` as a kill switch: the sections disappear, tokens stop activating and desired state closes every front. |
+| `YOAL_FEATURE_CONTAINER_CONSOLE` | **on** | workloads | Container console for container projects: Overview (state, live stats, processes, mounts, sandbox), a read-only file browser and an interactive shell. Permission-gated (`container:inspect`, `container:files`, `container:exec`; files and shells need a signed-in person) and audited. Set `0` as a kill switch: the project sections and routes disappear and desired state stops opening every node's console front. |
+| `YOAL_FEATURE_DB_TLS` | **on** | databases | TLS-only managed database connections (`sslmode=require`). |
+| `YOAL_FEATURE_ORG_NETWORKS` | **on** | networking | Private per-org networks connecting workloads and databases. |
+| `YOAL_FEATURE_SERVICE_ENDPOINTS` | **on** | networking | Cross-node database attachments through consumer loopback endpoints (CLUSTERING.md C2). |
+| `YOAL_FEATURE_MULTI_NODE_REPLICAS` | **on** | workloads | Spread HTTP workload replicas across nodes behind a load-balanced route (CLUSTERING.md C4). |
+| `YOAL_FEATURE_DB_AUTO_PROMOTE` | off | databases | Let the failover controller (with `failover.enabled`) promote a Postgres read replica when its primary's node goes silent (CLUSTERING.md §9.3). Off until the object-store lease self-fences a partitioned primary. |
+| `YOAL_FEATURE_APP_VOLUMES` | **on** | workloads | Persistent application volumes attached to deployed workloads. |
+| `YOAL_FEATURE_JOBS` | **on** | automation | Scheduled one-off and cron jobs. |
+| `YOAL_FEATURE_PREVIEW_DATA` | **on** | automation | Clone database and bucket data into previews (can copy production data). |
+| `YOAL_FEATURE_AGENT_DATA_WRITE` | **on** | agents | Let MCP/agent tools mutate user data instead of read-only access. |
+| `YOAL_FEATURE_QUOTAS` | **on** | platform | Enforce per-org project, storage and upload quotas. Set `0` only to lift limits temporarily. |
+| `YOAL_FEATURE_UPGRADE_ROLLBACK` | **on** | platform | Reserved for dashboard-triggered automatic rollback after `/readyz` fails. The CLI updater rollback path is the tested default. |
+| `YOAL_FEATURE_BLUEPRINTS` | **on** | automation | Plan and apply blueprint files (`yoal.blueprint.yaml`, OPERATIONS §12), including `--prune`. |
+| `YOAL_FEATURE_MEDIA` | **on** | storage | Image/video uploads, transforms and delivery. |
 
-`SKIFF_FEATURE_DB_CONSOLE` (the DBGate studio, D60) is retired. It is ignored if still set, and
-the control plane logs a warning at startup; remove it from `skiff.env`. An unknown
-`SKIFF_FEATURE_*` is never an error.
+`YOAL_FEATURE_DB_CONSOLE` (the DBGate studio, D60) is retired. It is ignored if still set, and
+the control plane logs a warning at startup; remove it from `yoal.env`. An unknown
+`YOAL_FEATURE_*` is never an error.
 
-Because every flag is on, set `SKIFF_FEATURE_PREVIEW_DATA=0`, `SKIFF_FEATURE_AGENT_DATA_WRITE=0`
-and `SKIFF_FEATURE_BLUEPRINTS=0` on a host whose data you are not prepared to have copied, changed
+Because every flag is on, set `YOAL_FEATURE_PREVIEW_DATA=0`, `YOAL_FEATURE_AGENT_DATA_WRITE=0`
+and `YOAL_FEATURE_BLUEPRINTS=0` on a host whose data you are not prepared to have copied, changed
 or pruned. `DB_TLS` and `ORG_NETWORKS` change existing databases and workloads at the next
 reconcile (TLS URLs with `sslmode=require`, per-org Podman networks). `MULTI_NODE_REPLICAS` refuses a
 deploy whose replica count exceeds the eligible nodes under `node` spread, and while
@@ -228,14 +228,14 @@ deploy whose replica count exceeds the eligible nodes under `node` spread, and w
 
 ### 2.5.1 PITR repository
 
-`SKIFF_FEATURE_PITR` (on by default) also reads the pgBackRest repository from the control-plane environment
-(see [PITR.md](./PITR.md)): `SKIFF_PITR_REPO_BUCKET`, `SKIFF_PITR_ACCESS_KEY_ID`,
-`SKIFF_PITR_SECRET_ACCESS_KEY`, optional `SKIFF_PITR_REPO_ENDPOINT`, `SKIFF_PITR_REPO_REGION`,
-`SKIFF_PITR_REPO_PREFIX` and `SKIFF_PITR_REPO_FORCE_PATH_STYLE`. An incomplete set fails closed;
+`YOAL_FEATURE_PITR` (on by default) also reads the pgBackRest repository from the control-plane environment
+(see [PITR.md](./PITR.md)): `YOAL_PITR_REPO_BUCKET`, `YOAL_PITR_ACCESS_KEY_ID`,
+`YOAL_PITR_SECRET_ACCESS_KEY`, optional `YOAL_PITR_REPO_ENDPOINT`, `YOAL_PITR_REPO_REGION`,
+`YOAL_PITR_REPO_PREFIX` and `YOAL_PITR_REPO_FORCE_PATH_STYLE`. An incomplete set fails closed;
 the credentials are handed to nodes through the authenticated activation endpoint, never through
 desired state or SQLite. The endpoint must be `https://` (pgBackRest has no plain-HTTP S3 client).
 Leave the flag off until `scripts/pitr-drill.sh` passes on one of the install's Linux nodes, and
-publish and pin the `skiff-postgres-pitr` image first ([PITR.md](./PITR.md) §Enable it).
+publish and pin the `yoal-postgres-pitr` image first ([PITR.md](./PITR.md) §Enable it).
 
 > **Already-shipped surfaces.** Database backups/restores, the object browser and the pooler
 > shipped before their flags did, so those flags default **on** and act as kill switches. A
@@ -244,15 +244,15 @@ publish and pin the `skiff-postgres-pitr` image first ([PITR.md](./PITR.md) §En
 
 ### 2.6 Privileged helper
 
-`/etc/skiff/helper.env` configures `skiff-helper` (created by the installer, preserved on upgrade):
+`/etc/yoal/helper.env` configures `yoal-helper` (created by the installer, preserved on upgrade):
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `SKIFF_HELPER_RELEASE_DIRS` | `/var/lib/skiff/agent/releases,/opt/skiff/releases` | Release roots probed for process workloads. |
-| `SKIFF_HELPER_QUADLET_DIR` | `/etc/containers/systemd` | Where `.container`/`.network` files are written for Podman's Quadlet generator. |
-| `SKIFF_HELPER_CONTROL_SOCKET_GROUP` | `skiff` | Group allowed to connect to the helper socket. |
-| `SKIFF_HELPER_WORKLOAD_SOCKET_GROUP` | `caddy` | Group for socket-activated workload sockets. |
-| `SKIFF_HELPER_APPARMOR_PROFILE` | `auto` | `auto` sets `apparmor=unconfined` on containers only when `kernel.apparmor_restrict_unprivileged_unconfined=1` (Ubuntu 26.04 and newer kernels stack the container profile, which denies a process signalling its own children, so Postgres cannot start). `none` keeps the runtime default; any other value is passed as the profile name. |
+| `YOAL_HELPER_RELEASE_DIRS` | `/var/lib/yoal/agent/releases,/opt/yoal/releases` | Release roots probed for process workloads. |
+| `YOAL_HELPER_QUADLET_DIR` | `/etc/containers/systemd` | Where `.container`/`.network` files are written for Podman's Quadlet generator. |
+| `YOAL_HELPER_CONTROL_SOCKET_GROUP` | `yoal` | Group allowed to connect to the helper socket. |
+| `YOAL_HELPER_WORKLOAD_SOCKET_GROUP` | `caddy` | Group for socket-activated workload sockets. |
+| `YOAL_HELPER_APPARMOR_PROFILE` | `auto` | `auto` sets `apparmor=unconfined` on containers only when `kernel.apparmor_restrict_unprivileged_unconfined=1` (Ubuntu 26.04 and newer kernels stack the container profile, which denies a process signalling its own children, so Postgres cannot start). `none` keeps the runtime default; any other value is passed as the profile name. |
 
 Project and runner containers render `UserNS=auto:size=65536`, so uid 0 inside the container is an
 unprivileged host uid. Before the first one starts, the helper appends
@@ -265,20 +265,20 @@ and the helper owns their data directories with those uids.
 
 #### Database studio unit (D96)
 
-`skiff-studio.service` runs the native database studio's query engine: the agent binary's
-`studio` entrypoint (`/opt/skiff/current/agent/skiff-agent studio`) as `skiff`, in its own
+`yoal-studio.service` runs the native database studio's query engine: the agent binary's
+`studio` entrypoint (`/opt/yoal/current/agent/yoal-agent studio`) as `yoal`, in its own
 cgroup (`MemoryMax=256M`, separate from the agent's 192 MB) and listening only on
-`/run/skiff/studio.sock`. It holds no node token. The unit is installed by the installer and
+`/run/yoal/studio.sock`. It holds no node token. The unit is installed by the installer and
 updater but has no `[Install]` section: nothing starts it at boot, and `systemctl enable`
 refuses it. The agent asks the helper to start it (`POST /v1/studio/start`) when a studio session
 arrives for that node, and the process exits after 5 idle minutes. The agent fronts it on
-`127.0.0.1:$SKIFF_STUDIO_PORT` (default `8083`), which only the internal database gateway
-reaches. An agent update runs `systemctl try-restart skiff-studio.service`, so a running studio
+`127.0.0.1:$YOAL_STUDIO_PORT` (default `8083`), which only the internal database gateway
+reaches. An agent update runs `systemctl try-restart yoal-studio.service`, so a running studio
 moves to the new binary and a stopped one stays stopped. Logs are in
-`journalctl -u skiff-studio`.
+`journalctl -u yoal-studio`.
 
 **DBGate removal.** The DBGate sidecar (D60) and its pinned image are gone. A node upgraded while
-a DBGate session was open can keep a `skiff-workload-<db>-console.container` Quadlet, its
+a DBGate session was open can keep a `yoal-workload-<db>-console.container` Quadlet, its
 container and a `console.env` under the workload runtime directory. The helper removes these
 once, at start: it stops and disables each leftover unit, deletes its file, force-removes any
 matching container and deletes the env file, then runs `daemon-reload` only if a unit file was
@@ -286,7 +286,7 @@ removed. It logs the database ids it cleaned up. The step is idempotent and best
 failure is logged and retried on the next helper start. The DBGate image is not deleted; remove it
 with `podman image prune` if you need the space.
 
-A helper update is installed from the active release at `/opt/skiff/helper/skiff-helper` and
+A helper update is installed from the active release at `/opt/yoal/helper/yoal-helper` and
 restarted by the installer/updater. Existing container units are re-rendered on their next apply,
 so after a helper upgrade use **Restart** on each managed service (or redeploy an app) to pick up
 unit changes.
@@ -294,9 +294,9 @@ unit changes.
 #### Container console front
 
 Container projects' **Overview**, **Shell** and **Files** sections go through a front the agent
-serves itself, with no unit: while `SKIFF_FEATURE_CONTAINER_CONSOLE` is on, desired state lists a
-port and the agent listens on `127.0.0.1:$SKIFF_CONTAINER_CONSOLE_PORT` (default `8084`). It is
-reachable only through the existing internal gateway: the edge's `SKIFF_DATABASE_GATEWAY_PORT`
+serves itself, with no unit: while `YOAL_FEATURE_CONTAINER_CONSOLE` is on, desired state lists a
+port and the agent listens on `127.0.0.1:$YOAL_CONTAINER_CONSOLE_PORT` (default `8084`). It is
+reachable only through the existing internal gateway: the edge's `YOAL_DATABASE_GATEWAY_PORT`
 listener routes a node's `n-<label>.console.internal` host to that node's front (D82/D96), so there
 is no new public port and nothing listens on the internet.
 
@@ -315,37 +315,37 @@ not.
 
 ### 2.7 Telemetry store (ClickHouse)
 
-Installing the optional store (§3.6) adds any of these that are missing to `skiff.env` (passwords
+Installing the optional store (§3.6) adds any of these that are missing to `yoal.env` (passwords
 are 32 random bytes, base64url); removing it deletes them again. Without them telemetry reports
 "not installed". Existing values are never overwritten, so you can rotate a
-password by editing it and running `sudo skiff-update-self`, which regenerates
-`/etc/skiff/clickhouse/users.xml` from these values and restarts ClickHouse (§3.6).
+password by editing it and running `sudo yoal-update-self`, which regenerates
+`/etc/yoal/clickhouse/users.xml` from these values and restarts ClickHouse (§3.6).
 
 | Variable | Default | Secret | Meaning |
 |---|---|---|---|
-| `SKIFF_CLICKHOUSE_URL` | `http://127.0.0.1:18123` | no | ClickHouse HTTP endpoint (loopback only). |
-| `SKIFF_CLICKHOUSE_DATABASE` | `skiff` | no | Database the control plane creates and writes. |
-| `SKIFF_CLICKHOUSE_USER` | `skiff` | no | Writer: all privileges on the telemetry database only. |
-| `SKIFF_CLICKHOUSE_PASSWORD` | generated | yes | Writer password (stored in `users.xml` as SHA-256 only). |
-| `SKIFF_CLICKHOUSE_READER_USER` | `skiff_reader` | no | Read-only user for ad-hoc SQL from the dashboard. |
-| `SKIFF_CLICKHOUSE_READER_PASSWORD` | generated | yes | Reader password. |
-| `SKIFF_CLICKHOUSE_MEMORY_MB` | unset (768) | no | Memory ceiling in MiB (`max_server_memory_usage`), 256–65536. Per-query limits, the merge budget and the unit's `MemoryMax` (4/3 of it) scale with it. Set it in Settings → Telemetry → Memory, which restarts ClickHouse and reverts if it does not come back. Never written by the installer. |
+| `YOAL_CLICKHOUSE_URL` | `http://127.0.0.1:18123` | no | ClickHouse HTTP endpoint (loopback only). |
+| `YOAL_CLICKHOUSE_DATABASE` | `yoal` | no | Database the control plane creates and writes. |
+| `YOAL_CLICKHOUSE_USER` | `yoal` | no | Writer: all privileges on the telemetry database only. |
+| `YOAL_CLICKHOUSE_PASSWORD` | generated | yes | Writer password (stored in `users.xml` as SHA-256 only). |
+| `YOAL_CLICKHOUSE_READER_USER` | `yoal_reader` | no | Read-only user for ad-hoc SQL from the dashboard. |
+| `YOAL_CLICKHOUSE_READER_PASSWORD` | generated | yes | Reader password. |
+| `YOAL_CLICKHOUSE_MEMORY_MB` | unset (768) | no | Memory ceiling in MiB (`max_server_memory_usage`), 256–65536. Per-query limits, the merge budget and the unit's `MemoryMax` (4/3 of it) scale with it. Set it in Settings → Telemetry → Memory, which restarts ClickHouse and reverts if it does not come back. Never written by the installer. |
 
-### 2.8 Email (`skiff-mail`, docs/EMAIL.md)
+### 2.8 Email (`yoal-mail`, docs/EMAIL.md)
 
-The control plane reads one key; the MTA reads optional overrides from `/etc/skiff/mail.env` on the
+The control plane reads one key; the MTA reads optional overrides from `/etc/yoal/mail.env` on the
 mail node (the unit sets the paths). None of them is secret: DKIM keys and credential hashes reach
-`skiff-mail` only from the agent, over `/run/skiff/mail.sock`, into memory.
+`yoal-mail` only from the agent, over `/run/yoal/mail.sock`, into memory.
 
 | Variable | Where | Default | Meaning |
 |---|---|---|---|
-| `SKIFF_MAIL_DOMAIN` | `skiff.env` | The content domain | Custom domain for `mx1.`, `mx.`, `smtp.`, `bounces.` and `_spf.` (D116). A mail domain saved in **Email → Mail server** overrides it. |
-| `SKIFF_FEATURE_EMAIL` | `skiff.env` | `1` | `0` hides Email and refuses sends; a running `skiff-mail` keeps draining its spool. |
-| `SKIFF_MAIL_LISTEN` | `mail.env` | `0.0.0.0` | Listen address for the SMTP ports. |
-| `SKIFF_MAIL_PORT_INBOUND` / `_SUBMISSION` / `_SUBMISSIONS` | `mail.env` | `25` / `587` / `465` | Ports; `off` disables one. Submission stays off until a certificate exists. |
-| `SKIFF_MAIL_IPV6` | `mail.env` | unset | `1` delivers over IPv6 too. Only with a working IPv6 PTR. |
-| `SKIFF_MAIL_DELIVERY_PORT` | `mail.env` | `25` | Remote MX port (tests and lab setups only). |
-| `SKIFF_CADDY_DATA_DIR`, `SKIFF_MAIL_TLS_DIR` | helper env | `/var/lib/caddy/.local/share/caddy`, `/run/skiff/mail-tls` | Where the helper copies the `smtp.` certificate from and to. |
+| `YOAL_MAIL_DOMAIN` | `yoal.env` | The content domain | Custom domain for `mx1.`, `mx.`, `smtp.`, `bounces.` and `_spf.` (D116). A mail domain saved in **Email → Mail server** overrides it. |
+| `YOAL_FEATURE_EMAIL` | `yoal.env` | `1` | `0` hides Email and refuses sends; a running `yoal-mail` keeps draining its spool. |
+| `YOAL_MAIL_LISTEN` | `mail.env` | `0.0.0.0` | Listen address for the SMTP ports. |
+| `YOAL_MAIL_PORT_INBOUND` / `_SUBMISSION` / `_SUBMISSIONS` | `mail.env` | `25` / `587` / `465` | Ports; `off` disables one. Submission stays off until a certificate exists. |
+| `YOAL_MAIL_IPV6` | `mail.env` | unset | `1` delivers over IPv6 too. Only with a working IPv6 PTR. |
+| `YOAL_MAIL_DELIVERY_PORT` | `mail.env` | `25` | Remote MX port (tests and lab setups only). |
+| `YOAL_CADDY_DATA_DIR`, `YOAL_MAIL_TLS_DIR` | helper env | `/var/lib/caddy/.local/share/caddy`, `/run/yoal/mail-tls` | Where the helper copies the `smtp.` certificate from and to. |
 
 ---
 
@@ -355,7 +355,7 @@ mail node (the unit sets the paths). None of them is secret: DKIM keys and crede
 
 - Debian 13 or Ubuntu 24.04+ on x86_64/aarch64, systemd, root access.
 - Ports 80/443 free. Domains are optional (§3.7); when you use them, point their DNS at this machine.
-- **Caddy and Podman are installed for you** (skip with `--skip-deps` / `SKIFF_SKIP_DEPS=1` if you
+- **Caddy and Podman are installed for you** (skip with `--skip-deps` / `YOAL_SKIP_DEPS=1` if you
   manage packages yourself):
   - **Caddy**, when `caddy` is not on `PATH`: from the official Caddy apt repository
     (`dl.cloudsmith.io/public/caddy/stable`, verified by apt), then `caddy add-package
@@ -380,18 +380,18 @@ mail node (the unit sets the paths). None of them is secret: DKIM keys and crede
 ### 3.2 Bootstrap
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/skiff/main/install.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/yoal/main/install.sh | sudo sh
 ```
 
 The `install.sh` bootstrap is deliberately tiny: it installs `curl`/`tar`/`unzip` if needed,
-downloads Bun to `/opt/skiff/runtime`, downloads the repo tarball, and hands over to
+downloads Bun to `/opt/yoal/runtime`, downloads the repo tarball, and hands over to
 `scripts/install/main.ts` (Bun). All deployment logic is in that Bun program.
 
 Non-interactive:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/skiff/main/install.sh | sudo env \
-  SKIFF_YES=1 \
+curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/yoal/main/install.sh | sudo env \
+  YOAL_YES=1 \
   sh -s -- \
   --platform-host control.example.com \
   --content-domain example.com \
@@ -403,25 +403,25 @@ Without domains (dashboard at `http://<server-ip>`, sites at `*.<ip-with-dashes>
 HTTP; add domains and HTTPS later in **Settings → Domains**, §3.7):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/skiff/main/install.sh | sudo env SKIFF_YES=1 sh
+curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/yoal/main/install.sh | sudo env YOAL_YES=1 sh
 ```
 
 Pass `--public-address <ipv4>` when the detected address is wrong (for example behind NAT).
 
 The bootstrap installs the newest stable release (the GitHub release marked Latest) and writes
-`SKIFF_UPDATE_CHANNEL=stable`, so the host then follows the stable channel (§4.1). Pass
-`--canary` (or `SKIFF_CHANNEL=canary`) to build the head of `main` and follow canary instead:
+`YOAL_UPDATE_CHANNEL=stable`, so the host then follows the stable channel (§4.1). Pass
+`--canary` (or `YOAL_CHANNEL=canary`) to build the head of `main` and follow canary instead:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/skiff/main/install.sh | sudo sh -s -- --canary
+curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/yoal/main/install.sh | sudo sh -s -- --canary
 ```
 
 A re-run keeps the channel the host already follows unless one of these asks for another, and
 then also rewrites the updater's remembered channel. Without a stable release the bootstrap
 stops and suggests `--canary`.
 
-Private repo: add `SKIFF_GITHUB_TOKEN=…`. Pin a ref with `SKIFF_REF=v1.2.3`. Use an existing
-checkout with `SKIFF_SOURCE_DIR=/path/to/skiff`.
+Private repo: add `YOAL_GITHUB_TOKEN=…`. Pin a ref with `YOAL_REF=v1.2.3`. Use an existing
+checkout with `YOAL_SOURCE_DIR=/path/to/yoal`.
 
 ### 3.3 What the Bun installer does
 
@@ -436,68 +436,68 @@ checkout with `SKIFF_SOURCE_DIR=/path/to/skiff`.
    When HTTPS is on, the installer then asks for a **Cloudflare DNS token** (input is not echoed)
    and writes it to `--cloudflare-token-file` (default `/etc/caddy/cloudflare.token`, `root:caddy`,
    `0640`). Sites share the wildcard certificate `*.<content domain>`, which Let's Encrypt only
-   issues over DNS-01, and the Skiff Caddy build only has the Cloudflare provider, so the token is
+   issues over DNS-01, and the Yoal Caddy build only has the Cloudflare provider, so the token is
    not optional: without it every deployed site returns Cloudflare error 525. The token is checked
    against `GET /user/tokens/verify` before anything is written; a rejected token stops the install,
    while an unreachable Cloudflare only warns. Pass `--cloudflare-token-file <path>` (or
-   `SKIFF_CLOUDFLARE_TOKEN_FILE`) to skip the prompt on unattended installs; a fresh HTTPS install
+   `YOAL_CLOUDFLARE_TOKEN_FILE`) to skip the prompt on unattended installs; a fresh HTTPS install
    with no token fails in preflight, an `--upgrade` warns so an existing host is never blocked.
-2. **Users/dirs** — `skiff` user (member of `caddy`), `/opt/skiff`, `/var/lib/skiff`,
-   `/etc/skiff`, `/run/skiff` (2770 root:caddy).
+2. **Users/dirs** — `yoal` user (member of `caddy`), `/opt/yoal`, `/var/lib/yoal`,
+   `/etc/yoal`, `/run/yoal` (2770 root:caddy).
 3. **Secrets** — generates the master key, sealed with `systemd-creds` into
-   `/etc/skiff/master.key.cred` (0400) when the host has it, else `/etc/skiff/master.key` (0400),
-   plus `BETTER_AUTH_SECRET`, `SKIFF_SITE_COOKIE_SECRET`, `SKIFF_OBJECT_STORE_SECRET`; preserves
+   `/etc/yoal/master.key.cred` (0400) when the host has it, else `/etc/yoal/master.key` (0400),
+   plus `BETTER_AUTH_SECRET`, `YOAL_SITE_COOKIE_SECRET`, `YOAL_OBJECT_STORE_SECRET`; preserves
    them on upgrade. An upgrade on a host with a plaintext key seals the same key, keeps the
    plaintext as `master.key.pre-seal` until the control plane has started with the sealed one,
-   then destroys it; a failed install puts the plaintext back. `skiff-update-self` never seals
+   then destroys it; a failed install puts the plaintext back. `yoal-update-self` never seals
    (it only keeps the drop-ins in step with the file it finds), so an older host keeps its
    plaintext key until the installer is re-run on it.
 4. **Build** — copies the repo to a new immutable release, runs `bun install --frozen-lockfile`,
    `vite build` (adapter-bun), and `bun build --compile` for the agent and the privileged helper.
-5. **Activate** — atomically switches `/opt/skiff/current` to the new release and installs the
-   release's helper binary at `/opt/skiff/helper/skiff-helper`.
+5. **Activate** — atomically switches `/opt/yoal/current` to the new release and installs the
+   release's helper binary at `/opt/yoal/helper/yoal-helper`.
 6. **Telemetry store (optional)** — only when asked for: right after the domain questions the
    installer shows a Yes / No toggle (default **No**), or pass `--clickhouse` / `--no-clickhouse`
-   (`--yes` means no). When chosen it installs and starts `skiff-clickhouse.service` (§3.6) before
-   the control plane, so its `SKIFF_CLICKHOUSE_*` settings are in place when it boots. A failed
+   (`--yes` means no). When chosen it installs and starts `yoal-clickhouse.service` (§3.6) before
+   the control plane, so its `YOAL_CLICKHOUSE_*` settings are in place when it boots. A failed
    download or start prints a warning and the install carries on. `--upgrade` keeps an installed
    store current and never adds one unless `--clickhouse` is given.
 7. **Services** — writes hardened units (control plane, agent, helper), fixes Caddy's admin socket
-   mode (`0660`, group `caddy`), adds the `skiff` supplementary group to Caddy so it can read
+   mode (`0660`, group `caddy`), adds the `yoal` supplementary group to Caddy so it can read
    release artifacts, starts the helper, then the control plane. The drop-in only applies to a
    process systemd starts, so the installer inspects the **running** Caddy's groups (`/proc/<pid>`)
-   and restarts it when they are stale — otherwise Caddy cannot read `/var/lib/skiff/agent` and
+   and restarts it when they are stale — otherwise Caddy cannot read `/var/lib/yoal/agent` and
    every site answers 403 while the node looks healthy.
-8. **Caddy bootstrap fix** — points the platform vhost at `unix//run/skiff/control.sock`, then the
+8. **Caddy bootstrap fix** — points the platform vhost at `unix//run/yoal/control.sock`, then the
    agent takes over the whole Caddy config (platform + content routes) via the admin API.
 9. **Node enrolment** — creates the edge node (or reuses it), rotates its token, writes
-   `/etc/skiff/agent.env`, bumps the desired-state watermark, and starts the agent.
-   It also installs `skiff-builder.service` and the `skiff-build` account. The Builder idles until
+   `/etc/yoal/agent.env`, bumps the desired-state watermark, and starts the agent.
+   It also installs `yoal-builder.service` and the `yoal-build` account. The Builder idles until
    you give the node the Builder role (**Nodes → Edit node**). It then claims one git build at a
-   time and runs it with `systemd-run` as `skiff-build`: 2 GB, 200% CPU, 10 minutes, writable
-   checkout only, no access to Skiff state or the node token (D47). Workers get the same unit from
-   the WireGuard guide. Builds use the toolchains on the node (Skiff's Bun is on `PATH`; install
-   Node or anything else the build command needs). For private repositories set `SKIFF_GIT_TOKEN`
-   in `/etc/skiff/agent.env`. It is sent only to the hosts in `SKIFF_GIT_TOKEN_HOSTS`
+   time and runs it with `systemd-run` as `yoal-build`: 2 GB, 200% CPU, 10 minutes, writable
+   checkout only, no access to Yoal state or the node token (D47). Workers get the same unit from
+   the WireGuard guide. Builds use the toolchains on the node (Yoal's Bun is on `PATH`; install
+   Node or anything else the build command needs). For private repositories set `YOAL_GIT_TOKEN`
+   in `/etc/yoal/agent.env`. It is sent only to the hosts in `YOAL_GIT_TOKEN_HOSTS`
    (comma-separated, default `github.com`), as a header in the clone's environment, never in the
    remote URL, so the build can't read it from `.git/config`. This needs git 2.31 or later. SSH
-   URLs use `SKIFF_GIT_SSH_KEY` (a root-only deploy key file) through `GIT_SSH_COMMAND` in the
-   clone's environment only; host keys are pinned by `SKIFF_GIT_SSH_KNOWN_HOSTS` or recorded on
-   first use in `/var/lib/skiff-builder/known_hosts`. `.git`
+   URLs use `YOAL_GIT_SSH_KEY` (a root-only deploy key file) through `GIT_SSH_COMMAND` in the
+   clone's environment only; host keys are pinned by `YOAL_GIT_SSH_KNOWN_HOSTS` or recorded on
+   first use in `/var/lib/yoal-builder/known_hosts`. `.git`
    directories and the build's scratch `HOME` are never included in the artifact.
    The same daemon runs **pipeline** jobs ([PIPELINES.md](./PIPELINES.md), D148–D153, D160–D162),
-   set in `/etc/skiff/agent.env`: `SKIFF_PIPELINES=false` turns them off; `SKIFF_PIPELINE_MAX_JOBS`
-   (default 1) is how many run at once; `SKIFF_PIPELINE_LABELS` adds `runs-on` labels to the
+   set in `/etc/yoal/agent.env`: `YOAL_PIPELINES=false` turns them off; `YOAL_PIPELINE_MAX_JOBS`
+   (default 1) is how many run at once; `YOAL_PIPELINE_LABELS` adds `runs-on` labels to the
    automatic ones (`linux`, `x64`/`arm64`, `self-hosted`, the node name, `oci-build`).
-   `SKIFF_PIPELINE_ISOLATION` is `auto` (default), `container` or `sandbox`. `auto` asks skiff-helper
+   `YOAL_PIPELINE_ISOLATION` is `auto` (default), `container` or `sandbox`. `auto` asks yoal-helper
    (`GET /v1/pipeline/capabilities`) and, when it answers with a working Podman, runs each job in a
-   per-job container the helper starts (D151), otherwise in the git-build sandbox as `skiff-build`.
+   per-job container the helper starts (D151), otherwise in the git-build sandbox as `yoal-build`.
    Job containers, their services and the per-job BuildKit sidecar live under the Builder's build
    directory; the helper copies `buildctl` out of the pinned BuildKit image once into `tools/`, and
    BuildKit caches live in `buildkit-cache/<scope>`. The node reports which OCI runtimes it has:
    install gVisor (`runsc`, from `gvisor.tar.bz2`) and register it with Podman to offer the `gvisor`
    tier; the `microvm` tier needs a Podman-usable Kata runtime and `/dev/kvm`.
-   `SKIFF_PIPELINE_CONTROL_URL` is the control-plane URL as seen from inside a job container when it
+   `YOAL_PIPELINE_CONTROL_URL` is the control-plane URL as seen from inside a job container when it
    differs. Jobs heartbeat every 15 s; a job whose node stops responding for 60 s fails.
 10. **Health** — waits for the public platform URL, then checks **site TLS**: it handshakes with
    the origin on `127.0.0.1:443` using a random unused label under the content domain, which only
@@ -515,15 +515,15 @@ health check fails. `--dry-run` prints the plan, `--uninstall [--purge]` removes
 ### 3.4 Verify
 
 ```sh
-systemctl status caddy skiff-control-plane skiff-agent --no-pager
+systemctl status caddy yoal-control-plane yoal-agent --no-pager
 curl -sS https://control.example.com/api/setup/status
 curl -sS -o /dev/null -w '%{http_code}\n' https://anything.example.com/   # 200/404, never 525
-ls -l /run/skiff /var/lib/caddy/admin.sock   # sockets 0660, group caddy
+ls -l /run/yoal /var/lib/caddy/admin.sock   # sockets 0660, group caddy
 
 # The wildcard certificate must answer for any unused label under the content domain.
 openssl s_client -connect 127.0.0.1:443 -servername anything.example.com </dev/null 2>/dev/null \
   | openssl x509 -noout -subject -ext subjectAltName
-# The running Caddy process (not the unit file) must have the skiff group.
+# The running Caddy process (not the unit file) must have the yoal group.
 grep '^Groups:' /proc/$(systemctl show caddy -p MainPID --value)/status
 ```
 
@@ -532,21 +532,21 @@ handshake for that hostname — almost always the wildcard certificate is missin
 caddy | grep tls.obtain` shows the ACME order and its error. If it says *no solvers available*, or
 the order fails, `/etc/caddy/cloudflare.token` is missing, empty, revoked, or lacks Zone → DNS →
 Edit on the content zone. Fix the file (`root:caddy`, `0640`), then `systemctl restart
-skiff-agent` (the agent rebuilds Caddy's config with the DNS-01 challenge) and watch for
+yoal-agent` (the agent rebuilds Caddy's config with the DNS-01 challenge) and watch for
 `certificate obtained successfully`. Cached assets can hide this: an image can serve from
 Cloudflare's cache while every HTML page returns 525.
 
-**Sites return 403 from Caddy.** The running Caddy lacks the `skiff` supplementary group, so it
-cannot read `/var/lib/skiff/agent`. `systemctl restart caddy` (the installer does this when it
+**Sites return 403 from Caddy.** The running Caddy lacks the `yoal` supplementary group, so it
+cannot read `/var/lib/yoal/agent`. `systemctl restart caddy` (the installer does this when it
 detects the stale process).
 
 Then open the setup link (§3.5) to create the owner. Create an API key in **Settings → API keys**
-for `skif`.
+for `yoal`.
 
-The installer also puts `skif` and `skiff` in `/usr/local/bin`. They run the CLI bundled with the
-active release (`/opt/skiff/current/cli/skif.js`) on Skiff's own Bun, so the host needs no Node.js
-and the CLI upgrades and rolls back with the platform. Sign in with `skif login --url
-https://control.example.com`. On other machines install it from npm (`npm i -g @skiffy/skiff`).
+The installer also puts `yoal` in `/usr/local/bin`. It runs the CLI bundled with the
+active release (`/opt/yoal/current/cli/yoal.js`) on Yoal's own Bun, so the host needs no Node.js
+and the CLI upgrades and rolls back with the platform. Sign in with `yoal login --url
+https://control.example.com`. On other machines install it from npm (`npm i -g @yoal/cli`).
 
 ### 3.5 First-run setup
 
@@ -555,8 +555,8 @@ magic-link, GitHub and passkey sign-up are refused until it has run, so whoever 
 cannot claim the instance.
 
 1. Open the link the installer printed: `https://<platform>/setup?token=…`. Lost it? Run
-   `sudo cat /etc/skiff/setup-token` (paste it into `/setup`) or
-   `journalctl -u skiff-control-plane | grep setup`. The control plane logs the full link on every
+   `sudo cat /etc/yoal/setup-token` (paste it into `/setup`) or
+   `journalctl -u yoal-control-plane | grep setup`. The control plane logs the full link on every
    boot until an owner exists.
 2. **Check** lists what the install looks like: HTTPS, whether this browser can make a passkey
    here, email (SMTP or server log), storage and enrolled nodes. Warnings don't block setup.
@@ -569,7 +569,7 @@ cannot claim the instance.
 5. **Finish**: optionally add an authenticator app as a backup to the passkey (it also issues
    backup codes), then follow the links to email, backups, members and API keys.
 
-Setup must run on the platform origin (`SKIFF_PLATFORM_ORIGIN`): sign-in cookies, CSRF checks and
+Setup must run on the platform origin (`YOAL_PLATFORM_ORIGIN`): sign-in cookies, CSRF checks and
 passkeys are bound to it. Opening `/setup` on another host (for example the server's IP) shows a
 link to the right address. Once an owner exists the token is dead: `/setup` sends visitors to
 `/login`.
@@ -577,7 +577,7 @@ link to the right address. Once an owner exists the token is dead: `/setup` send
 **Signing in later.** Use your email and password, then your passkey or authenticator code (the
 login page asks for the code straight after the password when an app is set up). A passkey alone
 also works on HTTPS. "Email me a sign-in link" sends a magic link; with no SMTP configured it is
-written to the control-plane log (`journalctl -u skiff-control-plane | grep magic-link`). Anyone
+written to the control-plane log (`journalctl -u yoal-control-plane | grep magic-link`). Anyone
 can add or change a password under **Settings → Account**; changing it signs out every other
 device. There is no public password sign-up: invitees accept with a magic link (or GitHub), then
 set a password.
@@ -598,8 +598,8 @@ Operators reset a password directly with `reset-password` (same effects, audited
 for installs without email or a user who can't receive it:
 
 ```sh
-cd /opt/skiff/current/repo/apps/control-plane
-sudo -u skiff env SKIFF_DATA_DIR=/var/lib/skiff/data /opt/skiff/runtime/bin/bun scripts/reset-password.ts you@example.com
+cd /opt/yoal/current/repo/apps/control-plane
+sudo -u yoal env YOAL_DATA_DIR=/var/lib/yoal/data /opt/yoal/runtime/bin/bun scripts/reset-password.ts you@example.com
 ```
 
 It prompts for the new password (12+ characters), or reads the first line of stdin.
@@ -609,8 +609,8 @@ add another owner straight to the database with `create-user`, then sign in as t
 email and password and enrol a new factor. On installer-built releases the script is in the release's source copy:
 
 ```sh
-cd /opt/skiff/current/repo/apps/control-plane
-sudo -u skiff env SKIFF_DATA_DIR=/var/lib/skiff/data /opt/skiff/runtime/bin/bun scripts/create-user.ts \
+cd /opt/yoal/current/repo/apps/control-plane
+sudo -u yoal env YOAL_DATA_DIR=/var/lib/yoal/data /opt/yoal/runtime/bin/bun scripts/create-user.ts \
   you@example.com "Your Name" --org <org-slug> --role owner --platform-admin
 ```
 
@@ -622,7 +622,7 @@ Traffic, database and storage telemetry (48 h of 1-minute rollups, 90 d of 1-hou
 in a small ClickHouse server on the control-plane host. Daily Parquet partitions still go to R2
 (§6).
 
-**It is optional and off by default (D101)**, because it is the heaviest piece of a Skiff host
+**It is optional and off by default (D101)**, because it is the heaviest piece of a Yoal host
 (~240 MB download, ~750 MB on disk, 300–800 MB of RAM). Without it everything else works; traffic
 charts, the database/storage stats tabs and Dashboards say the store is not installed. Ways to
 add or remove it:
@@ -630,32 +630,32 @@ add or remove it:
 - **Settings → Telemetry** (platform owner): *Install ClickHouse*, *Remove* (keeps the data for a
   reinstall) or *Remove and delete data*. The control plane drops a request for the root helper
   (§4.3, action `telemetry`), which installs or removes it and restarts the control plane.
-- **CLI on the server:** `sudo skiff-platform-config telemetry on`, `… telemetry off`, or
+- **CLI on the server:** `sudo yoal-platform-config telemetry on`, `… telemetry off`, or
   `… telemetry off --purge`.
 - **Installer:** the Yes / No prompt after the domain questions, or `--clickhouse` (§3.3).
 
-`skiff-update-self` only maintains an installed store (version bumps, config); it never installs
+`yoal-update-self` only maintains an installed store (version bumps, config); it never installs
 one. If an installed ClickHouse is down, the dashboard says so and nothing else is affected: the
 control-plane units `Wants=` it but do not require it.
 
 | | |
 |---|---|
-| Unit | `skiff-clickhouse.service`, user `skiff-clickhouse` (system user, no login, no home) |
+| Unit | `yoal-clickhouse.service`, user `yoal-clickhouse` (system user, no login, no home) |
 | Version | ClickHouse 26.8.34.13 LTS, the official static build, pinned with its sha512 in `scripts/systemd/clickhouse.ts` |
 | Listens | HTTP on `127.0.0.1:18123` only. No native TCP (`9000` belongs to object storage), MySQL, PostgreSQL, interserver or gRPC ports |
-| Files | binary `/opt/skiff/clickhouse/<version>/clickhouse`, config `/etc/skiff/clickhouse/config.xml` + `users.xml`, data `/var/lib/skiff/clickhouse` |
-| Logs | stderr at `warning` level, so `journalctl -u skiff-clickhouse`. System log tables (`query_log`, `part_log`, `trace_log`, `metric_log`, `text_log`, …) are disabled |
-| Memory | `max_server_memory_usage` 768 MiB by default (`SKIFF_CLICKHOUSE_MEMORY_MB`) under the unit's `MemoryMax` at 4/3 of it (`1G`); writer queries 2/3 (512 MiB), reader queries and merges 1/3 (256 MiB); mark cache 64 MiB, no uncompressed cache. Past the ceiling every query and insert fails with `MEMORY_LIMIT_EXCEEDED` and the dashboard shows telemetry unavailable: raise it, or press Restart, in Settings → Telemetry |
+| Files | binary `/opt/yoal/clickhouse/<version>/clickhouse`, config `/etc/yoal/clickhouse/config.xml` + `users.xml`, data `/var/lib/yoal/clickhouse` |
+| Logs | stderr at `warning` level, so `journalctl -u yoal-clickhouse`. System log tables (`query_log`, `part_log`, `trace_log`, `metric_log`, `text_log`, …) are disabled |
+| Memory | `max_server_memory_usage` 768 MiB by default (`YOAL_CLICKHOUSE_MEMORY_MB`) under the unit's `MemoryMax` at 4/3 of it (`1G`); writer queries 2/3 (512 MiB), reader queries and merges 1/3 (256 MiB); mark cache 64 MiB, no uncompressed cache. Past the ceiling every query and insert fails with `MEMORY_LIMIT_EXCEEDED` and the dashboard shows telemetry unavailable: raise it, or press Restart, in Settings → Telemetry |
 | CPU | 2 threads per query, 20 concurrent queries, 2 merge threads; `CPUWeight=50`/`IOWeight=50` so workloads win under contention |
-| Disk | The binary is about 750 MB. An upgrade needs about 1.3 GB free under `/opt/skiff` while it downloads (218 MB archive) and extracts |
+| Disk | The binary is about 750 MB. An upgrade needs about 1.3 GB free under `/opt/yoal` while it downloads (218 MB archive) and extracts |
 
 **Users** (`users.xml`; there is no `default` user, and both users can only connect from
 `127.0.0.1`/`::1`):
 
-- `skiff` (writer): all privileges on database `skiff`, `SELECT` on `system.parts`, `disks`,
+- `yoal` (writer): all privileges on database `yoal`, `SELECT` on `system.parts`, `disks`,
   `merges`, `mutations`, `metrics` and `asynchronous_metrics`, temporary tables, and nothing else.
   It cannot manage users.
-- `skiff_reader` (dashboard SQL): `SELECT` on `skiff.*` only, profile `readonly` with
+- `yoal_reader` (dashboard SQL): `SELECT` on `yoal.*` only, profile `readonly` with
   `readonly=2`. It can set per-query output settings (for example
   `output_format_json_quote_64bit_integers`), but profile constraints cap
   `max_execution_time` 30 s, `max_memory_usage` 256 MiB (1/3 of the ceiling), `max_result_rows` 100 000 (results
@@ -666,7 +666,7 @@ control-plane units `Wants=` it but do not require it.
 **Install and updates.** The installer runs it as its own step. On existing installs, the
 release's `converge` hook (§4.1, *Host convergence*) keeps it current on every update, using the
 pin and config of the release being installed (control-plane hosts only: those with
-`/etc/skiff/skiff.env`). A rollback never moves it to an older pin. Each run is idempotent. It downloads the
+`/etc/yoal/yoal.env`). A rollback never moves it to an older pin. Each run is idempotent. It downloads the
 archive only when the pinned binary is missing, verifies the sha512, and checks that the binary
 runs. It then rewrites the config and unit only when they changed, restarts only on a change, and
 waits up to 60 s for `/ping`. If a new version does not come up, the previous unit is put back.
@@ -674,24 +674,24 @@ Older version directories are deleted only once the new one serves. Every failur
 hash mismatch, low disk, server not answering) is a warning: neither the install nor the update
 fails because of it.
 
-Because `/etc/skiff` is `0750 root:skiff`, the server never reads it: systemd passes
+Because `/etc/yoal` is `0750 root:yoal`, the server never reads it: systemd passes
 `config.xml` and `users.xml` in as credentials (`LoadCredential=`), and the server runs with
-`--config-file=%d/config.xml`. Edit nothing in `/etc/skiff/clickhouse` by hand; the next run
+`--config-file=%d/config.xml`. Edit nothing in `/etc/yoal/clickhouse` by hand; the next run
 overwrites it.
 
 ```sh
-systemctl status skiff-clickhouse --no-pager
-journalctl -u skiff-clickhouse -n 100
+systemctl status yoal-clickhouse --no-pager
+journalctl -u yoal-clickhouse -n 100
 curl -s 127.0.0.1:18123/ping                      # Ok.
 
-# Query as the reader (the password is in /etc/skiff/skiff.env)
-P=$(sudo sed -n 's/^SKIFF_CLICKHOUSE_READER_PASSWORD=//p' /etc/skiff/skiff.env)
-curl -s --user "skiff_reader:$P" 'http://127.0.0.1:18123/?query=SELECT+1'
+# Query as the reader (the password is in /etc/yoal/yoal.env)
+P=$(sudo sed -n 's/^YOAL_CLICKHOUSE_READER_PASSWORD=//p' /etc/yoal/yoal.env)
+curl -s --user "yoal_reader:$P" 'http://127.0.0.1:18123/?query=SELECT+1'
 
 # Disk used per table needs the writer (only it may read system.parts)
-W=$(sudo sed -n 's/^SKIFF_CLICKHOUSE_PASSWORD=//p' /etc/skiff/skiff.env)
-curl -s --user "skiff:$W" http://127.0.0.1:18123/ \
-  --data-binary "SELECT table, formatReadableSize(sum(bytes_on_disk)) FROM system.parts WHERE database = 'skiff' AND active GROUP BY table"
+W=$(sudo sed -n 's/^YOAL_CLICKHOUSE_PASSWORD=//p' /etc/yoal/yoal.env)
+curl -s --user "yoal:$W" http://127.0.0.1:18123/ \
+  --data-binary "SELECT table, formatReadableSize(sum(bytes_on_disk)) FROM system.parts WHERE database = 'yoal' AND active GROUP BY table"
 ```
 
 **Reset.** Hot telemetry is not backed up and can be rebuilt from nothing: deleting it loses only
@@ -699,15 +699,15 @@ the last 90 days of charts (older data is in the R2 Parquet archive, if R2 is co
 control plane recreates its tables on the next start.
 
 ```sh
-sudo systemctl stop skiff-control-plane skiff-clickhouse
-sudo rm -rf /var/lib/skiff/clickhouse
-sudo skiff-platform-config telemetry on        # recreates the directory and starts ClickHouse
-# or, without updating: sudo install -d -m 0750 -o skiff-clickhouse -g skiff-clickhouse /var/lib/skiff/clickhouse
-#   && sudo systemctl start skiff-clickhouse skiff-control-plane
+sudo systemctl stop yoal-control-plane yoal-clickhouse
+sudo rm -rf /var/lib/yoal/clickhouse
+sudo yoal-platform-config telemetry on        # recreates the directory and starts ClickHouse
+# or, without updating: sudo install -d -m 0750 -o yoal-clickhouse -g yoal-clickhouse /var/lib/yoal/clickhouse
+#   && sudo systemctl start yoal-clickhouse yoal-control-plane
 ```
 
 **Local development.** `bun run dev:clickhouse` runs the same config against
-`apps/control-plane/.data/clickhouse` with the dev passwords `skiff-dev` / `skiff-dev-reader`.
+`apps/control-plane/.data/clickhouse` with the dev passwords `yoal-dev` / `yoal-dev-reader`.
 The dev control plane connects to it without any env vars once that directory exists, and runs
 without telemetry otherwise, like a default host. It needs `clickhouse`
 on `PATH` (`brew install --cask clickhouse`, or `curl https://clickhouse.com/ | sh`).
@@ -738,8 +738,8 @@ HTTPS later:
    afterwards), asks for confirmation when it resolves elsewhere (fine behind a proxy), and, when
    the dashboard address changes, requires the owner to have an authenticator app: passkeys are
    bound to the address they were made on and stop working after the move.
-4. `skiff-platform-config` rewrites `skiff.env` and the edge agent's `agent.env` together, saves
-   the token to `/etc/skiff/cloudflare.token`, restarts the control plane and the agent, and waits
+4. `yoal-platform-config` rewrites `yoal.env` and the edge agent's `agent.env` together, saves
+   the token to `/etc/yoal/cloudflare.token`, restarts the control plane and the agent, and waits
    for the new address to answer through Caddy on this host (90 s, or 4 min with HTTPS while the
    certificate is issued). If it doesn't, both files go back and both services restart on the old
    address (`reverted`).
@@ -747,19 +747,19 @@ HTTPS later:
    and bumps desired state, so every node pulls the new routes. Custom domains are unaffected.
 
 After a dashboard move, everyone signs in again at the new address (sessions are per host), passkeys
-must be added again, and `skif login --url <new>` / MCP clients need re-authorising. API keys keep
-working. The edge agent reaches the control plane on `/run/skiff/control.sock`
-(`SKIFF_CONTROL_SOCKET`), so it never depends on the old or new public name while it switches.
+must be added again, and `yoal login --url <new>` / MCP clients need re-authorising. API keys keep
+working. The edge agent reaches the control plane on `/run/yoal/control.sock`
+(`YOAL_CONTROL_SOCKET`), so it never depends on the old or new public name while it switches.
 
 **Worker nodes** keep the control URL they joined with. After moving the dashboard, set
-`SKIFF_CONTROL_URL=<new origin>` in each worker's `/etc/skiff/agent.env` and run
-`sudo systemctl restart skiff-agent`.
+`YOAL_CONTROL_URL=<new origin>` in each worker's `/etc/yoal/agent.env` and run
+`sudo systemctl restart yoal-agent`.
 
 **Recovering from a bad change** (for example DNS removed later): on the server,
 
 ```sh
-sudo skiff-platform-config domains --platform-host <server-ip>             # back to http://<ip> + sslip.io
-sudo skiff-platform-config domains --platform-host control.example.com --content-domain example.com \
+sudo yoal-platform-config domains --platform-host <server-ip>             # back to http://<ip> + sslip.io
+sudo yoal-platform-config domains --platform-host control.example.com --content-domain example.com \
   --acme-email ops@example.com --cloudflare-token-file /path/to/token      # or straight to HTTPS
 ```
 
@@ -774,45 +774,45 @@ it in Email → Mail server:
    verified account). Check: `timeout 8 bash -c '</dev/tcp/gmail-smtp-in.l.google.com/25' && echo ok`.
 2. **Ports in.** Open 25, 465 and 587 in the host and provider firewalls.
 3. **Reverse DNS.** Set the PTR of the node's IPv4 to `mx1.<mail domain>` in the provider console.
-   Skiff creates the A record; `dig +short -x <ip>` must answer `mx1.<mail domain>.`.
+   Yoal creates the A record; `dig +short -x <ip>` must answer `mx1.<mail domain>.`.
 4. **Blocklists.** Check the IP at Spamhaus, and enrol it in Google Postmaster Tools and Microsoft SNDS/JMRP
    (point complaint reports at `fbl@bounces.<mail domain>`).
 
-Then pick the node in Email → Mail server. Its agent starts `skiff-mail.service` through the helper;
-Skiff publishes `mx1.`/`mx.`/`smtp.` A records, `_spf.` and the `bounces.` MX and SPF through
+Then pick the node in Email → Mail server. Its agent starts `yoal-mail.service` through the helper;
+Yoal publishes `mx1.`/`mx.`/`smtp.` A records, `_spf.` and the `bounces.` MX and SPF through
 Cloudflare (or lists them to copy), and Caddy obtains the `smtp.` certificate, after which
-submission on 587/465 comes up. `journalctl -u skiff-mail` shows the MTA; the spool is
-`/var/lib/skiff/mail` and survives restarts. New orgs start in the sandbox (D119); move an org out
+submission on 587/465 comes up. `journalctl -u yoal-mail` shows the MTA; the spool is
+`/var/lib/yoal/mail` and survives restarts. New orgs start in the sandbox (D119); move an org out
 in Email → Mail server.
 
 ## 4. Upgrade
 
-Re-run the bootstrap with `--upgrade` (or just re-run it; it reuses `/etc/skiff` and the data
+Re-run the bootstrap with `--upgrade` (or just re-run it; it reuses `/etc/yoal` and the data
 directory). It builds a new immutable release, snapshots SQLite, swaps the `current` symlink,
 restarts the services, bumps the desired-state watermark and health-checks the platform. A failed
 health check restores the previous release automatically.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/skiff/main/install.sh | sudo env \
-  SKIFF_REF=v1.2.3 sh -s -- --upgrade --yes \
+curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/yoal/main/install.sh | sudo env \
+  YOAL_REF=v1.2.3 sh -s -- --upgrade --yes \
   --platform-host control.example.com --content-domain example.com \
   --acme-email ops@example.com
 ```
 
 The installer is the updater. On an existing install it:
 
-1. Writes a sealed pre-upgrade bundle to `/var/lib/skiff/backups/upgrade-<UTC>-v<version>/`
-   (control SQLite, `.env`, `AGENT.env`, master key and platform settings), whenever `skiff.db`
+1. Writes a sealed pre-upgrade bundle to `/var/lib/yoal/backups/upgrade-<UTC>-v<version>/`
+   (control SQLite, `.env`, `AGENT.env`, master key and platform settings), whenever `yoal.db`
    exists (with or without `--upgrade`). Settings not given as flags are kept from the existing
-   `skiff.env`.
+   `yoal.env`.
 2. Builds the new release on the host from the source tarball while the old one keeps
-   serving, then atomically repoints `/opt/skiff/current` (the outgoing release becomes
+   serving, then atomically repoints `/opt/yoal/current` (the outgoing release becomes
    `previous`). Signature verification against the signed release bundle is not wired into the
    installer yet.
 3. Rewrites the units and restarts the helper, then the control plane. Forward-only migrations
    run on control-plane start; the explicit migrator is available for restores. The dashboard and
    API are down for that restart. Caddy is not stopped: the installer only reloads it if the
-   bootstrap Caddyfile changed (or restarts it once to add the `skiff` group), so sites keep
+   bootstrap Caddyfile changed (or restarts it once to add the `yoal` group), so sites keep
    serving.
 4. Restarts the agent (and a running studio or mail unit) on the new binary.
 5. Waits for `control.sock` and `/readyz`, then for the public platform URL. On failure it stops
@@ -823,36 +823,36 @@ The installer is the updater. On an existing install it:
 Rollback manually if needed:
 
 ```sh
-readlink -f /opt/skiff/current
-sudo ln -sfn /opt/skiff/releases/<previous-version> /opt/skiff/current
-sudo systemctl restart caddy skiff-control-plane skiff-agent
+readlink -f /opt/yoal/current
+sudo ln -sfn /opt/yoal/releases/<previous-version> /opt/yoal/current
+sudo systemctl restart caddy yoal-control-plane yoal-agent
 ```
 
 The installer does not prune release directories; the self-updater does, keeping `current` and
 `previous` after each successful update. The installer keeps the last three pre-upgrade bundles
-in `/var/lib/skiff/backups`; a failed upgrade's bundle stays there for inspection.
+in `/var/lib/yoal/backups`; a failed upgrade's bundle stays there for inspection.
 
 Policy: nothing updates on its own. The dashboard flags a newer version to platform admins (the
 shell badge and Settings → Updates, which says whether it is a patch, minor or major bump), and an
-admin applies it from Settings → Updates or with `skiff-update-self`. There is no scheduled or
+admin applies it from Settings → Updates or with `yoal-update-self`. There is no scheduled or
 automatic install, for patch releases either. Never upgrade across a database backup window
 without confirming Litestream is current.
 
 ### 4.1 Self-update from GitHub
 
 ```sh
-sudo skiff-update-self                     # automatic: signed release if published, else source
-sudo skiff-update-self --source download   # signed release only; never builds on the host
-sudo skiff-update-self --source build      # build the configured ref from source only
-sudo skiff-update-self channel             # this host's release channel (canary or stable)
-sudo skiff-update-self channel stable      # follow promoted releases only; remembered
-sudo skiff-update-self --channel canary    # switch back and update in one go
-sudo skiff-update-self check               # running vs latest version; changes nothing
-sudo skiff-update-self plan                # preflight without changing anything (disk, target, migrations)
-sudo skiff-update-self --dry-run           # show the release and the plan
-sudo skiff-update-self status              # current / previous / last switch / recorded failures
-sudo skiff-update-self rollback            # back to previous; run again to undo the rollback
-sudo skiff-update-self recover             # resolve an interrupted update now (also automatic)
+sudo yoal-update-self                     # automatic: signed release if published, else source
+sudo yoal-update-self --source download   # signed release only; never builds on the host
+sudo yoal-update-self --source build      # build the configured ref from source only
+sudo yoal-update-self channel             # this host's release channel (canary or stable)
+sudo yoal-update-self channel stable      # follow promoted releases only; remembered
+sudo yoal-update-self --channel canary    # switch back and update in one go
+sudo yoal-update-self check               # running vs latest version; changes nothing
+sudo yoal-update-self plan                # preflight without changing anything (disk, target, migrations)
+sudo yoal-update-self --dry-run           # show the release and the plan
+sudo yoal-update-self status              # current / previous / last switch / recorded failures
+sudo yoal-update-self rollback            # back to previous; run again to undo the rollback
+sudo yoal-update-self recover             # resolve an interrupted update now (also automatic)
 ```
 
 Or use **Settings → Updates** in the dashboard (platform owners and admins only).
@@ -877,7 +877,7 @@ touch only docs, tests, CI or the separately versioned CLI never bump. Minor and
 always manual: run `bun run version:minor` or `bun run version:major` in the commit that adds
 the feature or breaking change, and the hook then leaves it alone. Use `bun run version:show`
 to see what is released and what is pending. To skip the hook, use `git commit --no-verify` or
-`SKIFF_NO_VERSION_BUMP=1`. The hook compares against your local `origin/main`, so `git fetch`
+`YOAL_NO_VERSION_BUMP=1`. The hook compares against your local `origin/main`, so `git fetch`
 before a batch. The build bakes `VERSION` in, so the dashboard always shows the version
 of the code that is actually running.
 
@@ -885,22 +885,22 @@ The same hooks path has a `pre-push` hook that runs a GitGuardian secret scan
 (`ggshield secret scan pre-push`) over the commits being pushed and blocks the push if it finds
 a secret. Set it up once with `brew install ggshield` (or `pipx install ggshield`) and
 `ggshield auth login`. Without ggshield installed the hook warns and lets the push through. To
-skip it, use `git push --no-verify` or `SKIFF_NO_SECRET_SCAN=1`. If a finding is a false
+skip it, use `git push --no-verify` or `YOAL_NO_SECRET_SCAN=1`. If a finding is a false
 positive, `ggshield secret ignore --last-found` records it in `.gitguardian.yaml`.
 
 **Releases are built and signed in CI, never on the host.** Every push to `main` whose `VERSION`
 has no release yet runs [`.github/workflows/publish.yml`](../.github/workflows/publish.yml):
 tests, one build per architecture (native amd64 and arm64 runners), the stage-0 updater compiled
 with `bun build --compile`, Caddy built with `caddy-dns/cloudflare`, and the release's own canary
-hook run as the `skiff` user under the production systemd sandbox
+hook run as the `yoal` user under the production systemd sandbox
 ([`scripts/release/ci-canary.sh`](../scripts/release/ci-canary.sh)).
 Only then is `manifest.json` written and signed with Ed25519
 ([`scripts/release/manifest.ts`](../scripts/release/manifest.ts); the workflow refuses to
 publish a signature the updater would not accept) and the GitHub release `v<VERSION>` created
-with `skiff-<version>-linux-<arch>.tar.gz`, `manifest.json`, `manifest.json.sig` and
-`skiff-recover.sh`. The signing key is the `SKIFF_RELEASE_SIGNING_KEY` repository secret; its
+with `yoal-<version>-linux-<arch>.tar.gz`, `manifest.json`, `manifest.json.sig` and
+`yoal-recover.sh`. The signing key is the `YOAL_RELEASE_SIGNING_KEY` repository secret; its
 public half is compiled into the updater ([`signing.ts`](../scripts/update-self/signing.ts)),
-and extra trusted keys can be dropped into `/etc/skiff/updater/keys/*.pub` for rotation.
+and extra trusted keys can be dropped into `/etc/yoal/updater/keys/*.pub` for rotation.
 
 The updater installs the newest non-draft `v<semver>` release **on the host's channel** (below)
 whose manifest verifies, after checking the artifact's size and sha256 against it. It lists the
@@ -923,10 +923,10 @@ release that is already stable or unsigned, and one not newer than the current s
 summary lists the canaries that stable hosts will skip. To pull a bad canary before canary
 hosts take it, delete the release or turn it into a draft; promotion never sees drafts.
 
-A host's channel lives in `/var/lib/skiff-update/channel` (`root:skiff 0640`), written only by the
-updater. `--channel <name>` on `update`, `skiff-update-self channel <name>`, or the choice on
+A host's channel lives in `/var/lib/yoal-update/channel` (`root:yoal 0640`), written only by the
+updater. `--channel <name>` on `update`, `yoal-update-self channel <name>`, or the choice on
 **Settings → Updates** changes it, and the choice is remembered. Until a host chooses,
-`SKIFF_UPDATE_CHANNEL` (in `skiff.env`; the installer writes `stable`, or `canary` with
+`YOAL_UPDATE_CHANNEL` (in `yoal.env`; the installer writes `stable`, or `canary` with
 `--canary`) is the default, and without that, `canary`. `check`,
 `plan` and `status` show the channel. Two rules keep a switch safe:
 
@@ -955,7 +955,7 @@ so a host can avoid running prebuilt binaries if that matters to it:
 | Download signed release | `--source download` (alias `artifact`) | The Ed25519-signed manifest, the artifact's SHA-256 and the release key compiled into the updater | Fast; nothing is compiled on the host. Needs a published release. |
 | Build from source | `--source build` (alias `source`, or `--ref <ref>`) | GitHub and the exact commit/ref it checks out; no CI binary is executed | Slower and needs disk/CPU; useful when you do not want to trust a prebuilt artifact |
 
-`SKIFF_UPDATE_SOURCE` sets the CLI default. The dashboard writes the choice to an allowlisted
+`YOAL_UPDATE_SOURCE` sets the CLI default. The dashboard writes the choice to an allowlisted
 sidecar next to the update request (`request.mode`); the root updater consumes and deletes it,
 with `--source` taking precedence. A request from an older control plane has no sidecar and
 falls back to `auto`, which is also why the *first* update after this change still uses the
@@ -969,37 +969,37 @@ than a silent fallback to a source build.
 `caddy list-modules`), installs it at the binary path the running unit executes, and restarts
 that unit. On an installed host that is the packaged `caddy.service` running `/usr/bin/caddy`; it
 keeps its config and admin socket, and the old binary is saved as
-`<path>.skiff-previous` and restored if the restart or the post-update health checks fail. A
-host running `skiff-caddy.service` already resolves `/opt/skiff/current/caddy/caddy`, so only
+`<path>.yoal-previous` and restored if the restart or the post-update health checks fail. A
+host running `yoal-caddy.service` already resolves `/opt/yoal/current/caddy/caddy`, so only
 the restart is needed. On the first update to a Caddy-bearing release the updater adds the same
 binary to `previous`, so a later rollback stays bootable. The release's Caddy is skipped when
 `caddy/caddy` is absent (an older artifact or a source ref that predates it). If the unit executes
 a package-managed path such as `/usr/bin/caddy`, the updater replaces that file (keeping
-`.skiff-previous`); a distro package upgrade can overwrite it, and the next Skiff update puts the
-release build back. The repository's hardened `skiff-caddy.service` (§10) runs
-`/opt/skiff/current/caddy/caddy` directly and avoids that, but neither the installer nor the
+`.yoal-previous`); a distro package upgrade can overwrite it, and the next Yoal update puts the
+release build back. The repository's hardened `yoal-caddy.service` (§10) runs
+`/opt/yoal/current/caddy/caddy` directly and avoids that, but neither the installer nor the
 updater installs it; an installed host runs the packaged `caddy.service`. As with the install
 method, the updater that *installs* this feature predates it, so Caddy is managed from the
 following run onward.
 
 **From the dashboard.** The control plane is unprivileged and sandboxed, so it cannot update or
-restart itself. The button drops `/var/lib/skiff/update/request`. A root path unit
-(`skiff-update-self.path`) notices it and starts `skiff-update-self.service`, which deletes the
-request and runs `skiff-update-self update --trigger dashboard`. The updater treats the request
+restart itself. The button drops `/var/lib/yoal/update/request`. A root path unit
+(`yoal-update-self.path`) notices it and starts `yoal-update-self.service`, which deletes the
+request and runs `yoal-update-self update --trigger dashboard`. The updater treats the request
 purely as a trigger: it re-checks GitHub itself and never reads the request file. The chosen
 install method and release channel are the exceptions, carried in the allowlisted `request.mode`
 and `request.channel` sidecars. The page previews either channel (`?channel=stable`); requesting
 an update with a channel other than the host's switches the host to it, even when nothing is
 newer (the run records the channel and stays put). Progress goes to
-`/var/lib/skiff-update/status.json` (`root:skiff 0640`), which the page polls, and the same run
-appends a JSON Lines log to `/var/lib/skiff-update/update.log` (`root:skiff 0640`). The page
+`/var/lib/yoal-update/status.json` (`root:yoal 0640`), which the page polls, and the same run
+appends a JSON Lines log to `/var/lib/yoal-update/update.log` (`root:yoal 0640`). The page
 tails it into **Live log**. Every request is recorded in the audit log as `platform.update`.
-Logs: the page, `/var/lib/skiff-update/update.log`, and `journalctl -u skiff-update-self`.
+Logs: the page, `/var/lib/yoal-update/update.log`, and `journalctl -u yoal-update-self`.
 
 **The update, step by step** (source: [`scripts/update-self/`](../scripts/update-self)):
 
 1. **Stage beside the running release.** The signed artifact is downloaded, verified and
-   unpacked into `/opt/skiff/releases/<UTC>-<sha12>` (or built there from source). Nothing that
+   unpacked into `/opt/yoal/releases/<UTC>-<sha12>` (or built there from source). Nothing that
    serves is touched; a failed stage leaves no trace.
 2. **Canary, judged by the release itself.** Stage-0 hands the new release an empty scratch
    directory and runs *that release's* hook,
@@ -1007,15 +1007,15 @@ Logs: the page, `/var/lib/skiff-update/update.log`, and `journalctl -u skiff-upd
    lays out the data dir (directories first, then ownership), takes a `VACUUM INTO` copy of the
    live database, and boots the release as a transient unit with the production user and
    sandbox, its own socket and no outbound side effects (SMTP, alerts, R2 and backups stripped;
-   `SKIFF_STANDBY=1`). It must pass `/api/setup/status`, `/login` and `/readyz`, stay up 3 s
+   `YOAL_STANDBY=1`). It must pass `/api/setup/status`, `/login` and `/readyz`, stay up 3 s
    more, and report a verdict whose reason is the failing `/readyz` check or the crash line from
    its journal. Because the data-layout knowledge ships *in the release*, a bug in it can only
    fail the release that contains it; the next release brings its own fixed copy. (This is the
    lesson of 2026-11-05, when a bug in the installed updater's canary rejected every new
    release.) Releases from before hooks existed use stage-0's bundled copy of the same canary.
 3. **Cut over with zero downtime.** The incoming release starts as
-   `skiff-control-plane-standby.service` on `/run/skiff/control-standby.sock` while the primary
-   keeps serving. Once it is healthy on its own socket, `/run/skiff/control.sock` (a symlink
+   `yoal-control-plane-standby.service` on `/run/yoal/control-standby.sock` while the primary
+   keeps serving. Once it is healthy on its own socket, `/run/yoal/control.sock` (a symlink
    that Caddy, the agent, the CLI and every script use) is renamed to point at it: one atomic
    rename, new connections follow, open ones finish on the old process.
 4. **Bake.** The new release serves real traffic for 60 s (`--bake <seconds>`), probed every
@@ -1039,14 +1039,14 @@ Each release therefore ships two more hooks in
 [`scripts/release/hooks.ts`](../scripts/release/hooks.ts)
 ([`converge.ts`](../scripts/release/converge.ts)), run with the release's own Bun:
 
-- `prepare`, after staging and before the canary: additive `skiff.env` defaults the release needs
+- `prepare`, after staging and before the canary: additive `yoal.env` defaults the release needs
   to boot (today the Web Push key pair). The running release keeps serving with them.
 - `converge`, after `current` moves and before the primary, helper and agent restart on the new
   release: the control-plane, standby and guard units, the dashboard update and platform-config
-  triggers, `/usr/local/sbin/skiff-update-self`, the studio unit, the helper binary, unit and env,
-  and, on hosts with an agent, `skiff-agent.service`, the builder and storage units, the
-  `skiff-builder`/`skiff-storage` links and the pinned workerd. Then the `skif`/`skiff` and
-  `skiff-restore`/`-drill`/`-alert`/`-recovery-kit` commands, the backup units (refreshed only
+  triggers, `/usr/local/sbin/yoal-update-self`, the studio unit, the helper binary, unit and env,
+  and, on hosts with an agent, `yoal-agent.service`, the builder and storage units, the
+  `yoal-builder`/`yoal-storage` links and the pinned workerd. Then the `yoal` CLI and
+  `yoal-restore`/`-drill`/`-alert`/`-recovery-kit` commands, the backup units (refreshed only
   where the installer added them; Litestream restarts if its unit changed) and an installed
   ClickHouse. Each step is idempotent and only writes what differs.
 
@@ -1057,55 +1057,55 @@ moves ClickHouse to an older pin. A failed step is a warning in the log and neve
 update. Stage-0's built-in helper install is the fallback when the hook fails or the release
 predates it (its `protocol` hook does not list `converge`). Those releases also get stage-0's ClickHouse upkeep. The
 first update to a release with the hook is driven by an older stage-0 that knows nothing about
-it, so that release's host side converges on the next `skiff-update-self` run or **Update** click,
+it, so that release's host side converges on the next `yoal-update-self` run or **Update** click,
 even one that finds nothing newer. To converge by hand:
 
 ```sh
-sudo /opt/skiff/current/runtime/bun /opt/skiff/current/repo/scripts/release/hooks.ts converge \
-  --release "$(readlink -f /opt/skiff/current)"
+sudo /opt/yoal/current/runtime/bun /opt/yoal/current/repo/scripts/release/hooks.ts converge \
+  --release "$(readlink -f /opt/yoal/current)"
 ```
 
 **Releases with migrations are fenced.** Two releases may share the SQLite file only if the old
 one understands the schema. When the new release ships migrations the database has not applied,
 the old release is stopped first (a few seconds of downtime, as before), a sealed upgrade bundle
-is written to `/var/lib/skiff/backups/upgrade-<UTC>-v<version>/`, and only then does the new
+is written to `/var/lib/yoal/backups/upgrade-<UTC>-v<version>/`, and only then does the new
 release start and migrate. Any failure before commit restores that bundle's database (Litestream
 is paused so it starts a clean generation) and restarts the old release. Code-only releases
 always get the zero-downtime path. `--no-zero-downtime` forces the old stop/swap/start behaviour.
 
 Exactly one process owns background work. The standby (and the canary) run with
-`SKIFF_STANDBY=1`, which skips the maintenance loop and the resumption of interrupted mass
+`YOAL_STANDBY=1`, which skips the maintenance loop and the resumption of interrupted mass
 operations; the primary keeps them throughout.
 
 **Failures are attributed, not just recorded.** A release is marked bad only when its own hook
 returns a well-formed failing verdict, or it fails while serving (standby health or bake). It is
 then skipped until `--force`, and only by the same updater build: a verdict is stamped with the
-updater identity (`skiff-update-self --version`), so installing a fixed updater automatically
+updater identity (`yoal-update-self --version`), so installing a fixed updater automatically
 retries releases an older one blamed. A hook that crashes, times out or gives no verdict, an
 interrupted update and a release that served fine on the standby but not on the primary are
 `inconclusive` and always retried. If two *different* releases fail at the same step for the same
 reason, neither is blamed (`suspect`) and the log says the updater or host is the likely cause.
 `status` lists every verdict with its cause.
 
-**Stage-0 updater.** `/usr/local/sbin/skiff-update-self` runs
-`/usr/local/lib/skiff-updater/current/skiff-updated`, a self-contained compiled binary that does
+**Stage-0 updater.** `/usr/local/sbin/yoal-update-self` runs
+`/usr/local/lib/yoal-updater/current/yoal-updated`, a self-contained compiled binary that does
 not use any release's Bun or `node_modules`. If it is missing or does not answer `--version`,
 the wrapper falls back to the TypeScript updater in `current`, then `previous`
-(`SKIFF_UPDATER=source` forces that). Each release carries its own `updater/skiff-updated`.
+(`YOAL_UPDATER=source` forces that). Each release carries its own `updater/yoal-updated`.
 After the release commits, never in the same transaction, that binary is installed side by side,
-must pass `skiff-updated self-test` (state readable, release keys trusted, the active release's
+must pass `yoal-updated self-test` (state readable, release keys trusted, the active release's
 hooks callable), and only then becomes `current`; a candidate that fails is discarded.
 
-**Crashes, reboots and power cuts.** `skiff-update-guard.service` runs at boot before the control
+**Crashes, reboots and power cuts.** `yoal-update-guard.service` runs at boot before the control
 plane and Litestream. If an update was in flight and not committed, it restores the committed
 pointers (and, for a fenced update, the pre-update database), removes the standby link and
 records the attempt as `inconclusive`. It touches only files, so it can never wait on the units it
 precedes. The standby unit is never enabled, so a reboot always comes up on `current`, and the
 primary's pre-start creates `control.sock` → `control-primary.sock`. Without a reboot, the next
-`skiff-update-self` invocation finishes or reverts the interrupted switch. The updater's own unit
+`yoal-update-self` invocation finishes or reverts the interrupted switch. The updater's own unit
 ignores SIGINT/SIGTERM/SIGHUP while a switch is in flight.
 
-**When nothing else works: `skiff-recover`.** A break-glass script published with every
+**When nothing else works: `yoal-recover`.** A break-glass script published with every
 platform release, independent of the updater. It never touches the database. The full procedure
 is in [§4.1.1](#411-recovering-a-stuck-or-failed-update).
 
@@ -1119,12 +1119,12 @@ release left it. `rollback` takes a fresh snapshot, then swaps `current` and `pr
 
 Exit codes: `0` updated or nothing to do, `1` nothing changed or rolled back (old release
 serving), `2` the old release did not come back healthy (look at
-`journalctl -u skiff-control-plane` now). Units and host commands come from the same templates
+`journalctl -u yoal-control-plane` now). Units and host commands come from the same templates
 as the installer ([`scripts/systemd/`](../scripts/systemd), [`scripts/install/commands.ts`](../scripts/install/commands.ts)),
 written by the release's `converge` hook (*Host convergence* above), so `install.sh --upgrade` is
 only needed for what the installer alone does: OS packages, users, Caddy's admin-socket drop-in
-and turning backups on. Private repositories need `SKIFF_GITHUB_TOKEN`
-or `/etc/skiff/github.token` (`0600`).
+and turning backups on. Private repositories need `YOAL_GITHUB_TOKEN`
+or `/etc/yoal/github.token` (`0600`).
 
 ### 4.1.1 Recovering a stuck or failed update
 
@@ -1132,22 +1132,22 @@ The updater is designed to fail back to a serving release, so most incidents nee
 a look at what it recorded. Start there, never by moving symlinks:
 
 ```sh
-sudo skiff-update-self status              # current/previous, in-flight switch, recorded verdicts
-sudo skiff-update-self check               # running vs newest release; changes nothing
-sudo skiff-update-self version             # which updater build is judging releases
-sudo journalctl -u skiff-update-self -n 200 --no-pager
-sudo tail -n 50 /var/lib/skiff-update/update.log   # JSON Lines: phases, commands, build output
-cat /var/lib/skiff-update/status.json              # exactly what the dashboard is showing
+sudo yoal-update-self status              # current/previous, in-flight switch, recorded verdicts
+sudo yoal-update-self check               # running vs newest release; changes nothing
+sudo yoal-update-self version             # which updater build is judging releases
+sudo journalctl -u yoal-update-self -n 200 --no-pager
+sudo tail -n 50 /var/lib/yoal-update/update.log   # JSON Lines: phases, commands, build output
+cat /var/lib/yoal-update/status.json              # exactly what the dashboard is showing
 ```
 
 | What you see | What it means | What to do |
 |---|---|---|
-| Dashboard stuck on **Test boot** (`phase: "canary"`) with no new log output | The updater process died or was killed mid-canary; `status.json` still holds the last phase it wrote. The running release is untouched and serving. | `sudo systemctl stop skiff-update-self`, then `sudo skiff-update-self recover`, then update again. |
-| `status` prints `interrupted update` | A switch started and did not commit (crash, reboot, power cut). | `sudo skiff-update-self recover`. The boot guard also does this automatically, filesystem-only, before the control plane starts. |
-| The release is listed under `failed` | Its own canary returned a failing verdict, or it failed while serving. This updater build skips it until `--force`. | Fix the release, or `sudo skiff-update-self update --force` to retry it. `skiff-recover clear-verdicts` forgets *all* verdicts, not just one. |
+| Dashboard stuck on **Test boot** (`phase: "canary"`) with no new log output | The updater process died or was killed mid-canary; `status.json` still holds the last phase it wrote. The running release is untouched and serving. | `sudo systemctl stop yoal-update-self`, then `sudo yoal-update-self recover`, then update again. |
+| `status` prints `interrupted update` | A switch started and did not commit (crash, reboot, power cut). | `sudo yoal-update-self recover`. The boot guard also does this automatically, filesystem-only, before the control plane starts. |
+| The release is listed under `failed` | Its own canary returned a failing verdict, or it failed while serving. This updater build skips it until `--force`. | Fix the release, or `sudo yoal-update-self update --force` to retry it. `yoal-recover clear-verdicts` forgets *all* verdicts, not just one. |
 | The new release never took traffic and the old one is still serving | The updater reverted automatically (canary, standby or bake). | Read the reason in `status` and the journal. Nothing else is required; the next release is still installable. |
-| Exit code `2`, neither release healthy | Recovery itself failed. This is the only case that needs a human immediately. | `journalctl -u skiff-control-plane -n 200`, then `skiff-recover status` and `skiff-recover use previous` (below). |
-| `skiff-update-self` missing, segfaulting or answering `--version` with garbage | Stage-0 is broken. The wrapper should already fall back to the TypeScript updater in `current`. | `skiff-recover install-updater`, or `skiff-recover source-updater update`. |
+| Exit code `2`, neither release healthy | Recovery itself failed. This is the only case that needs a human immediately. | `journalctl -u yoal-control-plane -n 200`, then `yoal-recover status` and `yoal-recover use previous` (below). |
+| `yoal-update-self` missing, segfaulting or answering `--version` with garbage | Stage-0 is broken. The wrapper should already fall back to the TypeScript updater in `current`. | `yoal-recover install-updater`, or `yoal-recover source-updater update`. |
 
 **The one-time `--no-canary` bootstrap (installs older than 0.6.7).** The 0.6.1-era installed
 updater ran its canary from the host, and that canary laid out `data/objects` as root *after*
@@ -1157,8 +1157,8 @@ cannot recur; but the old installed updater must be replaced first. Do that with
 that skips the host canary:
 
 ```sh
-sudo skiff-update-self plan --no-canary     # confirm the target release and preflight
-sudo skiff-update-self update --no-canary   # one time only
+sudo yoal-update-self plan --no-canary     # confirm the target release and preflight
+sudo yoal-update-self update --no-canary   # one time only
 ```
 
 `--no-canary` skips only the isolated test boot. The preflight, sealed database snapshot,
@@ -1169,28 +1169,28 @@ run: it invokes the updater with no flags and will hang on the same canary. Once
 completes, the new release's own updater is in `current`, and later updates need no flags and
 are zero-downtime.
 
-**Interrupted switches.** `skiff-update-guard.service` runs at boot, before the control plane and
+**Interrupted switches.** `yoal-update-guard.service` runs at boot, before the control plane and
 Litestream, and restores the committed pointers if an update was in flight (for a fenced update
 it also restores the pre-update database) and records the attempt as `inconclusive`. It only
 touches files, so it can never wait on the units it precedes. The standby unit is never enabled,
-so a reboot always comes up on `current`. Without a reboot, the next `skiff-update-self`
+so a reboot always comes up on `current`. Without a reboot, the next `yoal-update-self`
 invocation finishes or reverts the switch. A switch in progress ignores SIGINT, SIGTERM and
 SIGHUP; do not kill it deliberately. A SIGKILL during the canary or bake phase leaves the last
-committed release serving, because nothing was committed yet, but run `skiff-update-self
+committed release serving, because nothing was committed yet, but run `yoal-update-self
 recover` afterwards to clear the in-flight marker.
 
-**Rollback is the first remedy, and it is reversible.** `sudo skiff-update-self rollback` swaps
+**Rollback is the first remedy, and it is reversible.** `sudo yoal-update-self rollback` swaps
 `current`/`previous`; run it again to undo. Without a flag it refuses when the previous release
 does not understand the applied schema. `--restore-db` also restores the database to the moment
 the current release was activated (writes since then are lost, but the pre-rollback snapshot
 makes a second `rollback --restore-db` go forward again); `--keep-db` runs old code against the
-newer schema. Real data recovery is separate: `/opt/skiff/current/repo/scripts/restore.sh` and
+newer schema. Real data recovery is separate: `/opt/yoal/current/repo/scripts/restore.sh` and
 [§5](#5-restore).
 
-**`skiff-recover` reference.** Download it from a platform release and run it as root:
+**`yoal-recover` reference.** Download it from a platform release and run it as root:
 
 ```sh
-curl -fsSL https://github.com/KieranHolroyd/skiff/releases/latest/download/skiff-recover.sh \
+curl -fsSL https://github.com/KieranHolroyd/yoal/releases/latest/download/yoal-recover.sh \
   | sudo sh -s -- status
 ```
 
@@ -1199,19 +1199,19 @@ a platform release; when that happens this URL returns **404** even though the a
 the platform tag. Pin the platform tag instead:
 
 ```sh
-curl -fsSL https://github.com/KieranHolroyd/skiff/releases/download/v<VERSION>/skiff-recover.sh \
+curl -fsSL https://github.com/KieranHolroyd/yoal/releases/download/v<VERSION>/yoal-recover.sh \
   | sudo sh -s -- status
 ```
 
-Replace `<VERSION>` with the running version (`cat /opt/skiff/current/repo/VERSION`) or the
-newest platform release from `gh release list --repo KieranHolroyd/skiff`. The same file is
+Replace `<VERSION>` with the running version (`cat /opt/yoal/current/repo/VERSION`) or the
+newest platform release from `gh release list --repo KieranHolroyd/yoal`. The same file is
 attached to every platform release and can be downloaded from the release page.
 
 | Command | Effect |
 |---|---|
 | `status` | Read-only: `current`/`previous`/`standby` targets, where `control.sock` points, the stage-0 updater, releases on disk, interrupted-update marker, unit states. Run this first. |
 | `use <release\|previous>` | Points `current` at a complete release already on disk (sets `previous` to the outgoing one), removes the standby link and any `inProgress` marker, then restarts the control plane. Refuses an incomplete release. |
-| `clear-verdicts` | Wipes `failedCommits` in `/opt/skiff/update-state.json`, so previously rejected releases are retried. Prefer `update --force` for one release; use this only when the updater itself was at fault. |
+| `clear-verdicts` | Wipes `failedCommits` in `/opt/yoal/update-state.json`, so previously rejected releases are retried. Prefer `update --force` for one release; use this only when the updater itself was at fault. |
 | `install-updater [vX.Y.Z]` | Downloads a platform release's `manifest.json`/`.sig`, verifies them against the running release's trusted keys, checks the artifact's sha256, runs `self-test`, and installs that binary as stage-0. Defaults to the newest signed release. |
 | `source-updater ARGS...` | Runs the TypeScript updater from `current` with `ARGS`, bypassing stage-0 (for example `source-updater update --no-canary`). |
 
@@ -1219,39 +1219,39 @@ It never touches the database. `install-updater` fails loudly if the active rele
 signing keys or the manifest does not verify; it will not install an unsigned or unverified
 updater.
 
-**Last resort: repointing by hand.** Prefer `skiff-recover use`. If the script cannot run, a
-release is a directory under `/opt/skiff/releases/<UTC>-<sha12>`; `current` and `previous` are
+**Last resort: repointing by hand.** Prefer `yoal-recover use`. If the script cannot run, a
+release is a directory under `/opt/yoal/releases/<UTC>-<sha12>`; `current` and `previous` are
 symlinks to it, and `control.sock` is a symlink to `control-primary.sock` or
 `control-standby.sock`. Repoint `current` atomically (write a temporary symlink, then
-`mv -Tf`), stop the standby unit, restart `skiff-control-plane`, and check `/readyz`. Never edit
-`update-state.json` while an update is in flight; run `skiff-update-self recover` first.
+`mv -Tf`), stop the standby unit, restart `yoal-control-plane`, and check `/readyz`. Never edit
+`update-state.json` while an update is in flight; run `yoal-update-self recover` first.
 
 **Recording the incident.** `update.log` (JSON Lines) and `status.json` are the primary record;
-the updater's identity (`skiff-update-self version`) matters because verdicts are stamped with
+the updater's identity (`yoal-update-self version`) matters because verdicts are stamped with
 it, so a fixed updater retries releases an older one blamed. The dashboard's **Settings →
 Updates** page shows the same status and live log, and each request is in the audit log as
 `platform.update`.
 
 ### 4.1.2 Updating worker nodes
 
-The control plane's own host (and its agent) updates with `skiff-update-self` (§4.1). Every
+The control plane's own host (and its agent) updates with `yoal-update-self` (§4.1). Every
 other node updates from the dashboard (D99):
 
 1. **Nodes**: a node whose agent is older than the control plane shows **`<version>` available**
    on its card. Choose **Update node** (on the card or in the `…` menu) and confirm.
-2. On its next desired-state pull the agent asks `skiff-helper` to install that version. The
+2. On its next desired-state pull the agent asks `yoal-helper` to install that version. The
    helper downloads the signed `manifest.json` for `v<version>` from GitHub, verifies the
    signature with the release keys built into it, downloads
-   `skiff-node-<version>-linux-<arch>.tar.gz`, checks its size and sha256, and replaces
-   `/opt/skiff/current/agent/skiff-agent` and `/opt/skiff/helper/skiff-helper`. It then restarts
-   `skiff-agent` and `skiff-helper`, plus `skiff-builder` and `skiff-studio` if they are running.
+   `yoal-node-<version>-linux-<arch>.tar.gz`, checks its size and sha256, and replaces
+   `/opt/yoal/current/agent/yoal-agent` and `/opt/yoal/helper/yoal-helper`. It then restarts
+   `yoal-agent` and `yoal-helper`, plus `yoal-builder` and `yoal-studio` if they are running.
 3. The card shows **updating to `<version>`** until the agent's heartbeat reports the new version,
    usually within a minute or two. A failure (no signed release, a bad checksum, no outbound
    HTTPS to GitHub, no helper) shows its reason on the card; **Retry update** tries again.
 
-Requirements on the node: `skiff-helper` running as root, outbound HTTPS to `github.com` and
+Requirements on the node: `yoal-helper` running as root, outbound HTTPS to `github.com` and
 `objects.githubusercontent.com`, and an agent new enough to update itself. The helper refuses a
-downgrade and refuses a control-plane host (`/opt/skiff/current` is a release symlink there).
+downgrade and refuses a control-plane host (`/opt/yoal/current` is a release symlink there).
 Sites and workloads keep running; the node shows offline only while its agent restarts.
 
 A node update replaces only the two binaries. Unlike a control-plane update (§4.1, *Host
@@ -1262,9 +1262,9 @@ re-run by hand until the helper learns to converge.
 **Rolling back a node by hand.** The previous binaries are kept next to the new ones:
 
 ```sh
-sudo install -m 0755 /opt/skiff/current/agent/skiff-agent.previous /opt/skiff/current/agent/skiff-agent
-sudo install -m 0755 /opt/skiff/helper/skiff-helper.previous /opt/skiff/helper/skiff-helper
-sudo systemctl restart skiff-helper skiff-agent
+sudo install -m 0755 /opt/yoal/current/agent/yoal-agent.previous /opt/yoal/current/agent/yoal-agent
+sudo install -m 0755 /opt/yoal/helper/yoal-helper.previous /opt/yoal/helper/yoal-helper
+sudo systemctl restart yoal-helper yoal-agent
 ```
 
 **First update of an older agent.** An agent from before dashboard updates says so on its card
@@ -1273,43 +1273,43 @@ dashboard. Set `V` to the control plane's version and `ARCH` to the node's (`amd
 
 ```sh
 sudo bash -euo pipefail <<'SCRIPT'
-V=0.0.0 ARCH=amd64 REPO=KieranHolroyd/skiff
+V=0.0.0 ARCH=amd64 REPO=KieranHolroyd/yoal
 cd "$(mktemp -d)"
 curl -fsSLO "https://github.com/$REPO/releases/download/v$V/manifest.json"
-curl -fsSLO "https://github.com/$REPO/releases/download/v$V/skiff-node-$V-linux-$ARCH.tar.gz"
-grep -q "$(sha256sum "skiff-node-$V-linux-$ARCH.tar.gz" | cut -d' ' -f1)" manifest.json \
+curl -fsSLO "https://github.com/$REPO/releases/download/v$V/yoal-node-$V-linux-$ARCH.tar.gz"
+grep -q "$(sha256sum "yoal-node-$V-linux-$ARCH.tar.gz" | cut -d' ' -f1)" manifest.json \
   || { echo "checksum does not match manifest.json" >&2; exit 1; }
-tar -xzf "skiff-node-$V-linux-$ARCH.tar.gz"
-install -m 0755 skiff-agent /opt/skiff/current/agent/skiff-agent
-install -m 0755 skiff-helper /opt/skiff/helper/skiff-helper
-systemctl restart skiff-helper skiff-agent
+tar -xzf "yoal-node-$V-linux-$ARCH.tar.gz"
+install -m 0755 yoal-agent /opt/yoal/current/agent/yoal-agent
+install -m 0755 yoal-helper /opt/yoal/helper/yoal-helper
+systemctl restart yoal-helper yoal-agent
 SCRIPT
 ```
 
 This checks the bundle against `manifest.json` only; the dashboard path also verifies the
 manifest's signature. Workers joined with `scripts/dev/join-linux-worker.sh` can instead rebuild
-from `/opt/skiff/src`. Run neither on the control-plane host: use `skiff-update-self` there.
+from `/opt/yoal/src`. Run neither on the control-plane host: use `yoal-update-self` there.
 
 ### 4.2 Uninstall
 
 ```sh
-sudo skiff-uninstall                 # remove binaries/units; keep data + config
-sudo skiff-uninstall --purge --yes   # remove local state too (R2 is never touched)
+sudo yoal-uninstall                 # remove binaries/units; keep data + config
+sudo yoal-uninstall --purge --yes   # remove local state too (R2 is never touched)
 ```
 
-`skiff-uninstall` (`scripts/uninstall.sh`) stops, disables and removes every Skiff unit: the
-control plane and its standby slot, the update guard and `skiff-update-self.{path,service}`, the
+`yoal-uninstall` (`scripts/uninstall.sh`) stops, disables and removes every Yoal unit: the
+control plane and its standby slot, the update guard and `yoal-update-self.{path,service}`, the
 agent, helper, builder, studio, storage, mail, Litestream, restore drill, alert and
 platform-config units, and ClickHouse, with their drop-ins (including the master key drop-ins).
-It removes the operator commands in `/usr/local/{bin,sbin}` (`skif`, `skiff-update-self`,
-`skiff-platform-config`, `skiff-restore`, `skiff-restore-drill`, `skiff-alert`,
-`skiff-recovery-kit`, `skiff-rotate-master-key`, `skiff-uninstall`) and `/opt/skiff`.
+It removes the operator commands in `/usr/local/{bin,sbin}` (`yoal`, `yoal-update-self`,
+`yoal-platform-config`, `yoal-restore`, `yoal-restore-drill`, `yoal-alert`,
+`yoal-recovery-kit`, `yoal-rotate-master-key`, `yoal-uninstall`) and `/opt/yoal`.
 
-The default keeps `/var/lib/skiff`, `/etc/skiff` (including the master key, sealed or not) and
+The default keeps `/var/lib/yoal`, `/etc/yoal` (including the master key, sealed or not) and
 `/etc/caddy/Caddyfile` so a reinstall can reuse the database and master key. The ClickHouse data
-(`/var/lib/skiff/clickhouse`) and binary (`/opt/skiff/clickhouse`) also stay unless you purge.
-`--purge` also removes the system users (`skiff`, `skiff-build`, `skiff-clickhouse`, `caddy`),
-puts back the Caddyfile Skiff replaced (`Caddyfile.dist`, or `Caddyfile.pre-skiff` when the
+(`/var/lib/yoal/clickhouse`) and binary (`/opt/yoal/clickhouse`) also stay unless you purge.
+`--purge` also removes the system users (`yoal`, `yoal-build`, `yoal-clickhouse`, `caddy`),
+puts back the Caddyfile Yoal replaced (`Caddyfile.dist`, or `Caddyfile.pre-yoal` when the
 installer only patched an existing one) and reloads Caddy, and destroys the master key, so export a recovery kit (§6.2) first if the R2 backups should stay
 restorable. Containers and units the helper rendered for workloads are not removed; delete the
 apps first. Backups and releases in R2 survive both modes by design.
@@ -1321,40 +1321,40 @@ apps along (D97). Storage moves empty (objects are not copied), and app volumes 
 Then use **Nodes → ⋯ → Remove node** (or
 `DELETE /api/v1/nodes/:id`). The token is revoked immediately, disk registrations go, and any
 build it had claimed is requeued for another Builder. The edge node cannot be removed. Removal
-does not touch the machine: run `sudo skiff-uninstall` there (or `docker compose down -v` for the
+does not touch the machine: run `sudo yoal-uninstall` there (or `docker compose down -v` for the
 container node), otherwise the agent keeps serving its last config and logs `Unknown node token`.
 
 **Changing the edge node.** **Nodes → ⋯ → Make this the edge** (or `POST /api/v1/nodes/:id/edge`)
 hands the role to another online node (D98); the old edge becomes a worker and keeps its apps and
-databases (give it a public address first if it hosts any). Skiff only swaps the roles. If the new
+databases (give it a public address first if it hosts any). Yoal only swaps the roles. If the new
 edge is a different machine: point DNS for the platform and content domains at it, give its
-`agent.env` the edge settings (`SKIFF_TLS`, ACME/Cloudflare, `SKIFF_PLATFORM_HOST` and an upstream
+`agent.env` the edge settings (`YOAL_TLS`, ACME/Cloudflare, `YOAL_PLATFORM_HOST` and an upstream
 that reaches the control plane), restart its agent, and only then retire the old edge.
 
 ### 4.2.1 Moving node storage to another disk
 
 **Nodes → Edit node → Storage** sets where a node keeps its release cache and agent state (what
 Caddy serves sites from) and its build scratch. Leave a field blank for the default
-(`/var/lib/skiff/agent`, `/var/lib/skiff-builder`). The change reaches the agent in desired state,
-and the agent asks `skiff-storage.path` to apply it. The root `skiff-storage.service` re-reads the
+(`/var/lib/yoal/agent`, `/var/lib/yoal-builder`). The change reaches the agent in desired state,
+and the agent asks `yoal-storage.path` to apply it. The root `yoal-storage.service` re-reads the
 paths from the control plane, checks them, and then:
 
 1. waits if a build is running (the node card says so; it retries every minute);
 2. for the data directory: stops the agent (and with it the Builder), runs `cp -a` into the new
-   directory, re-points `sites/` links, sets `SKIFF_DATA_DIR` in `/etc/skiff/agent.env`, adds
-   `ReadWritePaths=` in `skiff-agent.service.d/skiff-storage.conf`, and starts the agent. Caddy
+   directory, re-points `sites/` links, sets `YOAL_DATA_DIR` in `/etc/yoal/agent.env`, adds
+   `ReadWritePaths=` in `yoal-agent.service.d/yoal-storage.conf`, and starts the agent. Caddy
    keeps serving the old copy until the agent re-applies its config; the old copy is deleted about
    20 s after the agent is back. If the agent does not stay up, everything is put back;
-3. for the build directory: writes `skiff-builder.service.d/skiff-storage.conf` and restarts an
+3. for the build directory: writes `yoal-builder.service.d/yoal-storage.conf` and restarts an
    idle Builder. Nothing is copied.
 
 Prepare the target first: mount the disk (add it to `/etc/fstab` so it survives a reboot), and make
-sure every parent directory can be traversed by the `skiff` user. The target must be empty or new.
-Paths under `/etc`, `/usr`, `/home`, `/tmp`, `/run`, `/opt/skiff`, the control-plane data and bare
-mount roots such as `/mnt` are refused. Use `/mnt/data/skiff` rather than `/mnt/data`.
+sure every parent directory can be traversed by the `yoal` user. The target must be empty or new.
+Paths under `/etc`, `/usr`, `/home`, `/tmp`, `/run`, `/opt/yoal`, the control-plane data and bare
+mount roots such as `/mnt` are refused. Use `/mnt/data/yoal` rather than `/mnt/data`.
 
-The result is in `/etc/skiff/storage.json` and on the node card; details are in
-`journalctl -u skiff-storage`. The control plane's own data (`/var/lib/skiff/data`, database,
+The result is in `/etc/yoal/storage.json` and on the node card; details are in
+`journalctl -u yoal-storage`. The control plane's own data (`/var/lib/yoal/data`, database,
 objects and backups) is not moved by this; stop the services and relocate it by hand.
 
 ### 4.2.2 Migration safety and rollback protocol
@@ -1381,7 +1381,7 @@ The repository check is:
 
 ```sh
 bun run check:migrations
-# or, in CI: SKIFF_MIGRATION_BASE_REF=<base-sha> bun scripts/check-migrations.ts
+# or, in CI: YOAL_MIGRATION_BASE_REF=<base-sha> bun scripts/check-migrations.ts
 ```
 
 It fails on a non-sequential/duplicate prefix or on a modified/renamed/deleted existing
@@ -1398,27 +1398,27 @@ that still reads those columns; restore the pre-update snapshot instead.
 **Pre-update snapshot**
 
 The installer and self-updater write a sealed bundle before running migrations
-(`/var/lib/skiff/backups/upgrade-<UTC>-v<version>/`, §4.2.4). Before a manual migration or a
+(`/var/lib/yoal/backups/upgrade-<UTC>-v<version>/`, §4.2.4). Before a manual migration or a
 hand-run restore, take the same three things:
 
 | State | What to keep | Why |
 |---|---|---|
-| Control DB | `sqlite3 /var/lib/skiff/data/skiff.db ".backup '/var/lib/skiff/backups/pre-migrate-<UTC>.db'"` | The only undo for a bad schema change. |
-| Config + keys | `/etc/skiff/skiff.env` (`BETTER_AUTH_SECRET`, `SKIFF_*`) and `/etc/skiff/master.key` (the APP_KEY used to seal org secrets), offline encrypted | A restored DB is unreadable without the same master key; sessions/tokens need the same auth secret. |
+| Control DB | `sqlite3 /var/lib/yoal/data/yoal.db ".backup '/var/lib/yoal/backups/pre-migrate-<UTC>.db'"` | The only undo for a bad schema change. |
+| Config + keys | `/etc/yoal/yoal.env` (`BETTER_AUTH_SECRET`, `YOAL_*`) and `/etc/yoal/master.key` (the APP_KEY used to seal org secrets), offline encrypted | A restored DB is unreadable without the same master key; sessions/tokens need the same auth secret. |
 | Managed data | R2 object versioning/Litestream, managed database backups, volume snapshots | The control DB does **not** contain user database rows, bucket objects, volumes or release artifacts. |
 
-The app-level backup/restore surfaces (Settings → Backups, `skiff-restore`) cover the control
+The app-level backup/restore surfaces (Settings → Backups, `yoal-restore`) cover the control
 DB. They do not replace an infrastructure snapshot of managed data, and they never touch R2.
 
 **Rollback a bad migration**
 
-1. Stop `skiff-control-plane` and `skiff-litestream`.
+1. Stop `yoal-control-plane` and `yoal-litestream`.
 2. If the migration already applied and the new release is healthy enough to serve, prefer a
    **forward fix**: write the next-numbered corrective migration, review it, deploy. This keeps
    history intact and is always the first choice for additive changes.
 3. If you must go back, restore the pre-migration control DB snapshot, then start the previous
-   release (`skiff-update-self rollback --restore-db`, or the manual symlink + restart in §4).
-   Never delete rows from `skiff_migrations` or edit the SQL file to force a re-run.
+   release (`yoal-update-self rollback --restore-db`, or the manual symlink + restart in §4).
+   Never delete rows from `yoal_migrations` or edit the SQL file to force a re-run.
 4. Restore `.env`/`master.key` from the same point in time. A snapshot restored under a different
    master key will not decrypt database credentials, storage keys or other sealed secrets.
 5. Managed data is **not** restored automatically. Recover R2 from versioning/Litestream, managed
@@ -1440,7 +1440,7 @@ contains secrets:
   "version": "1.4.0",
   "schema": { "latest": "0017_scheduler.sql", "expected": "0017_scheduler.sql", "applied": 17, "pending": [] },
   "agent": { "desiredVersion": "1.4.0", "nodes": [{ "id": "nod_…", "name": "edge", "version": "1.4.0" }] },
-  "dataDirs": [{ "name": "data", "path": "/var/lib/skiff/data", "exists": true, "writable": true }],
+  "dataDirs": [{ "name": "data", "path": "/var/lib/yoal/data", "exists": true, "writable": true }],
   "disk": { "freeBytes": 18446744073, "requiredBytes": 2097152, "headroom": true },
   "backupTarget": { "kind": "r2", "reachable": true, "checkedAt": "…" },
   "helper": { "version": "1.4.0" }
@@ -1454,30 +1454,30 @@ backup target or low disk is reported as `degraded` but does not take a serving 
 (upgrades are refused instead).
 
 ```sh
-curl -fsS --unix-socket /run/skiff/control.sock http://localhost/readyz | jq
+curl -fsS --unix-socket /run/yoal/control.sock http://localhost/readyz | jq
 ```
 
 ### 4.2.4 Upgrade preflight and sealed snapshots
 
-`UpgradeService.preflight()` (and `sudo skiff-update-self plan`, or **Settings → Updates**) refuses
+`UpgradeService.preflight()` (and `sudo yoal-update-self plan`, or **Settings → Updates**) refuses
 an upgrade when it cannot be undone:
 
 | Check | Refusal |
 |---|---|
-| Backup target | unreachable: fix Settings → Backups / `SKIFF_OBJECT_STORE` / `R2_*` first |
+| Backup target | unreachable: fix Settings → Backups / `YOAL_OBJECT_STORE` / `R2_*` first |
 | Disk | less than **2×** the control DB size free for the snapshot |
 | Data dirs | `data`, `objects` or `backups` missing or not writable |
 | Migrations | a destructive `DROP TABLE` / `DROP COLUMN` / `ALTER COLUMN TYPE` without explicit approval, or an applied migration the target does not ship (a downgrade) |
-| PostgreSQL | any managed database major-version change; use `skif db upgrade` |
+| PostgreSQL | any managed database major-version change; use `yoal db upgrade` |
 | Release | target older than the running version (`--force` turns this into a warning) |
 
 Before the release switch the updater writes a sealed bundle under
-`/var/lib/skiff/backups/upgrade-<UTC>-v<version>/`:
+`/var/lib/yoal/backups/upgrade-<UTC>-v<version>/`:
 
 ```
 manifest.json          # versions, migration ids, sha256 per file, pinned flag
 db/control.db          # VACUUM INTO snapshot of the control SQLite
-config/skiff.env       # 0600/0400, includes APP_KEY/master key
+config/yoal.env       # 0600/0400, includes APP_KEY/master key
 config/agent.env
 config/master.key      # hosts with a plaintext key
 config/master.key.cred # hosts with a sealed key (opens only on this machine)
@@ -1485,7 +1485,7 @@ config/platform-settings.json
 ```
 
 The directory is `0700` and every file is `0600` (the master key is `0400`); only root can read it.
-`sudo skiff-update-self status` lists the retained bundles and `sudo cp -a` is the download path;
+`sudo yoal-update-self status` lists the retained bundles and `sudo cp -a` is the download path;
 the dashboard shows the count it can inspect. The pre-update bundle is **pinned until the next
 successful upgrade**, and the last three successful bundles are retained. A failed update keeps
 its bundle for inspection.
@@ -1493,12 +1493,12 @@ its bundle for inspection.
 Restoring a bundle is always a human decision:
 
 ```sh
-sudo systemctl stop skiff-control-plane
-sudo cp /var/lib/skiff/backups/upgrade-…/db/control.db /var/lib/skiff/data/skiff.db
-sudo chown skiff:skiff /var/lib/skiff/data/skiff.db
+sudo systemctl stop yoal-control-plane
+sudo cp /var/lib/yoal/backups/upgrade-…/db/control.db /var/lib/yoal/data/yoal.db
+sudo chown yoal:yoal /var/lib/yoal/data/yoal.db
 # Only from the same point in time, and only if the master key changed (rotated since):
-sudo cp /var/lib/skiff/backups/upgrade-…/config/master.key.cred /etc/skiff/master.key.cred   # or master.key
-sudo systemctl start skiff-control-plane
+sudo cp /var/lib/yoal/backups/upgrade-…/config/master.key.cred /etc/yoal/master.key.cred   # or master.key
+sudo systemctl start yoal-control-plane
 ```
 
 Managed database rows, buckets, app volumes and release artifacts are **not** in this bundle and
@@ -1507,7 +1507,7 @@ are never restored automatically.
 The self-updater runs: `preflight → sealed snapshot → release switch → /readyz + health smoke →
 automatic control-plane rollback`. The automatic rollback covers the release symlink, the control
 SQLite and the services. It does **not** restore `.env`/APP_KEY or any managed data; those remain
-manual so a bad update cannot silently rewind user data. `SKIFF_FEATURE_UPGRADE_ROLLBACK` is
+manual so a bad update cannot silently rewind user data. `YOAL_FEATURE_UPGRADE_ROLLBACK` is
 reserved for the dashboard control; the CLI path is the tested default.
 
 ### 4.2.5 Postgres major upgrades
@@ -1516,8 +1516,8 @@ Changing `databases.version` across majors (for example 16 → 17) is refused by
 `PATCH /api/v1/databases/:name`. The error points at the wizard:
 
 ```sh
-skif db upgrade main --to 17 --plan     # backup, disk, extensions, pg_upgrade/dump-restore plan
-skif db upgrade main --to 17 --apply    # queues a pinned backup + returns the same runbook
+yoal db upgrade main --to 17 --plan     # backup, disk, extensions, pg_upgrade/dump-restore plan
+yoal db upgrade main --to 17 --apply    # queues a pinned backup + returns the same runbook
 ```
 
 `--apply` does **not** switch the data directory. It queues a pinned logical backup and records
@@ -1542,8 +1542,8 @@ a data directory written by an older major, and never let an image tag change pe
 running a drill, downloading a database snapshot), **Settings → Notifications** (SMTP for
 sign-in links, invites and email alerts, plus the alert webhook and alert email address) and
 **Settings → Assistant** (the optional in-dashboard chat's OpenAI-compatible endpoint) change
-`/etc/skiff/skiff.env` without SSH. **Settings → Domains** (§3.7) also rewrites the edge agent's
-`/etc/skiff/agent.env` and restarts the agent, and verifies the new address before keeping it. **Settings → Telemetry** installs or removes the optional
+`/etc/yoal/yoal.env` without SSH. **Settings → Domains** (§3.7) also rewrites the edge agent's
+`/etc/yoal/agent.env` and restarts the agent, and verifies the new address before keeping it. **Settings → Telemetry** installs or removes the optional
 ClickHouse store (§3.6) the same way; installing takes a few minutes (a ~240 MB download).
 
 These tabs are **owner-only**: you must be a platform admin (§6.2 of DESIGN, the admin-plugin role)
@@ -1551,59 +1551,59 @@ These tabs are **owner-only**: you must be a platform admin (§6.2 of DESIGN, th
 admins who are not owners, API keys and MCP tokens get 403. On a single-user install that is the
 bootstrap user.
 
-It works like the update button. The control plane can't write `/etc/skiff`, so:
+It works like the update button. The control plane can't write `/etc/yoal`, so:
 
 1. The dashboard validates the form and *tests it for real* before queueing anything: R2 credentials
-   must write, read and delete a probe object (`skiff/healthcheck/…`); SMTP must send a test email to
+   must write, read and delete a probe object (`yoal/healthcheck/…`); SMTP must send a test email to
    you; a new webhook must accept a test alert.
-2. It writes `/var/lib/skiff/platform-config/request.json` (`0600 skiff`). The audit log records the
+2. It writes `/var/lib/yoal/platform-config/request.json` (`0600 yoal`). The audit log records the
    request as `platform.config` / `platform.backups` / `platform.restoreDrill` / `platform.pushKeys` with key names only,
    never values.
-3. `skiff-platform-config.path` (root) starts `skiff-platform-config.service`, which runs
-   `skiff-platform-config apply-request`. The helper claims the request (no symlinks or FIFOs,
+3. `yoal-platform-config.path` (root) starts `yoal-platform-config.service`, which runs
+   `yoal-platform-config apply-request`. The helper claims the request (no symlinks or FIFOs,
    regular files only, at most 64 KiB, deleted once read) and validates it again with the same rules
    (`packages/contracts/src/platform-config.ts`). Only these keys can ever be written:
    `R2_ACCOUNT_ID R2_BUCKET R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_ENDPOINT`,
-   `SKIFF_SMTP_HOST/PORT/USER/PASSWORD/FROM/SECURE`, `SKIFF_TWILIO_ACCOUNT_SID/AUTH_TOKEN/FROM`,
-   `SKIFF_ALERT_WEBHOOK SKIFF_ALERT_EMAIL SKIFF_ALERT_SMS`,
-   `SKIFF_ALERT_DISCORD_WEBHOOK SKIFF_ALERT_SLACK_WEBHOOK SKIFF_ALERT_TELEGRAM_BOT_TOKEN/CHAT_ID SKIFF_ALERT_NTFY_URL/TOKEN`, and
-   (Settings → Assistant, optional) `SKIFF_ASSISTANT_PROVIDER/BASE_URL/MODEL/API_KEY`. Values are pattern-checked (single line; nothing that could change the meaning of
+   `YOAL_SMTP_HOST/PORT/USER/PASSWORD/FROM/SECURE`, `YOAL_TWILIO_ACCOUNT_SID/AUTH_TOKEN/FROM`,
+   `YOAL_ALERT_WEBHOOK YOAL_ALERT_EMAIL YOAL_ALERT_SMS`,
+   `YOAL_ALERT_DISCORD_WEBHOOK YOAL_ALERT_SLACK_WEBHOOK YOAL_ALERT_TELEGRAM_BOT_TOKEN/CHAT_ID YOAL_ALERT_NTFY_URL/TOKEN`, and
+   (Settings → Assistant, optional) `YOAL_ASSISTANT_PROVIDER/BASE_URL/MODEL/API_KEY`. Values are pattern-checked (single line; nothing that could change the meaning of
    `litestream.yml`, which expands `${VAR}` before parsing).
-4. It saves the old file as `skiff.env.previous`, writes the new one (`root:skiff 0640`), and
+4. It saves the old file as `yoal.env.previous`, writes the new one (`root:yoal 0640`), and
    restarts the control plane. If the control plane is not healthy within 60 s, it restores
-   `skiff.env.previous`, restarts again and reports `reverted`.
+   `yoal.env.previous`, restarts again and reports `reverted`.
    A `push-keys` request (Settings → Notifications → **Set up push**, D108) writes nothing but a
-   missing `SKIFF_VAPID_PUBLIC_KEY`/`SKIFF_VAPID_PRIVATE_KEY` pair, generated by the helper itself;
+   missing `YOAL_VAPID_PUBLIC_KEY`/`YOAL_VAPID_PRIVATE_KEY` pair, generated by the helper itself;
    an existing valid pair is never replaced.
 5. Saving R2 credentials also turns backups on. If `/usr/local/bin/litestream` is missing, the helper
    installs Litestream v0.3.13 from GitHub, checked against a **pinned sha256** (amd64/arm64;
    `scripts/platform-config/helper.ts`). It then writes `litestream.yml` (only when missing or
-   still on the old `SKIFF_R2_*` names; operator edits are kept, with a `.bak`), installs the backup
-   units, the `skiff-restore` / `skiff-restore-drill` / `skiff-alert` commands and `sqlite3`, enables
+   still on the old `YOAL_R2_*` names; operator edits are kept, with a `.bak`), installs the backup
+   units, the `yoal-restore` / `yoal-restore-drill` / `yoal-alert` commands and `sqlite3`, enables
    Litestream and the drill timer, and checks that Litestream stays running.
-   This works whether or not `SKIFF_OBJECT_STORE` is `r2`. When artifacts do live in R2, the
+   This works whether or not `YOAL_OBJECT_STORE` is `r2`. When artifacts do live in R2, the
    dashboard refuses to remove the credentials or change the bucket.
 
-Progress is in `/var/lib/skiff-config/status.json` (`root:skiff 0640`). The page polls it through the
+Progress is in `/var/lib/yoal-config/status.json` (`root:yoal 0640`). The page polls it through the
 restart. The Backups page reads the replica state from `litestream generations` (so a running
 process with nothing in R2 shows as failing), the drill result from
-`/var/lib/skiff/drill/status.json`, and unit states over `systemctl show`.
+`/var/lib/yoal/drill/status.json`, and unit states over `systemctl show`.
 
-The installer creates the wrapper and units, and so does any `sudo skiff-update-self` run (e.g.
-`sudo skiff-update-self check`), which is how existing hosts get these tabs. The same operations
+The installer creates the wrapper and units, and so does any `sudo yoal-update-self` run (e.g.
+`sudo yoal-update-self check`), which is how existing hosts get these tabs. The same operations
 work from the shell:
 
 ```sh
-sudo skiff-platform-config backups on    # or off
-sudo skiff-platform-config drill
-sudo skiff-platform-config push-keys   # Web Push keys, if this host has none
-sudo skiff-platform-config status
-journalctl -u skiff-platform-config
+sudo yoal-platform-config backups on    # or off
+sudo yoal-platform-config drill
+sudo yoal-platform-config push-keys   # Web Push keys, if this host has none
+sudo yoal-platform-config status
+journalctl -u yoal-platform-config
 ```
 
 On a development server (`bun run dev`, no installed release) the same forms work, with the same
 owner gate and the same tests before saving, but there is no root helper. Values are saved to
-`<SKIFF_DATA_DIR>/platform-settings.json` (`.data/`, gitignored, `0600`). `config.ts` loads that file
+`<YOAL_DATA_DIR>/platform-settings.json` (`.data/`, gitignored, `0600`). `config.ts` loads that file
 over the shell environment at startup, so restart the dev server to apply. Litestream and the
 restore drill only run on an installed server.
 
@@ -1623,29 +1623,29 @@ static sites stay up. Restores do not reinstall Caddy/the agent or re-key WireGu
 ### 5.2 Same-host restore
 
 ```sh
-sudo skiff-restore --yes
+sudo yoal-restore --yes
 # or select a named replica from litestream.yml
-sudo skiff-restore --yes --from offsite
+sudo yoal-restore --yes --from offsite
 ```
 
 Steps performed:
 
-1. Stops `skiff-control-plane` and `skiff-litestream` (agents/Caddy remain up).
-2. Snapshots the current database to `/var/lib/skiff/backups/pre-restore-<UTC>.db`.
-3. Runs `litestream restore -config /etc/skiff/litestream.yml -o <tmp> <db>` to fetch the
+1. Stops `yoal-control-plane` and `yoal-litestream` (agents/Caddy remain up).
+2. Snapshots the current database to `/var/lib/yoal/backups/pre-restore-<UTC>.db`.
+3. Runs `litestream restore -config /etc/yoal/litestream.yml -o <tmp> <db>` to fetch the
    latest snapshot plus WAL frames from R2.
 4. Runs `PRAGMA integrity_check`; refuses to swap in a corrupt file.
 5. Atomically moves the restored file into place and removes stale `-wal`/`-shm`.
-6. Runs the bundled forward-only migrator as `skiff` (`tools/skiff-migrate.ts`).
-7. Starts the control plane, waits for `/run/skiff/control.sock`, then starts Litestream.
+6. Runs the bundled forward-only migrator as `yoal` (`tools/yoal-migrate.ts`).
+7. Starts the control plane, waits for `/run/yoal/control.sock`, then starts Litestream.
 8. On health failure, restores the pre-restore snapshot automatically and exits non-zero.
 
 Check afterwards:
 
 ```sh
-systemctl status skiff-control-plane skiff-litestream --no-pager
-journalctl -u skiff-control-plane -n 100 --no-pager
-curl -sS --unix-socket /run/skiff/control.sock http://localhost/ -o /dev/null -w '%{http_code}\n'
+systemctl status yoal-control-plane yoal-litestream --no-pager
+journalctl -u yoal-control-plane -n 100 --no-pager
+curl -sS --unix-socket /run/yoal/control.sock http://localhost/ -o /dev/null -w '%{http_code}\n'
 ```
 
 ### 5.3 Fresh-VPS disaster recovery (target < 15 min)
@@ -1657,10 +1657,10 @@ curl -sS --unix-socket /run/skiff/control.sock http://localhost/ -o /dev/null -w
    - `BETTER_AUTH_SECRET` comes back with the env file if the kit included it; if it is
      regenerated instead, every session and MCP token is invalidated.
 4. Install Litestream (`/usr/local/bin/litestream`).
-5. Run `skiff-restore --yes --recovery-kit <kit.age>`. It decrypts the kit (asking for the
-   passphrase), installs the original `master.key` and, if included, `skiff.env` with the R2
+5. Run `yoal-restore --yes --recovery-kit <kit.age>`. It decrypts the kit (asking for the
+   passphrase), installs the original `master.key` and, if included, `yoal.env` with the R2
    credentials, then restores the database. Without a kit, put both files in place by hand
-   first (`systemctl stop skiff-control-plane`) and run `skiff-restore --yes`.
+   first (`systemctl stop yoal-control-plane`) and run `yoal-restore --yes`.
 6. Re-issue certificates: Caddy obtains them automatically via DNS-01 on first start;
    confirm the Cloudflare token is in `/etc/caddy/cloudflare.token`.
 7. Re-key WireGuard (control plane + homelab); the homelab dials out and agents reconcile.
@@ -1679,11 +1679,11 @@ curl -sS --unix-socket /run/skiff/control.sock http://localhost/ -o /dev/null -w
 
 | Data | Mechanism | Frequency / retention | RPO |
 |---|---|---|---|
-| SQLite | Litestream → R2 (`skiff-litestream.service`) | WAL sync ~1 s; snapshot every 24 h; 30-day retention | ≤ ~1 s |
+| SQLite | Litestream → R2 (`yoal-litestream.service`) | WAL sync ~1 s; snapshot every 24 h; 30-day retention | ≤ ~1 s |
 | Release artifacts | Canonical in R2 (`releases/<sha256>.zip`, §2.3) | Lifecycle per project; last 10 + pinned in DB | n/a |
 | Telemetry | Daily Parquet partitions in R2 (`telemetry/day=YYYY-MM-DD/…`, §2.3) | 48 h 1-minute + 90 d 1-hour in ClickHouse (not backed up, §3.6); Parquet long-lived | 24 h |
 | Master key | Recovery kit: `age`-encrypted with a passphrase, shown once at install | Offline; re-export on rotation | n/a |
-| Config/secrets | Offline encrypted copy of `/etc/skiff/skiff.env` + recovery kit | On change | n/a |
+| Config/secrets | Offline encrypted copy of `/etc/yoal/yoal.env` + recovery kit | On change | n/a |
 | Caddy config/token | `/etc/caddy/Caddyfile`, Cloudflare token | On change | n/a |
 
 Notes:
@@ -1704,33 +1704,33 @@ The release workflow does not compile Litestream. Install the upstream binary at
 then enable replication:
 
 ```sh
-sudo systemctl enable --now skiff-litestream.service
-sudo systemctl enable --now skiff-restore-drill.timer
-sudo journalctl -u skiff-litestream -n 50 --no-pager
+sudo systemctl enable --now yoal-litestream.service
+sudo systemctl enable --now yoal-restore-drill.timer
+sudo journalctl -u yoal-litestream -n 50 --no-pager
 ```
 
-With R2 configured, the installer always writes `/etc/skiff/litestream.yml`, the Litestream
-and restore-drill units, `skiff-alert@.service`, and the `skiff-restore` /
-`skiff-restore-drill` / `skiff-alert` commands. It enables the units only when `litestream`
+With R2 configured, the installer always writes `/etc/yoal/litestream.yml`, the Litestream
+and restore-drill units, `yoal-alert@.service`, and the `yoal-restore` /
+`yoal-restore-drill` / `yoal-alert` commands. It enables the units only when `litestream`
 is on `PATH`; otherwise it warns and leaves them disabled, so nothing crash-loops at boot.
 Only the binary has to be installed by hand, or let **Settings → Backups** (§4.3) install the
 pinned Litestream release and enable everything when you save the R2 credentials.
 
 ### 6.2 Recovery kit
 
-`skiff-recovery-kit` (`scripts/recovery-kit.ts`) writes a standard armored **age** file in
+`yoal-recovery-kit` (`scripts/recovery-kit.ts`) writes a standard armored **age** file in
 passphrase mode, so stock `age -d` can also open it. The kit holds the master key, its
-fingerprint (first 16 hex of its sha256) and, with `--include-env`, `skiff.env`.
+fingerprint (first 16 hex of its sha256) and, with `--include-env`, `yoal.env`.
 
 ```sh
-sudo skiff-recovery-kit export --include-env     # /root/skiff-recovery-kit-<host>-<date>.age, 0600
-sudo skiff-recovery-kit verify <file>            # decrypts in memory, compares the fingerprint
-sudo skiff-recovery-kit import <file> [--restore-env] [--force]
+sudo yoal-recovery-kit export --include-env     # /root/yoal-recovery-kit-<host>-<date>.age, 0600
+sudo yoal-recovery-kit verify <file>            # decrypts in memory, compares the fingerprint
+sudo yoal-recovery-kit import <file> [--restore-env] [--force]
 ```
 
 - The installer offers an export at the end of a fresh interactive install.
 - An empty passphrase generates one and prints it once; typed passphrases need 12+ characters.
-  `--passphrase-file` (or `SKIFF_RECOVERY_PASSPHRASE_FILE`) for automation.
+  `--passphrase-file` (or `YOAL_RECOVERY_PASSPHRASE_FILE`) for automation.
 - Copy the kit off the server, then delete it there (`shred -u`). Keep the passphrase apart
   from the file. Re-export after every master-key rotation (§11).
 - `import` refuses to replace a different master key without `--force` and keeps any replaced
@@ -1742,7 +1742,7 @@ sudo skiff-recovery-kit import <file> [--restore-env] [--force]
   that no longer opens (rebuilt machine, TPM cleared, `/var/lib/systemd/credential.secret`
   lost) counts as different: `import --force` replaces it.
 - The sealed file is useless off its machine. That is the point, and it is why the kit, not a
-  copy of `/etc/skiff`, is the backup of the master key.
+  copy of `/etc/yoal`, is the backup of the master key.
 
 ---
 
@@ -1752,12 +1752,12 @@ sudo skiff-recovery-kit import <file> [--restore-env] [--force]
 
 - Control plane and agent expose Prometheus `/metrics` (the control plane also serves
   `/metrics/<area>`, docs/METRICS.md). There is no OTLP export.
-- `journalctl -u skiff-control-plane|skiff-agent|caddy|skiff-litestream`.
+- `journalctl -u yoal-control-plane|yoal-agent|caddy|yoal-litestream`.
 - Workload stdout/stderr is drained to the dashboard's Logs tab (7-day retention, 500k-row ceiling)
-  and `skif logs <project>` reads the same ordered events. Raw Caddy access logs stay on the node.
-- The drill writes `/var/lib/skiff/drill/status.json` (`ok`, timestamp, reason).
+  and `yoal logs <project>` reads the same ordered events. Raw Caddy access logs stay on the node.
+- The drill writes `/var/lib/yoal/drill/status.json` (`ok`, timestamp, reason).
 - `systemd-analyze security <unit>` for sandbox drift.
-- Litestream: check R2 object age under `skiff/sqlite` (the newest WAL segment
+- Litestream: check R2 object age under `yoal/sqlite` (the newest WAL segment
   should be seconds old). A running process with no recent objects is a silent failure.
 
 ### 7.2 Default alerts (DESIGN §8)
@@ -1775,8 +1775,8 @@ Wire email (SES SMTP), a generic webhook (Home Assistant, anything that takes JS
 channels (Discord, Slack, Telegram, ntfy; Settings → Notifications → Chat & push channels) through the
 `Notifier` interface (`packages/core/src/notify.ts`, `notify-chat.ts`). Each chat channel is sent a test
 alert before it is saved, and every request times out after 10 s so a dead endpoint cannot stall the
-maintenance loop. `skiff-restore-drill.service` and `skiff-litestream.service` ship with
-`OnFailure=skiff-alert@%n.service`, which sends the alert through `SKIFF_ALERT_WEBHOOK`, the chat channels and/or
+maintenance loop. `yoal-restore-drill.service` and `yoal-litestream.service` ship with
+`OnFailure=yoal-alert@%n.service`, which sends the alert through `YOAL_ALERT_WEBHOOK`, the chat channels and/or
 SMTP directly (it works with the control plane down) and includes the drill's
 `status.json` reason. Settings → Backups shows the latest drill result and unit states.
 
@@ -1789,37 +1789,37 @@ page; they use the same notifiers and show in one history with the system alerts
 Quick checks:
 
 ```sh
-systemctl list-timers 'skiff-*'
-journalctl -u skiff-restore-drill -n 100 --no-pager
-cat /var/lib/skiff/drill/status.json
-journalctl -u skiff-litestream -n 100 --no-pager
+systemctl list-timers 'yoal-*'
+journalctl -u yoal-restore-drill -n 100 --no-pager
+cat /var/lib/yoal/drill/status.json
+journalctl -u yoal-litestream -n 100 --no-pager
 ```
 
 ---
 
 ## 8. Restore drill
 
-The timer runs `skiff-restore-drill.service` on the 1st of each month at 04:17 with up to
+The timer runs `yoal-restore-drill.service` on the 1st of each month at 04:17 with up to
 30 minutes of jitter (`Persistent=true`). It is enabled by the installer only once R2 is
 configured.
 
 ### 8.1 Procedure
 
-1. Quiesce: stop `skiff-litestream` and `skiff-control-plane`. Agents/Caddy keep serving.
+1. Quiesce: stop `yoal-litestream` and `yoal-control-plane`. Agents/Caddy keep serving.
 2. `litestream restore` the latest snapshot + WAL frames into
-   `/var/lib/skiff/drill/run-<UTC>/restored.db`.
+   `/var/lib/yoal/drill/run-<UTC>/restored.db`.
 3. `PRAGMA integrity_check`.
 4. Fingerprint both databases: table list, row counts, and a SHA-256 over every row ordered
-   by primary key (`scripts/skiff-db-fingerprint.ts`).
+   by primary key (`scripts/yoal-db-fingerprint.ts`).
 5. Compare the two JSON documents byte-for-byte. Any difference is a failure.
 6. Restart services, verify the control plane socket, then prune old successful runs
-   (keep `SKIFF_RESTORE_DRILL_KEEP`, default 3). Failed runs are kept for inspection.
+   (keep `YOAL_RESTORE_DRILL_KEEP`, default 3). Failed runs are kept for inspection.
 
 Manual run:
 
 ```sh
-sudo skiff-restore-drill
-sudo journalctl -u skiff-restore-drill -n 100 --no-pager
+sudo yoal-restore-drill
+sudo journalctl -u yoal-restore-drill -n 100 --no-pager
 ```
 
 ### 8.2 Why the brief stop
@@ -1827,7 +1827,7 @@ sudo journalctl -u skiff-restore-drill -n 100 --no-pager
 Comparing a live WAL while writes are in flight produces false mismatches. Stopping
 Litestream lets it flush its final frames; stopping the control plane removes new writes.
 The window is seconds and sites continue to serve cached state. If a zero-downtime check
-is required, `SKIFF_DRILL_NO_QUIESCE=1` compares best-effort but may fail spuriously.
+is required, `YOAL_DRILL_NO_QUIESCE=1` compares best-effort but may fail spuriously.
 
 ### 8.3 Failure handling
 
@@ -1837,12 +1837,12 @@ ignore it:
 1. Read `status.json` and the retained run directory (`restored.json`, `live.json`, logs).
 2. Check R2 reachability, credentials, bucket lifecycle/versioning and Litestream logs.
 3. Run a manual restore into a scratch directory and inspect table differences.
-4. If the live DB is corrupt but R2 is good, run `skiff-restore --yes`.
+4. If the live DB is corrupt but R2 is good, run `yoal-restore --yes`.
 5. If both are bad, use the newest pre-upgrade/pre-restore snapshot in
-   `/var/lib/skiff/backups` and open a postmortem; adjust retention.
+   `/var/lib/yoal/backups` and open a postmortem; adjust retention.
 
 The drill never deletes the live database. Its only production side effect is the brief
-service stop and a scratch directory under `/var/lib/skiff/drill`.
+service stop and a scratch directory under `/var/lib/yoal/drill`.
 
 ---
 
@@ -1874,48 +1874,48 @@ control-plane standby and database replicas are planned in CLUSTERING.md §6–�
 | Directive | Why |
 |---|---|
 | `ProtectSystem=strict` | `/usr`, `/boot`, `/etc`, `/opt` become read-only. The only writable paths are explicit `ReadWritePaths=`; a compromised Bun process cannot persist in `/usr` or edit its own units. |
-| `ReadWritePaths=` | Least-privilege allowlist: control plane and agent `/var/lib/skiff` + `/run/skiff`; ClickHouse only `/var/lib/skiff/clickhouse`; Litestream `/var/lib/skiff`; drill `/var/lib/skiff` + `/run/skiff`; `skiff-caddy.service` (when adopted) only `/var/lib/skiff/caddy` + `/run/skiff`. |
+| `ReadWritePaths=` | Least-privilege allowlist: control plane and agent `/var/lib/yoal` + `/run/yoal`; ClickHouse only `/var/lib/yoal/clickhouse`; Litestream `/var/lib/yoal`; drill `/var/lib/yoal` + `/run/yoal`; `yoal-caddy.service` (when adopted) only `/var/lib/yoal/caddy` + `/run/yoal`. |
 | `NoNewPrivileges=yes` | No setuid escalation from a compromised service. v1 needs no runtime root (D26). |
-| `PrivateTmp=yes` | Private `/tmp` and `/var/tmp`, so services cannot signal or poison each other through shared temp files. The drill's scratch lives under `/var/lib/skiff`, not `/tmp`. |
+| `PrivateTmp=yes` | Private `/tmp` and `/var/tmp`, so services cannot signal or poison each other through shared temp files. The drill's scratch lives under `/var/lib/yoal`, not `/tmp`. |
 | `PrivateDevices=yes` | No raw device access. Caddy binds 80/443 with `CAP_NET_BIND_SERVICE`, not root. |
 | `ProtectHome=yes` | Home directories are empty/inaccessible. |
 | `ProtectKernel*`, `ProtectClock`, `ProtectHostname`, `ProtectControlGroups` | Blocks kernel module loading, sysctl changes, clock/hostname tampering and cgroup escapes. |
-| `RestrictAddressFamilies=` | Control plane: `AF_UNIX AF_INET AF_INET6` (R2/SES/Cloudflare). `skiff-caddy.service`: same. Agent: adds `AF_NETLINK` for interface stats. No packet sockets. |
+| `RestrictAddressFamilies=` | Control plane: `AF_UNIX AF_INET AF_INET6` (R2/SES/Cloudflare). `yoal-caddy.service`: same. Agent: adds `AF_NETLINK` for interface stats. No packet sockets. |
 | `RestrictNamespaces=yes` | No unprivileged namespace creation. |
 | `RestrictSUIDSGID=yes` | Files created by the service cannot gain setuid/setgid bits. |
 | `LockPersonality=yes`, `SystemCallArchitectures=native` | No 32-bit ABI or personality switching. |
 | `SystemCallFilter=@system-service + io_uring` | Removes privileged/mount/obsolete syscalls. Bun needs the io_uring syscalls on some kernels; they are explicitly allowed. If a future Bun release adds a syscall, add it here rather than dropping the filter. |
-| `MemoryMax=` | Control plane 1 GB (room to buffer a full 500 MiB artifact upload), agent 192 MB, ClickHouse 1 GB by default, 4/3 of `SKIFF_CLICKHOUSE_MEMORY_MB` (its own `max_server_memory_usage` stops it at 768 MiB first), Litestream 256 MB, drill 1 GB, `skiff-caddy.service` 256 MB. Bounds a runaway Bun/ClickHouse process on a 4 GB VPS. |
+| `MemoryMax=` | Control plane 1 GB (room to buffer a full 500 MiB artifact upload), agent 192 MB, ClickHouse 1 GB by default, 4/3 of `YOAL_CLICKHOUSE_MEMORY_MB` (its own `max_server_memory_usage` stops it at 768 MiB first), Litestream 256 MB, drill 1 GB, `yoal-caddy.service` 256 MB. Bounds a runaway Bun/ClickHouse process on a 4 GB VPS. |
 | `TasksMax=`, `LimitNOFILE=` | Prevents fork/descriptor exhaustion. |
-| `LoadCredentialEncrypted=master-key:…` / `LoadCredential=master-key:…` | The master key is placed in the service's credential directory (`%d`), not the environment, and is not readable by other services. When it is sealed (`/etc/skiff/master.key.cred`, §1), systemd decrypts it with the TPM2/host key only into that directory, so no plaintext copy exists on disk; the `skiff-master-key.conf` drop-in clears the unit body's `LoadCredential=` line (an empty assignment resets the list) and adds the encrypted one. Without `systemd-creds`, `/etc/skiff/master.key` stays `0400 root`. ClickHouse gets its `config.xml`/`users.xml` with `LoadCredential=`, so `skiff-clickhouse` never needs to traverse `/etc/skiff`. |
-| `CapabilityBoundingSet=` (empty) | Control plane, agent, ClickHouse, Litestream and drill have no capabilities (ClickHouse logs that it lacks `CAP_SYS_NICE`/`CAP_IPC_LOCK`/`CAP_NET_ADMIN`; it works without them). `skiff-caddy.service` keeps only `CAP_NET_BIND_SERVICE`. |
-| `skiff-builder.service` | Root, because only root can start a transient unit as another user. It keeps only `CAP_CHOWN`/`CAP_DAC_*`/`CAP_FOWNER` (hand a checkout to `skiff-build`, then read and delete it). Each build unit runs as `skiff-build` with `NoNewPrivileges`, `ProtectSystem=strict`, `ReadWritePaths=` its checkout, `InaccessiblePaths=` for `/etc/skiff`, `/var/lib/skiff`, `/run/skiff`, `/srv/skiff` and `/run/skiff-workloads`, no capabilities, and `TasksMax=1024`. The build gets only `HOME`, `PATH` and `CI`, never the daemon's environment. |
+| `LoadCredentialEncrypted=master-key:…` / `LoadCredential=master-key:…` | The master key is placed in the service's credential directory (`%d`), not the environment, and is not readable by other services. When it is sealed (`/etc/yoal/master.key.cred`, §1), systemd decrypts it with the TPM2/host key only into that directory, so no plaintext copy exists on disk; the `yoal-master-key.conf` drop-in clears the unit body's `LoadCredential=` line (an empty assignment resets the list) and adds the encrypted one. Without `systemd-creds`, `/etc/yoal/master.key` stays `0400 root`. ClickHouse gets its `config.xml`/`users.xml` with `LoadCredential=`, so `yoal-clickhouse` never needs to traverse `/etc/yoal`. |
+| `CapabilityBoundingSet=` (empty) | Control plane, agent, ClickHouse, Litestream and drill have no capabilities (ClickHouse logs that it lacks `CAP_SYS_NICE`/`CAP_IPC_LOCK`/`CAP_NET_ADMIN`; it works without them). `yoal-caddy.service` keeps only `CAP_NET_BIND_SERVICE`. |
+| `yoal-builder.service` | Root, because only root can start a transient unit as another user. It keeps only `CAP_CHOWN`/`CAP_DAC_*`/`CAP_FOWNER` (hand a checkout to `yoal-build`, then read and delete it). Each build unit runs as `yoal-build` with `NoNewPrivileges`, `ProtectSystem=strict`, `ReadWritePaths=` its checkout, `InaccessiblePaths=` for `/etc/yoal`, `/var/lib/yoal`, `/run/yoal`, `/srv/yoal` and `/run/yoal-workloads`, no capabilities, and `TasksMax=1024`. The build gets only `HOME`, `PATH` and `CI`, never the daemon's environment. |
 | `ProtectProc=invisible` (control plane, ClickHouse) | Hides other processes. `ProcSubset=pid` is deliberately not set because Bun and ClickHouse read `/proc/cpuinfo` and `/proc/meminfo`; the agent also needs `/proc` for node metrics. |
-| Setgid `/run/skiff` | The alternative to a root socket helper: socket ownership is controlled by directory group inheritance, and no service joins another's primary group. |
+| Setgid `/run/yoal` | The alternative to a root socket helper: socket ownership is controlled by directory group inheritance, and no service joins another's primary group. |
 
 **Caddy runs as the packaged `caddy.service`.** The installer installs Caddy from the official apt
 repository and keeps the package's unit and its sandboxing, adding only the
-`skiff-admin-socket.conf` drop-in (`SupplementaryGroups=skiff`, `chmod 0660` on the admin socket).
+`yoal-admin-socket.conf` drop-in (`SupplementaryGroups=yoal`, `chmod 0660` on the admin socket).
 Caddy's admin API is never on TCP `:2019` (D7): the bootstrap Caddyfile puts it at
 `/var/lib/caddy/admin.sock` (mode `0660`, group `caddy`) and the agent is the only consumer
-(`SKIFF_CADDY_ADMIN_SOCKET`, detected by the installer and written into the agent unit).
+(`YOAL_CADDY_ADMIN_SOCKET`, detected by the installer and written into the agent unit).
 
-`scripts/systemd/skiff-caddy.service`, with the hand-maintained `skiff-agent.service` and
-`skiff-control-plane.service` beside it, is a hardened alternative that no installer or updater
-writes: Caddy as `caddy` in group `skiff-caddy`, the release's own binary
-(`/opt/skiff/current/caddy/caddy`), data under `/var/lib/skiff/caddy`, the admin socket at
-`/run/skiff/caddy-admin.sock`, config `/etc/caddy/skiff.Caddyfile`, and the directives in the
+`scripts/systemd/yoal-caddy.service`, with the hand-maintained `yoal-agent.service` and
+`yoal-control-plane.service` beside it, is a hardened alternative that no installer or updater
+writes: Caddy as `caddy` in group `yoal-caddy`, the release's own binary
+(`/opt/yoal/current/caddy/caddy`), data under `/var/lib/yoal/caddy`, the admin socket at
+`/run/yoal/caddy-admin.sock`, config `/etc/caddy/yoal.Caddyfile`, and the directives in the
 table above. Its group, runtime-directory ownership, Caddyfile and admin socket all differ from an
 installed host, so adopting it is a manual migration this runbook does not cover. The updater
-prefers `skiff-caddy.service` when it exists; the installer-generated units use the `caddy` group.
+prefers `yoal-caddy.service` when it exists; the installer-generated units use the `caddy` group.
 
 Review drift with:
 
 ```sh
-systemd-analyze security skiff-control-plane.service
-systemd-analyze security skiff-agent.service
-systemd-analyze security skiff-builder.service
-systemd-analyze security skiff-clickhouse.service
+systemd-analyze security yoal-control-plane.service
+systemd-analyze security yoal-agent.service
+systemd-analyze security yoal-builder.service
+systemd-analyze security yoal-clickhouse.service
 systemd-analyze security caddy.service
 ```
 
@@ -1929,34 +1929,34 @@ directly: each org has a data key (DEK), and the master key wraps those DEKs
 therefore re-wraps a small number of values; it does not re-encrypt any secret, database,
 storage, broker, email or backup-target credential, or release. Replacing the key file with a
 new random one **without re-wrapping** makes every existing secret undecryptable: never do that
-by hand, use `skiff-rotate-master-key`.
+by hand, use `yoal-rotate-master-key`.
 
 ### 11.1 Prepare
 
 1. Confirm the latest Litestream snapshot is current and a drill has passed recently.
-2. Make sure you have a recovery kit for the **current** key (`sudo skiff-recovery-kit verify
+2. Make sure you have a recovery kit for the **current** key (`sudo yoal-recovery-kit verify
    <kit>`, §6.2). Older Litestream snapshots and pre-update bundles stay on the old key, and that
    kit is how you open them later.
 3. Check the key opens everything, without changing anything:
 
    ```sh
-   sudo skiff-rotate-master-key --dry-run
+   sudo yoal-rotate-master-key --dry-run
    ```
 
 The control plane stops for a few seconds during the rotation; sites keep serving. The
-command refuses to run while a self-update (`skiff-update-self.service`) is running.
+command refuses to run while a self-update (`yoal-update-self.service`) is running.
 
 ### 11.2 Rotate
 
 ```sh
-sudo skiff-rotate-master-key          # asks for confirmation (type "rotate"); --yes skips it
+sudo yoal-rotate-master-key          # asks for confirmation (type "rotate"); --yes skips it
 ```
 
 `scripts/rotate-master-key.ts` works on whichever store the host uses (sealed
 `master.key.cred` or plaintext `master.key`, §1) and keeps it, in this order:
 
 1. Proves the current key unwraps every row, and refuses otherwise.
-2. Snapshots the database to `/var/lib/skiff/backups/pre-key-rotation-<UTC>.db` (0600, still on
+2. Snapshots the database to `/var/lib/yoal/backups/pre-key-rotation-<UTC>.db` (0600, still on
    the old key).
 3. Generates the new key and stages it as `<store>.new` (sealed with `systemd-creds` when the
    live key is), then reads it back.
@@ -1964,7 +1964,7 @@ sudo skiff-rotate-master-key          # asks for confirmation (type "rotate"); -
 5. Re-wraps in one SQLite transaction, which re-opens every row with the new key before it
    commits.
 6. Copies the live key to `<store>.old` and renames the staged key over the live one.
-7. Starts the control plane, waits for `/readyz` (`SKIFF_HEALTH_TIMEOUT`, default 90 s), reads
+7. Starts the control plane, waits for `/readyz` (`YOAL_HEALTH_TIMEOUT`, default 90 s), reads
    the key back the way the unit does and unwraps every row again.
 8. Destroys `<store>.old` only then. If step 6 or 7 fails, the database is re-wrapped back,
    the old key is put back and the control plane restarted on it.
@@ -1980,7 +1980,7 @@ No `daemon-reload` is needed: the unit reads the credential at start.
 
 1. Open the dashboard and confirm an existing secret-backed deployment still activates.
 2. Re-export the recovery kit now; the old kit no longer matches this host:
-   `sudo skiff-recovery-kit export --include-env`.
+   `sudo yoal-recovery-kit export --include-env`.
 3. Keep the previous kit (it holds the old key) until Litestream snapshots, the
    `pre-key-rotation-*.db` snapshot and pre-update bundles from before the rotation have aged
    out.
@@ -1988,8 +1988,8 @@ No `daemon-reload` is needed: the unit reads the credential at start.
    notification token and restart once on the next reconcile, and open container-console
    sessions must reconnect.
 
-Rotating `BETTER_AUTH_SECRET` (sessions) or `SKIFF_SITE_COOKIE_SECRET` (protected-site
-cookies) is independent: replace the value in `/etc/skiff/skiff.env`, restart the control
+Rotating `BETTER_AUTH_SECRET` (sessions) or `YOAL_SITE_COOKIE_SECRET` (protected-site
+cookies) is independent: replace the value in `/etc/yoal/yoal.env`, restart the control
 plane (and agent for the site-cookie secret), and expect existing sessions/cookies to be
 invalidated. Rotate R2 keys in Cloudflare, update the env file, then restart Litestream and
 the control plane.
@@ -2000,17 +2000,17 @@ the control plane.
 
 | Symptom | Check | Fix |
 |---|---|---|
-| Control plane won't start | `journalctl -u skiff-control-plane -n 100` | Usually missing `SKIFF_PLATFORM_ORIGIN`/`BETTER_AUTH_SECRET` in the env file, or the master key missing. A sealed key that no longer opens (`Failed to decrypt` in the journal, after a rebuild or TPM clear) needs `skiff-recovery-kit import <kit> --force` (§6.2). |
-| Caddy can't reach the control plane | `ls -l /run/skiff`, `namei -l /run/skiff/control.sock` | `/run/skiff` must be `2770 root:caddy`; control plane needs `SupplementaryGroups=caddy`. |
+| Control plane won't start | `journalctl -u yoal-control-plane -n 100` | Usually missing `YOAL_PLATFORM_ORIGIN`/`BETTER_AUTH_SECRET` in the env file, or the master key missing. A sealed key that no longer opens (`Failed to decrypt` in the journal, after a rebuild or TPM clear) needs `yoal-recovery-kit import <kit> --force` (§6.2). |
+| Caddy can't reach the control plane | `ls -l /run/yoal`, `namei -l /run/yoal/control.sock` | `/run/yoal` must be `2770 root:caddy`; control plane needs `SupplementaryGroups=caddy`. |
 | Agent can't use Caddy admin | `ls -l /var/lib/caddy/admin.sock` | Socket must be `0660` and group `caddy`; agent needs that supplementary group. Never expose `:2019` as a workaround. |
-| Litestream exits immediately | `journalctl -u skiff-litestream` | Missing/incorrect `R2_*` in `skiff.env` (an old `litestream.yml` may still use `SKIFF_R2_*`); `R2_ENDPOINT` must be the R2 S3 URL, region `auto`. |
-| Telemetry unavailable | `systemctl status skiff-clickhouse`, `curl -s 127.0.0.1:18123/ping`, `journalctl -u skiff-clickhouse -n 100` | Re-run `sudo skiff-platform-config telemetry on` (it repairs and restarts ClickHouse and prints why it could not). Not installed at all is normal: install it from Settings → Telemetry. `Authentication failed` in the control-plane log means `users.xml` and `skiff.env` disagree; the same command regenerates `users.xml`. |
-| Restore says "no snapshots" | R2 prefix/lifecycle, credentials | The replica path is `skiff/sqlite` in `/etc/skiff/litestream.yml`; confirm objects exist there; run a drill. |
-| Update stuck at **Test boot** / canary | `skiff-update-self status`, `journalctl -u skiff-update-self -n 200` | Stop the unit, `skiff-update-self recover`, retry. Installs older than 0.6.7 need one `update --no-canary` bootstrap: [§4.1.1](#411-recovering-a-stuck-or-failed-update). |
-| `skiff-recover.sh` download returns 404 | `gh release list --repo KieranHolroyd/skiff` | `/releases/latest` can resolve to a CLI release; pin the platform tag instead: [§4.1.1](#411-recovering-a-stuck-or-failed-update). |
+| Litestream exits immediately | `journalctl -u yoal-litestream` | Missing/incorrect `R2_*` in `yoal.env` (an old `litestream.yml` may still use `YOAL_R2_*`); `R2_ENDPOINT` must be the R2 S3 URL, region `auto`. |
+| Telemetry unavailable | `systemctl status yoal-clickhouse`, `curl -s 127.0.0.1:18123/ping`, `journalctl -u yoal-clickhouse -n 100` | Re-run `sudo yoal-platform-config telemetry on` (it repairs and restarts ClickHouse and prints why it could not). Not installed at all is normal: install it from Settings → Telemetry. `Authentication failed` in the control-plane log means `users.xml` and `yoal.env` disagree; the same command regenerates `users.xml`. |
+| Restore says "no snapshots" | R2 prefix/lifecycle, credentials | The replica path is `yoal/sqlite` in `/etc/yoal/litestream.yml`; confirm objects exist there; run a drill. |
+| Update stuck at **Test boot** / canary | `yoal-update-self status`, `journalctl -u yoal-update-self -n 200` | Stop the unit, `yoal-update-self recover`, retry. Installs older than 0.6.7 need one `update --no-canary` bootstrap: [§4.1.1](#411-recovering-a-stuck-or-failed-update). |
+| `yoal-recover.sh` download returns 404 | `gh release list --repo KieranHolroyd/yoal` | `/releases/latest` can resolve to a CLI release; pin the platform tag instead: [§4.1.1](#411-recovering-a-stuck-or-failed-update). |
 | Restore fails health check | Journal + `status` | The pre-restore snapshot was restored automatically; inspect the release/migrations. |
 | Drill fails with table differences | `diff` of `live.json` / `restored.json` | R2 lag, wrong bucket, or writes during a no-quiesce run. Re-run with quiescing. |
-| Disk > 85% | `du -sh /opt/skiff/releases /var/lib/skiff/* /var/log` | GC releases, rotate journald, prune drill runs/backups. |
+| Disk > 85% | `du -sh /opt/yoal/releases /var/lib/yoal/* /var/log` | GC releases, rotate journald, prune drill runs/backups. |
 | `systemd-analyze security` score regressed | Unit diff | Reinstall the release units; local drop-ins may weaken sandboxing. |
 
 Emergency access: SSH is key-only; on the edge prefer SSH over WireGuard and keep a
@@ -2022,7 +2022,7 @@ internet while debugging.
 ## 13. Assumptions in this delivery
 
 - The systemd units are checked in at `scripts/systemd/` (the release bundle ships them as
-  `systemd/`); the installer is the only writer of `/etc/systemd/system/skiff-*.service`.
+  `systemd/`); the installer is the only writer of `/etc/systemd/system/yoal-*.service`.
 - The release bundle includes the matching Bun runtime, a production-only hoisted
   `node_modules` tree (adapter-bun externalises dependencies), migrations, ops scripts,
   `litestream.yml` and units, so a `curl | sh` install is self-contained. ClickHouse is not
@@ -2032,7 +2032,7 @@ internet while debugging.
   workflow.
 - Bun `1.4.4`, Caddy `2.11.8` and `caddy-dns/cloudflare` `v0.2.4` are pinned in the release
   workflow. Bump them together and re-run the drill.
-- Master-key rotation is the host command `skiff-rotate-master-key` (§11), not a `skif` or API
+- Master-key rotation is the host command `yoal-rotate-master-key` (§11), not a `yoal` or API
   surface: it needs root, stops the control plane, and works on the key file directly. The
   master key is sealed with `systemd-creds` on systemd 250+ (Debian 13 ships 257); on a TPM2 host
   without a PCR policy, so firmware and Secure Boot updates cannot lock the control plane out.

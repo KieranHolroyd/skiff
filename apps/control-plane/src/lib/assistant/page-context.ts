@@ -1,15 +1,15 @@
-import type { AssistantPageContext, AssistantPageTarget } from '@skiff/contracts';
+import type { AssistantPageContext, AssistantPageTarget } from '@yoal/contracts';
 
 /**
  * Turn the visible dashboard into a compact outline for the assistant. Elements with
- * `data-skiff-target` are stable anchors; headings, buttons, links, tabs and inputs are collected
+ * `data-yoal-target` are stable anchors; headings, buttons, links, tabs and inputs are collected
  * with a CSS selector so the guide can point at almost anything without hand-editing every page.
  */
 
 const MAX_TARGETS = 120;
 
 function textOf(element: Element): string {
-	const explicit = element.getAttribute('data-skiff-label') ?? element.getAttribute('aria-label');
+	const explicit = element.getAttribute('data-yoal-label') ?? element.getAttribute('aria-label');
 	if (explicit?.trim()) return explicit.trim();
 	if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)
 		return (element.placeholder || element.getAttribute('aria-label') || '').trim();
@@ -61,12 +61,12 @@ export function collectPageContext(): AssistantPageContext {
 
 	const add = (element: Element, kind = kindOf(element)) => {
 		if (seen.has(element) || targets.length >= MAX_TARGETS) return;
-		if (element.closest('#skiff-assistant')) return;
+		if (element.closest('#yoal-assistant')) return;
 		if (!visible(element)) return;
 		const label = textOf(element).slice(0, 200);
 		if (!label) return;
 		seen.add(element);
-		const id = element.getAttribute('data-skiff-target')?.trim() || undefined;
+		const id = element.getAttribute('data-yoal-target')?.trim() || undefined;
 		targets.push({
 			...(id ? { id } : {}),
 			label,
@@ -76,7 +76,7 @@ export function collectPageContext(): AssistantPageContext {
 	};
 
 	// Stable anchors first so they are never crowded out by a long table.
-	for (const element of document.querySelectorAll('[data-skiff-target]')) add(element);
+	for (const element of document.querySelectorAll('[data-yoal-target]')) add(element);
 	for (const element of document.querySelectorAll('h1, h2, h3, [role="tab"]')) add(element);
 	for (const element of document.querySelectorAll('button, a[href]')) {
 		if (element instanceof HTMLAnchorElement) {
@@ -99,7 +99,7 @@ export function collectPageContext(): AssistantPageContext {
 /** Resolve a tour step to a live element (target id first, then an authenticated selector). */
 export function resolveTourTarget(target?: string, selector?: string): Element | null {
 	if (target) {
-		const found = document.querySelector(`[data-skiff-target="${CSS.escape(target)}"]`);
+		const found = document.querySelector(`[data-yoal-target="${CSS.escape(target)}"]`);
 		if (found) return found;
 	}
 	if (selector) {

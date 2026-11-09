@@ -8,7 +8,7 @@ const flags: FlagSpec = {
 	help: { type: 'boolean', short: 'h' },
 };
 
-const usage = `Usage: skif status [project] [--json]
+const usage = `Usage: yoal status [project] [--json]
 
 Show fleet health and node status. With a project, also show access modes and deployments.`;
 

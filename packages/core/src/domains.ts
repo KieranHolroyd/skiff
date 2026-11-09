@@ -1,6 +1,6 @@
 import { resolve4, resolveCname } from 'node:dns/promises';
 import { and, asc, desc, eq, inArray, isNull, lt, or } from 'drizzle-orm';
-import { domains, nodes, projects } from '@skiff/db';
+import { domains, nodes, projects } from '@yoal/db';
 import {
 	type DomainCheckResult,
 	type DomainCreateInput,
@@ -9,7 +9,7 @@ import {
 	type DomainView,
 	type Principal,
 	type ResourceRef,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { resolveTxtRecords } from './dns-txt.ts';
 import { ConflictError, NotFoundError, ValidationError } from './errors.ts';
@@ -27,8 +27,8 @@ function domainResource(row: Pick<DomainRow, 'projectId'>): ResourceRef {
 	return { type: 'project', id: row.projectId };
 }
 
-const VERIFY_PREFIX = '_skiff';
-const TOKEN_PREFIX = 'skiff-verify=';
+const VERIFY_PREFIX = '_yoal';
+const TOKEN_PREFIX = 'yoal-verify=';
 const HOSTNAME_PATTERN = /^(?!-)[a-z0-9-]{1,63}(?:\.(?!-)[a-z0-9-]{1,63})+$/;
 const HOUR_MS = 3_600_000;
 
@@ -99,7 +99,7 @@ export interface CloudflareConfig {
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 const CLOUDFLARE_API = 'https://api.cloudflare.com/client/v4';
-const RECORD_COMMENT = 'Managed by Skiff';
+const RECORD_COMMENT = 'Managed by Yoal';
 
 interface CloudflareEnvelope<T> {
 	success?: boolean;
@@ -109,10 +109,10 @@ interface CloudflareEnvelope<T> {
 
 /** Read Cloudflare auto-record settings from the environment. Disabled unless a token is set. */
 export function cloudflareConfigFromEnv(env: Record<string, string | undefined> = process.env): CloudflareConfig | null {
-	const apiToken = env.SKIFF_CLOUDFLARE_API_TOKEN?.trim();
+	const apiToken = env.YOAL_CLOUDFLARE_API_TOKEN?.trim();
 	if (!apiToken) return null;
-	const zoneId = env.SKIFF_CLOUDFLARE_ZONE_ID?.trim() || undefined;
-	const zoneName = env.SKIFF_CLOUDFLARE_ZONE_NAME?.trim().toLowerCase() || undefined;
+	const zoneId = env.YOAL_CLOUDFLARE_ZONE_ID?.trim() || undefined;
+	const zoneName = env.YOAL_CLOUDFLARE_ZONE_NAME?.trim().toLowerCase() || undefined;
 	// The zone is required: never guess which zone a record belongs to.
 	if (!zoneId && !zoneName) return null;
 	return { apiToken, zoneId, zoneName };
@@ -212,7 +212,7 @@ export interface DomainServiceOptions {
 	dns?: DnsResolver;
 	/** `null` disables auto-records even if the environment is configured. */
 	cloudflare?: CloudflareClient | null;
-	/** Explicit Cloudflare settings; `null` disables. Defaults to `SKIFF_CLOUDFLARE_*`. */
+	/** Explicit Cloudflare settings; `null` disables. Defaults to `YOAL_CLOUDFLARE_*`. */
 	cloudflareConfig?: CloudflareConfig | null;
 	/** Injectable fetch for the default Cloudflare client (tests never touch the network). */
 	fetch?: FetchLike;
@@ -523,7 +523,7 @@ export class DomainService {
 					.update(domains)
 					.set({
 						status: 'verified',
-						lastError: `The certificate for ${row.hostname} expired at ${expired.get(row.hostname)}. The proxy keeps trying to renew it; check that the hostname still points at Skiff.`,
+						lastError: `The certificate for ${row.hostname} expired at ${expired.get(row.hostname)}. The proxy keeps trying to renew it; check that the hostname still points at Yoal.`,
 					})
 					.where(eq(domains.id, row.id))
 					.run();
@@ -697,7 +697,7 @@ export class DomainService {
 		const host = hostname.toLowerCase();
 		if (host === platform || host.endsWith(`.${platform}`) || host === content || host.endsWith(`.${content}`))
 			throw new ValidationError(
-				`"${hostname}" is on the Skiff platform or content domain; add it as a project domain instead.`,
+				`"${hostname}" is on the Yoal platform or content domain; add it as a project domain instead.`,
 			);
 	}
 
@@ -828,7 +828,7 @@ export class DomainService {
 						continue;
 					}
 					if (isAddressRecord(existing.type)) {
-						// Attaching a hostname claims its address record: update it to point at Skiff.
+						// Attaching a hostname claims its address record: update it to point at Yoal.
 						await client.updateRecord(existing.id, input);
 						if (record.primary) recordId = existing.id;
 						changed = true;
@@ -927,7 +927,7 @@ export function nextStatus(row: Pick<DomainRow, 'status' | 'verifiedAt' | 'creat
 }
 
 function failedNote(hostname: string): string {
-	return `${hostname} has not verified within ${DOMAIN_FAIL_AFTER_MS / HOUR_MS} hours of being added; Skiff re-checks it every ${DOMAIN_RECHECK_FAILED_MS / HOUR_MS} hours, or select Check DNS after fixing the record.`;
+	return `${hostname} has not verified within ${DOMAIN_FAIL_AFTER_MS / HOUR_MS} hours of being added; Yoal re-checks it every ${DOMAIN_RECHECK_FAILED_MS / HOUR_MS} hours, or select Check DNS after fixing the record.`;
 }
 
 function normalizeDnsName(value: string): string {

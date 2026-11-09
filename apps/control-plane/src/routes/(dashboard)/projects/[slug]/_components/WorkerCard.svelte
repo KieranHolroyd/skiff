@@ -3,9 +3,9 @@
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import CogIcon from '@lucide/svelte/icons/cog';
 	import WorkflowIcon from '@lucide/svelte/icons/workflow';
-	import type { GithubRunnerPoolView, WorkloadSpec, WorkloadView } from '@skiff/contracts';
+	import type { GithubRunnerPoolView, WorkloadSpec, WorkloadView } from '@yoal/contracts';
 	import { runAction } from '#lib/actions.js';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
@@ -98,7 +98,7 @@
 								>{view.auth === 'pat'
 									? 'access token'
 									: view.auth === 'installation'
-										? 'Skiff GitHub App'
+										? 'Yoal GitHub App'
 										: 'GitHub App'}</Badge
 							>
 						</div>

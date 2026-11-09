@@ -29,7 +29,7 @@ clear direct-vs-pooled URLs, and copy-paste snippets that work.
 - `DatabaseService.connectionUrl()` emits a direct URL with no `sslmode`; the sampler uses
   `tls: false` (`apps/agent/src/database-stats.ts`).
 - The helper renders one container unit per database, publishes `127.0.0.1:<port>:5432`, and joins
-  `skiff-workloads`.
+  `yoal-workloads`.
 - Attachments inject `<PREFIX>_URL`, host/port/user/password/name at activation.
 - Users must set `max_connections` or add PgBouncer themselves; there is no pooler, no TLS cert,
   and no connection snippet.
@@ -38,7 +38,7 @@ clear direct-vs-pooled URLs, and copy-paste snippets that work.
 
 ### Pooler placement
 
-Start with a **per-database PgBouncer sidecar** in the same `skiff-workloads` network. It is simple,
+Start with a **per-database PgBouncer sidecar** in the same `yoal-workloads` network. It is simple,
 isolated, and measurable. PgBouncer's RSS is small (typically 5–20 MB), but measure against the
 250 MB baseline; if density becomes a problem, add a node-level pooler in P2. Do not silently route
 everything through it.
@@ -61,7 +61,7 @@ everything through it.
 ### TLS
 
 - Generate a per-node CA (or per-database self-signed cert) in the helper; write the cert/key as
-  `0400` files under `/run/skiff-workloads/<id>/tls/`; mount into the Postgres container.
+  `0400` files under `/run/yoal-workloads/<id>/tls/`; mount into the Postgres container.
 - Postgres settings: `ssl=on`, `ssl_cert_file`, `ssl_key_file`, `ssl_min_protocol_version=TLSv1.2`.
 - Attachments inject:
   - `<PREFIX>_URL` with `?sslmode=require` (default; encrypts, no CA verification).
@@ -136,7 +136,7 @@ everything through it.
 
 ## Rollout
 
-`SKIFF_FEATURE_POOLER` and `SKIFF_FEATURE_DB_TLS` off by default. Enable TLS first (low risk), then
+`YOAL_FEATURE_POOLER` and `YOAL_FEATURE_DB_TLS` off by default. Enable TLS first (low risk), then
 the pooler for new databases, then convert existing databases on restart. Never force a restart of
 a running database without a maintenance window.
 

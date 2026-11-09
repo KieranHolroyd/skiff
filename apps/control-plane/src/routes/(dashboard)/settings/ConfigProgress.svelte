@@ -6,7 +6,7 @@
 	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
 	import InfoIcon from '@lucide/svelte/icons/info';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
-	import type { PlatformConfigOutcome, PlatformConfigStatus } from '@skiff/contracts';
+	import type { PlatformConfigOutcome, PlatformConfigStatus } from '@yoal/contracts';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Spinner } from '#lib/components/ui/spinner/index.js';
 	import { fetchJson } from '#lib/query.js';
@@ -114,7 +114,7 @@
 		<Alert.Description>
 			Settings saved here go to <code>.data/platform-settings.json</code> (gitignored) and override
 			your shell environment after a dev-server restart. On an installed server they are written to
-			<code>/etc/skiff/skiff.env</code> instead.
+			<code>/etc/yoal/yoal.env</code> instead.
 		</Alert.Description>
 	</Alert.Root>
 {:else if availability === 'unmanaged'}
@@ -132,7 +132,7 @@
 		<TriangleAlertIcon />
 		<Alert.Title>Not enabled on this host yet</Alert.Title>
 		<Alert.Description>
-			Run <code>sudo skiff-update-self check</code> on the server once. It installs the small root helper
+			Run <code>sudo yoal-update-self check</code> on the server once. It installs the small root helper
 			that applies settings from this page; nothing else changes.
 		</Alert.Description>
 	</Alert.Root>
@@ -157,7 +157,7 @@
 		<Alert.Title>The last change stopped reporting</Alert.Title>
 		<Alert.Description>
 			It last said “{view.status.message}” at {formatDateTime(view.status.updatedAt)}. Check
-			<code>journalctl -u skiff-platform-config</code> on the server. You can try again.
+			<code>journalctl -u yoal-platform-config</code> on the server. You can try again.
 		</Alert.Description>
 	</Alert.Root>
 {:else if relevant?.outcome && recent}

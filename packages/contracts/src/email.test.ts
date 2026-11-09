@@ -63,7 +63,7 @@ describe('emailSendSchema', () => {
 		expect(emailSendSchema.safeParse({ ...base, subject: 'a\r\nBcc: x@y.z' }).success).toBe(false);
 		expect(emailSendSchema.safeParse({ ...base, headers: { 'X-Ok': 'a\nb' } }).success).toBe(false);
 		expect(emailSendSchema.safeParse({ ...base, headers: { From: 'x@y.z' } }).success).toBe(false);
-		expect(emailSendSchema.safeParse({ ...base, headers: { 'X-Skiff-Org': 'x' } }).success).toBe(false);
+		expect(emailSendSchema.safeParse({ ...base, headers: { 'X-Yoal-Org': 'x' } }).success).toBe(false);
 		expect(emailSendSchema.safeParse({ ...base, headers: { 'X-Campaign': 'spring' } }).success).toBe(true);
 	});
 	test('caps the total recipient count', () => {
@@ -141,12 +141,12 @@ describe('DNS helpers', () => {
 		expect(dkimSelector(new Date('2026-11-07T00:00:00Z'))).toBe('skf202611');
 	});
 	test('SPF merge keeps the existing qualifier and never duplicates', () => {
-		const inc = 'include:_spf.skiff.dev';
-		expect(mergeSpf(null, inc)).toBe('v=spf1 include:_spf.skiff.dev ~all');
-		expect(mergeSpf('v=spf1 include:_spf.google.com -all', inc)).toBe('v=spf1 include:_spf.google.com include:_spf.skiff.dev -all');
-		expect(mergeSpf('v=spf1 mx', inc)).toBe('v=spf1 mx include:_spf.skiff.dev ~all');
-		expect(mergeSpf('v=spf1 include:_spf.skiff.dev ~all', inc)).toBe('v=spf1 include:_spf.skiff.dev ~all');
-		expect(spfIncludes('v=spf1 +include:_spf.skiff.dev ~all', inc)).toBe(true);
+		const inc = 'include:_spf.yoal.dev';
+		expect(mergeSpf(null, inc)).toBe('v=spf1 include:_spf.yoal.dev ~all');
+		expect(mergeSpf('v=spf1 include:_spf.google.com -all', inc)).toBe('v=spf1 include:_spf.google.com include:_spf.yoal.dev -all');
+		expect(mergeSpf('v=spf1 mx', inc)).toBe('v=spf1 mx include:_spf.yoal.dev ~all');
+		expect(mergeSpf('v=spf1 include:_spf.yoal.dev ~all', inc)).toBe('v=spf1 include:_spf.yoal.dev ~all');
+		expect(spfIncludes('v=spf1 +include:_spf.yoal.dev ~all', inc)).toBe(true);
 		expect(spfIncludes('v=spf1 mx ~all', inc)).toBe(false);
 	});
 });

@@ -14,12 +14,12 @@
 	import SendIcon from '@lucide/svelte/icons/send';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import ZapIcon from '@lucide/svelte/icons/zap';
-	import type { ProjectView } from '@skiff/core';
-	import type { EventSource, FunctionView } from '@skiff/contracts';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import type { ProjectView } from '@yoal/core';
+	import type { EventSource, FunctionView } from '@yoal/contracts';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';

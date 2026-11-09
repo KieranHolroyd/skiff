@@ -1,6 +1,6 @@
 <script lang="ts">
 	/** A rule's severity, as a quiet outlined badge with a coloured marker. */
-	import type { AlertSeverity } from '@skiff/contracts';
+	import type { AlertSeverity } from '@yoal/contracts';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 
 	let { severity }: { severity: AlertSeverity } = $props();

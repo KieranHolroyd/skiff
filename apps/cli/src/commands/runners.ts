@@ -7,7 +7,7 @@ import { pruneCommand } from './prune.ts';
  * disappears, and GitHub keeps them until they are removed.
  */
 
-const usage = `Usage: skif runners <command> [options]
+const usage = `Usage: yoal runners <command> [options]
 
 Commands:
   prune                                Delete stale runner registrations (dry run by default)

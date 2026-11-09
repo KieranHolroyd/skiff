@@ -10,7 +10,7 @@ import { requirePrincipal } from '#lib/server/principal.js';
  * and carries `impersonated_by` so the hosted page and the app can show a banner.
  *
  * This is a *pool* session, not a platform session: it authenticates only against the pool's OAuth
- * and hosted pages. Skiff's admin API still requires a platform session, key or STS token, so an
+ * and hosted pages. Yoal's admin API still requires a platform session, key or STS token, so an
  * impersonated session cannot call it. The remaining risk is an app that does not check
  * `impersonated_by`: to it, support looks exactly like the user, by design.
  */

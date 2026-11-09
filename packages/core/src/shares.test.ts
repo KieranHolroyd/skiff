@@ -2,12 +2,12 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
+import { createDb } from '@yoal/db';
 import { buildPrincipal } from './orgs.ts';
 import { createCore, type Core } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-shares-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-shares-'));
 const opened = createDb({ path: ':memory:' });
 const clock = Date.now();
 const core: Core = createCore({
@@ -130,15 +130,15 @@ describe('share mounts', () => {
 			server: 'nas.home',
 			exportPath: '/vault/',
 			readOnly: false,
-			credentials: { username: 'skiff', password: 'hunter2-secret', domain: 'HOME' },
+			credentials: { username: 'yoal', password: 'hunter2-secret', domain: 'HOME' },
 		});
 		const created = core.shares.get(admin, 'vault');
-		expect(created).toMatchObject({ exportPath: '/vault', hasCredentials: true, username: 'skiff', mounts: [] });
+		expect(created).toMatchObject({ exportPath: '/vault', hasCredentials: true, username: 'yoal', mounts: [] });
 		expect(JSON.stringify(created)).not.toContain('hunter2');
 
 		const mounted = core.shares.mount(admin, 'vault', { node: 'nas-client' });
 		expect(mounted.mounts).toMatchObject([
-			{ nodeName: 'nas-client', status: 'pending', mountPath: '/mnt/skiff-shares/vault', diskName: 'vault', disk: null },
+			{ nodeName: 'nas-client', status: 'pending', mountPath: '/mnt/yoal-shares/vault', diskName: 'vault', disk: null },
 		]);
 		const mountId = mounted.mounts[0]!.id;
 
@@ -160,7 +160,7 @@ describe('share mounts', () => {
 		// Only the node holding the mount can fetch the credentials.
 		expect(core.shares.credentialsFor(node.nodeId, mountId)).toEqual({
 			id: mountId,
-			username: 'skiff',
+			username: 'yoal',
 			password: 'hunter2-secret',
 			domain: 'HOME',
 		});
@@ -173,13 +173,13 @@ describe('share mounts', () => {
 		// The next inventory shows the mount at its path: it becomes a bulk network disk.
 		heartbeat(node, {
 			shareMounts: [{ id: mountId, mounted: true, error: null }],
-			volumes: inventory([{ sourceKey: 'cifs:nas.home/vault', kind: 'cifs', mountPath: '/mnt/skiff-shares/vault' }]),
+			volumes: inventory([{ sourceKey: 'cifs:nas.home/vault', kind: 'cifs', mountPath: '/mnt/yoal-shares/vault' }]),
 		});
 		const linked = core.shares.get(admin, 'vault').mounts[0]!;
 		expect(linked.disk).toMatchObject({ name: 'vault', status: 'ready' });
 		const disks = core.disks.overview(admin).nodes.find((item) => item.id === node.nodeId)!.disks;
 		expect(disks).toMatchObject([
-			{ name: 'vault', kind: 'cifs', remote: true, tier: 'bulk', share: 'vault', mountPath: '/mnt/skiff-shares/vault' },
+			{ name: 'vault', kind: 'cifs', remote: true, tier: 'bulk', share: 'vault', mountPath: '/mnt/yoal-shares/vault' },
 		]);
 		// Settings → Storage cannot remove it; the share owns it.
 		expect(() => core.disks.remove(admin, disks[0]!.id)).toThrow(/Network shares/);
@@ -190,8 +190,8 @@ describe('share mounts', () => {
 		// Definition changes and deletion wait for the unmount; credentials can rotate any time.
 		expect(() => core.shares.update(admin, 'vault', { server: 'nas2.home' })).toThrow(/Unmount it/);
 		expect(() => core.shares.remove(admin, 'vault')).toThrow(/still mounted/);
-		const rotated = core.shares.update(admin, 'vault', { credentials: { username: 'skiff2', password: 'new-secret' } });
-		expect(rotated.username).toBe('skiff2');
+		const rotated = core.shares.update(admin, 'vault', { credentials: { username: 'yoal2', password: 'new-secret' } });
+		expect(rotated.username).toBe('yoal2');
 		expect((await core.nodes.desiredState(node.token)).shareMounts[0]!.generation).toBe('2');
 
 		// Unmount removes the disk, then waits for the node.
@@ -230,7 +230,7 @@ describe('share mounts', () => {
 		// Once mounted, it becomes the disk it was asked to be.
 		heartbeat(node, {
 			shareMounts: [{ id: mountId, mounted: true, error: null }],
-			volumes: inventory([{ sourceKey: 'nfs:10.0.0.5:/export/library', kind: 'nfs', mountPath: '/mnt/skiff-shares/library' }]),
+			volumes: inventory([{ sourceKey: 'nfs:10.0.0.5:/export/library', kind: 'nfs', mountPath: '/mnt/yoal-shares/library' }]),
 		});
 		expect(core.shares.get(admin, 'library').mounts[0]!.disk).toMatchObject({ name: 'library-disk' });
 

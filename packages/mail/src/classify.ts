@@ -1,4 +1,4 @@
-import type { EmailBounceClass } from '@skiff/contracts';
+import type { EmailBounceClass } from '@yoal/contracts';
 
 /**
  * SMTP reply classification (EMAIL.md §3.2, §7.1).

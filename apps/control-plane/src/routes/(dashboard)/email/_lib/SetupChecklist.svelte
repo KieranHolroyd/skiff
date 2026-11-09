@@ -17,10 +17,10 @@
 	import SendIcon from '@lucide/svelte/icons/send';
 	import ServerIcon from '@lucide/svelte/icons/server';
 	import WandSparklesIcon from '@lucide/svelte/icons/wand-sparkles';
-	import { EMAIL_SANDBOX_LIMITS, emailEnvNames } from '@skiff/contracts';
+	import { EMAIL_SANDBOX_LIMITS, emailEnvNames } from '@yoal/contracts';
 	import { notify, runAction } from '#lib/actions.js';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
@@ -82,16 +82,16 @@
 
 	const sender = $derived(verifiedDomains[0]?.name ?? data.pending?.name ?? 'example.com');
 	const port25 = 'nc -vz -w 5 gmail-smtp-in.l.google.com 25';
-	const attachCommand = 'skif email attach -p <project>';
+	const attachCommand = 'yoal email attach -p <project>';
 	const curl = $derived(
 		[
 			`curl -X POST ${data.apiBase}/send \\`,
-			`  -H "Authorization: Bearer $SKIFF_API_KEY" \\`,
+			`  -H "Authorization: Bearer $YOAL_API_KEY" \\`,
 			`  -H "Content-Type: application/json" \\`,
 			`  -d '{`,
 			`    "from": { "name": "My App", "address": "hello@${sender}" },`,
 			`    "to": ["you@${sender}"],`,
-			`    "subject": "Hello from Skiff",`,
+			`    "subject": "Hello from Yoal",`,
 			`    "text": "Sent through my own mail node."`,
 			`  }'`
 		].join('\n')
@@ -100,13 +100,13 @@
 		[
 			`import nodemailer from 'nodemailer';`,
 			``,
-			`// skif email attach injects these into the project's environment.`,
+			`// yoal email attach injects these into the project's environment.`,
 			`const mail = nodemailer.createTransport(process.env.SMTP_URL);`,
 			``,
 			`await mail.sendMail({`,
 			`  from: 'My App <hello@${sender}>',`,
 			`  to: 'you@${sender}',`,
-			`  subject: 'Hello from Skiff',`,
+			`  subject: 'Hello from Yoal',`,
 			`  text: 'Sent through my own mail node.'`,
 			`});`
 		].join('\n')
@@ -176,7 +176,7 @@
 			<div id="step-{step.id}" class="space-y-3 border-t px-4 py-4 text-sm sm:pl-14" hidden={!open}>
 				{#if step.id === 'node'}
 					<p>
-						Skiff delivers mail with its own MTA, <code class="font-mono text-xs">skiff-mail</code>,
+						Yoal delivers mail with its own MTA, <code class="font-mono text-xs">yoal-mail</code>,
 						running on one node you choose. Recipients judge your mail partly by that node's IP, so
 						pick it with care:
 					</p>
@@ -220,7 +220,7 @@
 							</li>
 							<li>
 								Make sure {@render code(hostnames.helo)} resolves to {data.ip}. With the platform's
-								Cloudflare zone connected, Skiff published it with the other platform records{area
+								Cloudflare zone connected, Yoal published it with the other platform records{area
 									.can.platform
 									? ' below'
 									: ''}.
@@ -255,7 +255,7 @@
 						Add the domain your mail will come from. A subdomain such as
 						<span class="font-mono text-xs">mail.example.com</span> or
 						<span class="font-mono text-xs">notify.example.com</span> keeps your app's reputation apart
-						from the mail your people send. If its zone is in the Cloudflare account Skiff uses, Skiff
+						from the mail your people send. If its zone is in the Cloudflare account Yoal uses, Yoal
 						creates the DNS records itself; otherwise the next step lists them to copy.
 					</p>
 					{#if data.domains.length > 0}
@@ -315,7 +315,7 @@
 					{/if}
 				{:else if step.id === 'verify'}
 					<p>
-						Skiff signs every message with a DKIM key made for your domain. Publishing the key in
+						Yoal signs every message with a DKIM key made for your domain. Publishing the key in
 						DNS proves you control the domain and verifies it. SPF and DMARC aren't required to
 						verify, but Gmail and Yahoo expect both before they trust bulk mail.
 					</p>
@@ -369,14 +369,14 @@
 						</div>
 						{#if data.pendingAutoDns && area.can.update}
 							<p class="text-xs text-muted-foreground">
-								{domain.name} is in the Cloudflare zone Skiff has a token for, so
+								{domain.name} is in the Cloudflare zone Yoal has a token for, so
 								<span class="font-medium text-foreground">Set up for me</span> creates the DKIM record,
 								plus SPF and DMARC where the domain has none. Existing SPF and DMARC records are never
 								overwritten.
 							</p>
 						{/if}
 						<p class="text-xs text-muted-foreground">
-							New records usually show up within a few minutes, sometimes up to an hour. Skiff also
+							New records usually show up within a few minutes, sometimes up to an hour. Yoal also
 							re-checks every domain daily.
 						</p>
 					{:else if verifiedDomains.length > 0}
@@ -434,7 +434,7 @@
 					<div class="space-y-2">
 						<h3 class="font-medium">SMTP, for any mailer library</h3>
 						<p class="text-muted-foreground">
-							Attach email to a Skiff project and its next deploy gets a project-scoped credential
+							Attach email to a Yoal project and its next deploy gets a project-scoped credential
 							as environment variables:
 						</p>
 						<CodeBlock code={attachCommand} />
@@ -453,7 +453,7 @@
 					<div class="space-y-2 pt-2">
 						<h3 class="font-medium">HTTP, with an API key</h3>
 						<p class="text-muted-foreground">
-							Any Skiff API key with the email:send permission works as a Bearer token.
+							Any Yoal API key with the email:send permission works as a Bearer token.
 						</p>
 						<CodeBlock code={curl} />
 						<Button variant="outline" href={resolve('/(dashboard)/settings/api-keys')}

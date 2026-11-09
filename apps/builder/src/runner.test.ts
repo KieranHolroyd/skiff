@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { BuildValidationError } from './command.ts';
 import { insideCheckout } from './runner.ts';
 
-const root = mkdtempSync(join(tmpdir(), 'skiff-runner-'));
+const root = mkdtempSync(join(tmpdir(), 'yoal-runner-'));
 const checkout = join(root, 'checkout');
 mkdirSync(join(checkout, 'apps', 'web', 'dist'), { recursive: true });
 mkdirSync(join(root, 'outside'));

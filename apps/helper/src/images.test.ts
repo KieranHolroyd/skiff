@@ -28,7 +28,7 @@ describe('planImagePrune', () => {
 		{ Id: '1'.repeat(64), Names: [], RepoDigests: [`ghcr.io/acme/api@${DIGEST}`], Size: 10 },
 		{ Id: '2'.repeat(64), Names: ['docker.io/library/postgres:17-alpine'], Size: 20 },
 		{ Id: '3'.repeat(64), Names: ['ghcr.io/acme/api:0.9'], Size: 30 },
-		{ Id: '4'.repeat(64), Names: ['localhost/cairn-skiff:old'], Size: 40 },
+		{ Id: '4'.repeat(64), Names: ['localhost/cairn-yoal:old'], Size: 40 },
 		{ Id: '5'.repeat(64), Names: ['docker.io/library/busybox:latest'], Size: 50, Containers: 1 },
 		{ Id: '6'.repeat(64), Names: null, RepoDigests: null, Size: 60 },
 	];
@@ -42,11 +42,11 @@ describe('planImagePrune', () => {
 });
 
 describe('pruneNodeImages', () => {
-	const dir = mkdtempSync(join(tmpdir(), 'skiff-images-'));
+	const dir = mkdtempSync(join(tmpdir(), 'yoal-images-'));
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 	test('removes unreferenced images without --force and reports what failed', async () => {
-		writeFileSync(join(dir, 'skiff-workload-wld_1.container'), '[Container]\nImage=ghcr.io/acme/api:1.0\n');
+		writeFileSync(join(dir, 'yoal-workload-wld_1.container'), '[Container]\nImage=ghcr.io/acme/api:1.0\n');
 		writeFileSync(join(dir, 'notes.txt'), 'Image=ghcr.io/acme/old:1\n');
 		const calls: string[][] = [];
 		const runner: CommandRunner = {

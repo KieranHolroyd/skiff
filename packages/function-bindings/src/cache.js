@@ -1,5 +1,5 @@
 /**
- * Skiff Cache API binding service.
+ * Yoal Cache API binding service.
  *
  * workerd sends `caches.default` / `caches.open(name)` traffic to the service named by a Worker's
  * `cacheApiOutbound` field (`workerd.capnp`). The protocol is the one workerd's cache client
@@ -8,7 +8,7 @@
  *   GET  <url>         cached response with `CF-Cache-Status: HIT`, or a 504 MISS
  *   PUT  <url>         body is a serialised HTTP response; stores it, 204 on success / 413 refused
  *   PURGE <url>        deletes one entry, 200 on success / 404 when absent
- *   DELETE /purge-all  `{ deleted: n }` (Skiff admin hook, not part of the workerd protocol)
+ *   DELETE /purge-all  `{ deleted: n }` (Yoal admin hook, not part of the workerd protocol)
  *
  * workerd reads the hit/miss verdict from `CF-Cache-Status` (an "EXPIRED"/"UPDATING"/"MISS" reply
  * becomes `undefined` from `cache.match()`), and treats a PUT reply of 204 as stored, 413 as
@@ -19,7 +19,7 @@
  * variants, no multipart ranges, and a per-host size cap enforced by refusing new objects.
  *
  * Protocol shape adapted from Miniflare (Apache-2.0), cloudflare/workers-sdk
- * (`packages/miniflare/src/workers/cache`). The storage model is Skiff's: one Durable Object
+ * (`packages/miniflare/src/workers/cache`). The storage model is Yoal's: one Durable Object
  * instance per host, plain key/value Durable Object storage, no SQL and no blob disk service.
  */
 
@@ -195,7 +195,7 @@ export class CacheObject {
 		return new Response(null, { status: 200 });
 	}
 
-	/** `DELETE /purge-all`: Skiff's administrative clear, `{ deleted: n }`. */
+	/** `DELETE /purge-all`: Yoal's administrative clear, `{ deleted: n }`. */
 	async purgeAll(request) {
 		const path = pathname(request.url);
 		if (path !== '/purge-all') return new Response(null, { status: 404 });

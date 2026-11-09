@@ -22,7 +22,7 @@ import { confirmOrRefuse } from './run-operation.ts';
 
 /** Managed databases (docs/DATABASES.md). Every check lives on the server; this is a thin client. */
 
-const usage = `Usage: skif db <command> [options]
+const usage = `Usage: yoal db <command> [options]
 
 Commands:
   list                         List databases (the default); --all includes the trash
@@ -38,7 +38,7 @@ Commands:
   logs <name>                  Tail the database container journal (--follow to stream)
   credentials <name>           Print the connection URL (--json for user, password, host, port)
   credentials list|create|rotate|revoke|reveal <name> …
-                               Named credentials (app, readonly, backup); see \`skif db credentials --help\`
+                               Named credentials (app, readonly, backup); see \`yoal db credentials --help\`
   restart <name>|--all         Restart a database (and its pooler) or every database
   upgrade <name> --to <major>  Plan a PostgreSQL major upgrade; --apply queues a backup
   rotate <name>                Rotate the owner password (--monitor for the monitor role)
@@ -51,7 +51,7 @@ Commands:
   pitr-backup <name>           Take a PITR base backup now (--type full|diff|incr)
   restore-to <name>            Restore to a moment into a new database (--time <ISO> --as <new-name>)
   replica list|add|remove|promote <name> …
-                               Postgres read replicas; see \`skif db replica --help\`
+                               Postgres read replicas; see \`yoal db replica --help\`
 
 Create options:
   -p, --project <slug>         Attach to this project right away (placed on its node)
@@ -80,7 +80,7 @@ Update options:
                                disabling never drops one)
       --version <version>      Move forward in place: mysql, mariadb, valkey, redis and clickhouse.
                                Asks first, since there is no way back. A PostgreSQL major goes
-                               through \`skif db upgrade\`; mongodb needs a backup and restore.
+                               through \`yoal db upgrade\`; mongodb needs a backup and restore.
 
 Options:
   -y, --yes                    Don't ask for confirmation (required when stdin isn't a terminal)
@@ -92,13 +92,13 @@ run on the database's node (\`auto\` placement handles that). Credentials need t
 database:credentials permission and every read is audited.
 
 Examples:
-  skif db create main --project api
-  skif db create cache --engine valkey --project api    # api receives REDIS_URL
-  skif db create events --engine clickhouse --project api  # api receives CLICKHOUSE_URL
-  skif db attach main --project api --prefix DATABASE
-  skif db credentials create main --role readonly --purpose BI
-  skif db attach main --project reports --credential readonly
-  psql "$(skif db credentials main)"     # on the node, or through ssh -L <port>:127.0.0.1:<port>`;
+  yoal db create main --project api
+  yoal db create cache --engine valkey --project api    # api receives REDIS_URL
+  yoal db create events --engine clickhouse --project api  # api receives CLICKHOUSE_URL
+  yoal db attach main --project api --prefix DATABASE
+  yoal db credentials create main --role readonly --purpose BI
+  yoal db attach main --project reports --credential readonly
+  psql "$(yoal db credentials main)"     # on the node, or through ssh -L <port>:127.0.0.1:<port>`;
 
 const baseFlags: FlagSpec = {
 	json: { type: 'boolean' },
@@ -226,14 +226,14 @@ function parseNamed(argv: string[], spec: FlagSpec, command: string) {
 		console.log(usage);
 		return null;
 	}
-	const line = `Usage: skif db ${command} <name>`;
+	const line = `Usage: yoal db ${command} <name>`;
 	rejectExtraPositionals(args, 1, line);
 	const name = requirePositional(args, 0, `database name.\n\n${line}`);
 	return { args, name };
 }
 
 function requireProject(project: string | undefined, command: string, name: string): string {
-	if (!project) throw new UsageError(`Name the project: skif db ${command} ${name} --project <slug>`);
+	if (!project) throw new UsageError(`Name the project: yoal db ${command} ${name} --project <slug>`);
 	return project;
 }
 
@@ -243,7 +243,7 @@ async function listDatabases(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif db list [--all] [--json]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal db list [--all] [--json]');
 	const client = await authenticatedClient();
 	const { databases, raw } = await client.listDatabases({ includeDeleted: args.boolean('all') });
 	if (args.boolean('json')) {
@@ -251,7 +251,7 @@ async function listDatabases(argv: string[]): Promise<void> {
 		return;
 	}
 	if (databases.length === 0) {
-		console.log('No databases yet. Create one with `skif db create <name> --project <slug>`.');
+		console.log('No databases yet. Create one with `yoal db create <name> --project <slug>`.');
 		return;
 	}
 	console.log(databaseTable(databases));
@@ -311,9 +311,9 @@ async function createDatabase(argv: string[]): Promise<void> {
 			`Attached to ${attached.projectSlug} as ${attached.envPrefix}: it receives ${attached.envNames.join(', ')} at its next activation.`,
 		);
 	const steps = [
-		`Follow it:    skif db info ${database.name}`,
-		...(attached ? [] : [`Attach:       skif db attach ${database.name} --project <slug>`]),
-		`Connect:      skif db credentials ${database.name}`,
+		`Follow it:    yoal db info ${database.name}`,
+		...(attached ? [] : [`Attach:       yoal db attach ${database.name} --project <slug>`]),
+		`Connect:      yoal db credentials ${database.name}`,
 	];
 	console.log(`\nNext steps:\n${indent(steps)}`);
 }
@@ -330,7 +330,7 @@ async function showDatabase(argv: string[]): Promise<void> {
 	}
 	console.log(databaseDetails(database));
 	if (database.deletedAt)
-		console.log(`\nIn the trash. Restore with \`skif db restore ${database.name}\`; delete for good with \`skif db purge ${database.name}\`.`);
+		console.log(`\nIn the trash. Restore with \`yoal db restore ${database.name}\`; delete for good with \`yoal db purge ${database.name}\`.`);
 }
 
 async function updateDatabase(argv: string[]): Promise<void> {
@@ -374,8 +374,8 @@ async function updateDatabase(argv: string[]): Promise<void> {
 	console.log(`Updated "${database.name}" (${engineLabel(database)}).`);
 	// Limits are not part of the activation (docs/DATABASES.md), so only the other fields restart it.
 	if (patch.version || patch.pooler !== undefined || patch.extensions)
-		console.log(`It restarts on node ${nodeLabel(database)} with the change. Follow it: skif db info ${database.name}`);
-	else console.log(`New limits apply the next time it restarts: skif db restart ${database.name}`);
+		console.log(`It restarts on node ${nodeLabel(database)} with the change. Follow it: yoal db info ${database.name}`);
+	else console.log(`New limits apply the next time it restarts: yoal db restart ${database.name}`);
 }
 
 async function attachDatabase(argv: string[]): Promise<void> {
@@ -431,7 +431,7 @@ async function deleteDatabase(argv: string[]): Promise<void> {
 			`Database "${name}" is attached to ${current.attachments.map((item) => item.projectSlug).join(', ')}. Detach it first.`,
 			{
 				code: 'conflict',
-				suggestions: current.attachments.map((item) => `skif db detach ${name} --project ${item.projectSlug}`),
+				suggestions: current.attachments.map((item) => `yoal db detach ${name} --project ${item.projectSlug}`),
 			},
 		);
 	const confirmed = await confirmOrRefuse(
@@ -452,7 +452,7 @@ async function deleteDatabase(argv: string[]): Promise<void> {
 		return;
 	}
 	console.log(`Deleted "${database.name}".${database.purgeAt ? ` It is purged for good after ${formatTime(database.purgeAt)}.` : ''}`);
-	console.log(`Undo: skif db restore ${database.name}`);
+	console.log(`Undo: yoal db restore ${database.name}`);
 }
 
 async function restoreDatabase(argv: string[]): Promise<void> {
@@ -465,7 +465,7 @@ async function restoreDatabase(argv: string[]): Promise<void> {
 		printJson(raw);
 		return;
 	}
-	console.log(`Restored "${database.name}" on node ${nodeLabel(database)} (${database.status}). Re-attach projects with \`skif db attach\`.`);
+	console.log(`Restored "${database.name}" on node ${nodeLabel(database)} (${database.status}). Re-attach projects with \`yoal db attach\`.`);
 }
 
 async function purgeDatabase(argv: string[]): Promise<void> {
@@ -477,7 +477,7 @@ async function purgeDatabase(argv: string[]): Promise<void> {
 	if (!database.deletedAt)
 		throw new CliError(`Database "${name}" is not in the trash. Delete it first.`, {
 			code: 'conflict',
-			suggestions: [`skif db delete ${name}`],
+			suggestions: [`yoal db delete ${name}`],
 		});
 	const confirmed = await confirmOrRefuse(
 		`This permanently deletes database "${name}" and its data on node ${nodeLabel(database)}. It cannot be undone. Type ${name} to confirm: `,
@@ -497,7 +497,7 @@ async function purgeDatabase(argv: string[]): Promise<void> {
 		printJson(raw);
 		return;
 	}
-	console.log(`Purging "${name}": its node deletes the data, then it disappears from \`skif db list --all\`.`);
+	console.log(`Purging "${name}": its node deletes the data, then it disappears from \`yoal db list --all\`.`);
 }
 
 async function showCredentials(argv: string[]): Promise<void> {
@@ -515,7 +515,7 @@ async function showCredentials(argv: string[]): Promise<void> {
 		printJson(raw);
 		return;
 	}
-	// The URL alone on stdout, so `psql "$(skif db credentials main)"` works.
+	// The URL alone on stdout, so `psql "$(yoal db credentials main)"` works.
 	console.log(credentials.url);
 	if (process.stderr.isTTY && credentials.note) process.stderr.write(`${credentials.note}\n`);
 }
@@ -603,7 +603,7 @@ async function upgradeDatabase(argv: string[]): Promise<void> {
 	if (!parsed) return;
 	const { args, name } = parsed;
 	const target = args.string('to');
-	if (!target) throw new UsageError(`Usage: skif db upgrade ${name} --to <major> [--apply]`);
+	if (!target) throw new UsageError(`Usage: yoal db upgrade ${name} --to <major> [--apply]`);
 	const client = await authenticatedClient();
 	if (!args.boolean('apply')) {
 		const { plan, raw } = await client.databaseUpgradePlan(name, target);
@@ -674,7 +674,7 @@ async function listBackups(argv: string[]): Promise<void> {
 		);
 	}
 	if (backups.length === 0) {
-		console.log(`No backups yet. Take one with \`skif db backup ${name}\`.`);
+		console.log(`No backups yet. Take one with \`yoal db backup ${name}\`.`);
 		return;
 	}
 	console.log(
@@ -726,7 +726,7 @@ async function createBackup(argv: string[]): Promise<void> {
 		printJson(raw);
 		return;
 	}
-	console.log(`Queued backup ${backup.id} for "${name}". The node picks it up on its next pull; follow it with \`skif db backups ${name}\`.`);
+	console.log(`Queued backup ${backup.id} for "${name}". The node picks it up on its next pull; follow it with \`yoal db backups ${name}\`.`);
 }
 
 async function deleteBackup(argv: string[]): Promise<void> {
@@ -735,7 +735,7 @@ async function deleteBackup(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 2, 'Usage: skif db backup-delete <name> <backup-id>');
+	rejectExtraPositionals(args, 2, 'Usage: yoal db backup-delete <name> <backup-id>');
 	const name = requirePositional(args, 0, 'database name');
 	const backupId = requirePositional(args, 1, 'backup id');
 	const client = await authenticatedClient();
@@ -753,7 +753,7 @@ async function restoreBackup(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 2, 'Usage: skif db restore-backup <name> <backup-id> --as <new-name>');
+	rejectExtraPositionals(args, 2, 'Usage: yoal db restore-backup <name> <backup-id> --as <new-name>');
 	const name = requirePositional(args, 0, 'source database name');
 	const backupId = requirePositional(args, 1, 'backup id');
 	const target = args.string('as');
@@ -772,7 +772,7 @@ async function restoreBackup(argv: string[]): Promise<void> {
 		return;
 	}
 	console.log(`Restoring backup ${backupId} into "${database.name}" on node ${nodeLabel(database)}.`);
-	console.log(`The node verifies the restore; follow it with \`skif db info ${database.name}\`.`);
+	console.log(`The node verifies the restore; follow it with \`yoal db info ${database.name}\`.`);
 }
 
 async function backupPolicy(argv: string[]): Promise<void> {

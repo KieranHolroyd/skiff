@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { AgentNodeTask, WorkloadDesired } from '@skiff/contracts';
+import type { AgentNodeTask, WorkloadDesired } from '@yoal/contracts';
 import { encodeHeaders } from '../../../packages/function-bindings/src/nats.js';
 import { NodeTaskRunner, taskTargets } from './node-tasks.ts';
 
@@ -132,8 +132,8 @@ function runner(options: { js?: ReturnType<typeof fakeJetStream>; fetch?: typeof
 	const instance = new NodeTaskRunner({
 		controlUrl: 'https://control.test',
 		nodeToken: 'tok',
-		socketDir: '/run/skiff/workloads',
-		fetchActivation: async () => ({ env: { SKIFF_BROKER_USER: 'u', SKIFF_BROKER_PASSWORD: 'p' } }) as never,
+		socketDir: '/run/yoal/workloads',
+		fetchActivation: async () => ({ env: { YOAL_BROKER_USER: 'u', YOAL_BROKER_PASSWORD: 'p' } }) as never,
 		connect: (options.js ?? fakeJetStream()).connect,
 		workloadStatus: async () => (options.status ?? 'running') as never,
 		noteActivity: (projectId) => activity.push(projectId),
@@ -153,7 +153,7 @@ describe('NodeTaskRunner: broker tasks', () => {
 		const on = targets(broker());
 
 		const created = await instance.runOne(task({ kind: 'broker.queue.create', input: { queue: 'jobs' } }), on, signal);
-		expect(created).toMatchObject({ ok: true, result: { stream: 'SKIFF_Q_jobs', created: true, state: { messages: 0, firstAt: null } } });
+		expect(created).toMatchObject({ ok: true, result: { stream: 'YOAL_Q_jobs', created: true, state: { messages: 0, firstAt: null } } });
 		const again = await instance.runOne(task({ kind: 'broker.queue.create', input: { queue: 'jobs' } }), on, signal);
 		expect(again.result).toMatchObject({ created: false });
 
@@ -163,35 +163,35 @@ describe('NodeTaskRunner: broker tasks', () => {
 			signal,
 		);
 		expect(sent).toMatchObject({ ok: true, result: { sent: 3, seqs: [1, 2, 3], state: { messages: 3 } } });
-		const stored = js.streams.get('SKIFF_Q_jobs')!.messages;
+		const stored = js.streams.get('YOAL_Q_jobs')!.messages;
 		expect(stored.map((item) => item.headers['Nats-Msg-Id'])).toEqual(['ntk_send-0', 'ntk_send-1', 'ntk_send-2']);
-		expect(stored[0]!.headers['Skiff-Content-Type']).toBe('json');
-		expect(Number(stored[0]!.headers['Skiff-Not-Before'])).toBeGreaterThan(Date.now());
+		expect(stored[0]!.headers['Yoal-Content-Type']).toBe('json');
+		expect(Number(stored[0]!.headers['Yoal-Not-Before'])).toBeGreaterThan(Date.now());
 
-		const peek = await instance.runOne(task({ kind: 'broker.stream.peek', input: { stream: 'SKIFF_Q_jobs', limit: 2 } }), on, signal);
+		const peek = await instance.runOne(task({ kind: 'broker.stream.peek', input: { stream: 'YOAL_Q_jobs', limit: 2 } }), on, signal);
 		expect(peek.result).toMatchObject({ total: 3, firstSeq: 1, lastSeq: 3, nextSeq: 3 });
 		const messages = (peek.result as { messages: Array<{ seq: number; body: string; encoding: string; headers: Record<string, string> }> }).messages;
 		expect(messages.map((item) => [item.seq, item.body, item.encoding])).toEqual([
 			[1, '{"n":1}', 'utf8'],
 			[2, '{"n":1}', 'utf8'],
 		]);
-		expect(messages[0]!.headers['skiff-content-type']).toBe('json');
+		expect(messages[0]!.headers['yoal-content-type']).toBe('json');
 		// Peeking consumes nothing.
-		expect(js.streams.get('SKIFF_Q_jobs')!.messages).toHaveLength(3);
+		expect(js.streams.get('YOAL_Q_jobs')!.messages).toHaveLength(3);
 
-		const removed = await instance.runOne(task({ kind: 'broker.stream.deleteMessage', input: { stream: 'SKIFF_Q_jobs', seq: 2 } }), on, signal);
+		const removed = await instance.runOne(task({ kind: 'broker.stream.deleteMessage', input: { stream: 'YOAL_Q_jobs', seq: 2 } }), on, signal);
 		expect(removed.result).toMatchObject({ deleted: true, state: { messages: 2 } });
-		const gone = await instance.runOne(task({ kind: 'broker.stream.deleteMessage', input: { stream: 'SKIFF_Q_jobs', seq: 2 } }), on, signal);
+		const gone = await instance.runOne(task({ kind: 'broker.stream.deleteMessage', input: { stream: 'YOAL_Q_jobs', seq: 2 } }), on, signal);
 		expect(gone.result).toMatchObject({ deleted: false });
 
-		const purged = await instance.runOne(task({ kind: 'broker.stream.purge', input: { stream: 'SKIFF_Q_jobs' } }), on, signal);
+		const purged = await instance.runOne(task({ kind: 'broker.stream.purge', input: { stream: 'YOAL_Q_jobs' } }), on, signal);
 		expect(purged.result).toMatchObject({ purged: 2, state: { messages: 0 } });
-		const deleted = await instance.runOne(task({ kind: 'broker.stream.delete', input: { stream: 'SKIFF_Q_jobs' } }), on, signal);
-		expect(deleted.result).toEqual({ stream: 'SKIFF_Q_jobs', deleted: true });
-		expect(js.streams.has('SKIFF_Q_jobs')).toBe(false);
+		const deleted = await instance.runOne(task({ kind: 'broker.stream.delete', input: { stream: 'YOAL_Q_jobs' } }), on, signal);
+		expect(deleted.result).toEqual({ stream: 'YOAL_Q_jobs', deleted: true });
+		expect(js.streams.has('YOAL_Q_jobs')).toBe(false);
 
-		const missing = await instance.runOne(task({ kind: 'broker.stream.peek', input: { stream: 'SKIFF_Q_jobs', limit: 5 } }), on, signal);
-		expect(missing).toMatchObject({ ok: false, error: 'Stream SKIFF_Q_jobs does not exist on this broker.' });
+		const missing = await instance.runOne(task({ kind: 'broker.stream.peek', input: { stream: 'YOAL_Q_jobs', limit: 5 } }), on, signal);
+		expect(missing).toMatchObject({ ok: false, error: 'Stream YOAL_Q_jobs does not exist on this broker.' });
 	});
 
 	test('redrive moves dead-lettered messages back, keeping body and id but not the attempt count', async () => {
@@ -200,15 +200,15 @@ describe('NodeTaskRunner: broker tasks', () => {
 		const signal = new AbortController().signal;
 		const on = targets(broker());
 		await instance.runOne(task({ kind: 'broker.queue.create', input: { queue: 'jobs-dlq' } }), on, signal);
-		const dlq = js.streams.get('SKIFF_Q_jobs-dlq')!;
+		const dlq = js.streams.get('YOAL_Q_jobs-dlq')!;
 		for (const [index, body] of ['a', 'b', 'c'].entries())
-			dlq.messages.push({ seq: index + 1, subject: 'skiff.q.jobs-dlq', data: encoder.encode(JSON.stringify(body)), headers: { 'Nats-Msg-Id': `m${index}`, 'Skiff-Content-Type': 'json', 'Skiff-Attempts': '4' } });
+			dlq.messages.push({ seq: index + 1, subject: 'yoal.q.jobs-dlq', data: encoder.encode(JSON.stringify(body)), headers: { 'Nats-Msg-Id': `m${index}`, 'Yoal-Content-Type': 'json', 'Yoal-Attempts': '4' } });
 		dlq.lastSeq = 3;
 
 		const result = await instance.runOne(task({ kind: 'broker.queue.redrive', input: { from: 'jobs-dlq', to: 'jobs', limit: 2 } }), on, signal);
-		expect(result).toMatchObject({ ok: true, result: { moved: 2, remaining: 1, state: { stream: 'SKIFF_Q_jobs', messages: 2 }, source: { messages: 1 } } });
-		const moved = js.streams.get('SKIFF_Q_jobs')!.messages;
-		expect(moved.map((item) => [decoder.decode(item.data), item.headers['Nats-Msg-Id'], item.headers['Skiff-Attempts']])).toEqual([
+		expect(result).toMatchObject({ ok: true, result: { moved: 2, remaining: 1, state: { stream: 'YOAL_Q_jobs', messages: 2 }, source: { messages: 1 } } });
+		const moved = js.streams.get('YOAL_Q_jobs')!.messages;
+		expect(moved.map((item) => [decoder.decode(item.data), item.headers['Nats-Msg-Id'], item.headers['Yoal-Attempts']])).toEqual([
 			['"a"', 'm0', undefined],
 			['"b"', 'm1', undefined],
 		]);
@@ -230,17 +230,17 @@ describe('NodeTaskRunner: function tasks', () => {
 		}) as unknown as typeof fetch;
 		const { instance, activity } = runner({ fetch: fetchFake, status: 'stopped' });
 		const result = await instance.runOne(
-			task({ kind: 'function.invoke', input: { method: 'POST', path: '/hook?x=1', headers: { 'content-type': 'text/plain', 'x-skiff-internal': '1' }, body: 'hi' } }, 'wl_fn'),
+			task({ kind: 'function.invoke', input: { method: 'POST', path: '/hook?x=1', headers: { 'content-type': 'text/plain', 'x-yoal-internal': '1' }, body: 'hi' } }, 'wl_fn'),
 			targets(fn()),
 			new AbortController().signal,
 		);
 		expect(result).toMatchObject({ ok: true, result: { status: 201, statusText: 'Created', body: 'hello', encoding: 'utf8', size: 5, truncated: false, coldStart: true } });
 		expect((result.result as { headers: string[][] }).headers).toContainEqual(['x-out', '1']);
 		expect(calls[0]!.url).toBe('http://localhost/hook?x=1');
-		expect(calls[0]!.init.unix).toBe('/run/skiff/workloads/wl_fn.sock');
+		expect(calls[0]!.init.unix).toBe('/run/yoal/workloads/wl_fn.sock');
 		const sent = calls[0]!.init.headers as Headers;
-		expect(sent.get('x-skiff-internal')).toBeNull();
-		expect(sent.get('user-agent')).toBe('skiff-test-request');
+		expect(sent.get('x-yoal-internal')).toBeNull();
+		expect(sent.get('user-agent')).toBe('yoal-test-request');
 		expect(activity).toEqual(['prj_fn']);
 	});
 
@@ -254,8 +254,8 @@ describe('NodeTaskRunner: function tasks', () => {
 		const on = targets(fn());
 		const result = await instance.runOne(task({ kind: 'function.scheduled', input: { cron: '*/5 * * * *' } }, 'wl_fn'), on, new AbortController().signal);
 		expect(result).toMatchObject({ ok: true, result: { status: 501, error: 'this function has no scheduled handler', coldStart: false } });
-		expect(calls[0]!.url).toBe('http://localhost/__skiff/scheduled');
-		expect(calls[0]!.headers).toMatchObject({ 'x-skiff-internal': '1', 'x-skiff-cron': '*/5 * * * *' });
+		expect(calls[0]!.url).toBe('http://localhost/__yoal/scheduled');
+		expect(calls[0]!.headers).toMatchObject({ 'x-yoal-internal': '1', 'x-yoal-cron': '*/5 * * * *' });
 
 		const unknown = await instance.runOne(task({ kind: 'function.scheduled', input: { cron: '0 0 * * *' } }, 'wl_fn'), on, new AbortController().signal);
 		expect(unknown).toMatchObject({ ok: false });

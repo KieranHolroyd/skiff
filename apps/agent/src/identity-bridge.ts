@@ -6,16 +6,16 @@ import {
 	type IdentityHealth,
 	type IdentitySecrets,
 	type IdentityUnitStatus,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 
 /**
  * The agent's side of the separate identity process (docs/IAM.md §11.2). On the identity node only,
- * it starts `skiff-identity` through the helper, pushes the non-secret pool projection, fetches the
+ * it starts `yoal-identity` through the helper, pushes the non-secret pool projection, fetches the
  * authenticated secret bundle (confidential OIDC clients and social providers) from the control
  * plane, and restarts the unit when it stops answering. It stops the unit when this node is no
  * longer assigned.
  *
- * Like `skiff-mail`, the process never dials the control plane: state, secrets and health cross the
+ * Like `yoal-mail`, the process never dials the control plane: state, secrets and health cross the
  * node's private unix socket. Secrets are relayed straight through and never logged.
  */
 
@@ -31,13 +31,13 @@ type Log = (level: 'info' | 'warn' | 'error', message: string) => void;
 type UnitState = 'starting' | 'running' | 'unhealthy' | 'stopped';
 
 export interface IdentityBridgeOptions {
-	/** `skiff-identity`'s control socket. */
+	/** `yoal-identity`'s control socket. */
 	socketPath: string;
 	helper: HelperIdentityApi;
 	/** Control plane base URL and node token for the authenticated secret fetch. */
 	controlUrl?: string;
 	nodeToken?: string;
-	/** Process build, reported in the heartbeat (`SKIFF_IDENTITY_VERSION`). */
+	/** Process build, reported in the heartbeat (`YOAL_IDENTITY_VERSION`). */
 	version?: string;
 	fetch?: Fetch;
 	log: Log;
@@ -129,9 +129,9 @@ export class IdentityBridge {
 		this.unhealthy = 0;
 		try {
 			await this.options.helper.identityStop();
-			this.options.log('info', 'This node is no longer the identity node: stopped skiff-identity');
+			this.options.log('info', 'This node is no longer the identity node: stopped yoal-identity');
 		} catch (error) {
-			this.options.log('warn', `Stopping skiff-identity failed: ${String(error)}`);
+			this.options.log('warn', `Stopping yoal-identity failed: ${String(error)}`);
 		}
 	}
 
@@ -152,7 +152,7 @@ export class IdentityBridge {
 				await this.options.helper.identityStart();
 				this.started = true;
 				this.setState('starting');
-				this.options.log('info', 'Started skiff-identity (this node is the identity node)');
+				this.options.log('info', 'Started yoal-identity (this node is the identity node)');
 			}
 			const health = await this.health();
 			if (!health || !health.ready) {
@@ -177,7 +177,7 @@ export class IdentityBridge {
 
 	/** Stop and start the unit (or use a helper verb when it has one). Exposed for tests. */
 	async restart(reason = 'requested'): Promise<void> {
-		this.options.log('warn', `Restarting skiff-identity (${reason})`);
+		this.options.log('warn', `Restarting yoal-identity (${reason})`);
 		this.restarts += 1;
 		this.unhealthy = 0;
 		this.setState('starting');
@@ -192,12 +192,12 @@ export class IdentityBridge {
 			this.secretsGeneration = null;
 		} catch (error) {
 			this.setState('unhealthy');
-			this.options.log('warn', `Restarting skiff-identity failed: ${String(error)}`);
+			this.options.log('warn', `Restarting yoal-identity failed: ${String(error)}`);
 		}
 	}
 
 	private identity(path: string, init: RequestInit = {}): Promise<Response> {
-		return this.fetch(`http://skiff-identity${path}`, {
+		return this.fetch(`http://yoal-identity${path}`, {
 			...init,
 			unix: this.options.socketPath,
 			headers: { 'content-type': 'application/json', ...(init.headers as Record<string, string> | undefined) },
@@ -228,7 +228,7 @@ export class IdentityBridge {
 	private async pushState(): Promise<void> {
 		const state = identityDesiredSchema.parse(this.desired);
 		const pushed = await this.identity('/state', { method: 'PUT', body: JSON.stringify(state) });
-		if (!pushed.ok) throw new Error(`skiff-identity refused the state: ${pushed.status} ${await pushed.text().catch(() => '')}`);
+		if (!pushed.ok) throw new Error(`yoal-identity refused the state: ${pushed.status} ${await pushed.text().catch(() => '')}`);
 		this.generation = state.generation;
 		// A new projection may add a client or provider; fetch its secret on this same pass.
 		this.secretsGeneration = null;
@@ -255,7 +255,7 @@ export class IdentityBridge {
 			if (!response.ok) throw new Error(`identity/secrets -> ${response.status}`);
 			const secrets: IdentitySecrets = identitySecretsSchema.parse(await response.json());
 			const pushed = await this.identity('/secrets', { method: 'PUT', body: JSON.stringify(secrets) });
-			if (!pushed.ok) throw new Error(`skiff-identity refused secrets: ${pushed.status}`);
+			if (!pushed.ok) throw new Error(`yoal-identity refused secrets: ${pushed.status}`);
 			this.secretsGeneration = secrets.generation;
 			const clients = secrets.pools.reduce((total, pool) => total + pool.clients.length, 0);
 			this.options.log('info', `Pushed identity secrets g${secrets.generation} (${secrets.pools.length} pools, ${clients} clients)`);

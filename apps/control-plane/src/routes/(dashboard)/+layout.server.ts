@@ -1,5 +1,5 @@
 import { error, redirect } from '@sveltejs/kit';
-import { hasPermission, STEP_UP_WINDOW_MS } from '@skiff/contracts';
+import { hasPermission, STEP_UP_WINDOW_MS } from '@yoal/contracts';
 import { freshUntil, isVerificationFresh, minutesLeft } from '#lib/server/step-up/policy.js';
 import { core } from '#lib/server/core.js';
 import { contentDomain, features, platformOrigin, sharedDomain } from '#lib/server/config.js';

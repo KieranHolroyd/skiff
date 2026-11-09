@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AgentJobRun, DesiredState, WorkloadActivation, WorkloadDesired } from '@skiff/contracts';
+import type { AgentJobRun, DesiredState, WorkloadActivation, WorkloadDesired } from '@yoal/contracts';
 import { JobRunner, jobWorkloads, type HelperJobApi, type HelperJobStatus } from './jobs.ts';
 import type { HelperLogResult } from './helper-client.ts';
 
@@ -182,7 +182,7 @@ describe('JobRunner', () => {
 	});
 
 	test('a failed report is retried; a restarted agent resumes from its state file', async () => {
-		const dir = mkdtempSync(join(tmpdir(), 'skiff-agent-jobs-'));
+		const dir = mkdtempSync(join(tmpdir(), 'yoal-agent-jobs-'));
 		dirs.push(dir);
 		const statePath = join(dir, 'jobs-state.json');
 		const first = setup({ statePath });

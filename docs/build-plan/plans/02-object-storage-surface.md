@@ -83,7 +83,7 @@ Need a path from the browser to a private RustFS instance. Use a **task/result r
 2. **Download/upload** need a browser-reachable URL:
    - Public instance: presign against `<name>--s3.<contentDomain>`.
    - Private instance: add a platform gateway route on the **platform origin**,
-     `/_skiff/storage/<instance>/<bucket>/<key>`, served by the edge Caddy. The URL carries a
+     `/_yoal/storage/<instance>/<bucket>/<key>`, served by the edge Caddy. The URL carries a
      short-lived HMAC token (`exp`, `method`, `key`, `user`) minted by the control plane. Caddy
      `forward_auth`s the token to the control plane, then proxies to the instance's loopback (edge)
      or over WireGuard (worker). This route is not a public S3 endpoint; it is an authenticated
@@ -159,7 +159,7 @@ Need a path from the browser to a private RustFS instance. Use a **task/result r
 
 ## Rollout
 
-`SKIFF_FEATURE_OBJECT_BROWSER` off by default. Bucket config can ship first. Enable browser for
+`YOAL_FEATURE_OBJECT_BROWSER` off by default. Bucket config can ship first. Enable browser for
 dev, then staging, then default after the conformance suite passes. Keep the RustFS console off.
 
 ## Open questions

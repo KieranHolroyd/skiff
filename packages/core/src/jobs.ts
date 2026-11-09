@@ -1,5 +1,5 @@
 import { and, eq } from 'drizzle-orm';
-import { nodes, workloadReplicas, workloads } from '@skiff/db';
+import { nodes, workloadReplicas, workloads } from '@yoal/db';
 import {
 	JOBS_CAPABILITY,
 	jobCreateSchema,
@@ -19,7 +19,7 @@ import {
 	type LogQuery,
 	type LogQueryResult,
 	type Principal,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
 import { parseCron } from './cron.ts';
@@ -141,13 +141,13 @@ export class JobService {
 		);
 	}
 
-	/** `SKIFF_FEATURE_JOBS` (off by default). Off: no new jobs or runs, and the scheduler stops. */
+	/** `YOAL_FEATURE_JOBS` (off by default). Off: no new jobs or runs, and the scheduler stops. */
 	enabled(): boolean {
 		return featureEnabled(this.ctx.config, 'JOBS');
 	}
 
 	private assertEnabled(): void {
-		if (!this.enabled()) throw new CoreError('feature_disabled', 'Jobs are not enabled on this platform (SKIFF_FEATURE_JOBS).', 404);
+		if (!this.enabled()) throw new CoreError('feature_disabled', 'Jobs are not enabled on this platform (YOAL_FEATURE_JOBS).', 404);
 	}
 
 	// ---------------------------------------------------------------- definitions

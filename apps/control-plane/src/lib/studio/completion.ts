@@ -1,4 +1,4 @@
-import type { Column, StudioInfo, TreeNode, TreePath } from '@skiff/studio/protocol';
+import type { Column, StudioInfo, TreeNode, TreePath } from '@yoal/studio/protocol';
 import { studioCall } from './client.js';
 import type { CompletionItem, CompletionSource } from './ui-types.js';
 

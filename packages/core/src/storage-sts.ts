@@ -3,7 +3,7 @@
  *
  * The pinned RustFS 1.0.4 build serves `POST /` with an `Action=AssumeRoleWithWebIdentity`
  * form body, verifies the token against an external OIDC issuer configured through
- * `RUSTFS_IDENTITY_OPENID_*`, and returns the usual STS XML. Skiff signs a short-lived workload
+ * `RUSTFS_IDENTITY_OPENID_*`, and returns the usual STS XML. Yoal signs a short-lived workload
  * token whose `groups` claim names the attachment's scoped IAM policy; RustFS maps that claim to
  * the policy and the request's inline `Policy` narrows the session to the requested bucket.
  *
@@ -17,7 +17,7 @@ import {
 	STORAGE_STS_TTL_SECONDS,
 	storageUserPolicy,
 	type StorageGrant,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { unescapeXml, xmlTag } from './storage-s3.ts';
 
 /** The RustFS STS endpoint existed from 1.0.4; anything else must fall back to sealed keys. */
@@ -67,7 +67,7 @@ export function storageStsForm(input: StorageStsRequestInput): URLSearchParams {
 		Version: '2011-06-15',
 		WebIdentityToken: input.token,
 		DurationSeconds: String(duration),
-		RoleSessionName: input.roleSessionName ?? 'skiff-storage',
+		RoleSessionName: input.roleSessionName ?? 'yoal-storage',
 	});
 	if (input.policy) {
 		const encoded = JSON.stringify(input.policy);

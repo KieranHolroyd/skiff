@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { FailoverPlan } from '@skiff/contracts';
+import type { FailoverPlan } from '@yoal/contracts';
 import { advanceFailover, canAdvance, FAILOVER_BUDGET_MS } from './failover.ts';
 
 const plan = {

@@ -1,10 +1,10 @@
 # v2-stress
 
-An example project that exercises every new axis of Skiff v2: process workloads, container
+An example project that exercises every new axis of Yoal v2: process workloads, container
 workloads, per-node placement and admission, just-in-time secrets, `/data` persistence, git builds,
 named environments, custom domains, and the HTTP path through Caddy to a live app.
 
-The app is deliberately dependency-free Bun. The scripts treat Skiff as a black box and use only
+The app is deliberately dependency-free Bun. The scripts treat Yoal as a black box and use only
 the public REST and agent APIs, so they double as a smoke test for a fresh install and as a
 reproducer when a v2 feature misbehaves.
 
@@ -39,17 +39,17 @@ reproducer when a v2 feature misbehaves.
 From the repository root:
 
 ```sh
-# 1. Build and run locally (no Skiff needed)
+# 1. Build and run locally (no Yoal needed)
 bun examples/v2-stress/src/server.ts            # http://127.0.0.1:3000
 bun examples/v2-stress/scripts/stress.ts --base http://127.0.0.1:3000 --skip-load
 
 # 2. Provision on a platform (API key with project/build/secret rights)
-export SKIFF_URL=https://control.example.com
-export SKIFF_TOKEN=skif_…
+export YOAL_URL=https://control.example.com
+export YOAL_TOKEN=yoal_…
 bun examples/v2-stress/scripts/provision.ts --slug v2-stress
 
 # 3. Stress the deployed app
-export SKIFF_NODE_TOKEN=…                       # optional: desired-state/activation checks
+export YOAL_NODE_TOKEN=…                       # optional: desired-state/activation checks
 bun examples/v2-stress/scripts/stress.ts --base https://v2-stress.<contentDomain>
 ```
 
@@ -71,7 +71,7 @@ bun examples/v2-stress/src/server.ts
 ```
 
 and pass `--secrets --expect-env local --secret-env-sha <sha256>` to the stress script. Without a
-Skiff workload, the app falls back to `./.stress-data` (or memory) and says so in `/api/info` and in
+Yoal workload, the app falls back to `./.stress-data` (or memory) and says so in `/api/info` and in
 the stress report. A process unit's persistent directory arrives as `STATE_DIRECTORY`; a container
 gets `/data`.
 
@@ -130,9 +130,9 @@ bun run --cwd examples/v2-stress build
 
 # the deploy endpoint takes inline files; the CLI zips a directory instead
 # (see docs/API.md for the presigned upload flow)
-curl -sS -X POST "$SKIFF_URL/api/v1/projects/v2-stress/deploy" \
-  -H "authorization: Bearer $SKIFF_TOKEN" \
-  -H "origin: $SKIFF_URL" \
+curl -sS -X POST "$YOAL_URL/api/v1/projects/v2-stress/deploy" \
+  -H "authorization: Bearer $YOAL_TOKEN" \
+  -H "origin: $YOAL_URL" \
   -H 'content-type: application/json' \
   -d '{"environment":"staging","promote":true,"files":[{"path":"server.js","content":"…","encoding":"base64"}]}'
 ```
@@ -145,7 +145,7 @@ workload per project, so environment hosts serve the project workload rather tha
 `--domain app.example.com` creates the domain and prints:
 
 ```
-TXT   _skiff.app.example.com → skiff-verify=…
+TXT   _yoal.app.example.com → yoal-verify=…
 CNAME app.example.com        → v2-stress.<contentDomain>
 ```
 
@@ -220,7 +220,7 @@ releases the buffer) or the kernel kills the unit and the report fails with a ti
   Quadlet volume. `/api/info` reports which path won.
 - **Bun must be on the workload PATH.** The spec runs `bun server.js`, so the node's Bun needs to be
   visible to systemd (`/usr/local/bin/bun` is the helper default; this repo's installer currently
-  puts it in `/opt/skiff/runtime/bin/bun`). If yours differs, provision with
-  `--command "/opt/skiff/runtime/bin/bun server.js"` or rely on the helper's default
+  puts it in `/opt/yoal/runtime/bin/bun`). If yours differs, provision with
+  `--command "/opt/yoal/runtime/bin/bun server.js"` or rely on the helper's default
   `bun run start` once the installer wiring lands.
 - **DNS is manual.** The example prints the records; verification is on demand.

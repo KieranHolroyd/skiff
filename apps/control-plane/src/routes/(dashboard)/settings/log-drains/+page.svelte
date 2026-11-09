@@ -6,12 +6,12 @@
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import PowerIcon from '@lucide/svelte/icons/power';
 	import TrashIcon from '@lucide/svelte/icons/trash';
-	import type { LogDrainView } from '@skiff/contracts';
+	import type { LogDrainView } from '@yoal/contracts';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import SecretDialog from '#lib/components/skiff/SecretDialog.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import SecretDialog from '#lib/components/yoal/SecretDialog.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
@@ -131,7 +131,7 @@
 	}
 </script>
 
-<svelte:head><title>Log drains · Settings · Skiff</title></svelte:head>
+<svelte:head><title>Log drains · Settings · Yoal</title></svelte:head>
 
 <SettingsHeader id="log-drains" />
 
@@ -140,7 +140,7 @@
 		title="Log drains"
 		icon={LogsIcon}
 		count={data.drains.length}
-		description="Every line Skiff stores is forwarded within a few seconds, from when the drain is created."
+		description="Every line Yoal stores is forwarded within a few seconds, from when the drain is created."
 		flush
 	>
 		{#snippet actions()}
@@ -369,7 +369,7 @@
 					required
 					placeholder={kind === 'otlp'
 						? 'https://otlp-gateway.example.com/otlp'
-						: 'https://logs.example.com/skiff'}
+						: 'https://logs.example.com/yoal'}
 					spellcheck="false"
 					class="font-mono text-sm"
 				/>
@@ -377,7 +377,7 @@
 					{#if kind === 'otlp'}
 						OTLP/HTTP with JSON encoding; <code class="font-mono">/v1/logs</code> is added to a bare origin.
 					{:else}
-						Skiff POSTs batches signed with <code class="font-mono">X-Skiff-Signature</code>; the
+						Yoal POSTs batches signed with <code class="font-mono">X-Yoal-Signature</code>; the
 						secret is shown once, after adding.
 					{/if}
 				</Field.Description>
@@ -533,7 +533,7 @@
 	>
 		<p class="text-xs text-muted-foreground">
 			Each request carries <code class="font-mono"
-				>X-Skiff-Signature: t=&lt;unix&gt;,v1=&lt;hex&gt;</code
+				>X-Yoal-Signature: t=&lt;unix&gt;,v1=&lt;hex&gt;</code
 			>, where the hex is HMAC-SHA256 of <code class="font-mono">&lt;t&gt;.&lt;raw body&gt;</code>
 			with this secret. Reject old <code class="font-mono">t</code> values to stop replays.
 		</p>

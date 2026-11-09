@@ -1,4 +1,4 @@
-import type { EmailOrgState } from '@skiff/contracts';
+import type { EmailOrgState } from '@yoal/contracts';
 
 /**
  * The Email setup checklist on the overview (docs/EMAIL.md §9): the steps from "nothing configured"

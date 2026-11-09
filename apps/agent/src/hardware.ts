@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 import { arch, cpus, release } from 'node:os';
-import type { NodeHardware } from '@skiff/contracts';
+import type { NodeHardware } from '@yoal/contracts';
 
 /**
  * Hardware facts for placement (docs/CLUSTERING.md §3.1, phase C0).

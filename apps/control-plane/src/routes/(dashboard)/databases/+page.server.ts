@@ -9,7 +9,7 @@ import {
 	hasPermission,
 	type DatabaseView,
 	type NodeCapacityView
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { failStatus, formString, toFormFailure } from '../_lib/errors.js';
 import { databaseCan, fieldErrorsFrom, optionalNumber } from './_lib/forms.server.js';

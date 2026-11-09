@@ -4,7 +4,7 @@ import { core } from '#lib/server/core.js';
 import { sso, type SsoLogoutTarget } from '#lib/server/sso.js';
 
 /**
- * Sign out of Skiff, then send the browser to the IdP's Single Logout Service when it is configured.
+ * Sign out of Yoal, then send the browser to the IdP's Single Logout Service when it is configured.
  *
  * `@better-auth/sso` has full SAML SLO endpoints (`/api/auth/sso/saml2/logout/:providerId` and the
  * IdP callback `/api/auth/sso/saml2/sp/slo/:providerId`), but they are only registered when its

@@ -5,8 +5,8 @@
 	import UsersIcon from '@lucide/svelte/icons/users';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import * as Avatar from '#lib/components/ui/avatar/index.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
@@ -83,7 +83,7 @@
 </script>
 
 <svelte:head>
-	<title>Members · Settings · Skiff</title>
+	<title>Members · Settings · Yoal</title>
 </svelte:head>
 
 <SettingsHeader id="members">
@@ -209,7 +209,7 @@
 					<Badge variant="secondary" class="tabular-nums">{data.invitations.length}</Badge>
 				</Card.Title>
 				<Card.Description>
-					Skiff is invite-only: only invited email addresses can create an account. Invitees sign in
+					Yoal is invite-only: only invited email addresses can create an account. Invitees sign in
 					with that email (GitHub, passkey or an email link) and accept.
 				</Card.Description>
 			</Card.Header>

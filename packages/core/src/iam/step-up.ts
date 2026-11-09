@@ -1,8 +1,8 @@
 /**
  * Step-up enforcement wiring (STEP-UP.md §8).
  *
- * The rules themselves live in `@skiff/contracts` (`requireStepUp`, `StepUpRequiredError`); this
- * module only decides whether they are switched on. It is off unless `SKIFF_STEP_UP=1`, because
+ * The rules themselves live in `@yoal/contracts` (`requireStepUp`, `StepUpRequiredError`); this
+ * module only decides whether they are switched on. It is off unless `YOAL_STEP_UP=1`, because
  * until the verification plugin and `VerifyDialog` ship (STEP-UP.md §10, steps 2–3) a challenged
  * user has no way to verify. Defaulting off also keeps headless e2e and `bun test` unchanged.
  *
@@ -10,7 +10,7 @@
  * toggle) sees the current value and there is one source of truth for every surface.
  */
 export function stepUpEnabled(env: Record<string, string | undefined> = process.env): boolean {
-	return env.SKIFF_STEP_UP === '1';
+	return env.YOAL_STEP_UP === '1';
 }
 
 /**

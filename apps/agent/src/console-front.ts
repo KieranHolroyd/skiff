@@ -16,7 +16,7 @@ import {
 	type ContainerConsoleActivation,
 	type ContainerConsoleScope,
 	type NodeContainerConsoleDesired,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 
 export type FetchConsoleActivation = (token: string, signal?: AbortSignal) => Promise<ContainerConsoleActivation>;
 
@@ -297,7 +297,7 @@ async function boundedBytes(request: Request, max: number): Promise<Uint8Array> 
 	return bytes;
 }
 
-const PASSED_HEADERS = ['content-type', 'content-length', 'x-skiff-file-name', 'x-skiff-file-path'];
+const PASSED_HEADERS = ['content-type', 'content-length', 'x-yoal-file-name', 'x-yoal-file-path'];
 
 function passthrough(body: string | ReadableStream<Uint8Array> | null, upstream: Response): Response {
 	const headers = new Headers({ 'cache-control': 'no-store' });

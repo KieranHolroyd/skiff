@@ -16,7 +16,7 @@ import {
 	pipelineTriggers,
 	pipelineVariables,
 	projects,
-} from '@skiff/db';
+} from '@yoal/db';
 import {
 	PIPELINE_DEFAULT_IMAGE,
 	PIPELINE_WORKFLOW_DIR,
@@ -64,7 +64,7 @@ import {
 	type PipelineWorkflow,
 	type Permission,
 	type Principal,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { entriesFromZip } from './artifact.ts';
@@ -72,7 +72,7 @@ import { newId } from './util.ts';
 import { PipelineOidc } from './pipeline-oidc.ts';
 import { commitState, githubTarget, postCommitStatus } from './pipeline-status.ts';
 import { forgeClient } from './forges/clients.ts';
-import { forgeFullName, parseRepoUrl, type ForgeKind } from '@skiff/contracts';
+import { forgeFullName, parseRepoUrl, type ForgeKind } from '@yoal/contracts';
 
 /** The secret name App-covered repositories get a repository-scoped installation token under. */
 export const GITHUB_TOKEN_SECRET = 'GITHUB_TOKEN';
@@ -97,7 +97,7 @@ const JOB_MEMORY_MB = 4096;
 const JOB_CPUS = 2;
 
 /**
- * Runner labels GitHub workflows use for hosted runners. A Skiff node is Linux, so these are
+ * Runner labels GitHub workflows use for hosted runners. A Yoal node is Linux, so these are
  * treated as `linux` rather than leaving the job queued forever (Gitea does the same mapping).
  */
 const HOSTED_LABEL_ALIASES: Array<[RegExp, string]> = [
@@ -205,13 +205,13 @@ interface TriggerPayload {
 	changedFiles?: string[] | null;
 	title?: string | null;
 	schedule?: string | null;
-	/** For skiff_event triggers: the event type that fired. */
+	/** For yoal_event triggers: the event type that fired. */
 	eventType?: string | null;
-	/** Small event object exposed as `skiff.event`. */
+	/** Small event object exposed as `yoal.event`. */
 	event?: Record<string, unknown>;
 }
 
-/** What a repository's default branch subscribes to: a cron, or Skiff event types (`[]` = any). */
+/** What a repository's default branch subscribes to: a cron, or Yoal event types (`[]` = any). */
 export type PipelineSubscription = { path: string; cron: string } | { path: string; events: string[] };
 
 interface RunStatusUpdate {
@@ -275,7 +275,7 @@ export class PipelineEngine {
 	}
 
 	/**
-	 * Best-effort commit status for a run (WP3, D176): `skiff/<workflow>` on the run's commit,
+	 * Best-effort commit status for a run (WP3, D176): `yoal/<workflow>` on the run's commit,
 	 * linking to the run page. Uses the repository's status token, else the org's GitHub App or the
 	 * forge connection serving the repository; never throws.
 	 */
@@ -290,7 +290,7 @@ export class PipelineEngine {
 					: run.status === 'in_progress'
 						? 'Running'
 						: `${run.conclusion ?? 'completed'}${run.error ? `: ${run.error.split('\n')[0]}` : ''}`;
-			const context = `skiff/${run.workflowName}`;
+			const context = `yoal/${run.workflowName}`;
 			const targetUrl = `${this.ctx.config.platformOrigin}/pipelines/${encodeURIComponent(repository.name)}/runs/${run.number}`;
 			const warn = (error: unknown) =>
 				console.warn(`[pipelines] commit status for ${repository.name}#${run.number} failed: ${(error as Error).message}`);
@@ -312,7 +312,7 @@ export class PipelineEngine {
 					.catch(warn);
 				return;
 			}
-			// No stored token: Skiff's GitHub App or the forge connection reports (D164, D176).
+			// No stored token: Yoal's GitHub App or the forge connection reports (D164, D176).
 			void this.ctx.git
 				.commitStatus(repository.orgId, repository.cloneUrl, {
 					sha: run.sha,
@@ -409,7 +409,7 @@ export class PipelineEngine {
 			schedule: payload.schedule ?? null,
 			eventType: payload.eventType ?? null,
 		};
-		// Parse every file first: a workflow may call another one (`uses: ./.skiff/workflows/x.yml`).
+		// Parse every file first: a workflow may call another one (`uses: ./.yoal/workflows/x.yml`).
 		const parsed = new Map<string, PipelineWorkflow>();
 		const parseErrors = new Map<string, unknown>();
 		for (const file of [...files, ...(payload.workflowText ? report.files.filter((f) => f.path.startsWith(`${PIPELINE_WORKFLOW_DIR}/`)) : [])]) {
@@ -427,7 +427,7 @@ export class PipelineEngine {
 			const workflow = parsed.get(file.path);
 			if (workflow) {
 				for (const cron of workflow.on.schedule) schedules.push({ path: file.path, cron });
-				if (workflow.on.skiffEvent) schedules.push({ path: file.path, events: workflow.on.skiffEvent.types });
+				if (workflow.on.yoalEvent) schedules.push({ path: file.path, events: workflow.on.yoalEvent.types });
 			} else {
 				const error = parseErrors.get(file.path);
 				// A dispatch names one workflow; any other event reports every broken file it may have run.
@@ -453,7 +453,7 @@ export class PipelineEngine {
 			finish('failed', `No workflow named ${payload.workflowPath ?? '(none)'} at ${trigger.ref}.`, []);
 			return [];
 		}
-		// The default branch's `schedule:` crons and `skiff_event` subscriptions are remembered so the
+		// The default branch's `schedule:` crons and `yoal_event` subscriptions are remembered so the
 		// minute tick and the event hook need no clone.
 		if (trigger.event === 'push' && trigger.ref === `refs/heads/${repository.defaultBranch}` && !payload.workflowText)
 			this.ctx.db
@@ -528,7 +528,7 @@ export class PipelineEngine {
 		return id;
 	}
 
-	/** Expression context shared by every job of a run (`skiff`, `inputs`, `vars`). */
+	/** Expression context shared by every job of a run (`yoal`, `inputs`, `vars`). */
 	runContext(run: PipelineRunRow, repository: PipelineRepositoryRow): PipelineExpressionContext {
 		const payload = this.triggerPayload(run.triggerId);
 		const vars = Object.fromEntries(
@@ -540,7 +540,7 @@ export class PipelineEngine {
 				.map((row) => [row.name, row.value]),
 		);
 		return {
-			skiff: {
+			yoal: {
 				sha: run.sha,
 				ref: run.ref,
 				ref_name: refName(run.ref),
@@ -730,7 +730,7 @@ export class PipelineEngine {
 		const outputs: Record<string, string> = {};
 		for (const [name, template] of Object.entries(call.outputs)) {
 			try {
-				outputs[name] = interpolate(template, { skiff: {}, jobs });
+				outputs[name] = interpolate(template, { yoal: {}, jobs });
 			} catch {
 				outputs[name] = '';
 			}
@@ -960,7 +960,7 @@ export class PipelineEngine {
 			.from(pipelineEnvironments)
 			.where(and(eq(pipelineEnvironments.repositoryId, repository.id), eq(pipelineEnvironments.name, environment)))
 			.get();
-		// GitHub creates an environment on first use; so does Skiff, with no rules.
+		// GitHub creates an environment on first use; so does Yoal, with no rules.
 		if (!row) {
 			const now = this.ctx.now();
 			this.ctx.db
@@ -1316,16 +1316,16 @@ export class PipelineEngine {
 		};
 		// A job inlined from a reusable workflow sees the call's inputs, not the run's.
 		if (spec.callKey) context.inputs = spec.callInputs ?? {};
-		(context.skiff as Record<string, unknown>).job = job.key;
+		(context.yoal as Record<string, unknown>).job = job.key;
 		// The platform registry (docs/REGISTRY.md): where `registry/<name>` tags push to.
 		const registry = this.ctx.registry.jobRegistry(job.orgId, run.trust);
 		if (registry) {
-			(context.skiff as Record<string, unknown>).registry = registry.host;
-			(context.skiff as Record<string, unknown>).registry_namespace = registry.namespace;
+			(context.yoal as Record<string, unknown>).registry = registry.host;
+			(context.yoal as Record<string, unknown>).registry_namespace = registry.namespace;
 		}
 		// The engine-only call fields stay here; the runner gets a plain job spec.
 		const { callWith: _with, callKey: _key, callSecretMap: _secrets, ...jobSpec } = spec;
-		const buildkit = spec.steps.some((step) => step.uses !== null && resolvePipelineAction(step.uses) === 'skiff/build-image');
+		const buildkit = spec.steps.some((step) => step.uses !== null && resolvePipelineAction(step.uses) === 'yoal/build-image');
 		return {
 			kind: 'job',
 			jobId: job.id,
@@ -1530,7 +1530,7 @@ export class PipelineEngine {
 				runId: job.runId,
 				step: -1,
 				stream: 'system',
-				text: `[skiff] log limit of ${MAX_LOG_LINES_PER_JOB} lines reached; further output is dropped`,
+				text: `[yoal] log limit of ${MAX_LOG_LINES_PER_JOB} lines reached; further output is dropped`,
 				ts: now,
 			});
 		for (let i = 0; i < lines.length; i += 200)
@@ -1541,7 +1541,7 @@ export class PipelineEngine {
 	appendSystemLine(job: PipelineJobRow, text: string): void {
 		this.ctx.db
 			.insert(pipelineLogLines)
-			.values({ jobId: job.id, runId: job.runId, step: -1, stream: 'system', text: `[skiff] ${text}`, ts: this.ctx.now() })
+			.values({ jobId: job.id, runId: job.runId, step: -1, stream: 'system', text: `[yoal] ${text}`, ts: this.ctx.now() })
 			.run();
 	}
 
@@ -1821,7 +1821,7 @@ export class PipelineEngine {
 				JSON.stringify({ image: input.image, run: run.id, sha: run.sha, workflow: run.workflowPath }, null, 2),
 			);
 			const fresh = this.ctx.projects.requireById(principal, project.id);
-			const deployment = await this.ctx.deployments.deployEntries(principal, fresh, [{ path: 'skiff-pipeline.json', data: manifest }], {
+			const deployment = await this.ctx.deployments.deployEntries(principal, fresh, [{ path: 'yoal-pipeline.json', data: manifest }], {
 				promote: input.promote,
 				message,
 			});

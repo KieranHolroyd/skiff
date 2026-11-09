@@ -1,4 +1,4 @@
-# Skiff — v0 Spike Results (2026-11-03)
+# Yoal — v0 Spike Results (2026-11-03)
 
 Environment: macOS arm64, Bun 1.4.0. RSS figures are from macOS and must be re-measured on Debian 13,
 where they are typically lower.
@@ -34,7 +34,7 @@ where they are typically lower.
 - **The MCP 2026-07-28 spec deprecates Dynamic Client Registration in favour of Client ID Metadata Documents (CIMD).**
   - `@better-auth/mcp` `mcp()` *is* the OAuth 2.1 provider. Don't add `oauthProvider()` as well.
   - `@better-auth/cimd` adds CIMD.
-  - Skiff enables **both**: CIMD by default, plus DCR via `SKIFF_MCP_ALLOW_DCR` (default on) for older clients.
+  - Yoal enables **both**: CIMD by default, plus DCR via `YOAL_MCP_ALLOW_DCR` (default on) for older clients.
 - CIMD needs an SSRF-safe fetch transport. The bundled `@better-auth/cimd/node` transport works under Bun:
   - It rejects loopback, private, link-local and metadata IPs, plain HTTP and redirects.
   - It **pins the DNS result**: Bun honours `node:https` `lookup`.
@@ -47,7 +47,7 @@ where they are typically lower.
     root protected-resource path itself.
   - **SvelteKit's built-in CSRF check blocks the OAuth token endpoint** in production builds (it's a
     cross-origin form POST by design). It's disabled (`csrf.trustedOrigins: ['*']`) and replaced with
-    Skiff's stricter policy in `src/lib/server/csrf.ts`:
+    Yoal's stricter policy in `src/lib/server/csrf.ts`:
     - every mutation must be same-origin,
     - with an exact allowlist for cookieless endpoints (token, register, revoke, introspect, `/mcp`).
   - Better Auth logs "Expected string[] but got TEXT" warnings on SQLite when it re-checks the schema. They're harmless,
@@ -56,7 +56,7 @@ where they are typically lower.
     **Follow-up:** verify in-process, or point `jwksUrl` at the local socket.
 
 ## 3. MCP server (`@modelcontextprotocol/server` 2.4.0, protocol 2026-07-28)
-- `createMcpHandler(factory)` is stateless per request and fits Skiff exactly.
+- `createMcpHandler(factory)` is stateless per request and fits Yoal exactly.
 - **Destructive confirmation** uses multi-round-trip input: `inputRequired(...)` + `acceptedContent(...)`.
   - The confirmation key embeds the project slug.
   - If the user declines, the tool cancels; it doesn't ask again.
@@ -118,6 +118,6 @@ Libraries: `smtp-server` 3.21.3 (MIT-0), `nodemailer` 10.3.1 (MIT-0), `mailauth`
 Verdict: build the MTA in Bun (D115). KumoMTA is no longer needed.
 
 ## 7. Still to do
-- Litestream → R2 replication + `skif restore` drill (needs an R2 bucket and credentials).
+- Litestream → R2 replication + `yoal restore` drill (needs an R2 bucket and credentials).
 - Re-measure DuckDB, control-plane and Caddy RSS on Debian 13.
 - Real-client check: connect Claude Code / Claude.ai to a deployed instance (CIMD vs DCR, protocol era).

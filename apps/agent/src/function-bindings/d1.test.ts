@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { FunctionRuntimeBinding, WorkloadDesired } from '@skiff/contracts';
+import type { FunctionRuntimeBinding, WorkloadDesired } from '@yoal/contracts';
 import { renderD1Binding } from './d1.ts';
 
 function workload(compatibilityDate = '2026-10-01'): WorkloadDesired {

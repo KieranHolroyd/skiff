@@ -1,6 +1,6 @@
 /**
  * Managed databases (docs/DATABASES.md): the wire types the CLI reads, and pure formatting for
- * `skif db`. Types mirror `packages/contracts/src/database.ts`; the CLI bundle stays free of
+ * `yoal db`. Types mirror `packages/contracts/src/database.ts`; the CLI bundle stays free of
  * runtime dependencies (D40), so keep them in sync.
  */
 import { UsageError } from './errors.ts';
@@ -213,7 +213,7 @@ export interface DatabaseCredentials {
 	note: string;
 }
 
-/** Mirrors `databaseEngines` in @skiff/contracts (D95). Keep in sync; the server validates. */
+/** Mirrors `databaseEngines` in @yoal/contracts (D95). Keep in sync; the server validates. */
 export const DATABASE_ENGINES = ['postgres', 'mysql', 'mariadb', 'mongodb', 'valkey', 'redis', 'clickhouse'] as const;
 
 export interface DatabaseCreateInput {
@@ -310,7 +310,7 @@ export function topTables(tables: DatabaseTableStat[], limit = 10): DatabaseTabl
 	return [...tables].sort((a, b) => b.totalBytes - a.totalBytes).slice(0, limit);
 }
 
-/** The `skif db info` report. */
+/** The `yoal db info` report. */
 export function databaseDetails(view: DatabaseView, options: { now?: number; tables?: number } = {}): string {
 	const lines: string[] = [];
 	const field = (label: string, value: string) => lines.push(`${label.padEnd(10)}  ${value}`);
@@ -336,7 +336,7 @@ export function databaseDetails(view: DatabaseView, options: { now?: number; tab
 
 	lines.push('');
 	if (view.attachments.length === 0) {
-		lines.push(`Attached projects: none. Attach one with \`skif db attach ${view.name} --project <slug>\`.`);
+		lines.push(`Attached projects: none. Attach one with \`yoal db attach ${view.name} --project <slug>\`.`);
 	} else {
 		lines.push('Attached projects:');
 		lines.push(
@@ -371,7 +371,7 @@ export function databaseDetails(view: DatabaseView, options: { now?: number; tab
 	return lines.join('\n');
 }
 
-/** Mirrors `DatabaseReplicaView` in @skiff/contracts (docs/CLUSTERING.md §9.2). */
+/** Mirrors `DatabaseReplicaView` in @yoal/contracts (docs/CLUSTERING.md §9.2). */
 export interface DatabaseReplicaView {
 	id: string;
 	databaseId: string;
@@ -395,7 +395,7 @@ export interface DatabaseReplicaView {
 	createdAt: string;
 }
 
-/** Mirrors `DatabaseFailoverView` in @skiff/contracts (docs/CLUSTERING.md §9.3). */
+/** Mirrors `DatabaseFailoverView` in @yoal/contracts (docs/CLUSTERING.md §9.3). */
 export interface DatabaseFailoverView {
 	id: string;
 	databaseId: string;
@@ -412,7 +412,7 @@ export interface DatabaseFailoverView {
 	finishedAt: string | null;
 }
 
-/** Mirrors `databasePitrStatusSchema` in @skiff/contracts (docs/PITR.md). Credential-free. */
+/** Mirrors `databasePitrStatusSchema` in @yoal/contracts (docs/PITR.md). Credential-free. */
 export interface DatabasePitrView {
 	databaseId: string;
 	databaseName: string;

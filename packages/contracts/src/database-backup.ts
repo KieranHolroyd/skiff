@@ -126,7 +126,7 @@ export interface DatabaseBackupLocation {
 	kind: 'platform' | 'local' | 's3';
 	/** Exact object location, e.g. `s3://bucket/prefix/key (https://endpoint)` or `file:///dir/key`. */
 	location: string;
-	/** False when the recorded target was deleted: Skiff can no longer reach the object. */
+	/** False when the recorded target was deleted: Yoal can no longer reach the object. */
 	available: boolean;
 	unavailableReason: string | null;
 }

@@ -61,16 +61,16 @@ describe('evaluateAccessPolicy', () => {
 	});
 
 	test('matches a service token by header hash, never the raw value', () => {
-		const token = 'skiff-service-token';
+		const token = 'yoal-service-token';
 		const rules = [
-			rule(0, 'deny', { type: 'serviceToken', header: 'x-skiff-token', tokenHash: sha256Hex('wrong') }),
-			rule(1, 'allow', { type: 'serviceToken', header: 'x-skiff-token', tokenHash: sha256Hex(token) }),
+			rule(0, 'deny', { type: 'serviceToken', header: 'x-yoal-token', tokenHash: sha256Hex('wrong') }),
+			rule(1, 'allow', { type: 'serviceToken', header: 'x-yoal-token', tokenHash: sha256Hex(token) }),
 		];
 		expect(
-			evaluateAccessPolicy(policy(rules), {}, { headers: { 'x-skiff-token': token } }),
+			evaluateAccessPolicy(policy(rules), {}, { headers: { 'x-yoal-token': token } }),
 		).toBe('allow');
 		expect(
-			evaluateAccessPolicy(policy(rules), {}, { headers: { 'x-skiff-token': 'not-it' } }),
+			evaluateAccessPolicy(policy(rules), {}, { headers: { 'x-yoal-token': 'not-it' } }),
 		).toBe('deny');
 	});
 
@@ -122,24 +122,24 @@ describe('evaluateAccessPolicy', () => {
 });
 
 describe('evaluateAccessEdge', () => {
-	const token = 'skiff-service-token';
+	const token = 'yoal-service-token';
 	const tokens = serviceTokenRules(
 		policy([
-			rule(0, 'allow', { type: 'serviceToken', header: 'X-Skiff-Access-Token', tokenHash: sha256Hex(token) }),
+			rule(0, 'allow', { type: 'serviceToken', header: 'X-Yoal-Access-Token', tokenHash: sha256Hex(token) }),
 			rule(1, 'deny', { type: 'serviceToken', header: 'X-Blocked', tokenHash: sha256Hex('blocked') }),
 		]),
 	);
 
 	test('a matching service token allows before any redirect', () => {
 		expect(
-			evaluateAccessEdge(tokens, { 'x-skiff-access-token': token }, true),
-		).toEqual({ decision: 'allow', header: 'x-skiff-access-token' });
+			evaluateAccessEdge(tokens, { 'x-yoal-access-token': token }, true),
+		).toEqual({ decision: 'allow', header: 'x-yoal-access-token' });
 	});
 
 	test('a missing or wrong token continues to login when a person could match', () => {
 		expect(evaluateAccessEdge(tokens, {}, true)).toEqual({ decision: 'login' });
 		expect(
-			evaluateAccessEdge(tokens, { 'x-skiff-access-token': 'not-it' }, true),
+			evaluateAccessEdge(tokens, { 'x-yoal-access-token': 'not-it' }, true),
 		).toEqual({ decision: 'login' });
 	});
 
@@ -150,13 +150,13 @@ describe('evaluateAccessEdge', () => {
 	test('a matching deny token beats an allow, whatever the header order', () => {
 		const rules = serviceTokenRules(
 			policy([
-				rule(0, 'allow', { type: 'serviceToken', header: 'X-Skiff-Access-Token', tokenHash: sha256Hex(token) }),
-				rule(1, 'deny', { type: 'serviceToken', header: 'X-Skiff-Access-Token', tokenHash: sha256Hex('blocked') }),
+				rule(0, 'allow', { type: 'serviceToken', header: 'X-Yoal-Access-Token', tokenHash: sha256Hex(token) }),
+				rule(1, 'deny', { type: 'serviceToken', header: 'X-Yoal-Access-Token', tokenHash: sha256Hex('blocked') }),
 			]),
 		);
-		expect(evaluateAccessEdge(rules, { 'x-skiff-access-token': 'blocked' }, true)).toEqual({
+		expect(evaluateAccessEdge(rules, { 'x-yoal-access-token': 'blocked' }, true)).toEqual({
 			decision: 'deny',
-			header: 'x-skiff-access-token',
+			header: 'x-yoal-access-token',
 		});
 	});
 });

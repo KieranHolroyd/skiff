@@ -13,9 +13,9 @@
 export const TEMPORARY_DOMAIN_SUFFIX = 'sslip.io';
 
 /** Files the edge agent and Caddy read for DNS-01 (Cloudflare). */
-export const CLOUDFLARE_TOKEN_FILE = '/etc/skiff/cloudflare.token';
+export const CLOUDFLARE_TOKEN_FILE = '/etc/yoal/cloudflare.token';
 /** The control plane's unix socket; the edge agent talks to it directly (no hairpin through Caddy). */
-export const CONTROL_SOCKET = '/run/skiff/control.sock';
+export const CONTROL_SOCKET = '/run/yoal/control.sock';
 
 const LABEL = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
 const DOMAIN = new RegExp(`^(?=.{1,253}$)${LABEL}(?:\\.${LABEL})+$`);
@@ -96,9 +96,9 @@ export function platformOriginFor(settings: Pick<DomainSettings, 'platformHost' 
 	return `${settings.tls ? 'https' : 'http'}://${settings.platformHost}`;
 }
 
-/** Read the current settings back from the control plane's env (`/etc/skiff/skiff.env`). */
+/** Read the current settings back from the control plane's env (`/etc/yoal/yoal.env`). */
 export function domainSettingsFromEnv(env: { get(key: string): string | undefined }): DomainSettings {
-	const origin = env.get('SKIFF_PLATFORM_ORIGIN') ?? '';
+	const origin = env.get('YOAL_PLATFORM_ORIGIN') ?? '';
 	let platformHost = '';
 	let tls = false;
 	try {
@@ -110,36 +110,36 @@ export function domainSettingsFromEnv(env: { get(key: string): string | undefine
 	}
 	return {
 		platformHost,
-		contentDomain: env.get('SKIFF_CONTENT_DOMAIN') ?? '',
+		contentDomain: env.get('YOAL_CONTENT_DOMAIN') ?? '',
 		tls,
-		acmeEmail: tls ? (env.get('SKIFF_ACME_EMAIL') ?? '') : '',
+		acmeEmail: tls ? (env.get('YOAL_ACME_EMAIL') ?? '') : '',
 	};
 }
 
 /** Env changes (`null` removes) for a set of files. */
 export type EnvChanges = Record<string, string | null>;
 
-/** `/etc/skiff/skiff.env` (control plane; the agent also loads it first). */
+/** `/etc/yoal/yoal.env` (control plane; the agent also loads it first). */
 export function controlPlaneEnvChanges(settings: DomainSettings, tokenFile: string | null): EnvChanges {
 	return {
-		SKIFF_PLATFORM_ORIGIN: platformOriginFor(settings),
-		SKIFF_CONTENT_DOMAIN: settings.contentDomain,
-		SKIFF_ACME_EMAIL: settings.tls ? settings.acmeEmail : null,
+		YOAL_PLATFORM_ORIGIN: platformOriginFor(settings),
+		YOAL_CONTENT_DOMAIN: settings.contentDomain,
+		YOAL_ACME_EMAIL: settings.tls ? settings.acmeEmail : null,
 		// The installer's name for the token file, kept so re-runs remember it.
-		SKIFF_CLOUDFLARE_TOKEN_FILE: tokenFile,
+		YOAL_CLOUDFLARE_TOKEN_FILE: tokenFile,
 	};
 }
 
-/** `/etc/skiff/agent.env` on the control-plane host (it overrides skiff.env for the edge agent). */
+/** `/etc/yoal/agent.env` on the control-plane host (it overrides yoal.env for the edge agent). */
 export function edgeAgentEnvChanges(settings: DomainSettings, tokenFile: string | null): EnvChanges {
 	return {
-		SKIFF_CONTROL_URL: platformOriginFor(settings),
-		SKIFF_CONTROL_SOCKET: CONTROL_SOCKET,
-		SKIFF_CONTENT_DOMAIN: settings.contentDomain,
-		SKIFF_PLATFORM_HOST: settings.platformHost,
-		SKIFF_ACME_EMAIL: settings.tls ? settings.acmeEmail : null,
-		SKIFF_TLS: settings.tls ? '1' : '0',
-		SKIFF_CLOUDFLARE_API_TOKEN_FILE: settings.tls ? tokenFile : null,
+		YOAL_CONTROL_URL: platformOriginFor(settings),
+		YOAL_CONTROL_SOCKET: CONTROL_SOCKET,
+		YOAL_CONTENT_DOMAIN: settings.contentDomain,
+		YOAL_PLATFORM_HOST: settings.platformHost,
+		YOAL_ACME_EMAIL: settings.tls ? settings.acmeEmail : null,
+		YOAL_TLS: settings.tls ? '1' : '0',
+		YOAL_CLOUDFLARE_API_TOKEN_FILE: settings.tls ? tokenFile : null,
 	};
 }
 
@@ -168,7 +168,7 @@ export interface CloudflareTokenPermission {
 	type: 'read' | 'edit';
 }
 
-/** What Skiff's DNS token needs: find the zone by name, then edit its records (DNS-01, app and email records). */
+/** What Yoal's DNS token needs: find the zone by name, then edit its records (DNS-01, app and email records). */
 export const CLOUDFLARE_DNS_TOKEN_PERMISSIONS: readonly CloudflareTokenPermission[] = [
 	{ key: 'zone', type: 'read' },
 	{ key: 'dns', type: 'edit' },
@@ -192,7 +192,7 @@ export function cloudflareTokenCreateUrl(options: CloudflareTokenLinkOptions = {
 		permissionGroupKeys: JSON.stringify(permissions.map(({ key, type }) => ({ key, type }))),
 		accountId: '*',
 		zoneId: 'all',
-		name: options.name ?? 'Skiff DNS',
+		name: options.name ?? 'Yoal DNS',
 	});
 	return `https://dash.cloudflare.com/profile/api-tokens?${params.toString()}`;
 }

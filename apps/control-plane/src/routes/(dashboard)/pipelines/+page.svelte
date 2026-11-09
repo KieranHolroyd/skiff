@@ -8,10 +8,10 @@
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
 	import WorkflowIcon from '@lucide/svelte/icons/workflow';
-	import DataTable, { type DataColumn } from '#lib/components/skiff/DataTable.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import GitRepoPicker from '#lib/components/skiff/GitRepoPicker.svelte';
-	import type { GitRepositoryView } from '@skiff/contracts';
+	import DataTable, { type DataColumn } from '#lib/components/yoal/DataTable.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import GitRepoPicker from '#lib/components/yoal/GitRepoPicker.svelte';
+	import type { GitRepositoryView } from '@yoal/contracts';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as InputGroup from '#lib/components/ui/input-group/index.js';
@@ -64,7 +64,7 @@
 	// Recent runs have no REST list across repositories, so refresh the page data while any runs.
 	$effect(() => {
 		if (!anyActive(data.recent)) return;
-		const timer = setInterval(() => void invalidate('skiff:pipelines'), 5000);
+		const timer = setInterval(() => void invalidate('yoal:pipelines'), 5000);
 		return () => clearInterval(timer);
 	});
 
@@ -98,7 +98,7 @@
 </script>
 
 <svelte:head>
-	<title>Pipelines · Skiff</title>
+	<title>Pipelines · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">
@@ -106,7 +106,7 @@
 		target="page.pipelines"
 		eyebrow="Workloads"
 		title="Pipelines"
-		description="GitHub Actions–style workflows from .skiff/workflows, run on your build nodes on push, pull request or by hand."
+		description="GitHub Actions–style workflows from .yoal/workflows, run on your build nodes on push, pull request or by hand."
 	>
 		{#if data.can.manage && !data.denied}
 			<Button onclick={() => (createOpen = true)}><PlusIcon />Add repository</Button>
@@ -124,8 +124,8 @@
 			icon={WorkflowIcon}
 			title="No repositories yet"
 			description={data.automatic.length > 0
-				? `Push a commit with a workflow in .skiff/workflows to a repository covered by ${data.automatic.join(' or ')}: it appears here and runs. Or add one by hand.`
-				: 'Connect a repository and Skiff runs its workflows on every push and pull request.'}
+				? `Push a commit with a workflow in .yoal/workflows to a repository covered by ${data.automatic.join(' or ')}: it appears here and runs. Or add one by hand.`
+				: 'Connect a repository and Yoal runs its workflows on every push and pull request.'}
 		>
 			{#if data.can.manage}
 				<Button onclick={() => (createOpen = true)}><PlusIcon />Add repository</Button>
@@ -214,7 +214,7 @@
 		bind:open={createOpen}
 		icon={WorkflowIcon}
 		title="Add repository"
-		description="Skiff reads workflows from .skiff/workflows at each commit. Nodes with the Builder role run the jobs."
+		description="Yoal reads workflows from .yoal/workflows at each commit. Nodes with the Builder role run the jobs."
 		action="?/create"
 		submitLabel="Add repository"
 		size="lg"
@@ -301,7 +301,7 @@
 						>{pickedFullName
 							? pickedProvider === 'github'
 								? 'Not needed: the GitHub App delivers this repository’s events.'
-								: 'Not needed: Skiff creates the webhook on the forge.'
+								: 'Not needed: Yoal creates the webhook on the forge.'
 							: 'At least 16 characters. Paste the same into the forge’s webhook (GitLab: Secret token). Not needed for repositories the GitHub App or a connected forge covers.'}</Field.Description
 					>
 					{#if errors.webhookSecret}<Field.Error>{errors.webhookSecret}</Field.Error>{/if}

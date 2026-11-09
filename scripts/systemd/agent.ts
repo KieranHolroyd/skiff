@@ -1,17 +1,17 @@
 /**
- * `skiff-agent.service` on a control-plane host: the node agent of the edge node that shares the
+ * `yoal-agent.service` on a control-plane host: the node agent of the edge node that shares the
  * machine with the control plane. Shared by the installer and the release's `converge` hook
  * (scripts/release/converge.ts), so a release that changes the unit also updates it on hosts
- * that only ever run `skiff-update-self`.
+ * that only ever run `yoal-update-self`.
  *
- * `scripts/systemd/skiff-agent.service` is the hand-maintained copy for `skiff-caddy` hosts; this
+ * `scripts/systemd/yoal-agent.service` is the hand-maintained copy for `yoal-caddy` hosts; this
  * module is what the installer writes.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-export const AGENT_UNIT = 'skiff-agent.service';
-export const CADDY_ACCESS_LOG = '/var/log/caddy/skiff-access.log';
+export const AGENT_UNIT = 'yoal-agent.service';
+export const CADDY_ACCESS_LOG = '/var/log/caddy/yoal-access.log';
 
 const CADDY_ADMIN_SOCKETS = ['/var/lib/caddy/admin.sock', '/run/caddy/admin.sock', '/etc/caddy/admin.sock'];
 
@@ -44,13 +44,13 @@ export function detectCaddyAdminSocket(caddyfile = '/etc/caddy/Caddyfile'): stri
 }
 
 export function agentUnit(paths: AgentUnitPaths = {}): string {
-	const optDir = paths.optDir ?? '/opt/skiff';
-	const etcDir = paths.etcDir ?? '/etc/skiff';
-	const varDir = paths.varDir ?? '/var/lib/skiff';
-	const runDir = paths.runDir ?? '/run/skiff';
+	const optDir = paths.optDir ?? '/opt/yoal';
+	const etcDir = paths.etcDir ?? '/etc/yoal';
+	const varDir = paths.varDir ?? '/var/lib/yoal';
+	const runDir = paths.runDir ?? '/run/yoal';
 	const agentEnvFile = join(etcDir, 'agent.env');
 	return `[Unit]
-Description=Skiff node agent
+Description=Yoal node agent
 After=network-online.target caddy.service
 Wants=network-online.target
 ConditionPathExists=${agentEnvFile}
@@ -59,17 +59,17 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-User=skiff
-Group=skiff
+User=yoal
+Group=yoal
 SupplementaryGroups=caddy
 UMask=0007
 WorkingDirectory=${optDir}/current/agent
-EnvironmentFile=${join(etcDir, 'skiff.env')}
+EnvironmentFile=${join(etcDir, 'yoal.env')}
 EnvironmentFile=-${agentEnvFile}
-Environment=SKIFF_AGENT_SOCKET=${runDir}/agent.sock
-Environment=SKIFF_CADDY_ADMIN_SOCKET=${paths.caddyAdminSocket ?? detectCaddyAdminSocket()}
-Environment=SKIFF_CADDY_ACCESS_LOG=${paths.caddyAccessLog ?? CADDY_ACCESS_LOG}
-ExecStart=${optDir}/current/agent/skiff-agent
+Environment=YOAL_AGENT_SOCKET=${runDir}/agent.sock
+Environment=YOAL_CADDY_ADMIN_SOCKET=${paths.caddyAdminSocket ?? detectCaddyAdminSocket()}
+Environment=YOAL_CADDY_ACCESS_LOG=${paths.caddyAccessLog ?? CADDY_ACCESS_LOG}
+ExecStart=${optDir}/current/agent/yoal-agent
 Restart=on-failure
 RestartSec=2
 TimeoutStopSec=20

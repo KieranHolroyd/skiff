@@ -2,7 +2,7 @@
  * Shared by the document and key-value workspaces: how an `apply` result and a studio error
  * read to the user.
  */
-import type { ApplyResult } from '@skiff/studio/protocol';
+import type { ApplyResult } from '@yoal/studio/protocol';
 import { StudioCallError } from '../client.js';
 
 export interface ApplySummary {

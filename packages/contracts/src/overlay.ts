@@ -9,7 +9,7 @@ import * as z from 'zod';
  * no managed peer list.
  */
 
-export const nodeNetworkModes = ['skiff', 'external', 'edge'] as const;
+export const nodeNetworkModes = ['yoal', 'external', 'edge'] as const;
 export type NodeNetworkMode = (typeof nodeNetworkModes)[number];
 export const nodeNetworkModeSchema = z.enum(nodeNetworkModes);
 
@@ -54,7 +54,7 @@ export type WireguardState = z.infer<typeof wireguardStateSchema>;
 
 /** Added to the join request by the managed installer; absent means a BYO/external node. */
 export const nodeJoinNetworkSchema = z.object({
-	networkMode: z.enum(['skiff', 'external']).default('external'),
+	networkMode: z.enum(['yoal', 'external']).default('external'),
 	wireguardPublicKey: wireguardPublicKeySchema.optional(),
 });
 export type NodeJoinNetwork = z.infer<typeof nodeJoinNetworkSchema>;

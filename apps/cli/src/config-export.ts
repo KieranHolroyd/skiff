@@ -1,5 +1,5 @@
 /**
- * Helpers for `skif export` (docs/OPERATIONS.md §13): the server builds the snapshot; the CLI
+ * Helpers for `yoal export` (docs/OPERATIONS.md §13): the server builds the snapshot; the CLI
  * picks a file name, renders YAML or JSON and summarises what was left out. The CLI runs on Node,
  * so YAML is emitted here (the document is plain JSON data: objects, arrays, strings, numbers,
  * booleans and null).
@@ -13,7 +13,7 @@ export interface ConfigExportSkip {
 	reason: string;
 }
 
-/** Mirrors `ConfigExport` in @skiff/core; only the header fields the CLI reads are typed. */
+/** Mirrors `ConfigExport` in @yoal/core; only the header fields the CLI reads are typed. */
 export interface ConfigExportDocument {
 	apiVersion: string;
 	exportedAt: string;
@@ -27,7 +27,7 @@ export interface ConfigExportDocument {
 
 const HEADER_KEYS = new Set(['apiVersion', 'exportedAt', 'platform', 'org', 'projectFilter', 'skipped']);
 
-/** `skiff-config-<org slug or host>-<YYYY-MM-DD>.<ext>`. */
+/** `yoal-config-<org slug or host>-<YYYY-MM-DD>.<ext>`. */
 export function defaultExportFileName(doc: Pick<ConfigExportDocument, 'org' | 'platform' | 'exportedAt'>, format: ExportFormat): string {
 	let label = doc.org.slug ?? '';
 	if (!label) {
@@ -38,7 +38,7 @@ export function defaultExportFileName(doc: Pick<ConfigExportDocument, 'org' | 'p
 		}
 	}
 	const safe = label.toLowerCase().replace(/[^a-z0-9.-]+/g, '-').replace(/^-+|-+$/g, '') || 'org';
-	return `skiff-config-${safe}-${doc.exportedAt.slice(0, 10)}.${format === 'json' ? 'json' : 'yaml'}`;
+	return `yoal-config-${safe}-${doc.exportedAt.slice(0, 10)}.${format === 'json' ? 'json' : 'yaml'}`;
 }
 
 /** `--format` wins; otherwise the `--out` extension decides; YAML by default. */
@@ -56,7 +56,7 @@ export function exportFormatFor(format: string | undefined, out: string | undefi
 export function renderExport(doc: ConfigExportDocument, format: ExportFormat): string {
 	if (format === 'json') return `${JSON.stringify(doc, null, 2)}\n`;
 	const header = [
-		'# Skiff config export: configuration only, no data and no secret values.',
+		'# Yoal config export: configuration only, no data and no secret values.',
 		`# ${doc.platform.url}, org ${doc.org.slug ?? doc.org.id}, exported ${doc.exportedAt}`,
 	];
 	return `${header.join('\n')}\n${toYaml(doc)}\n`;

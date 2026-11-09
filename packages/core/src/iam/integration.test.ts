@@ -3,14 +3,14 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
+import { createDb } from '@yoal/db';
 import {
 	authorize,
 	compileGrants,
 	type Permission,
 	type Principal,
 	type ResourceRef,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { ForbiddenError, ValidationError } from '../errors.ts';
 import { createCore, type Core } from '../index.ts';
 import { LocalObjectStore } from '../object-store.ts';
@@ -27,7 +27,7 @@ import { groupClaimValues, groupIdsForClaims, verifiedDomainForEmail } from './s
  * the engine the way a reviewer would: bind, decide, approve, exchange, revoke.
  */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-iam-integration-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-iam-integration-'));
 const opened = createDb({ path: ':memory:' });
 let now = Date.parse('2026-11-08T12:00:00Z');
 let core: Core;
@@ -613,7 +613,7 @@ describe('user pool OIDC', () => {
 });
 
 describe('SSO domain routing and group claims', () => {
-	test('only a verified domain routes an email, and a mapped claim returns the Skiff group', () => {
+	test('only a verified domain routes an email, and a mapped claim returns the Yoal group', () => {
 		const org = 'org_sso';
 		const owner = ownerOf(org);
 		const group = core.ctx.iam.createGroup(owner, { name: 'engineering' });

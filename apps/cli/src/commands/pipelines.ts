@@ -38,8 +38,8 @@ import { runCommand as jobRunCommand } from './jobs.ts';
 import { confirmOrRefuse } from './run-operation.ts';
 
 /**
- * Pipelines (docs/PIPELINES.md §8): `skif repo`, `skif run`, `skif workflow`, `skif secret` and
- * `skif var`. A thin client over `/api/v1/repositories`; the server owns every rule.
+ * Pipelines (docs/PIPELINES.md §8): `yoal repo`, `yoal run`, `yoal workflow`, `yoal secret` and
+ * `yoal var`. A thin client over `/api/v1/repositories`; the server owns every rule.
  */
 
 const POLL_MS = 2_000;
@@ -85,9 +85,9 @@ function parse(argv: string[], spec: FlagSpec, usage: string): ParsedArgs | null
 	return args;
 }
 
-// ================================================================ skif repo
+// ================================================================ yoal repo
 
-const repoUsage = `Usage: skif repo <command> [options]
+const repoUsage = `Usage: yoal repo <command> [options]
 
 Commands:
   list                          Repositories with their last run (the default)
@@ -107,7 +107,7 @@ Options:
       --json                    JSON output
   -h, --help                    Show this help
 
-Workflows live in .skiff/workflows/*.yml in the repository (GitHub Actions syntax).`;
+Workflows live in .yoal/workflows/*.yml in the repository (GitHub Actions syntax).`;
 
 export async function repoCommand(argv: string[]): Promise<void> {
 	return dispatchTable(argv, repoUsage, { list: repoList, ls: repoList, show: repoShow, get: repoShow, add: repoAdd, create: repoAdd, remove: repoRemove, rm: repoRemove, delete: repoRemove }, 'list');
@@ -116,18 +116,18 @@ export async function repoCommand(argv: string[]): Promise<void> {
 async function repoList(argv: string[]): Promise<void> {
 	const args = parse(argv, {}, repoUsage);
 	if (!args) return;
-	rejectExtraPositionals(args, 0, 'Usage: skif repo list');
+	rejectExtraPositionals(args, 0, 'Usage: yoal repo list');
 	const raw = await (await api()).listRepositories();
 	if (args.boolean('json')) return printJson(raw);
-	if (raw.repositories.length === 0) return void console.log('No repositories yet. Connect one with: skif repo add <name> --url <clone-url>');
+	if (raw.repositories.length === 0) return void console.log('No repositories yet. Connect one with: yoal repo add <name> --url <clone-url>');
 	console.log(repositoryTable(raw.repositories));
 }
 
 async function repoShow(argv: string[]): Promise<void> {
 	const args = parse(argv, {}, repoUsage);
 	if (!args) return;
-	rejectExtraPositionals(args, 1, 'Usage: skif repo show <name>');
-	const name = requirePositional(args, 0, 'repository. Usage: skif repo show <name>');
+	rejectExtraPositionals(args, 1, 'Usage: yoal repo show <name>');
+	const name = requirePositional(args, 0, 'repository. Usage: yoal repo show <name>');
 	const client = await api();
 	const raw = await client.getRepository(name);
 	if (args.boolean('json')) return printJson(raw);
@@ -135,7 +135,7 @@ async function repoShow(argv: string[]): Promise<void> {
 }
 
 async function repoAdd(argv: string[]): Promise<void> {
-	const line = 'Usage: skif repo add <name> --url <clone-url> [--branch main] [--provider github|generic] [--webhook-secret <s>] [--image <img>]';
+	const line = 'Usage: yoal repo add <name> --url <clone-url> [--branch main] [--provider github|generic] [--webhook-secret <s>] [--image <img>]';
 	const args = parse(
 		argv,
 		{ url: { type: 'string' }, branch: { type: 'string' }, provider: { type: 'string' }, 'webhook-secret': { type: 'string' }, image: { type: 'string' } },
@@ -160,7 +160,7 @@ async function repoAdd(argv: string[]): Promise<void> {
 	if (args.boolean('json')) return printJson(raw);
 	console.log(`Connected ${raw.repository.name}.`);
 	console.log(indent(repositoryDetails(raw.repository, client.baseUrl)));
-	const next = [`Run a workflow:  skif workflow dispatch ${name} ci.yml`];
+	const next = [`Run a workflow:  yoal workflow dispatch ${name} ci.yml`];
 	if (raw.repository.provider === 'github')
 		next.unshift(`Webhook:         add ${client.baseUrl}${raw.repository.webhookPath} to the GitHub repository (push and pull_request events)`);
 	console.log(`\nNext steps:\n${indent(next)}`);
@@ -169,7 +169,7 @@ async function repoAdd(argv: string[]): Promise<void> {
 async function repoRemove(argv: string[]): Promise<void> {
 	const args = parse(argv, { yes: { type: 'boolean', short: 'y' } }, repoUsage);
 	if (!args) return;
-	const line = 'Usage: skif repo remove <name> --yes';
+	const line = 'Usage: yoal repo remove <name> --yes';
 	rejectExtraPositionals(args, 1, line);
 	const name = requirePositional(args, 0, `repository. ${line}`);
 	const confirmed = await confirmOrRefuse(`Remove repository ${name} with its runs, logs, artifacts, secrets and variables? [y/N] `, {
@@ -182,9 +182,9 @@ async function repoRemove(argv: string[]): Promise<void> {
 	console.log(`Removed ${name}.`);
 }
 
-// ================================================================ skif run
+// ================================================================ yoal run
 
-const runUsage = `Usage: skif run <command> <repo> [run] [options]
+const runUsage = `Usage: yoal run <command> <repo> [run] [options]
 
 Pipeline runs (<run> is a run number like 42 or #42, or a run id):
   list <repo>                  Runs, newest first (--status, --workflow, --limit)
@@ -198,7 +198,7 @@ Pipeline runs (<run> is a run number like 42 or #42, or a run id):
 Options:
       --status <status>        (list) queued, in_progress, completed, or a conclusion
                                (success, failure, cancelled, skipped, timed_out)
-      --workflow <file>        (list) ci.yml or .skiff/workflows/ci.yml
+      --workflow <file>        (list) ci.yml or .yoal/workflows/ci.yml
   -n, --limit <n>              (list) At most n runs (default 20, max 100)
       --job <key|id>           (logs) Which job
   -f, --follow                 (logs) Keep printing until the job finishes
@@ -207,7 +207,7 @@ Options:
       --json                   JSON output
   -h, --help                   Show this help
 
-\`skif run <project> -- <command…>\` still runs a one-off command on an app (skif run <project> --help).`;
+\`yoal run <project> -- <command…>\` still runs a one-off command on an app (yoal run <project> --help).`;
 
 const RUN_SUBCOMMANDS: Record<string, (argv: string[]) => Promise<void>> = {
 	list: runList,
@@ -222,7 +222,7 @@ const RUN_SUBCOMMANDS: Record<string, (argv: string[]) => Promise<void>> = {
 };
 
 /**
- * `skif run` is shared: `skif run <subcommand> <repo> …` is a pipeline run, `skif run <project> --
+ * `yoal run` is shared: `yoal run <subcommand> <repo> …` is a pipeline run, `yoal run <project> --
  * <command…>` (anything with `--`) is a one-off job run (plan 09).
  */
 export async function runOrPipelineCommand(argv: string[]): Promise<void> {
@@ -243,7 +243,7 @@ function runRef(value: string): string {
 async function runList(argv: string[]): Promise<void> {
 	const args = parse(argv, { status: { type: 'string' }, workflow: { type: 'string' }, limit: { type: 'string', short: 'n' }, ref: { type: 'string' } }, runUsage);
 	if (!args) return;
-	const line = 'Usage: skif run list <repo> [--status s] [--workflow w] [--limit n]';
+	const line = 'Usage: yoal run list <repo> [--status s] [--workflow w] [--limit n]';
 	rejectExtraPositionals(args, 1, line);
 	const repo = requirePositional(args, 0, `repository. ${line}`);
 	const filter = statusFilter(args.string('status'));
@@ -265,7 +265,7 @@ async function runList(argv: string[]): Promise<void> {
 async function runView(argv: string[]): Promise<void> {
 	const args = parse(argv, {}, runUsage);
 	if (!args) return;
-	const line = 'Usage: skif run view <repo> <run>';
+	const line = 'Usage: yoal run view <repo> <run>';
 	rejectExtraPositionals(args, 2, line);
 	const repo = requirePositional(args, 0, `repository. ${line}`);
 	const ref = runRef(requirePositional(args, 1, `run. ${line}`));
@@ -277,7 +277,7 @@ async function runView(argv: string[]): Promise<void> {
 async function runWatch(argv: string[]): Promise<void> {
 	const args = parse(argv, {}, runUsage);
 	if (!args) return;
-	const line = 'Usage: skif run watch <repo> <run>';
+	const line = 'Usage: yoal run watch <repo> <run>';
 	rejectExtraPositionals(args, 2, line);
 	const repo = requirePositional(args, 0, `repository. ${line}`);
 	const ref = runRef(requirePositional(args, 1, `run. ${line}`));
@@ -289,7 +289,7 @@ async function watchAndExit(client: PipelinesApi, repo: string, ref: string, jso
 	if (json) printJson({ run });
 	else {
 		const failed = run.jobs.find(isFailed);
-		if (failed && runExitCode(run) !== 0) console.error(`See the log: skif run logs ${repo} ${run.number} --job ${failed.id}`);
+		if (failed && runExitCode(run) !== 0) console.error(`See the log: yoal run logs ${repo} ${run.number} --job ${failed.id}`);
 	}
 	process.exitCode = runExitCode(run);
 }
@@ -317,7 +317,7 @@ export async function watchRun(client: PipelinesApi, repo: string, ref: string, 
 async function runLogs(argv: string[]): Promise<void> {
 	const args = parse(argv, { job: { type: 'string' }, follow: { type: 'boolean', short: 'f' } }, runUsage);
 	if (!args) return;
-	const line = 'Usage: skif run logs <repo> <run> [--job <key|id>] [-f]';
+	const line = 'Usage: yoal run logs <repo> <run> [--job <key|id>] [-f]';
 	rejectExtraPositionals(args, 2, line);
 	const repo = requirePositional(args, 0, `repository. ${line}`);
 	const ref = runRef(requirePositional(args, 1, `run. ${line}`));
@@ -373,7 +373,7 @@ async function refreshJob(client: PipelinesApi, repo: string, runId: string, job
 async function runCancel(argv: string[]): Promise<void> {
 	const args = parse(argv, {}, runUsage);
 	if (!args) return;
-	const line = 'Usage: skif run cancel <repo> <run>';
+	const line = 'Usage: yoal run cancel <repo> <run>';
 	rejectExtraPositionals(args, 2, line);
 	const repo = requirePositional(args, 0, `repository. ${line}`);
 	const ref = runRef(requirePositional(args, 1, `run. ${line}`));
@@ -385,7 +385,7 @@ async function runCancel(argv: string[]): Promise<void> {
 async function runRerun(argv: string[]): Promise<void> {
 	const args = parse(argv, { failed: { type: 'boolean' }, watch: { type: 'boolean', short: 'w' } }, runUsage);
 	if (!args) return;
-	const line = 'Usage: skif run rerun <repo> <run> [--failed] [--watch]';
+	const line = 'Usage: yoal run rerun <repo> <run> [--failed] [--watch]';
 	rejectExtraPositionals(args, 2, line);
 	const repo = requirePositional(args, 0, `repository. ${line}`);
 	const ref = runRef(requirePositional(args, 1, `run. ${line}`));
@@ -394,21 +394,21 @@ async function runRerun(argv: string[]): Promise<void> {
 	if (args.boolean('watch')) return watchAndExit(client, repo, raw.run.id, args.boolean('json'));
 	if (args.boolean('json')) return printJson(raw);
 	console.log(`Re-running ${args.boolean('failed') ? 'failed jobs of ' : ''}run #${raw.run.number} (attempt ${raw.run.attempt}).`);
-	console.log(`Watch it: skif run watch ${repo} ${raw.run.number}`);
+	console.log(`Watch it: yoal run watch ${repo} ${raw.run.number}`);
 }
 
-// ================================================================ skif workflow
+// ================================================================ yoal workflow
 
-const workflowUsage = `Usage: skif workflow <command> [options]
+const workflowUsage = `Usage: yoal workflow <command> [options]
 
 Commands:
   dispatch <repo> <workflow>   Run a workflow with a workflow_dispatch trigger (ci.yml or
-                               .skiff/workflows/ci.yml) at --ref (default: the default branch)
+                               .yoal/workflows/ci.yml) at --ref (default: the default branch)
   run <repo> --file <file.yml> Run a local workflow file against --ref without committing it
   run --local <file.yml>       Run the workflow's jobs on this machine, no control plane
                                (needs Bun or the standalone binary)
   lint <file.yml>              Check a workflow locally with the platform's parser
-  lint --import <gh.yml>       Convert a .github/workflows file to Skiff and list what does not
+  lint --import <gh.yml>       Convert a .github/workflows file to Yoal and list what does not
                                carry over (--out writes the converted file)
 
 Dispatch/run options:
@@ -425,21 +425,21 @@ Local run options (run --local):
       --secret <NAME[=VALUE]>  A secret (without =VALUE, read from $NAME); repeat for more
       --var <NAME=VALUE>       A variable (vars.NAME); repeat for more
       --matrix <key=value>     Only matrix combinations with this value; repeat for more
-      --event <name>           skiff.event_name (default workflow_dispatch)
+      --event <name>           yoal.event_name (default workflow_dispatch)
       --copy                   Run in a temporary copy of this directory
   Steps run directly here (container:/services: are not started); artifacts and caches are
-  kept under .skiff/local/. skiff/deploy and skiff/oidc-token need a control plane.
+  kept under .yoal/local/. yoal/deploy and yoal/oidc-token need a control plane.
 
 Lint options:
       --import <gh.yml>        The GitHub workflow to convert
       --out <file>             Write the converted workflow here (default: print it)
 
 Examples:
-  skif workflow dispatch shop deploy.yml --ref main -f environment=staging --watch
-  skif workflow run shop --file .skiff/workflows/ci.yml --ref my-branch --watch
-  skif workflow run --local .skiff/workflows/ci.yml -j test --secret NPM_TOKEN
-  skif workflow lint .skiff/workflows/ci.yml
-  skif workflow lint --import .github/workflows/ci.yml --out .skiff/workflows/ci.yml`;
+  yoal workflow dispatch shop deploy.yml --ref main -f environment=staging --watch
+  yoal workflow run shop --file .yoal/workflows/ci.yml --ref my-branch --watch
+  yoal workflow run --local .yoal/workflows/ci.yml -j test --secret NPM_TOKEN
+  yoal workflow lint .yoal/workflows/ci.yml
+  yoal workflow lint --import .github/workflows/ci.yml --out .yoal/workflows/ci.yml`;
 
 const dispatchFlags: FlagSpec = {
 	ref: { type: 'string' },
@@ -454,7 +454,7 @@ export async function workflowCommand(argv: string[]): Promise<void> {
 async function workflowDispatch(argv: string[]): Promise<void> {
 	const args = parse(argv, dispatchFlags, workflowUsage);
 	if (!args) return;
-	const line = 'Usage: skif workflow dispatch <repo> <workflow> [--ref r] [-f key=value …] [--watch]';
+	const line = 'Usage: yoal workflow dispatch <repo> <workflow> [--ref r] [-f key=value …] [--watch]';
 	rejectExtraPositionals(args, 2, line);
 	const repo = requirePositional(args, 0, `repository. ${line}`);
 	const workflow = requirePositional(args, 1, `workflow file (e.g. ci.yml). ${line}`);
@@ -489,7 +489,7 @@ export function parsePairs(pairs: string[], flag: string, fromEnv = false, env: 
 }
 
 async function workflowRunLocal(args: ParsedArgs, file: string): Promise<void> {
-	rejectExtraPositionals(args, 0, 'Usage: skif workflow run --local <file.yml> [-j job] [-f k=v] [--secret NAME[=VALUE]] [--copy]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal workflow run --local <file.yml> [-j job] [-f k=v] [--secret NAME[=VALUE]] [--copy]');
 	const { runLocalWorkflow } = await import('../pipelines-local.ts');
 	const json = args.boolean('json');
 	const result = await runLocalWorkflow({
@@ -513,7 +513,7 @@ async function workflowRun(argv: string[]): Promise<void> {
 	if (!args) return;
 	const local = args.string('local');
 	if (local !== undefined) return workflowRunLocal(args, local);
-	const line = 'Usage: skif workflow run <repo> --file <local.yml> [--ref r] [-f key=value …] [--watch]';
+	const line = 'Usage: yoal workflow run <repo> --file <local.yml> [--ref r] [-f key=value …] [--watch]';
 	rejectExtraPositionals(args, 1, line);
 	const repo = requirePositional(args, 0, `repository. ${line}`);
 	const file = args.string('file');
@@ -531,7 +531,7 @@ async function startDispatch(repo: string, target: { workflow?: string; workflow
 	if (!args.boolean('watch')) {
 		if (json) return printJson(raw);
 		console.log(raw.trigger.id);
-		console.error(`Dispatched on ${raw.trigger.ref}. A build node reads the workflow, then the run starts; see skif run list ${repo}.`);
+		console.error(`Dispatched on ${raw.trigger.ref}. A build node reads the workflow, then the run starts; see yoal run list ${repo}.`);
 		return;
 	}
 	const trigger = await waitForTrigger(client, repo, raw.trigger, json ? { ...defaultDeps, print: () => {} } : { ...defaultDeps, print: (text) => console.error(text) });
@@ -563,7 +563,7 @@ async function workflowLint(argv: string[]): Promise<void> {
 	if (!args) return;
 	const source = args.string('import');
 	if (source !== undefined) return workflowImport(args, source);
-	const line = 'Usage: skif workflow lint <file.yml>';
+	const line = 'Usage: yoal workflow lint <file.yml>';
 	rejectExtraPositionals(args, 1, line);
 	const file = requirePositional(args, 0, `workflow file. ${line}`);
 	const result = await lintWorkflow(await readText(file), file);
@@ -573,10 +573,10 @@ async function workflowLint(argv: string[]): Promise<void> {
 	if (!result.ok) process.exitCode = 1;
 }
 
-/** `skif workflow lint --import`: convert a GitHub workflow, list what changed, lint the result. */
+/** `yoal workflow lint --import`: convert a GitHub workflow, list what changed, lint the result. */
 async function workflowImport(args: ParsedArgs, source: string): Promise<void> {
-	rejectExtraPositionals(args, 0, 'Usage: skif workflow lint --import <.github/workflows/x.yml> [--out <file>]');
-	const yaml = bunYaml('skif workflow lint --import');
+	rejectExtraPositionals(args, 0, 'Usage: yoal workflow lint --import <.github/workflows/x.yml> [--out <file>]');
+	const yaml = bunYaml('yoal workflow lint --import');
 	const raw = await readText(source);
 	let doc: unknown;
 	try {
@@ -586,8 +586,8 @@ async function workflowImport(args: ParsedArgs, source: string): Promise<void> {
 	}
 	const { workflow, notes } = importGithubWorkflow(doc);
 	const out = args.string('out');
-	const target = out ?? `.skiff/workflows/${source.split('/').pop()}`;
-	const text = `# Imported from ${source} by skif workflow lint --import; review the notes it printed.\n${toYaml(workflow)}\n`;
+	const target = out ?? `.yoal/workflows/${source.split('/').pop()}`;
+	const text = `# Imported from ${source} by yoal workflow lint --import; review the notes it printed.\n${toYaml(workflow)}\n`;
 	const result = await lintDocument(yaml.parse(text), target);
 	if (out) await writeFile(out, text);
 	if (args.boolean('json')) {
@@ -614,9 +614,9 @@ async function readText(file: string): Promise<string> {
 	}
 }
 
-// ================================================================ skif secret / skif var
+// ================================================================ yoal secret / yoal var
 
-const secretUsage = `Usage: skif secret <command> <repo> [options]
+const secretUsage = `Usage: yoal secret <command> <repo> [options]
 
 Commands:
   list <repo>                  Secret names and scopes (values are never shown)
@@ -639,18 +639,18 @@ export async function secretCommand(argv: string[]): Promise<void> {
 async function secretList(argv: string[]): Promise<void> {
 	const args = parse(argv, {}, secretUsage);
 	if (!args) return;
-	rejectExtraPositionals(args, 1, 'Usage: skif secret list <repo>');
-	const repo = requirePositional(args, 0, 'repository. Usage: skif secret list <repo>');
+	rejectExtraPositionals(args, 1, 'Usage: yoal secret list <repo>');
+	const repo = requirePositional(args, 0, 'repository. Usage: yoal secret list <repo>');
 	const raw = await (await api()).listSecrets(repo);
 	if (args.boolean('json')) return printJson(raw);
-	if (raw.secrets.length === 0) return void console.log(`${repo} has no secrets. Set one with: skif secret set ${repo} NAME`);
+	if (raw.secrets.length === 0) return void console.log(`${repo} has no secrets. Set one with: yoal secret set ${repo} NAME`);
 	console.log(secretTable(raw.secrets));
 }
 
 async function secretSet(argv: string[]): Promise<void> {
 	const args = parse(argv, { env: { type: 'string' }, value: { type: 'string' } }, secretUsage);
 	if (!args) return;
-	const line = 'Usage: skif secret set <repo> <NAME> [--env e] [--value v | stdin]';
+	const line = 'Usage: yoal secret set <repo> <NAME> [--env e] [--value v | stdin]';
 	rejectExtraPositionals(args, 2, line);
 	const repo = requirePositional(args, 0, `repository. ${line}`);
 	const name = requirePositional(args, 1, `secret name. ${line}`);
@@ -665,7 +665,7 @@ async function secretSet(argv: string[]): Promise<void> {
 async function secretRemove(argv: string[]): Promise<void> {
 	const args = parse(argv, { env: { type: 'string' } }, secretUsage);
 	if (!args) return;
-	const line = 'Usage: skif secret rm <repo> <NAME> [--env e]';
+	const line = 'Usage: yoal secret rm <repo> <NAME> [--env e]';
 	rejectExtraPositionals(args, 2, line);
 	const repo = requirePositional(args, 0, `repository. ${line}`);
 	const name = requirePositional(args, 1, `secret name. ${line}`);
@@ -674,7 +674,7 @@ async function secretRemove(argv: string[]): Promise<void> {
 	console.log(`Deleted secret ${name} from ${repo}.`);
 }
 
-const varUsage = `Usage: skif var <command> <repo> [options]
+const varUsage = `Usage: yoal var <command> <repo> [options]
 
 Commands:
   list <repo>                  Variables with their values
@@ -687,7 +687,7 @@ Options:
       --json                   JSON output
   -h, --help                   Show this help
 
-Workflows read variables as \${{ vars.NAME }}. They are not secret: use skif secret for credentials.`;
+Workflows read variables as \${{ vars.NAME }}. They are not secret: use yoal secret for credentials.`;
 
 export async function varCommand(argv: string[]): Promise<void> {
 	return dispatchTable(argv, varUsage, { list: varList, ls: varList, set: varSet, rm: varRemove, remove: varRemove, delete: varRemove });
@@ -696,18 +696,18 @@ export async function varCommand(argv: string[]): Promise<void> {
 async function varList(argv: string[]): Promise<void> {
 	const args = parse(argv, {}, varUsage);
 	if (!args) return;
-	rejectExtraPositionals(args, 1, 'Usage: skif var list <repo>');
-	const repo = requirePositional(args, 0, 'repository. Usage: skif var list <repo>');
+	rejectExtraPositionals(args, 1, 'Usage: yoal var list <repo>');
+	const repo = requirePositional(args, 0, 'repository. Usage: yoal var list <repo>');
 	const raw = await (await api()).listVariables(repo);
 	if (args.boolean('json')) return printJson(raw);
-	if (raw.variables.length === 0) return void console.log(`${repo} has no variables. Set one with: skif var set ${repo} NAME value`);
+	if (raw.variables.length === 0) return void console.log(`${repo} has no variables. Set one with: yoal var set ${repo} NAME value`);
 	console.log(variableTable(raw.variables));
 }
 
 async function varSet(argv: string[]): Promise<void> {
 	const args = parse(argv, { value: { type: 'string' } }, varUsage);
 	if (!args) return;
-	const line = 'Usage: skif var set <repo> <NAME> [value | --value v | stdin]';
+	const line = 'Usage: yoal var set <repo> <NAME> [value | --value v | stdin]';
 	rejectExtraPositionals(args, 3, line);
 	const repo = requirePositional(args, 0, `repository. ${line}`);
 	const name = requirePositional(args, 1, `variable name. ${line}`);
@@ -723,7 +723,7 @@ async function varSet(argv: string[]): Promise<void> {
 async function varRemove(argv: string[]): Promise<void> {
 	const args = parse(argv, {}, varUsage);
 	if (!args) return;
-	const line = 'Usage: skif var rm <repo> <NAME>';
+	const line = 'Usage: yoal var rm <repo> <NAME>';
 	rejectExtraPositionals(args, 2, line);
 	const repo = requirePositional(args, 0, `repository. ${line}`);
 	const name = requirePositional(args, 1, `variable name. ${line}`);

@@ -48,8 +48,8 @@ describe('feature registry', () => {
 		for (const name of FEATURE_FLAG_NAMES) expect(DEFAULT_FEATURES[name]).toBe(true);
 	});
 
-	test('uses SKIFF_FEATURE_<NAME> as the env key', () => {
-		expect(featureEnvKey('BACKUPS_RESTORE')).toBe('SKIFF_FEATURE_BACKUPS_RESTORE');
+	test('uses YOAL_FEATURE_<NAME> as the env key', () => {
+		expect(featureEnvKey('BACKUPS_RESTORE')).toBe('YOAL_FEATURE_BACKUPS_RESTORE');
 	});
 });
 
@@ -82,30 +82,30 @@ describe('parseFeatureFlags', () => {
 	});
 
 	test('accepts explicit false without changing other defaults', () => {
-		expect(parseFeatureFlags({ SKIFF_FEATURE_QUOTAS: 'off' }).QUOTAS).toBe(false);
-		expect(parseFeatureFlags({ SKIFF_FEATURE_BACKUPS_RESTORE: '0' }).BACKUPS_RESTORE).toBe(false);
-		expect(parseFeatureFlags({ SKIFF_FEATURE_BACKUPS_RESTORE: '0' }).QUOTAS).toBe(true);
+		expect(parseFeatureFlags({ YOAL_FEATURE_QUOTAS: 'off' }).QUOTAS).toBe(false);
+		expect(parseFeatureFlags({ YOAL_FEATURE_BACKUPS_RESTORE: '0' }).BACKUPS_RESTORE).toBe(false);
+		expect(parseFeatureFlags({ YOAL_FEATURE_BACKUPS_RESTORE: '0' }).QUOTAS).toBe(true);
 	});
 
 	test('malformed values keep the safe default', () => {
 		const flags = parseFeatureFlags({
-			SKIFF_FEATURE_PITR: 'enabled',
-			SKIFF_FEATURE_QUOTAS: 'disabled'
+			YOAL_FEATURE_PITR: 'enabled',
+			YOAL_FEATURE_QUOTAS: 'disabled'
 		});
 		expect(flags.PITR).toBe(true);
 		expect(flags.QUOTAS).toBe(true);
 	});
 
-	test('ignores unknown SKIFF_FEATURE_* variables', () => {
+	test('ignores unknown YOAL_FEATURE_* variables', () => {
 		const flags = parseFeatureFlags({
-			SKIFF_FEATURE_NOT_REGISTERED: '1'
+			YOAL_FEATURE_NOT_REGISTERED: '1'
 		} as Record<string, string>);
 		expect(flags).toEqual(DEFAULT_FEATURES);
 		expect('NOT_REGISTERED' in flags).toBe(false);
 	});
 
 	test('a retired flag (DB_CONSOLE) is ignored, never an error', () => {
-		const flags = parseFeatureFlags({ SKIFF_FEATURE_DB_CONSOLE: '1' });
+		const flags = parseFeatureFlags({ YOAL_FEATURE_DB_CONSOLE: '1' });
 		expect(flags).toEqual(DEFAULT_FEATURES);
 		expect('DB_CONSOLE' in flags).toBe(false);
 	});
@@ -114,8 +114,8 @@ describe('parseFeatureFlags', () => {
 describe('retiredFeatureFlagsSet', () => {
 	test('reports retired flags that are still set so startup can warn', () => {
 		expect(retiredFeatureFlagsSet({})).toEqual([]);
-		const set = retiredFeatureFlagsSet({ SKIFF_FEATURE_DB_CONSOLE: '0' });
-		expect(set.map((flag) => flag.env)).toEqual(['SKIFF_FEATURE_DB_CONSOLE']);
+		const set = retiredFeatureFlagsSet({ YOAL_FEATURE_DB_CONSOLE: '0' });
+		expect(set.map((flag) => flag.env)).toEqual(['YOAL_FEATURE_DB_CONSOLE']);
 		expect(set[0]?.reason).toContain('DB_STUDIO');
 	});
 });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { WorkloadDesired } from '@skiff/contracts';
+import type { WorkloadDesired } from '@yoal/contracts';
 import { brokerProbeHandshake, probeDatabasePort, probeWorkloadHealth, withOptionalSpec, workloadFingerprint } from './runtime.ts';
 
 /** Queue brokers on the agent side (docs/BROKERS.md, D111). */

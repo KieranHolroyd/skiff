@@ -2,15 +2,15 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import { storageGatewayHost } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import { storageGatewayHost } from '@yoal/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore, type Core } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import { replicationStatus } from './storage-replication-service.ts';
 import { ROOT_ROTATION_TIMEOUT_MS } from './storage-instances.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-storage-repl-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-storage-repl-'));
 const opened = createDb({ path: ':memory:' });
 let clock = Date.parse('2026-11-07T10:00:00Z');
 const core: Core = createCore({

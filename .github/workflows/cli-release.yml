@@ -1,7 +1,7 @@
 name: Release CLI
 
 # Manual "Run workflow" button (Actions → Release CLI). Bumps apps/cli/package.json on main,
-# tags `cli-v<version>`, publishes `@skiffy/skiff` (the `skif` command) to npm with provenance, and
+# tags `cli-v<version>`, publishes `@yoal/cli` (the `yoal` command) to npm with provenance, and
 # creates a GitHub release.
 #
 # The CLI is versioned independently of the platform (`v*` tags, release.yml).
@@ -39,12 +39,12 @@ env:
   BUN_VERSION: '1.4.4'
   # Must match "name" in apps/cli/package.json. `npm pack` names a scoped tarball
   # `<scope>-<name>-<version>.tgz`.
-  PACKAGE: '@skiffy/skiff'
-  TARBALL_PREFIX: 'skiffy-skiff'
+  PACKAGE: '@yoal/cli'
+  TARBALL_PREFIX: 'yoal-cli'
 
 jobs:
   release:
-    name: Release @skiffy/skiff
+    name: Release @yoal/cli
     runs-on: ubuntu-latest
     steps:
       - name: Require main
@@ -170,8 +170,8 @@ jobs:
         run: |
           test "$(node -p "require('./package.json').name")" = "$PACKAGE"
           bun run build
-          test "$(node dist/skif.js --version)" = "$VERSION"
-          node dist/skif.js --help >/dev/null
+          test "$(node dist/yoal.js --version)" = "$VERSION"
+          node dist/yoal.js --help >/dev/null
           mkdir -p "$RUNNER_TEMP/pack"
           npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/pack"
           ls -l "$RUNNER_TEMP/pack"
@@ -205,7 +205,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           DIST_TAG: ${{ steps.version.outputs.dist_tag }}
           DRY_RUN: ${{ inputs.dry_run }}
-          # Optional: only needed until trusted publishing is configured for @skiffy/skiff on npmjs.com.
+          # Optional: only needed until trusted publishing is configured for @yoal/cli on npmjs.com.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           tarball="$RUNNER_TEMP/pack/$TARBALL_PREFIX-$VERSION.tgz"

@@ -1,8 +1,8 @@
 {
 	"id": "/",
-	"name": "Skiff",
-	"short_name": "Skiff",
-	"description": "Your Skiff dashboard: deploys, nodes and alerts.",
+	"name": "Yoal",
+	"short_name": "Yoal",
+	"description": "Your Yoal dashboard: deploys, nodes and alerts.",
 	"start_url": "/",
 	"scope": "/",
 	"display": "standalone",

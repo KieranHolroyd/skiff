@@ -125,8 +125,8 @@ import {
 	logDrainLevels,
 	logDrainSources,
 	type LogDrainView,
-} from '@skiff/contracts';
-import { MAX_DURATION_SECONDS, featureEnabled, parseAuditTime } from '@skiff/core';
+} from '@yoal/contracts';
+import { MAX_DURATION_SECONDS, featureEnabled, parseAuditTime } from '@yoal/core';
 import { authSecret } from './config';
 import { core } from './core';
 import { principalFromMcp } from './principal';
@@ -135,7 +135,7 @@ import { containerConsoleDeps } from './container-console-deps';
 import { pipelineTools } from './mcp-pipelines';
 
 /**
- * Skiff's MCP server (DESIGN §6.3, D11, D29, D35).
+ * Yoal's MCP server (DESIGN §6.3, D11, D29, D35).
  *
  * Every tool calls the service layer — never the database — so permissions and behaviour match
  * the dashboard, REST API and CLI. Scopes are RBAC permissions; a token missing one gets a
@@ -145,10 +145,10 @@ import { pipelineTools } from './mcp-pipelines';
 type PrincipalResult = Principal;
 
 /** `assistant` runs the same tools behind the dashboard chat, where the UI owns confirmation. */
-export type SkiffToolEra = 'legacy' | 'modern' | 'assistant';
+export type YoalToolEra = 'legacy' | 'modern' | 'assistant';
 
-/** A registered Skiff tool, captured for the in-dashboard assistant (docs/ASSISTANT.md). */
-export interface SkiffToolDefinition {
+/** A registered Yoal tool, captured for the in-dashboard assistant (docs/ASSISTANT.md). */
+export interface YoalToolDefinition {
 	name: string;
 	config: Record<string, unknown> & {
 		title?: string;
@@ -437,8 +437,8 @@ async function brokerLastHour(principal: Principal, name: string, storageMb: num
 /** Seconds `get_node_task` may hold the call open, as the REST `?wait=` cap. */
 const NODE_TASK_MAX_WAIT_SECONDS = 25;
 
-/** `SKIFF_Q_<queue>` is the JetStream stream behind a function queue (D112). */
-const queueStream = (queue: string) => `SKIFF_Q_${queue}`;
+/** `YOAL_Q_<queue>` is the JetStream stream behind a function queue (D112). */
+const queueStream = (queue: string) => `YOAL_Q_${queue}`;
 
 /**
  * A node task (D124) as an agent sees it: id, status, the node's result once it has one, and
@@ -627,7 +627,7 @@ function auditTool(
 const CONFIRM_TTL_MS = 10 * 60_000;
 
 function confirmationMac(payload: string): string {
-	return createHmac('sha256', authSecret).update(`skiff-mcp-confirm:${payload}`).digest('base64url');
+	return createHmac('sha256', authSecret).update(`yoal-mcp-confirm:${payload}`).digest('base64url');
 }
 
 /**
@@ -677,8 +677,8 @@ function confirmationTarget(state: unknown): string | undefined {
 
 function buildServer(
 	principal: Principal,
-	era: SkiffToolEra,
-	sink?: SkiffToolDefinition[],
+	era: YoalToolEra,
+	sink?: YoalToolDefinition[],
 	auditPrefix: 'mcp' | 'assistant' = 'mcp',
 	/** Names `tools/list` may expose; absent means capture every tool (the catalog build). */
 	visible?: ReadonlySet<string>,
@@ -692,7 +692,7 @@ function buildServer(
 				},
 				registerResource: () => ({})
 			} as unknown as McpServer)
-		: new McpServer({ name: 'skiff', version: '0.1.0' });
+		: new McpServer({ name: 'yoal', version: '0.1.0' });
 
 	/**
 	 * `server.registerTool` with auditing of every call, including scope denials. A tool whose config
@@ -761,7 +761,7 @@ function buildServer(
 		'whoami',
 		{
 			title: 'Who am I',
-			description: 'Show the authenticated user, MCP client and effective Skiff permissions.',
+			description: 'Show the authenticated user, MCP client and effective Yoal permissions.',
 			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 		},
 		async () =>
@@ -1133,7 +1133,7 @@ function buildServer(
 					isError: true,
 					...text(
 						`Removing binding ${bindingId} needs your confirmation, which this MCP client can't show. ` +
-							`Ask the user to remove it in the Skiff dashboard (Settings → Access → Bindings).`,
+							`Ask the user to remove it in the Yoal dashboard (Settings → Access → Bindings).`,
 					),
 				};
 			const key = `confirm_unbind_role:${bindingId}`;
@@ -1179,9 +1179,9 @@ function buildServer(
 	tool(
 		'search_docs',
 		{
-			title: 'Search Skiff docs',
+			title: 'Search Yoal docs',
 			description:
-				'Full-text search over the Skiff documentation for this platform version: how-to guides, concepts, CLI, REST and MCP reference, self-hosting and troubleshooting runbooks. Returns ranked sections with links and excerpts; read one in full with read_docs. Use it for "how do I…", "what does … mean" and "why does … happen" questions before guessing.',
+				'Full-text search over the Yoal documentation for this platform version: how-to guides, concepts, CLI, REST and MCP reference, self-hosting and troubleshooting runbooks. Returns ranked sections with links and excerpts; read one in full with read_docs. Use it for "how do I…", "what does … mean" and "why does … happen" questions before guessing.',
 			inputSchema: z.object({
 				query: z.string().min(1).max(200).describe('What to look for, in plain words'),
 				limit: z.number().int().min(1).max(20).optional().describe('Results to return (default 8)'),
@@ -1211,9 +1211,9 @@ function buildServer(
 	tool(
 		'read_docs',
 		{
-			title: 'Read Skiff docs',
+			title: 'Read Yoal docs',
 			description:
-				'Read a Skiff documentation page as Markdown, or just one section of it (pass the anchor from search_docs). Without a slug, returns the table of contents and index details.',
+				'Read a Yoal documentation page as Markdown, or just one section of it (pass the anchor from search_docs). Without a slug, returns the table of contents and index details.',
 			inputSchema: z.object({
 				slug: z
 					.string()
@@ -1323,7 +1323,7 @@ function buildServer(
 					isError: true,
 					...text(
 						`Deleting "${project}" needs your confirmation, which this MCP client can't show. ` +
-							`Ask the user to delete it from the Skiff dashboard (Projects → ${project} → Delete).`,
+							`Ask the user to delete it from the Yoal dashboard (Projects → ${project} → Delete).`,
 					),
 				};
 			const key = `confirm_delete:${project}`;
@@ -1430,7 +1430,7 @@ function buildServer(
 					isError: true,
 					...text(
 						`Deleting ${wanted.length} projects needs your confirmation, which this MCP client can't show. ` +
-							`Ask the user to delete them from the Skiff dashboard: ${link}`,
+							`Ask the user to delete them from the Yoal dashboard: ${link}`,
 					),
 				};
 			}
@@ -1564,7 +1564,7 @@ function buildServer(
 		{
 			title: 'Plan a blueprint',
 			description:
-				'Diff a Skiff blueprint (YAML or JSON, `apiVersion: skiff/v1`: projects, environments, domains, workload settings, databases, storage buckets, brokers and attachments) against live state. ' +
+				'Diff a Yoal blueprint (YAML or JSON, `apiVersion: yoal/v1`: projects, environments, domains, workload settings, databases, storage buckets, brokers and attachments) against live state. ' +
 				'Changes nothing. Returns every resource step (create, update, noop) with field-level changes and a planHash to pass to apply_stack within an hour. ' +
 				'Any problem (a missing permission or secret, an immutable field, a taken name) fails the plan with its resource path. Blueprints hold secret names, never values. Pruning is not available over MCP.',
 			inputSchema: planStackInputSchema,
@@ -1621,14 +1621,14 @@ function buildServer(
 			if (plan.prune && plan.summary.delete > 0)
 				return {
 					isError: true,
-					...text('This plan deletes resources. Pruning is a human action: apply it from the Skiff dashboard (New → Blueprint) or with `skif blueprint apply --prune`.'),
+					...text('This plan deletes resources. Pruning is a human action: apply it from the Yoal dashboard (New → Blueprint) or with `yoal blueprint apply --prune`.'),
 				};
 			if (era === 'legacy')
 				return {
 					isError: true,
 					...text(
 						`Applying blueprint "${plan.stack}" needs your confirmation, which this MCP client can't show. ` +
-							`Ask the user to apply it from the Skiff dashboard (${core.ctx.config.platformOrigin}/new/blueprint) or with \`skif blueprint apply\`.`,
+							`Ask the user to apply it from the Yoal dashboard (${core.ctx.config.platformOrigin}/new/blueprint) or with \`yoal blueprint apply\`.`,
 					),
 				};
 			const target = `stack:${plan.stack}:${planHash}`;
@@ -1990,7 +1990,7 @@ function buildServer(
 				'Send one real HTTP request to a function\'s live production host on its node, bypassing domains, Caddy and access rules ' +
 				'(so private projects answer too). It runs the deployed code for real: a POST, PUT or DELETE has the same side effects as ' +
 				'production traffic (database writes, outgoing calls, queue messages). Only send what the user asked for. Paths under ' +
-				`/__skiff/ are refused; request bodies are at most ${nodeTaskLimits.requestBodyBytes / 1024 / 1024} MiB. The result is the ` +
+				`/__yoal/ are refused; request bodies are at most ${nodeTaskLimits.requestBodyBytes / 1024 / 1024} MiB. The result is the ` +
 				`response status, headers and body (cut at ${nodeTaskLimits.responseBodyBytes / 1024} KiB), durationMs and coldStart ` +
 				`(true when the request woke an idle host). Waits up to ${nodeTaskLimits.waitMs / 1000} s, then returns a task id for get_node_task.`,
 			inputSchema: z.object({
@@ -2236,7 +2236,7 @@ function buildServer(
 			if (era === 'legacy')
 				return {
 					isError: true,
-					...text(`Deleting job "${job}" needs your confirmation, which this MCP client can't show. Delete it from the Skiff dashboard (${project} → Jobs).`),
+					...text(`Deleting job "${job}" needs your confirmation, which this MCP client can't show. Delete it from the Yoal dashboard (${project} → Jobs).`),
 				};
 			const key = `confirm_delete_job:${target}`;
 			const schema = z.object({ confirm: z.boolean() });
@@ -2703,7 +2703,7 @@ function buildServer(
 			description:
 				'Point-in-time recovery state for one PostgreSQL database: whether WAL archiving is on, archive health, the last ' +
 				'base backup and the recoverable window (`recoverableFrom` → `recoverableTo`, from the node\'s check every 15 minutes). ' +
-				'A restore target must fall inside that window. Offered while SKIFF_FEATURE_PITR is on; never returns repository credentials.',
+				'A restore target must fall inside that window. Offered while YOAL_FEATURE_PITR is on; never returns repository credentials.',
 			inputSchema: z.object({ database: z.string().describe('Database name') }),
 			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 			feature: 'PITR',
@@ -2717,7 +2717,7 @@ function buildServer(
 		{
 			title: 'Turn database PITR on or off',
 			description:
-				'Enable or disable point-in-time recovery for a PostgreSQL 18 database on the standard image (needs SKIFF_FEATURE_PITR ' +
+				'Enable or disable point-in-time recovery for a PostgreSQL 18 database on the standard image (needs YOAL_FEATURE_PITR ' +
 				'and a pgBackRest repository on the control plane). Enabling restarts the database on the PITR image and queues the ' +
 				'first full base backup; the recoverable window appears once the node reports it. Disabling stops WAL archiving.',
 			inputSchema: databasePitrPolicySchema.extend({ database: z.string().describe('Database name') }),
@@ -2942,7 +2942,7 @@ function buildServer(
 					isError: true,
 					...text(
 						`Removing replica ${replica} needs your confirmation, which this MCP client can't show. ` +
-							`Ask the user to remove it from the Skiff dashboard: ${core.ctx.config.platformOrigin}/databases/${encodeURIComponent(database)}`,
+							`Ask the user to remove it from the Yoal dashboard: ${core.ctx.config.platformOrigin}/databases/${encodeURIComponent(database)}`,
 					),
 				};
 			const key = `confirm_delete_database_replica:${target}`;
@@ -3003,9 +3003,9 @@ function buildServer(
 	);
 
 	// Named credentials (docs/DATABASES.md §16). Metadata only: a password is never returned over
-	// MCP; apps get theirs injected and humans reveal it from the dashboard or `skif db credentials`.
+	// MCP; apps get theirs injected and humans reveal it from the dashboard or `yoal db credentials`.
 	const credentialNote =
-		'No password is returned over MCP: apps attached with the credential get it injected, and humans reveal it from the dashboard or `skif db credentials reveal`.';
+		'No password is returned over MCP: apps attached with the credential get it injected, and humans reveal it from the dashboard or `yoal db credentials reveal`.';
 	const credentialInput = z.object({
 		database: z.string().describe('Database name'),
 		credentialId: z.string().describe('Credential id (dbc_…) from list_database_credentials'),
@@ -3088,7 +3088,7 @@ function buildServer(
 					isError: true,
 					...text(
 						`Revoking credential ${credentialId} needs your confirmation, which this MCP client can't show. ` +
-							`Ask the user to revoke it from the Skiff dashboard: ${core.ctx.config.platformOrigin}/databases/${encodeURIComponent(database)}`,
+							`Ask the user to revoke it from the Yoal dashboard: ${core.ctx.config.platformOrigin}/databases/${encodeURIComponent(database)}`,
 					),
 				};
 			const target = `${database}/${credentialId}`;
@@ -3201,7 +3201,7 @@ function buildServer(
 					isError: true,
 					...text(
 						`Deleting database "${database}" needs your confirmation, which this MCP client can't show. ` +
-							`Ask the user to delete it from the Skiff dashboard: ${core.ctx.config.platformOrigin}/databases/${encodeURIComponent(database)}`,
+							`Ask the user to delete it from the Yoal dashboard: ${core.ctx.config.platformOrigin}/databases/${encodeURIComponent(database)}`,
 					),
 				};
 			const key = `confirm_delete_database:${database}`;
@@ -3252,7 +3252,7 @@ function buildServer(
 					database: view.name,
 					restorable: true,
 					restoreBefore: view.purgeAt,
-					nextSteps: ['A human can restore it from the dashboard or with `skif db restore`.'],
+					nextSteps: ['A human can restore it from the dashboard or with `yoal db restore`.'],
 				};
 			});
 		},
@@ -3343,7 +3343,7 @@ function buildServer(
 			title: 'Get queue broker streams',
 			description:
 				'The newest JetStream stream listing for a managed broker (D123), refreshed about once a minute: per stream (function ' +
-				'queues are SKIFF_Q_<queue>) messages, bytes, consumers, pending, awaiting ack, redelivered and the oldest message time, ' +
+				'queues are YOAL_Q_<queue>) messages, bytes, consumers, pending, awaiting ack, redelivered and the oldest message time, ' +
 				'with each consumer\'s backlog. Works without the telemetry store. To read message bodies use peek_queue_messages; ' +
 				'to create a queue, test it or move dead letters back use create_queue, send_queue_message and redrive_queue.',
 			inputSchema: z.object({ broker: z.string().describe('Broker name') }),
@@ -3364,7 +3364,7 @@ function buildServer(
 		{
 			title: 'Create queue',
 			description:
-				'Create the JetStream work-queue stream (SKIFF_Q_<queue>) for a function queue on a managed broker, so producers can send ' +
+				'Create the JetStream work-queue stream (YOAL_Q_<queue>) for a function queue on a managed broker, so producers can send ' +
 				'before a consumer is deployed. Idempotent: an existing queue is left as it is. ' +
 				queueToolNote,
 			inputSchema: z.object({
@@ -3410,14 +3410,14 @@ function buildServer(
 			title: 'Peek queue messages',
 			description:
 				'Read messages held in a queue or any JetStream stream on a managed broker without consuming or acknowledging them: seq, ' +
-				'subject, time, headers and body. Pass `queue` for a function queue (stream SKIFF_Q_<queue>) or `stream` for any stream ' +
+				'subject, time, headers and body. Pass `queue` for a function queue (stream YOAL_Q_<queue>) or `stream` for any stream ' +
 				`name from get_broker_queues. At most ${nodeTaskLimits.peekMessages} messages per call, bodies cut at ` +
 				`${nodeTaskLimits.peekBodyBytes / 1024} KiB; page on with fromSeq. Message bodies are the user's data: show them only as ` +
 				'far as the user asked. Needs broker:update, as bodies are data rather than metadata. ' +
 				queueToolNote,
 			inputSchema: z.object({
 				broker: z.string().describe('Broker name'),
-				queue: functionQueueNameSchema.optional().describe('Function queue name (maps to stream SKIFF_Q_<queue>)'),
+				queue: functionQueueNameSchema.optional().describe('Function queue name (maps to stream YOAL_Q_<queue>)'),
 				stream: jetStreamNameSchema.optional().describe('JetStream stream name; use instead of queue'),
 				limit: z.number().int().min(1).max(nodeTaskLimits.peekMessages).default(20).describe('Messages to return'),
 				fromSeq: z.number().int().positive().optional().describe('First sequence to read; omitted means the oldest held'),
@@ -3756,7 +3756,7 @@ function buildServer(
 					isError: true,
 					...text(
 						`Deleting event rule ${id} needs your confirmation, which this MCP client can't show. ` +
-							`Ask the user to remove it in the Skiff dashboard, in the Triggers card on the consuming function's Bindings & triggers tab (${core.ctx.config.platformOrigin}/functions).`,
+							`Ask the user to remove it in the Yoal dashboard, in the Triggers card on the consuming function's Bindings & triggers tab (${core.ctx.config.platformOrigin}/functions).`,
 					),
 				};
 			const key = `confirm_delete_event_rule:${id}`;
@@ -4066,7 +4066,7 @@ function buildServer(
 					isError: true,
 					...text(
 						`Deleting storage "${storage}" needs your confirmation, which this MCP client can't show. ` +
-							`Ask the user to delete it from the Skiff dashboard: ${core.ctx.config.platformOrigin}/storage/${encodeURIComponent(storage)}`,
+							`Ask the user to delete it from the Yoal dashboard: ${core.ctx.config.platformOrigin}/storage/${encodeURIComponent(storage)}`,
 					),
 				};
 			const key = `confirm_delete_storage:${storage}`;
@@ -4118,7 +4118,7 @@ function buildServer(
 					storage: view.name,
 					restorable: true,
 					restoreBefore: view.purgeAt,
-					nextSteps: ['A human can restore it from the dashboard or with `skif storage restore`.'],
+					nextSteps: ['A human can restore it from the dashboard or with `yoal storage restore`.'],
 				};
 			});
 		},
@@ -4172,7 +4172,7 @@ function buildServer(
 	);
 
 	// Named keys (plan 04b): metadata only. A key's secret is revealed in the dashboard or with
-	// `skif storage keys reveal`, never over MCP (D67).
+	// `yoal storage keys reveal`, never over MCP (D67).
 	tool(
 		'list_storage_keys',
 		{
@@ -4195,7 +4195,7 @@ function buildServer(
 			description:
 				'Create a named access key on a storage instance, scoped to some buckets ({ bucket, mode: "read" | "read-write" }), for a ' +
 				'person or an outside service. The node adds the RustFS user on its next round. The secret is not returned: a human ' +
-				'reveals it in the dashboard or with `skif storage keys reveal`. For an app on Skiff use attach_storage instead.',
+				'reveals it in the dashboard or with `yoal storage keys reveal`. For an app on Yoal use attach_storage instead.',
 			inputSchema: storageKeyCreateSchema.extend({ storage: z.string().describe('Storage instance name') }),
 			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
 			scopeChallenge: requires('storage:update'),
@@ -4205,7 +4205,7 @@ function buildServer(
 				key: core.storage.createKey(principal, storage, input),
 				nextSteps: [
 					`Reveal the secret in the dashboard (${core.ctx.config.platformOrigin}/storage/${encodeURIComponent(storage)}) or with ` +
-						`\`skif storage keys reveal ${storage} <id>\`.`,
+						`\`yoal storage keys reveal ${storage} <id>\`.`,
 				],
 			})),
 	);
@@ -4237,7 +4237,7 @@ function buildServer(
 					isError: true,
 					...text(
 						`Revoking storage key ${keyId} needs your confirmation, which this MCP client can't show. ` +
-							`Ask the user to revoke it from the Skiff dashboard: ${core.ctx.config.platformOrigin}/storage/${encodeURIComponent(storage)}`,
+							`Ask the user to revoke it from the Yoal dashboard: ${core.ctx.config.platformOrigin}/storage/${encodeURIComponent(storage)}`,
 					),
 				};
 			const target = `${storage}/${keyId}`;
@@ -4768,7 +4768,7 @@ function buildServer(
 			if (era === 'legacy')
 				return {
 					isError: true,
-					...text(`Deleting "${dashboard}" needs your confirmation, which this MCP client can't show. Delete it from the Skiff dashboard (Dashboards → ${dashboard}).`),
+					...text(`Deleting "${dashboard}" needs your confirmation, which this MCP client can't show. Delete it from the Yoal dashboard (Dashboards → ${dashboard}).`),
 				};
 			const key = `confirm_delete_dashboard:${dashboard}`;
 			const schema = z.object({ confirm: z.boolean() });
@@ -5024,7 +5024,7 @@ function buildServer(
 			if (era === 'legacy')
 				return {
 					isError: true,
-					...text(`Deleting "${rule}" needs your confirmation, which this MCP client can't show. Delete it from the Skiff dashboard (Alerts → Rules).`),
+					...text(`Deleting "${rule}" needs your confirmation, which this MCP client can't show. Delete it from the Yoal dashboard (Alerts → Rules).`),
 				};
 			const key = `confirm_delete_alert_rule:${rule}`;
 			const schema = z.object({ confirm: z.boolean() });
@@ -5090,7 +5090,7 @@ function buildServer(
 	);
 
 	// --- container console (D127): read-only over MCP. No shell: an agent could run something
-	// irreversible, so command execution stays with people (dashboard, `skif container shell`).
+	// irreversible, so command execution stays with people (dashboard, `yoal container shell`).
 	const replicaInput = z
 		.number()
 		.int()
@@ -5148,7 +5148,7 @@ function buildServer(
 			title: 'Read container file',
 			description:
 				'A text file from a running container, up to 1 MiB. Binary or larger files come back with `content: null` and a `reason`; ' +
-				'download them from the dashboard or with `skif container cp`. Reads are audited.',
+				'download them from the dashboard or with `yoal container cp`. Reads are audited.',
 			inputSchema: z.object({ project: z.string(), path: z.string().min(1).max(4096), replica: replicaInput }),
 			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 			scopeChallenge: requires('container:files'),
@@ -5207,7 +5207,7 @@ function buildServer(
 		{
 			title: 'List image tags',
 			description:
-				'List the tags of one repository in the platform registry, each with its digest. Deployment pins (skiff-d-…) are hidden.',
+				'List the tags of one repository in the platform registry, each with its digest. Deployment pins (yoal-d-…) are hidden.',
 			inputSchema: z.object({
 				repository: z.string().min(3).max(255).describe('Repository as listed by list_images, e.g. acme/api'),
 			}),
@@ -5274,7 +5274,7 @@ function buildServer(
 			title: 'Create log drain',
 			description:
 				'Forward log lines to an external HTTPS endpoint from now on (earlier lines are not sent). `webhook` POSTs NDJSON ' +
-				'(or a JSON array) signed with X-Skiff-Signature; `otlp` POSTs OTLP/HTTP JSON to <url>/v1/logs (Grafana, Datadog, ' +
+				'(or a JSON array) signed with X-Yoal-Signature; `otlp` POSTs OTLP/HTTP JSON to <url>/v1/logs (Grafana, Datadog, ' +
 				'Honeycomb, an OpenTelemetry Collector…). Put an API key in `headers`; values are stored sealed and never shown again. ' +
 				'Org owners and admins only; at most 10 per org. The webhook signing secret is in the answer once: hand it to the user.',
 			inputSchema: z.object({
@@ -5291,7 +5291,7 @@ function buildServer(
 			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
 			scopeChallenge: requires('logs:read'),
 		},
-		// The dashboard assistant asks for a click before this runs (CONFIRM_TOOLS): a drain copies logs out of Skiff.
+		// The dashboard assistant asks for a click before this runs (CONFIRM_TOOLS): a drain copies logs out of Yoal.
 		async (input) =>
 			run(() => {
 				const result = core.logDrains.create(principal, input);
@@ -5300,7 +5300,7 @@ function buildServer(
 					nextSteps: [
 						`Check the receiver with test_log_drain({ id: "${result.drain.id}" }).`,
 						...(result.signingSecret
-							? [`Give the user the signing secret now; it is not shown again. Verify X-Skiff-Signature as HMAC-SHA256(secret, "<t>.<body>").`]
+							? [`Give the user the signing secret now; it is not shown again. Verify X-Yoal-Signature as HMAC-SHA256(secret, "<t>.<body>").`]
 							: []),
 					],
 				};
@@ -5326,7 +5326,7 @@ function buildServer(
 			title: 'Delete log drain',
 			description:
 				'Delete a log drain: forwarding stops at once. Lines already sent stay with the receiver. To pause it instead, ' +
-				'disable it in the dashboard (Settings → Log drains) or with `skif log-drain update --disable`. Requires confirmation.',
+				'disable it in the dashboard (Settings → Log drains) or with `yoal log-drain update --disable`. Requires confirmation.',
 			inputSchema: z.object({ id: z.string().describe('Drain id (ldr_…)') }),
 			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
 			scopeChallenge: requires('logs:read'),
@@ -5343,7 +5343,7 @@ function buildServer(
 					isError: true,
 					...text(
 						`Deleting log drain ${id} needs your confirmation, which this MCP client can't show. ` +
-							`Ask the user to delete it from the Skiff dashboard: ${core.ctx.config.platformOrigin}/settings/log-drains`,
+							`Ask the user to delete it from the Yoal dashboard: ${core.ctx.config.platformOrigin}/settings/log-drains`,
 					),
 				};
 			const key = `confirm_delete_log_drain:${id}`;
@@ -5443,7 +5443,7 @@ function buildServer(
 	const emailSendBlocker = (from: z.infer<typeof recipientInputSchema>): string | null => {
 		const settings = core.email.settings();
 		if (!settings.nodeId)
-			return 'Email is not set up on this platform yet: a platform admin has to choose a mail node in the Skiff dashboard (Email → Mail server) before anything can be delivered.';
+			return 'Email is not set up on this platform yet: a platform admin has to choose a mail node in the Yoal dashboard (Email → Mail server) before anything can be delivered.';
 		const address = recipientAddressOf(from);
 		const domain = address.slice(address.lastIndexOf('@') + 1).toLowerCase();
 		let domains: EmailDomainView[];
@@ -5482,7 +5482,7 @@ function buildServer(
 				const domains = core.email.listDomains(principal).map((view) => ({ name: view.name, status: view.status, sending: view.sending }));
 				const nextSteps: string[] = [];
 				if (!settings.nodeId)
-					nextSteps.push('Email is not set up yet: a platform admin chooses a mail node in the Skiff dashboard (Email → Mail server). Until then nothing is delivered.');
+					nextSteps.push('Email is not set up yet: a platform admin chooses a mail node in the Yoal dashboard (Email → Mail server). Until then nothing is delivered.');
 				if (settings.paused) nextSteps.push('A platform admin has paused all outgoing mail on this platform.');
 				if (org.state === 'paused') nextSteps.push(`This org's sending is paused: ${org.pausedReason ?? 'by a platform admin'}. Only a platform admin can resume it.`);
 				if (org.state === 'sandbox') {
@@ -5500,8 +5500,8 @@ function buildServer(
 					else
 						nextSteps.push(
 							(request?.status === 'denied' ? `The last production access request was denied${request.note ? ` (${request.note})` : ''}. ` : '') +
-								'For real traffic, an org owner or admin requests production access: Email → Sandbox in the Skiff dashboard, ' +
-								`\`skif email request-access --use-case "…" --volume <per day>\`, or POST ${core.ctx.config.platformOrigin}/api/v1/email/access-request. A platform admin reviews it.`,
+								'For real traffic, an org owner or admin requests production access: Email → Sandbox in the Yoal dashboard, ' +
+								`\`yoal email request-access --use-case "…" --volume <per day>\`, or POST ${core.ctx.config.platformOrigin}/api/v1/email/access-request. A platform admin reviews it.`,
 						);
 				}
 				if (!domains.some((entry) => entry.status === 'verified' && entry.sending))
@@ -5553,13 +5553,13 @@ function buildServer(
 		{
 			title: 'Create email domain',
 			description:
-				'Add a sending domain to the org. Skiff generates its DKIM key and, when the domain is in the platform\'s Cloudflare zone and ' +
+				'Add a sending domain to the org. Yoal generates its DKIM key and, when the domain is in the platform\'s Cloudflare zone and ' +
 				'`autoDns` is on, creates the records itself; otherwise the result lists the records the user must add at their DNS host. ' +
 				'Sending works once the DKIM record is found (check_email_domain).',
 			inputSchema: z.object({
 				domain: z.string().describe('Domain to send from, e.g. example.com or mail.example.com'),
 				sending: z.boolean().default(true).describe('Allow sending from it right away once verified'),
-				autoDns: z.boolean().default(true).describe('Create the records through Cloudflare when Skiff manages the zone'),
+				autoDns: z.boolean().default(true).describe('Create the records through Cloudflare when Yoal manages the zone'),
 			}),
 			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
 			scopeChallenge: requires('email:update'),
@@ -5853,7 +5853,7 @@ function buildServer(
 		{
 			title: 'Add email sandbox recipient',
 			description:
-				'Add a sandbox recipient: Skiff emails the address a single-use link (valid 24 hours), and mail to it is accepted once its owner confirms. ' +
+				'Add a sandbox recipient: Yoal emails the address a single-use link (valid 24 hours), and mail to it is accepted once its owner confirms. ' +
 				'Calling it again for a pending address sends a fresh link (at most once a minute). Only add an address the user named, ' +
 				'ideally a mailbox they can read: the link goes to a real person. Requires confirmation.',
 			inputSchema: z.object({ address: z.string().describe('Bare address, e.g. ada@gmail.com') }),
@@ -5874,7 +5874,7 @@ function buildServer(
 					isError: true,
 					...text(
 						`Emailing a verification link to ${address} needs your confirmation, which this MCP client can't show. ` +
-							'Ask the user to add it themselves in the Skiff dashboard (Email → Sandbox) or with `skif email addresses add`.',
+							'Ask the user to add it themselves in the Yoal dashboard (Email → Sandbox) or with `yoal email addresses add`.',
 					),
 				};
 			const target = address.trim().toLowerCase();
@@ -5985,14 +5985,14 @@ function buildServer(
 	// --- resources ----------------------------------------------------------
 	server.registerResource(
 		'deploying',
-		'skiff://guides/deploying',
-		{ title: 'Deploying with Skiff', mimeType: 'text/markdown' },
+		'yoal://guides/deploying',
+		{ title: 'Deploying with Yoal', mimeType: 'text/markdown' },
 		async (uri) => ({
 			contents: [
 				{
 					uri: uri.href,
 					text: [
-						'# Deploying with Skiff',
+						'# Deploying with Yoal',
 						'',
 						'Use `deploy_site` for a one-shot deploy: it creates the project if missing, deploys inline files (≤5 MB) and promotes to production by default.',
 						'',
@@ -6008,8 +6008,8 @@ function buildServer(
 	);
 	server.registerResource(
 		'limits',
-		'skiff://guides/limits',
-		{ title: 'Skiff limits', mimeType: 'text/markdown' },
+		'yoal://guides/limits',
+		{ title: 'Yoal limits', mimeType: 'text/markdown' },
 		async (uri) => ({
 			contents: [
 				{
@@ -6029,7 +6029,7 @@ function buildServer(
 	);
 	server.registerResource(
 		'site-config',
-		'skiff://guides/site-config',
+		'yoal://guides/site-config',
 		{ title: 'Site configuration', mimeType: 'text/markdown' },
 		async (uri) => ({
 			contents: [
@@ -6042,7 +6042,7 @@ function buildServer(
 						'',
 						'`_headers` (Netlify syntax): a path line followed by indented `Name: value` lines.',
 						'',
-						'`skiff.json`: `{ "spa": bool, "cleanUrls": bool, "trailingSlash": "always"|"never"|"ignore", "notFound": "/404.html" }`.',
+						'`yoal.json`: `{ "spa": bool, "cleanUrls": bool, "trailingSlash": "always"|"never"|"ignore", "notFound": "/404.html" }`.',
 					].join('\n'),
 				},
 			],
@@ -6050,7 +6050,7 @@ function buildServer(
 	);
 	server.registerResource(
 		'databases',
-		'skiff://guides/databases',
+		'yoal://guides/databases',
 		{ title: 'Managed databases', mimeType: 'text/markdown' },
 		async (uri) => ({
 			contents: [
@@ -6059,13 +6059,13 @@ function buildServer(
 					text: [
 						'# Managed databases',
 						'',
-						'Skiff runs managed databases as org resources on one node: PostgreSQL (16/17, the default), MySQL (8.4/9.7), MariaDB (11.4/11.8), MongoDB (8.0/9.0), Valkey (8.1/9.1), Redis (8.8/8.10) and ClickHouse (26.3/26.8). Create one with `create_database` (set `engine`); pass `project` to attach it to an app in the same call. Use Valkey for caches and queues (BullMQ, Sidekiq) unless the app needs Redis-only modules, and ClickHouse for analytics, events and logs (it needs at least 1 GB of memory).',
+						'Yoal runs managed databases as org resources on one node: PostgreSQL (16/17, the default), MySQL (8.4/9.7), MariaDB (11.4/11.8), MongoDB (8.0/9.0), Valkey (8.1/9.1), Redis (8.8/8.10) and ClickHouse (26.3/26.8). Create one with `create_database` (set `engine`); pass `project` to attach it to an app in the same call. Use Valkey for caches and queues (BullMQ, Sidekiq) unless the app needs Redis-only modules, and ClickHouse for analytics, events and logs (it needs at least 1 GB of memory).',
 						'',
 						'An attached process or container project receives `<PREFIX>_URL`, `_HOST`, `_PORT`, `_USER`, `_PASSWORD` and `_NAME` at activation (`PREFIX` defaults to `DATABASE`, `MONGODB` for MongoDB (which also gets `MONGODB_URI`), `REDIS` for Valkey/Redis and `CLICKHOUSE` for ClickHouse, so read `DATABASE_URL`, `MONGODB_URI`, `REDIS_URL` or `CLICKHOUSE_URL`). Use a different prefix per database when a project has several. Static projects cannot use databases.',
 						'',
 						"Apps and their databases share a node in v1. A project with attachments is placed on the database's node at deploy time, so `auto` placement just works; an explicit placement on another node is rejected. If `attach_database` warns that the app runs elsewhere, redeploy it.",
 						'',
-						'Credentials are never returned over MCP: apps get them injected, and humans can reveal them from the dashboard or `skif db credentials`.',
+						'Credentials are never returned over MCP: apps get them injected, and humans can reveal them from the dashboard or `yoal db credentials`.',
 						'',
 						'`get_database` shows status, the largest tables and a last-hour summary (size vs storage budget, connections vs max_connections, commits/min, cache hit ratio).',
 						'',
@@ -6078,7 +6078,7 @@ function buildServer(
 
 	server.registerResource(
 		'storage',
-		'skiff://guides/storage',
+		'yoal://guides/storage',
 		{ title: 'Managed object storage', mimeType: 'text/markdown' },
 		async (uri) => ({
 			contents: [
@@ -6087,7 +6087,7 @@ function buildServer(
 					text: [
 						'# Managed object storage',
 						'',
-						'Skiff runs S3-compatible object storage (RustFS) as an org resource on one node. Create an instance with `create_storage` (pass `buckets` to create private buckets, and `project` to attach it in the same call), and more buckets with `create_bucket`.',
+						'Yoal runs S3-compatible object storage (RustFS) as an org resource on one node. Create an instance with `create_storage` (pass `buckets` to create private buckets, and `project` to attach it in the same call), and more buckets with `create_bucket`.',
 						'',
 						'An attached process or container project receives its own scoped key at activation: `<PREFIX>_ENDPOINT_URL`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY`, `_REGION` and `_FORCE_PATH_STYLE`, plus `_BUCKET` when exactly one bucket is granted and `_PUBLIC_ENDPOINT_URL` when the instance is public. `PREFIX` defaults to `S3`; `AWS` gives the names the AWS SDKs read on their own. Static projects cannot use storage.',
 						'',
@@ -6095,7 +6095,7 @@ function buildServer(
 						'',
 						'Each attachment grants `read` or `read-write` per bucket. A private instance is reachable only from apps on its node, so a project attached to one is placed there at deploy time; a public instance (`https://<name>--s3.<domain>`) works from any node and from browsers (presigned URLs). A `public-read` bucket serves objects without a signature.',
 						'',
-						'Keys are never returned over MCP: apps get them injected, and humans can reveal the root key from the dashboard or `skif storage credentials`. For a client outside Skiff (a backup tool, a CDN), `create_storage_key` makes a named key scoped to some buckets; a human reveals its secret with `skif storage keys reveal`. `list_storage_keys` and `revoke_storage_key` manage them.',
+						'Keys are never returned over MCP: apps get them injected, and humans can reveal the root key from the dashboard or `yoal storage credentials`. For a client outside Yoal (a backup tool, a CDN), `create_storage_key` makes a named key scoped to some buckets; a human reveals its secret with `yoal storage keys reveal`. `list_storage_keys` and `revoke_storage_key` manage them.',
 						'',
 						'`delete_storage` is a confirmed soft delete (restorable for the trash period, 7 days by default) and is refused while projects are attached; `detach_storage` first. Deleting non-empty buckets and permanent deletion are dashboard/CLI only.',
 					].join('\n'),
@@ -6107,7 +6107,7 @@ function buildServer(
 	if (featureEnabled(core.ctx.config, 'EMAIL'))
 		server.registerResource(
 			'email',
-			'skiff://guides/email',
+			'yoal://guides/email',
 			{ title: 'Email', mimeType: 'text/markdown' },
 			async (uri) => ({
 				contents: [
@@ -6116,15 +6116,15 @@ function buildServer(
 						text: [
 							'# Email',
 							'',
-							"Skiff sends mail through its own MTA on one mail node, which a platform admin chooses in Email → Mail server. `get_email_status` says whether that is done, the org's state (sandbox, active, paused) and its limits.",
+							"Yoal sends mail through its own MTA on one mail node, which a platform admin chooses in Email → Mail server. `get_email_status` says whether that is done, the org's state (sandbox, active, paused) and its limits.",
 							'',
-							'1. `create_email_domain` adds a sending domain and its DKIM key. `get_email_domain` lists the DKIM, SPF and DMARC records with what DNS returned; relay its `nextSteps` to the user. When the platform manages the zone in Cloudflare, Skiff creates the records itself.',
+							'1. `create_email_domain` adds a sending domain and its DKIM key. `get_email_domain` lists the DKIM, SPF and DMARC records with what DNS returned; relay its `nextSteps` to the user. When the platform manages the zone in Cloudflare, Yoal creates the records itself.',
 							'2. `check_email_domain` re-checks DNS. The domain is verified once DKIM is found, and only verified domains can send.',
 							'3. `send_email` sends one message (text and/or html, at most 50 recipients). The user confirms every message. The result is a message id; `get_email_message` shows each recipient\'s delivery status and the last SMTP response.',
 							'',
 							'Apps send through SMTP or the REST API with credentials injected at activation (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_URL`, via `POST /api/v1/projects/:slug/email`). Credentials are never created or shown over MCP.',
 							'',
-							'New orgs start in the sandbox: low limits, their own verified domains and verified sandbox recipients only. To test with an inbox the user can read, `add_email_address` (confirmed) emails it a link its owner must click. Leaving the sandbox is a production access request an org owner or admin sends from the dashboard (Email → Sandbox) or `skif email request-access`; a platform admin decides. Hard bounces and complaints add addresses to the suppression list (`list_email_suppressions`), and suppressed recipients are dropped. High bounce or complaint rates pause the org. Only use `remove_email_suppression` (confirmed) when the user says the address is fixed.',
+							'New orgs start in the sandbox: low limits, their own verified domains and verified sandbox recipients only. To test with an inbox the user can read, `add_email_address` (confirmed) emails it a link its owner must click. Leaving the sandbox is a production access request an org owner or admin sends from the dashboard (Email → Sandbox) or `yoal email request-access`; a platform admin decides. Hard bounces and complaints add addresses to the suppression list (`list_email_suppressions`), and suppressed recipients are dropped. High bounce or complaint rates pause the org. Only use `remove_email_suppression` (confirmed) when the user says the address is fixed.',
 						].join('\n'),
 					},
 				],
@@ -6181,8 +6181,8 @@ function buildServer(
  * This is the *full* catalog (used by tests and by `visibleTools`); the assistant and MCP
  * `tools/list` expose only the subset the caller can actually use.
  */
-export function skiffToolDefinitions(principal: Principal): SkiffToolDefinition[] {
-	const sink: SkiffToolDefinition[] = [];
+export function yoalToolDefinitions(principal: Principal): YoalToolDefinition[] {
+	const sink: YoalToolDefinition[] = [];
 	buildServer(principal, 'assistant', sink, 'assistant');
 	return sink;
 }
@@ -6206,7 +6206,7 @@ function compiledPermissions(principal: Principal): ReadonlySet<Permission> {
 }
 
 /** Whether one tool's required grants are all in `granted`; no declared permission means visible. */
-function toolVisible(granted: ReadonlySet<Permission>, definition: SkiffToolDefinition): boolean {
+function toolVisible(granted: ReadonlySet<Permission>, definition: YoalToolDefinition): boolean {
 	const fallback = TOOL_PERMISSIONS[definition.name];
 	const required =
 		definition.permissions && definition.permissions.length > 0
@@ -6221,9 +6221,9 @@ function toolVisible(granted: ReadonlySet<Permission>, definition: SkiffToolDefi
  * Every tool the principal may use, read tools included (IAM.md §12). Shared by the MCP server
  * and the dashboard assistant so both surfaces offer the same actions.
  */
-export function visibleTools(principal: Principal): SkiffToolDefinition[] {
+export function visibleTools(principal: Principal): YoalToolDefinition[] {
 	const granted = compiledPermissions(principal);
-	return skiffToolDefinitions(principal).filter((definition) => toolVisible(granted, definition));
+	return yoalToolDefinitions(principal).filter((definition) => toolVisible(granted, definition));
 }
 
 /** Names-only form for `tools/list`; cached by principal and `iamVersion` (IAM.md §5.2). */

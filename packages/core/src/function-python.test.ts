@@ -2,15 +2,15 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_FEATURES, FUNCTIONS_PYTHON_CAPABILITY, type InlineFile } from '@skiff/contracts';
-import { createDb } from '@skiff/db';
+import { DEFAULT_FEATURES, FUNCTIONS_PYTHON_CAPABILITY, type InlineFile } from '@yoal/contracts';
+import { createDb } from '@yoal/db';
 import { buildPrincipal } from './orgs.ts';
 import { createCore, type Core } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import { sha256Hex } from './util.ts';
 
 /** Python Workers in the control plane (D121): flag, memory default and placement. */
-const dir = mkdtempSync(join(tmpdir(), 'skiff-fn-python-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-fn-python-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 const core: Core = createCore({
@@ -44,7 +44,7 @@ function bundle(extra: Record<string, unknown> = {}): InlineFile[] {
 		triggers: { crons: [], queues: [] },
 		...extra,
 	};
-	return [file('skiff-function.json', JSON.stringify(manifest)), file('entry.py', ENTRY)];
+	return [file('yoal-function.json', JSON.stringify(manifest)), file('entry.py', ENTRY)];
 }
 
 afterAll(() => {

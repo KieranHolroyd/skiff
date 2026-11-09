@@ -1,4 +1,4 @@
-import type { ForgeKind } from '@skiff/contracts';
+import type { ForgeKind } from '@yoal/contracts';
 import { CoreError } from '../errors.ts';
 import type { GithubPathContent } from '../github-app.ts';
 
@@ -103,7 +103,7 @@ class ForgeHttp {
 				method,
 				headers: {
 					accept: 'application/json',
-					'user-agent': 'skiff',
+					'user-agent': 'yoal',
 					...this.headers,
 					...(body === undefined ? {} : { 'content-type': 'application/json' }),
 				},
@@ -165,7 +165,7 @@ interface GitlabProject {
 	last_activity_at?: string | null;
 }
 
-/** Skiff state → GitLab commit status state. */
+/** Yoal state → GitLab commit status state. */
 export function gitlabState(state: ForgeStatusState): string {
 	switch (state) {
 		case 'running':
@@ -181,7 +181,7 @@ export function gitlabState(state: ForgeStatusState): string {
 	}
 }
 
-const DEPLOY_TOKEN_NAME = 'skiff-clone';
+const DEPLOY_TOKEN_NAME = 'yoal-clone';
 const DEPLOY_TOKEN_LIFETIME_MS = 2 * 24 * 60 * 60_000;
 
 class GitlabClient implements ForgeClient {
@@ -316,7 +316,7 @@ class GitlabClient implements ForgeClient {
 
 	/**
 	 * A per-project deploy token with `read_repository`, valid two days (D175). Needs Maintainer;
-	 * returns null on a refusal. Expired Skiff tokens on the project are revoked first.
+	 * returns null on a refusal. Expired Yoal tokens on the project are revoked first.
 	 */
 	async cloneCredential(fullName: string, now: number): Promise<ForgeCloneCredential | null> {
 		const base = `${this.project(fullName)}/deploy_tokens`;

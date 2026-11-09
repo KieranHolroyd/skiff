@@ -1,4 +1,4 @@
-# Skiff — Flows: durable multi-step changes
+# Yoal — Flows: durable multi-step changes
 
 Status: **built 2026-11-08** (D167). The engine, its migration (`0079_flows.sql`), the REST/SSE/MCP
 surfaces and the first consumer (database moves, D97) are in the tree and covered by unit tests.
@@ -103,7 +103,7 @@ that process releases it.
 **Driving.** Starts and signals drive their own run at once. The control plane also calls
 `drive()` every 5 s (retries after backoff, wait timeouts, cancels requested while another process
 held the run), and the maintenance sweep calls `tick()`, `drive()` and `prune()`. A standby control
-plane (`SKIFF_STANDBY=1`) drives nothing.
+plane (`YOAL_STANDBY=1`) drives nothing.
 
 **Adoption.** `start({ waiting })` creates a run already parked on a signal without calling the
 step. The database move uses it for moves that began before flows existed (§6).
@@ -213,7 +213,7 @@ tests, the way §6 did.
 
 - Dashboard pages for runs (a run timeline on the database page, an activity list). The REST, SSE
   and MCP surfaces are complete.
-- CLI commands (`skif ops get <id> --wait` works through `GET /api/v1/operations/<id>`, but the
+- CLI commands (`yoal ops get <id> --wait` works through `GET /api/v1/operations/<id>`, but the
   CLI does not render flows specially yet).
 - Fencing tokens across control planes. Leases fence processes sharing one SQLite. The HA epoch
   (docs/CLUSTERING.md §6) will add the controller epoch to the claim when standbys can promote.

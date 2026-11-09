@@ -1,0 +1,105 @@
+name: Runner image
+
+# yoal-runner, the default job image (docker/runner/Dockerfile, docs/PIPELINES.md §4.2): built
+# natively on each architecture with yoal/build-image (the per-job BuildKit sidecar), joined into
+# one multi-arch tag with yoal/image-index, and mirrored to GHCR.
+#
+# Pull requests build without pushing. Pushes to main publish `registry/yoal-runner:<sha>` (the
+# org's own namespace: `registry/<name>` expands to <registry host>/<org slug>/<name>) and
+# `:latest` on Yoal's registry, and the same index on ghcr.io (GHCR_TOKEN lives in the `release`
+# environment: allowed refs refs/heads/main, approval required — configured on the repository).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docker/runner/**'
+      - '.yoal/workflows/runner-image.yml'
+  pull_request:
+    paths:
+      - 'docker/runner/**'
+      - '.yoal/workflows/runner-image.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: 'runner-image-${{ yoal.ref }}'
+  cancel-in-progress: true
+
+env:
+  BUN_VERSION: '1.4.4'
+  NODE_MAJOR: '22'
+  GHCR_IMAGE: ghcr.io/kieranholroyd/yoal-runner
+
+jobs:
+  image:
+    name: 'yoal-runner (${{ matrix.arch }})'
+    runs-on: [linux, '${{ matrix.arch }}', oci-build]
+    strategy:
+      fail-fast: true
+      matrix:
+        arch: [x64, arm64]
+    steps:
+      - uses: yoal/checkout@v1
+
+      - id: build
+        uses: yoal/build-image@v1
+        with:
+          context: docker/runner
+          file: docker/runner/Dockerfile
+          tags: 'registry/yoal-runner:${{ yoal.sha }}-${{ matrix.arch }}'
+          build-args: |
+            BUN_VERSION=${{ env.BUN_VERSION }}
+            NODE_MAJOR=${{ env.NODE_MAJOR }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ yoal.repository }}
+            org.opencontainers.image.revision=${{ yoal.sha }}
+          push: "${{ yoal.event_name != 'pull_request' }}"
+
+      - name: Not pushed on pull requests
+        if: yoal.event_name == 'pull_request'
+        run: echo "Built ${{ steps.build.outputs.tags }} (not pushed on pull requests)."
+
+  publish:
+    name: Multi-arch index
+    needs: image
+    if: yoal.event_name != 'pull_request'
+    runs-on: linux
+    outputs:
+      image: '${{ steps.index.outputs.image }}'
+    steps:
+      - id: index
+        uses: yoal/image-index@v1
+        with:
+          tag: 'registry/yoal-runner:${{ yoal.sha }}'
+          # By tag: matrix jobs share one outputs map (last writer wins), so per-arch digests
+          # cannot travel through job outputs.
+          sources: |
+            registry/yoal-runner:${{ yoal.sha }}-x64
+            registry/yoal-runner:${{ yoal.sha }}-arm64
+
+      - if: yoal.ref == 'refs/heads/main'
+        uses: yoal/image-index@v1
+        with:
+          tag: registry/yoal-runner:latest
+          sources: '${{ steps.index.outputs.image }}'
+
+  mirror:
+    name: Mirror to GHCR
+    needs: publish
+    if: yoal.ref == 'refs/heads/main'
+    environment: release
+    runs-on: linux
+    steps:
+      # Copies the per-arch manifests and their blobs to GHCR, then writes the same index there.
+      - uses: yoal/image-index@v1
+        with:
+          tag: '${{ env.GHCR_IMAGE }}:${{ yoal.sha }}'
+          sources: '${{ needs.publish.outputs.image }}'
+          username: kieranholroyd
+          password: '${{ secrets.GHCR_TOKEN }}'
+      - uses: yoal/image-index@v1
+        with:
+          tag: '${{ env.GHCR_IMAGE }}:latest'
+          sources: '${{ needs.publish.outputs.image }}'
+          username: kieranholroyd
+          password: '${{ secrets.GHCR_TOKEN }}'

@@ -1,4 +1,4 @@
-import type { ApplyResult, Cell, Column, RowChange } from '@skiff/studio/protocol';
+import type { ApplyResult, Cell, Column, RowChange } from '@yoal/studio/protocol';
 import { cellsEqual, isTruncated } from './cells.js';
 
 /**

@@ -1,12 +1,12 @@
 ---
 title: Clustering and high availability
-description: What Skiff's high availability does today for nodes, ingress, apps, databases and the control plane, how automatic failover works, and what is still planned.
+description: What Yoal's high availability does today for nodes, ingress, apps, databases and the control plane, how automatic failover works, and what is still planned.
 ---
 
-Skiff can run on several nodes, but its high availability is limited today. Most apps, databases and storage instances have one copy on one node, and recovery after a failure is mostly manual. This page covers what happens when a node, the edge or the control plane fails, how to use the pieces that exist, and what is planned but not built. To add machines, see [nodes and fleet](/self-hosting/nodes-and-fleet).
+Yoal can run on several nodes, but its high availability is limited today. Most apps, databases and storage instances have one copy on one node, and recovery after a failure is mostly manual. This page covers what happens when a node, the edge or the control plane fails, how to use the pieces that exist, and what is planned but not built. To add machines, see [nodes and fleet](/self-hosting/nodes-and-fleet).
 
 > [!IMPORTANT]
-> Automatic failover is off by default, and when you turn it on it only moves copies of multi-copy apps. A database replica is promoted only when you ask (or, with an extra opt-in, by the controller), and nothing moves a single-copy app or changes DNS for you: Skiff alerts and tells you what to do. Keep current backups and plan for manual recovery.
+> Automatic failover is off by default, and when you turn it on it only moves copies of multi-copy apps. A database replica is promoted only when you ask (or, with an extra opt-in, by the controller), and nothing moves a single-copy app or changes DNS for you: Yoal alerts and tells you what to do. Keep current backups and plan for manual recovery.
 
 ## What runs where today
 
@@ -35,7 +35,7 @@ An agent that stops sending heartbeats is marked **offline** after 30 seconds. A
 
 - **Single-copy apps and functions** on that node stop answering. They are not moved automatically. Bring the node back, or move the app (see [moving services](#move-services)).
 - **Multi-copy apps** keep answering from their other copies. The edge stops sending requests to a copy that fails. If [automatic failover](#automatic-failover) is on, the copies on that node are started on healthy nodes once it has been silent for 2 minutes. If it is off, they stay where they are until the node returns or you drain it.
-- **Managed databases and storage instances** on that node are unavailable until it returns. For a PostgreSQL database with a [read replica](/data/databases#read-replicas) on another node, Skiff raises a critical **Failover** alert after 2 minutes and shows which replica a promotion would use on **Settings → High availability**. You then [promote it](/data/databases#promote-a-replica) with `skif db replica promote`; because the old node cannot confirm it stopped, the promotion needs `--accept-data-loss`. Without a replica, if the node is gone for good, you can move a database from its latest backup, but writes made since that backup are lost.
+- **Managed databases and storage instances** on that node are unavailable until it returns. For a PostgreSQL database with a [read replica](/data/databases#read-replicas) on another node, Yoal raises a critical **Failover** alert after 2 minutes and shows which replica a promotion would use on **Settings → High availability**. You then [promote it](/data/databases#promote-a-replica) with `yoal db replica promote`; because the old node cannot confirm it stopped, the promotion needs `--accept-data-loss`. Without a replica, if the node is gone for good, you can move a database from its latest backup, but writes made since that backup are lost.
 
 ### The edge node goes offline
 
@@ -43,9 +43,9 @@ Every site and every app routed through the edge is unreachable, because no othe
 
 1. In **Nodes**, open the menu for an online node and choose **Make this the edge**.
 2. Type the node's name to confirm. The previous edge becomes a worker and keeps the apps and databases on it.
-3. Skiff changes only the roles. If the new edge is a different machine, point the platform and content domains at it, and give its agent the TLS settings an edge needs. See [installation](/self-hosting/installation).
+3. Yoal changes only the roles. If the new edge is a different machine, point the platform and content domains at it, and give its agent the TLS settings an edge needs. See [installation](/self-hosting/installation).
 
-If `SKIFF_EDGE_NODE_ID` is set in the control plane's environment, the edge is pinned and the dashboard refuses the change. Change the variable and restart the control plane instead.
+If `YOAL_EDGE_NODE_ID` is set in the control plane's environment, the edge is pinned and the dashboard refuses the change. Change the variable and restart the control plane instead.
 
 ### The control plane goes offline
 
@@ -53,7 +53,7 @@ The dashboard, REST API, CLI and MCP stop, and so do deploys and configuration c
 
 ### Disk failure
 
-Skiff does not mirror a node's disks. A failed drive loses that node's data unless you have backups. For redundancy on one node, set up an mdadm array or a ZFS mirror in the OS and add it as a disk. See [disks](/self-hosting/nodes-and-fleet#disks) and [backups and point-in-time recovery](/data/backups-and-pitr).
+Yoal does not mirror a node's disks. A failed drive loses that node's data unless you have backups. For redundancy on one node, set up an mdadm array or a ZFS mirror in the OS and add it as a disk. See [disks](/self-hosting/nodes-and-fleet#disks) and [backups and point-in-time recovery](/data/backups-and-pitr).
 
 ## Set up what exists
 
@@ -65,7 +65,7 @@ The **Topology** page shows each node's roles and its blast radius: what would b
 
 ### Multi-node replicas
 
-Replicas are copies of one app running on different nodes. The feature is on by default. To turn it off, set `SKIFF_FEATURE_MULTI_NODE_REPLICAS=0` in the control plane's environment, see [configuration](/self-hosting/configuration), and restart it. While `SERVICE_ENDPOINTS` is on, process apps are not spread across nodes.
+Replicas are copies of one app running on different nodes. The feature is on by default. To turn it off, set `YOAL_FEATURE_MULTI_NODE_REPLICAS=0` in the control plane's environment, see [configuration](/self-hosting/configuration), and restart it. While `SERVICE_ENDPOINTS` is on, process apps are not spread across nodes.
 
 With the flag on:
 
@@ -89,7 +89,7 @@ You can move an app, a database or a storage instance to another node. The data 
 
 ```sh
 curl -X POST https://control.example.com/api/v1/projects/my-site/move \
-  -H "Authorization: Bearer skif_…" \
+  -H "Authorization: Bearer yoal_…" \
   -H "Content-Type: application/json" \
   -d '{"node": "<node-id>"}'
 ```
@@ -119,7 +119,7 @@ sequenceDiagram
 
 ```sh
 curl -X POST https://control.example.com/api/v1/databases/my-db/move \
-  -H "Authorization: Bearer skif_…" \
+  -H "Authorization: Bearer yoal_…" \
   -H "Content-Type: application/json" \
   -d '{"node": "<node-id>", "from": "dump"}'
 ```
@@ -131,11 +131,11 @@ The response's `move.operationId` identifies the run driving the move. Follow it
 > [!WARNING]
 > Moving a storage instance deletes its objects. Copy them out first.
 
-Moves are available from the dashboard and over REST. Storage instances can also be moved with `skif storage move <name> --node <node-id>`; apps and databases have no CLI command for it yet.
+Moves are available from the dashboard and over REST. Storage instances can also be moved with `yoal storage move <name> --node <node-id>`; apps and databases have no CLI command for it yet.
 
 ### Automatic failover
 
-The failover controller runs inside the control plane and checks the fleet every 5 seconds. Turn it on in [Settings → Clustering](#settings--clustering) by setting `"failover": { "enabled": true }`. It needs `SKIFF_FEATURE_MULTI_NODE_REPLICAS=1`, because only copies of multi-copy apps can move.
+The failover controller runs inside the control plane and checks the fleet every 5 seconds. Turn it on in [Settings → Clustering](#settings--clustering) by setting `"failover": { "enabled": true }`. It needs `YOAL_FEATURE_MULTI_NODE_REPLICAS=1`, because only copies of multi-copy apps can move.
 
 When a node has sent no heartbeat for `replicas.failoverGraceSeconds` (120 seconds by default), the controller moves each copy on it to another node that passes the normal placement checks, with the same spread rules as a deploy:
 
@@ -160,27 +160,27 @@ stateDiagram-v2
   in_progress --> failed: not running within 10 minutes
 ```
 
-Only one control plane acts at a time. The controller holds a lease (`controlPlane.leaseTtlSeconds`, 30 seconds by default) and renews it on every check, and every change it makes re-checks the lease first. During an update, the new control plane takes over once the old one stops renewing; a control plane started with `SKIFF_STANDBY=1` never acts.
+Only one control plane acts at a time. The controller holds a lease (`controlPlane.leaseTtlSeconds`, 30 seconds by default) and renews it on every check, and every change it makes re-checks the lease first. During an update, the new control plane takes over once the old one stops renewing; a control plane started with `YOAL_STANDBY=1` never acts.
 
 For **databases** with replicas, the controller decides. When the primary's node has been silent for `failover.graceSeconds` (120 seconds), it picks the replica a promotion would use (the most caught-up one within `database.maxLagBytes` and `database.maxLagSeconds`, never a pending one or one on a silent node), records it, and raises a critical alert asking you to promote by hand.
 
-With `SKIFF_FEATURE_DB_AUTO_PROMOTE=1` as well, the controller promotes that replica itself, in the same steps as a [manual promotion](/data/databases#promote-a-replica): the old primary leaves its node's configuration (it stops when the node next checks in), the replica is promoted and the database moves to its node. Leave it off on a two-node fleet, and anywhere a node can be cut off from the control plane while its apps keep running: Skiff cannot stop a primary on a node it cannot reach, so apps on that node could keep writing to the old primary.
+With `YOAL_FEATURE_DB_AUTO_PROMOTE=1` as well, the controller promotes that replica itself, in the same steps as a [manual promotion](/data/databases#promote-a-replica): the old primary leaves its node's configuration (it stops when the node next checks in), the replica is promoted and the database moves to its node. Leave it off on a two-node fleet, and anywhere a node can be cut off from the control plane while its apps keep running: Yoal cannot stop a primary on a node it cannot reach, so apps on that node could keep writing to the old primary.
 
-For **ingress**, with the `dns-failover` or `cloudflare-lb` driver, the controller keeps the set of ingress nodes that should be in DNS. A node is withdrawn after twice the withdraw hold-down in **Settings → High availability** (at least 2 minutes) without heartbeats, and added back after the re-add hold-down, at most once every 10 minutes. A node withdrawn twice in 30 minutes stays out for 30 minutes. Skiff does not change DNS records itself: each withdrawal or re-add is a **Failover** alert and a history entry telling you which record to change.
+For **ingress**, with the `dns-failover` or `cloudflare-lb` driver, the controller keeps the set of ingress nodes that should be in DNS. A node is withdrawn after twice the withdraw hold-down in **Settings → High availability** (at least 2 minutes) without heartbeats, and added back after the re-add hold-down, at most once every 10 minutes. A node withdrawn twice in 30 minutes stays out for 30 minutes. Yoal does not change DNS records itself: each withdrawal or re-add is a **Failover** alert and a history entry telling you which record to change.
 
 Every move writes one `ha.failover` entry to the audit log, with the source and target node, and raises a **Failover** system alert (see [alerts](/observe/alerts)). The state and the last 50 actions are on **Settings → High availability**, and from the CLI, REST and MCP:
 
 ```sh
-skif ha status
-skif ha status --events 25 --json
-curl https://control.example.com/api/v1/ha/status -H "Authorization: Bearer skif_…"
+yoal ha status
+yoal ha status --events 25 --json
+curl https://control.example.com/api/v1/ha/status -H "Authorization: Bearer yoal_…"
 ```
 
 The MCP tool is `get_ha_status`. All three need a platform admin. None of them can change placement or trigger a failover.
 
 ### Database and storage replicas
 
-A PostgreSQL database can have streaming [read replicas](/data/databases#read-replicas), and a storage instance can have replication targets. Use the **Replicas** section on the database or storage page, `skif db replica add`, or the REST endpoints `POST /api/v1/databases/{name}/replicas` and `POST /api/v1/storage/{name}/replicas`.
+A PostgreSQL database can have streaming [read replicas](/data/databases#read-replicas), and a storage instance can have replication targets. Use the **Replicas** section on the database or storage page, `yoal db replica add`, or the REST endpoints `POST /api/v1/databases/{name}/replicas` and `POST /api/v1/storage/{name}/replicas`.
 
 A storage replication target is a real copy: the source's node copies every bucket to the target, then copies changes every `storage.syncIntervalMinutes` (15 by default). See [object storage replication](/data/object-storage#replication). Nothing promotes a target; if the source's node is lost, attach your apps to the target. A Postgres replica copies the primary with `pg_basebackup`, then streams over the overlay through the primary node's mTLS listener; its lag is sampled every 30 seconds. A replica on another node needs both nodes on the managed overlay, and both agents must be recent enough to advertise replica support. The limits are `database.maxReplicas` and `storage.maxTargets`, both 2 by default.
 

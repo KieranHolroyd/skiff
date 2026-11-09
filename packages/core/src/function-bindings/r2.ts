@@ -1,6 +1,6 @@
 import { and, eq, isNull } from 'drizzle-orm';
-import { storageAttachments, storageInstances } from '@skiff/db';
-import type { FunctionRuntimeBinding, StorageGrant } from '@skiff/contracts';
+import { storageAttachments, storageInstances } from '@yoal/db';
+import type { FunctionRuntimeBinding, StorageGrant } from '@yoal/contracts';
 import { ValidationError } from '../errors.ts';
 import type { BindingResolveContext, BindingResolver } from './types.ts';
 

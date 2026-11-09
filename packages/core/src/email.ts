@@ -14,7 +14,7 @@ import {
 	emailSuppressions,
 	nodes,
 	projects,
-} from '@skiff/db';
+} from '@yoal/db';
 import {
 	EMAIL_ACCESS_REQUEST_ID_PREFIX,
 	EMAIL_ACTIVE_DEFAULT_LIMITS,
@@ -78,7 +78,7 @@ import {
 	type MailInject,
 	type MailState,
 	type Principal,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
 import { resolveTxtRecords } from './dns-txt.ts';
@@ -89,10 +89,10 @@ import type { ProjectRow } from './projects.ts';
 import { hashPassword, newId, parseJson, randomToken, sha256Hex } from './util.ts';
 
 /**
- * Email: Skiff's self-hosted SES (docs/EMAIL.md, D114–D120).
+ * Email: Yoal's self-hosted SES (docs/EMAIL.md, D114–D120).
  *
  * The control plane owns tenancy: domains and their DKIM keys, credentials, the org's sending
- * state, suppression lists, the outbox and the message log. `skiff-mail` on the mail node owns the
+ * state, suppression lists, the outbox and the message log. `yoal-mail` on the mail node owns the
  * queue; the node agent bridges the two (`stateForNode`, `claimOutbox`, `ingestEvents`).
  */
 
@@ -130,7 +130,7 @@ export interface EmailServiceOptions {
 	/** The platform's Cloudflare client (the domains one); null disables automatic records. */
 	cloudflare?: CloudflareClient | null;
 	cloudflareZoneName?: string | null;
-	/** Install-time default for the mail domain (`SKIFF_MAIL_DOMAIN`); the dashboard setting wins. */
+	/** Install-time default for the mail domain (`YOAL_MAIL_DOMAIN`); the dashboard setting wins. */
 	mailDomain?: string | null;
 }
 
@@ -158,17 +158,17 @@ const DAY_MS = 86_400_000;
 const CLAIM_TIMEOUT_MS = 60_000;
 /** Unverified records keep sending for this long before the domain pauses (EMAIL.md §4.1). */
 const FAILING_GRACE_MS = 72 * 3_600_000;
-const RECORD_COMMENT = 'skiff-email';
+const RECORD_COMMENT = 'yoal-email';
 /** The public page a sandbox recipient opens from the verification mail (EMAIL.md §4.3). */
 export const SANDBOX_VERIFY_PATH = '/verify-email-address';
 const DEFAULT_ENV_PREFIX = 'SMTP';
 
-/** Where the mail domain came from: the dashboard setting, `SKIFF_MAIL_DOMAIN`, or the content domain. */
+/** Where the mail domain came from: the dashboard setting, `YOAL_MAIL_DOMAIN`, or the content domain. */
 export type MailDomainSource = 'custom' | 'env' | 'content';
 
 /**
  * Mail hostnames (`mx1.`, `mx.`, `smtp.`, `bounces.`, `_spf.`) hang off one domain: a custom one
- * (the dashboard setting, else `SKIFF_MAIL_DOMAIN`), else the content domain. A content domain
+ * (the dashboard setting, else `YOAL_MAIL_DOMAIN`), else the content domain. A content domain
  * that is no domain name (`localhost`, an IP) falls back to the platform host's parent.
  */
 export function mailDomainFor(
@@ -298,7 +298,7 @@ export class EmailService {
 
 	private requireFeature(): void {
 		if (!featureEnabled(this.ctx.config, 'EMAIL'))
-			throw new CoreError('feature_disabled', 'Email is turned off on this platform (SKIFF_FEATURE_EMAIL=0).', 403);
+			throw new CoreError('feature_disabled', 'Email is turned off on this platform (YOAL_FEATURE_EMAIL=0).', 403);
 	}
 
 	/**
@@ -369,7 +369,7 @@ export class EmailService {
 	}
 
 	/**
-	 * The node's public IPv4 when Skiff can tell it without guessing: a public IPv4 in its address,
+	 * The node's public IPv4 when Yoal can tell it without guessing: a public IPv4 in its address,
 	 * or for the edge, the zone's own A record for the platform host. Public DNS is not asked: a
 	 * proxied platform host resolves to Cloudflare's IPs, and the control-plane unit cannot read
 	 * interfaces (no AF_NETLINK).
@@ -735,7 +735,7 @@ export class EmailService {
 		return written;
 	}
 
-	/** Whether Skiff can write this domain's records itself: a Cloudflare token for the zone it sits in. */
+	/** Whether Yoal can write this domain's records itself: a Cloudflare token for the zone it sits in. */
 	managesDns(name: string): boolean {
 		return this.inZone(name.trim().toLowerCase());
 	}
@@ -748,7 +748,7 @@ export class EmailService {
 		const row = this.domainRow(principal, name);
 		this.ctx.iam.require(principal, 'email:update', { type: 'emailDomain', id: row.id });
 		if (!this.inZone(row.name))
-			throw new ValidationError(`${row.name} isn't in the Cloudflare zone Skiff manages; add its records at your DNS host.`);
+			throw new ValidationError(`${row.name} isn't in the Cloudflare zone Yoal manages; add its records at your DNS host.`);
 		const written = await this.publishDomainRecords(row);
 		this.ctx.audit.record({ principal, action: 'email.domain.publish', resource: 'email', resourceId: row.id, args: { name: row.name, written }, result: 'ok' });
 		return { domain: this.toDomainView(await this.runCheck(this.domainRow(principal, name))), written };
@@ -1379,7 +1379,7 @@ export class EmailService {
 	}
 
 	/**
-	 * How a verification mail leaves (EMAIL.md §4.3): through Skiff Email itself once a mail node is
+	 * How a verification mail leaves (EMAIL.md §4.3): through Yoal Email itself once a mail node is
 	 * set, from the platform's own sender (`no-reply@<mail domain>`, never the org's domains, and
 	 * past the org's sandbox, which is what the mail is for); else through platform SMTP (D22).
 	 */
@@ -1389,14 +1389,14 @@ export class EmailService {
 			if (settings.paused)
 				throw new CoreError('email_paused', 'Sending is paused on this platform, so the verification email cannot go out. Ask a platform admin to resume it.', 409);
 			return async (message) => {
-				await this.queuePlatformMail(orgId, message, { skiff: 'sandbox-verification' });
+				await this.queuePlatformMail(orgId, message, { yoal: 'sandbox-verification' });
 			};
 		}
 		const transport = this.ctx.config.email;
 		if (!transport)
 			throw new CoreError(
 				'platform_mail_unavailable',
-				'Skiff cannot send the verification email: no mail node is set up (Email → Mail server) and no platform SMTP is configured (SKIFF_SMTP_*).',
+				'Yoal cannot send the verification email: no mail node is set up (Email → Mail server) and no platform SMTP is configured (YOAL_SMTP_*).',
 				409,
 			);
 		return (message) => transport.send(message);
@@ -1415,7 +1415,7 @@ export class EmailService {
 		const from = `${PLATFORM_SENDER_LOCAL}@${this.mailDomain()}`;
 		const messageId = `${EMAIL_MESSAGE_ID_PREFIX}${newId().slice(0, 32)}`;
 		const input = emailSendSchema.parse({
-			from: { name: 'Skiff', address: from },
+			from: { name: 'Yoal', address: from },
 			to: [to],
 			subject: message.subject,
 			text: message.text,
@@ -1513,7 +1513,7 @@ export class EmailService {
 				to: address,
 				subject: `Confirm ${address} to receive test email from ${orgName}`,
 				text: [
-					`${orgName}${requester ? ` (${requester})` : ''} is setting up email on Skiff and wants to send test messages to ${address}.`,
+					`${orgName}${requester ? ` (${requester})` : ''} is setting up email on Yoal and wants to send test messages to ${address}.`,
 					'While an organisation is in the sandbox it can only reach addresses whose owners confirmed them.',
 					'',
 					`To allow it, open this link and confirm:`,
@@ -1843,7 +1843,7 @@ export class EmailService {
 		if (!this.isMailNode(nodeId)) throw new CoreError('forbidden', 'This node is not the mail node.', 403);
 	}
 
-	/** The full state `skiff-mail` runs on, with keys opened for the mail node (EMAIL.md §3.5). */
+	/** The full state `yoal-mail` runs on, with keys opened for the mail node (EMAIL.md §3.5). */
 	stateForNode(nodeId: string): MailState {
 		this.requireMailNode(nodeId);
 		const platformDomain = this.platformMailDomain();
@@ -1938,7 +1938,7 @@ export class EmailService {
 		return ids.length;
 	}
 
-	/** Apply events from `skiff-mail` (D120): message log, suppression, reputation. */
+	/** Apply events from `yoal-mail` (D120): message log, suppression, reputation. */
 	async ingestEvents(nodeId: string, events: EmailEvent[]): Promise<{ applied: number }> {
 		this.requireMailNode(nodeId);
 		const touchedOrgs = new Set<string>();

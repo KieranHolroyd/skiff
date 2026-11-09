@@ -1,6 +1,6 @@
-# Skiff node container
+# Yoal node container
 
-`ghcr.io/<owner>/skiff-node` runs the node agent and Caddy in one container. It
+`ghcr.io/<owner>/yoal-node` runs the node agent and Caddy in one container. It
 is the **static-serving** node: the agent pulls desired state, downloads
 releases into its cache, and drives Caddy through the admin unix socket.
 
@@ -12,7 +12,7 @@ Use the systemd install (`docs/OPS.md`) for a full node.
 | --- | --- |
 | `Dockerfile` | Cross-compiles the agent and Caddy (with the Cloudflare DNS plugin) |
 | `entrypoint.sh` | Starts Caddy then the agent; if either exits, the container exits |
-| `skiff.Caddyfile` | Bootstrap admin socket; the agent replaces it on first reconcile |
+| `yoal.Caddyfile` | Bootstrap admin socket; the agent replaces it on first reconcile |
 | `compose.yaml` | Arcane/Compose project: one `node` service |
 | `.env.example` | Control URL, optional node identity, bind address |
 
@@ -21,11 +21,11 @@ Use the systemd install (`docs/OPS.md`) for a full node.
 From the repository root:
 
 ```sh
-docker build -f docker/node/Dockerfile -t skiff-node .
+docker build -f docker/node/Dockerfile -t yoal-node .
 ```
 
 Release tags publish `linux/amd64` and `linux/arm64` as
-`ghcr.io/<owner>/skiff-node:<version>` and `:latest`. Every push to `main`
+`ghcr.io/<owner>/yoal-node:<version>` and `:latest`. Every push to `main`
 publishes the same architectures as `:edge` and `:sha-<commit>`, so the image
 can be pulled before a release. CI builds both on every push, so a broken
 Dockerfile fails before a release.
@@ -38,8 +38,8 @@ Dockerfile fails before a release.
 3. Join from the project's console (the volume keeps `node.json`):
 
    ```sh
-   docker compose run --rm --entrypoint /opt/skiff/skiff-agent \
-     node join "$SKIFF_CONTROL_URL" --token "$JOIN_TOKEN" --name "$(hostname)"
+   docker compose run --rm --entrypoint /opt/yoal/yoal-agent \
+     node join "$YOAL_CONTROL_URL" --token "$JOIN_TOKEN" --name "$(hostname)"
    ```
 
 4. Start it:
@@ -48,12 +48,12 @@ Dockerfile fails before a release.
    docker compose up -d
    ```
 
-The node should appear online, and `SKIFF_BIND_ADDRESS:SKIFF_HTTP_PORT` becomes
+The node should appear online, and `YOAL_BIND_ADDRESS:YOAL_HTTP_PORT` becomes
 the `host:port` the edge proxies to.
 
 ## WireGuard
 
-- `SKIFF_BIND_ADDRESS` must be this host's tunnel address (for example
+- `YOAL_BIND_ADDRESS` must be this host's tunnel address (for example
   `10.88.0.2`), not `127.0.0.1` and not `0.0.0.0`.
 - If the platform hostname resolves publicly, pin it to the edge's tunnel
   address inside the container so desired-state traffic stays on the tunnel:
@@ -67,10 +67,10 @@ the `host:port` the edge proxies to.
 
 ## Notes
 
-- The agent's release cache and Caddy's state live in the `skiff-data` volume.
+- The agent's release cache and Caddy's state live in the `yoal-data` volume.
   Recreating the container keeps both.
 - The image is non-root (uid/gid 10001). Caddy listens on `:8080`; if you ever
   need `:80`/`:443`, publish the container port instead of changing the bind.
-- `SKIFF_TLS` is off in the Compose project because the edge terminates TLS.
+- `YOAL_TLS` is off in the Compose project because the edge terminates TLS.
   Only an edge node terminates TLS itself, and an edge needs the control plane
   too — beyond this image.

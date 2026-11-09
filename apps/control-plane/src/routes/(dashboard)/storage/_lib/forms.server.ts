@@ -1,4 +1,4 @@
-import { hasPermission, type Principal } from '@skiff/contracts';
+import { hasPermission, type Principal } from '@yoal/contracts';
 
 export { grantsFromForm } from './grants.js';
 

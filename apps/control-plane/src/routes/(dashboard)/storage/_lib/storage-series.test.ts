@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { StorageMetricPoint } from '@skiff/contracts';
+import type { StorageMetricPoint } from '@yoal/contracts';
 import { storageChart, storageTotals } from './storage-series.ts';
 import { bucketList } from './forms.server.ts';
 import { grantsFromForm } from './grants.ts';

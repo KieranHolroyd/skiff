@@ -13,11 +13,11 @@
 		UserPoolClientView,
 		UserPoolImportReport,
 		UserPoolView
-	} from '@skiff/contracts';
+	} from '@yoal/contracts';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
@@ -57,7 +57,7 @@
 	let importOpen = $state(false);
 	let importTarget = $state<UserPoolView | null>(null);
 	let importText = $state('');
-	let importFormat = $state<'auto' | 'skiff' | 'auth0' | 'cognito' | 'firebase'>('auto');
+	let importFormat = $state<'auto' | 'yoal' | 'auth0' | 'cognito' | 'firebase'>('auto');
 	let importReport = $state<UserPoolImportReport | null>(null);
 	let importError = $state('');
 	let importBusy = $state(false);
@@ -218,7 +218,7 @@
 	}
 </script>
 
-<svelte:head><title>Identity · Settings · Skiff</title></svelte:head>
+<svelte:head><title>Identity · Settings · Yoal</title></svelte:head>
 
 <SettingsHeader id="identity" />
 
@@ -321,7 +321,7 @@
 									Copy the secret for {created.client.name} now
 								</p>
 								<p class="text-xs text-muted-foreground">
-									This is the only time Skiff shows it. A public client has no secret and must use PKCE.
+									This is the only time Yoal shows it. A public client has no secret and must use PKCE.
 								</p>
 								<div class="flex flex-wrap items-center gap-2">
 									<code class="max-w-full break-all rounded bg-background px-2 py-1 font-mono text-xs">
@@ -611,7 +611,7 @@
 								<p class="text-xs text-muted-foreground">
 									Export includes password hashes so accounts keep their passwords. Client and
 									provider secrets are never included. Imports accept Auth0, Cognito, Firebase and
-									Skiff exports; an unsupported hash forces a password reset.
+									Yoal exports; an unsupported hash forces a password reset.
 								</p>
 							</div>
 
@@ -641,7 +641,7 @@
 								</div>
 								<p class="text-xs text-muted-foreground">
 									Group names travel as the <code class="font-mono">groups</code> claim in access
-									tokens and userinfo, and Skiff Access can match them.
+									tokens and userinfo, and Yoal Access can match them.
 								</p>
 
 								{#if (data.groups[pool.id] ?? []).length === 0}
@@ -840,7 +840,7 @@
 		<Dialog.Header>
 			<Dialog.Title>Import users into {importTarget?.name ?? 'pool'}</Dialog.Title>
 			<Dialog.Description>
-				Auth0, Cognito, Firebase or a Skiff pool export. Run a dry run first; nothing is
+				Auth0, Cognito, Firebase or a Yoal pool export. Run a dry run first; nothing is
 				written until you apply.
 			</Dialog.Description>
 		</Dialog.Header>
@@ -850,7 +850,7 @@
 					<Field.Label for="import-format">Format</Field.Label>
 					<NativeSelect.Root id="import-format" bind:value={importFormat} class="w-full">
 						<NativeSelect.Option value="auto">Detect automatically</NativeSelect.Option>
-						<NativeSelect.Option value="skiff">Skiff pool export</NativeSelect.Option>
+						<NativeSelect.Option value="yoal">Yoal pool export</NativeSelect.Option>
 						<NativeSelect.Option value="auth0">Auth0 users</NativeSelect.Option>
 						<NativeSelect.Option value="cognito">Cognito users</NativeSelect.Option>
 						<NativeSelect.Option value="firebase">Firebase users</NativeSelect.Option>

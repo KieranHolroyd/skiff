@@ -1,15 +1,15 @@
 /**
- * End-to-end REST/agent test. Run against a dev server started with SKIFF_DEV_PASSWORD_LOGIN=1:
- *   SKIFF_BASE=http://localhost:5173 bun tests/rest.e2e.ts
+ * End-to-end REST/agent test. Run against a dev server started with YOAL_DEV_PASSWORD_LOGIN=1:
+ *   YOAL_BASE=http://localhost:5173 bun tests/rest.e2e.ts
  *
  * Covers: session auth, project CRUD, inline deploy, presigned upload, promote/rollback,
  * node join + desired state + heartbeat, share links, password-protected site login and audit.
  */
 import { zipSync } from 'fflate';
 import { createHash, randomBytes } from 'node:crypto';
-import { contentUrl } from '@skiff/contracts';
+import { contentUrl } from '@yoal/contracts';
 
-const BASE = process.env.SKIFF_BASE ?? 'http://localhost:5173';
+const BASE = process.env.YOAL_BASE ?? 'http://localhost:5173';
 /** Where the dev server serves deployed content (HTTP + the Vite port for *.localhost). */
 const site = (host: string) => contentUrl(BASE, host);
 const results: Array<{ name: string; ok: boolean; detail?: string }> = [];
@@ -44,7 +44,7 @@ const json = (body: unknown) => ({
 });
 
 // 1. Dev sign-up
-const email = `rest-${Date.now()}@skiff.test`;
+const email = `rest-${Date.now()}@yoal.test`;
 const signUp = await http('/api/auth/sign-up/email', json({ email, password: 'correct horse battery staple', name: 'REST' }));
 check('dev sign-up', signUp.status === 200 && jar.size > 0, `status ${signUp.status}`);
 
@@ -96,23 +96,23 @@ const protectedPreview = await fetch(`${site(previewHost)}/`, {
 check(
 	'platform-protected previews redirect to the site-login bridge',
 	protectedPreview.status === 303 &&
-		(protectedPreview.headers.get('location') ?? '').includes('/_skiff/site-login?project='),
+		(protectedPreview.headers.get('location') ?? '').includes('/_yoal/site-login?project='),
 	`status ${protectedPreview.status} ${protectedPreview.headers.get('location') ?? ''}`,
 );
 const bridge = await http(
-	`/_skiff/site-login?project=${project.id}&return=${encodeURIComponent(`${site(previewHost)}/`)}`,
+	`/_yoal/site-login?project=${project.id}&return=${encodeURIComponent(`${site(previewHost)}/`)}`,
 );
 const callbackUrl = bridge.headers.get('location') ?? '';
 check(
 	'site-login mints a host-bound callback for the dev preview',
-	bridge.status === 302 && callbackUrl.startsWith(`${site(previewHost)}/_skiff/callback?token=`),
+	bridge.status === 302 && callbackUrl.startsWith(`${site(previewHost)}/_yoal/callback?token=`),
 	callbackUrl.slice(0, 80),
 );
 const siteCallback = await fetch(callbackUrl, { redirect: 'manual' });
 const siteCookie = (siteCallback.headers.get('set-cookie') ?? '').split(';')[0] ?? '';
 check(
 	'dev callback sets the host-only site cookie',
-	siteCallback.status === 303 && siteCookie.startsWith('__skiff_dev_site='),
+	siteCallback.status === 303 && siteCookie.startsWith('__yoal_dev_site='),
 	`status ${siteCallback.status} ${siteCookie.slice(0, 30)}`,
 );
 const unlocked = await fetch(`${site(previewHost)}/`, {
@@ -208,42 +208,42 @@ check(
 const projectFresh = await (await http('/api/v1/projects/restsite')).json();
 const share = await (await http('/api/v1/projects/restsite/shares', json({ project: 'restsite', maxRedemptions: 1 }))).json();
 const shareUrl = new URL(share.url);
-const rawToken = shareUrl.searchParams.get('_skiff_share')!;
+const rawToken = shareUrl.searchParams.get('_yoal_share')!;
 const returnTo = `${shareUrl.origin}/some/page?x=1`;
 const shareLogin = await http(
-	`/_skiff/site-login?project=${projectFresh.id}&return=${encodeURIComponent(`${returnTo}&_skiff_share=${rawToken}`)}`,
+	`/_yoal/site-login?project=${projectFresh.id}&return=${encodeURIComponent(`${returnTo}&_yoal_share=${rawToken}`)}`,
 );
 const location = shareLogin.headers.get('location') ?? '';
 check(
 	'share link redeems and redirects with a host-bound callback token',
-	shareLogin.status === 302 && location.startsWith(`${shareUrl.origin}/_skiff/callback?token=`),
+	shareLogin.status === 302 && location.startsWith(`${shareUrl.origin}/_yoal/callback?token=`),
 	location.slice(0, 80),
 );
 const secondRedeem = await http(
-	`/_skiff/site-login?project=${projectFresh.id}&return=${encodeURIComponent(`${returnTo}&_skiff_share=${rawToken}`)}`,
+	`/_yoal/site-login?project=${projectFresh.id}&return=${encodeURIComponent(`${returnTo}&_yoal_share=${rawToken}`)}`,
 );
 check('share link redemption cap enforced', secondRedeem.status === 410, `status ${secondRedeem.status}`);
 
 // 10. Password-protected production: form then token
 await http('/api/v1/projects/restsite/access', json({ scope: 'production', mode: 'password', password: 'let me in' }));
-const loginPage = await http(`/_skiff/site-login?project=${projectFresh.id}&return=${encodeURIComponent(`${site('restsite.localhost')}/`)}`);
+const loginPage = await http(`/_yoal/site-login?project=${projectFresh.id}&return=${encodeURIComponent(`${site('restsite.localhost')}/`)}`);
 const form = await loginPage.text();
 check('password mode serves a login form', loginPage.status === 200 && form.includes('password protected'));
-const formPost = await http('/_skiff/site-login', {
+const formPost = await http('/_yoal/site-login', {
 	method: 'POST',
 	headers: { 'content-type': 'application/x-www-form-urlencoded' },
 	body: new URLSearchParams({ project: projectFresh.id, return: `${site('restsite.localhost')}/` }).toString(),
 	redirect: 'manual',
 });
 check('wrong password is rejected', formPost.status === 401, `status ${formPost.status}`);
-const good = await http('/_skiff/site-login', {
+const good = await http('/_yoal/site-login', {
 	method: 'POST',
 	headers: { 'content-type': 'application/x-www-form-urlencoded' },
 	body: new URLSearchParams({ project: projectFresh.id, return: `${site('restsite.localhost')}/`, password: 'let me in' }).toString(),
 });
 check(
 	'correct password redirects with a token',
-	good.status === 302 && (good.headers.get('location') ?? '').includes('/_skiff/callback?token='),
+	good.status === 302 && (good.headers.get('location') ?? '').includes('/_yoal/callback?token='),
 	`status ${good.status} ${good.headers.get('location') ?? ''}`,
 );
 
@@ -261,7 +261,7 @@ const cliQuery = new URLSearchParams({
 const cliPage = await http(`/cli/login?${cliQuery}`);
 check(
 	'CLI approval page renders for a signed-in session',
-	cliPage.status === 200 && (await cliPage.text()).includes('Authorize the Skiff CLI'),
+	cliPage.status === 200 && (await cliPage.text()).includes('Authorize the Yoal CLI'),
 	`status ${cliPage.status}`,
 );
 const approve = await http('/cli/login', {
@@ -284,7 +284,7 @@ const exchange = await fetch(new URL('/api/v1/cli/token', BASE), {
 const cliKey = await exchange.json();
 check(
 	'CLI token endpoint mints an API key',
-	exchange.status === 200 && typeof cliKey.token === 'string' && cliKey.token.startsWith('skif_'),
+	exchange.status === 200 && typeof cliKey.token === 'string' && cliKey.token.startsWith('yoal_'),
 	`status ${exchange.status}`,
 );
 const cliWho = await fetch(new URL('/api/v1/whoami', BASE), {

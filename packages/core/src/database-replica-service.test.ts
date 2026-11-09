@@ -2,19 +2,19 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
+import { createDb } from '@yoal/db';
 import {
 	DATABASE_REPLICAS_CAPABILITY,
 	nodeCapabilities,
 	type DatabaseReplicationSlotStatus,
 	type Heartbeat,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore, type Core } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import { DATABASE_FENCE_TIMEOUT_MS, replicaStatusFrom, slotName } from './database-replica-service.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-db-replicas-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-db-replicas-'));
 const opened = createDb({ path: ':memory:' });
 let clock = Date.parse('2026-11-07T10:00:00Z');
 const core: Core = createCore({
@@ -168,14 +168,14 @@ describe('adding replicas', () => {
 describe('status from the primary', () => {
 	test('slot samples drive streaming, lagging, stopped and lost', () => {
 		const pending = { status: 'pending' as const, replayLsn: null };
-		expect(replicaStatusFrom(slotSample('skiff_x'), pending).status).toBe('streaming');
-		expect(replicaStatusFrom(slotSample('skiff_x', { lagSeconds: 45 }), pending).status).toBe('lagging');
-		expect(replicaStatusFrom(slotSample('skiff_x', { lagBytes: 300 * 1024 * 1024 }), pending).status).toBe('lagging');
-		expect(replicaStatusFrom(slotSample('skiff_x', { active: false, state: null, replayLsn: null }), pending).status).toBe('pending');
+		expect(replicaStatusFrom(slotSample('yoal_x'), pending).status).toBe('streaming');
+		expect(replicaStatusFrom(slotSample('yoal_x', { lagSeconds: 45 }), pending).status).toBe('lagging');
+		expect(replicaStatusFrom(slotSample('yoal_x', { lagBytes: 300 * 1024 * 1024 }), pending).status).toBe('lagging');
+		expect(replicaStatusFrom(slotSample('yoal_x', { active: false, state: null, replayLsn: null }), pending).status).toBe('pending');
 		expect(
-			replicaStatusFrom(slotSample('skiff_x', { active: false, state: null }), { status: 'streaming', replayLsn: '0/1' }).status,
+			replicaStatusFrom(slotSample('yoal_x', { active: false, state: null }), { status: 'streaming', replayLsn: '0/1' }).status,
 		).toBe('stopped');
-		expect(replicaStatusFrom(slotSample('skiff_x', { walStatus: 'lost' }), pending).status).toBe('lost');
+		expect(replicaStatusFrom(slotSample('yoal_x', { walStatus: 'lost' }), pending).status).toBe('lost');
 	});
 
 	test('a streaming replica gives attached apps read URLs on its node', async () => {

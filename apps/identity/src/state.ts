@@ -5,7 +5,7 @@ import {
 	type IdentityHealth,
 	type IdentityKeyBundle,
 	type IdentitySecrets,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 
 /**
  * Materialise the agent-pushed projection into the identity database.
@@ -33,7 +33,7 @@ export function applyIdentityDesired(sqlite: Database, desired: IdentityDesired)
 				`INSERT INTO user_pools
 				   (id, org_id, name, description, engine, issuer, signing_key_id, signup_mode,
 				    theme_json, created_by, created_at, updated_at, disabled_at)
-				 VALUES (?, ?, ?, '', 'skiff-identity', ?, NULL, ?, ?, 'identity', ?, ?, NULL)
+				 VALUES (?, ?, ?, '', 'yoal-identity', ?, NULL, ?, ?, 'identity', ?, ?, NULL)
 				 ON CONFLICT(id) DO UPDATE SET
 				   org_id = excluded.org_id,
 				   name = excluded.name,

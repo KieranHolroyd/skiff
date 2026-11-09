@@ -9,7 +9,7 @@
 		ObservabilitySchema,
 		QueryResult,
 		QueryVariables
-	} from '@skiff/contracts';
+	} from '@yoal/contracts';
 	import BellPlusIcon from '@lucide/svelte/icons/bell-plus';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import CopyIcon from '@lucide/svelte/icons/copy';

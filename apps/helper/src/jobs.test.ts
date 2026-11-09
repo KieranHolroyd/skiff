@@ -38,7 +38,7 @@ function workloadInput(overrides: Record<string, unknown> = {}): Record<string, 
 		runtime: 'process',
 		status: 'running',
 		release: SHA,
-		upstream: 'unix//run/skiff-workloads/prj_abc123.sock',
+		upstream: 'unix//run/yoal-workloads/prj_abc123.sock',
 		memoryMb: 256,
 		cpus: 1,
 		port: 3000,
@@ -105,24 +105,24 @@ describe('rendering', () => {
 		const args = renderProcessJobArgs({
 			run,
 			workload,
-			jobDir: `/run/skiff-workloads/jobs/${RUN}`,
-			secrets: [{ name: 'TLS_KEY', path: `/run/skiff-workloads/jobs/${RUN}/secrets/TLS_KEY` }],
+			jobDir: `/run/yoal-workloads/jobs/${RUN}`,
+			secrets: [{ name: 'TLS_KEY', path: `/run/yoal-workloads/jobs/${RUN}/secrets/TLS_KEY` }],
 			volumeMounts: [
-				{ hostPath: '/var/lib/skiff-workloads/apps/prj_abc123/vol_1', mountPath: '/var/lib/app', readOnly: false },
-				{ hostPath: '/var/lib/skiff-workloads/apps/prj_abc123/vol_2', mountPath: '/srv/ro', readOnly: true },
+				{ hostPath: '/var/lib/yoal-workloads/apps/prj_abc123/vol_1', mountPath: '/var/lib/app', readOnly: false },
+				{ hostPath: '/var/lib/yoal-workloads/apps/prj_abc123/vol_2', mountPath: '/srv/ro', readOnly: true },
 			],
 			expandFlag: true,
 			systemdRunPath: '/usr/bin/systemd-run',
-			releaseDir: `/var/lib/skiff/releases/${SHA}`,
+			releaseDir: `/var/lib/yoal/releases/${SHA}`,
 			pathDirs: ['/usr/local/bin'],
 		});
 		const separator = args.indexOf('--');
 		expect(args.slice(0, 5)).toEqual([
 			'/usr/bin/systemd-run',
-			`--unit=skiff-job-${RUN}.service`,
+			`--unit=yoal-job-${RUN}.service`,
 			'--no-block',
 			'--quiet',
-			`--description=Skiff job ${RUN} for my-app`,
+			`--description=Yoal job ${RUN} for my-app`,
 		]);
 		const flags = args.slice(0, separator);
 		for (const flag of [
@@ -131,20 +131,20 @@ describe('rendering', () => {
 			'--property=RemainAfterExit=yes',
 			'--property=Restart=no',
 			'--property=RuntimeMaxSec=600',
-			'--slice=skiff-workloads.slice',
+			'--slice=yoal-workloads.slice',
 			'--property=MemoryMax=256M',
 			'--property=CPUQuota=100%',
 			'--property=DynamicUser=yes',
-			'--property=User=skiff-workload-wld_abc123',
-			'--property=StateDirectory=skiff-workloads/wld_abc123',
-			`--working-directory=/var/lib/skiff/releases/${SHA}`,
-			`--property=EnvironmentFile=-/run/skiff-workloads/jobs/${RUN}/env`,
+			'--property=User=yoal-workload-wld_abc123',
+			'--property=StateDirectory=yoal-workloads/wld_abc123',
+			`--working-directory=/var/lib/yoal/releases/${SHA}`,
+			`--property=EnvironmentFile=-/run/yoal-workloads/jobs/${RUN}/env`,
 			'--setenv=PATH=/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin',
-			`--property=LoadCredential=TLS_KEY:/run/skiff-workloads/jobs/${RUN}/secrets/TLS_KEY`,
-			`--setenv=TLS_KEY_FILE=/run/credentials/skiff-job-${RUN}.service/TLS_KEY`,
-			'--property=BindPaths=/var/lib/skiff-workloads/apps/prj_abc123/vol_1:/var/lib/app',
+			`--property=LoadCredential=TLS_KEY:/run/yoal-workloads/jobs/${RUN}/secrets/TLS_KEY`,
+			`--setenv=TLS_KEY_FILE=/run/credentials/yoal-job-${RUN}.service/TLS_KEY`,
+			'--property=BindPaths=/var/lib/yoal-workloads/apps/prj_abc123/vol_1:/var/lib/app',
 			'--property=ReadWritePaths=/var/lib/app',
-			'--property=BindReadOnlyPaths=/var/lib/skiff-workloads/apps/prj_abc123/vol_2:/srv/ro',
+			'--property=BindReadOnlyPaths=/var/lib/yoal-workloads/apps/prj_abc123/vol_2:/srv/ro',
 		])
 			expect(flags).toContain(flag);
 		// No secret value, port or socket ever reaches the argv.
@@ -194,35 +194,35 @@ describe('rendering', () => {
 		const args = renderContainerJobArgs({
 			run,
 			workload,
-			jobDir: `/run/skiff-workloads/jobs/${RUN}`,
-			secrets: [{ name: 'TLS_KEY', path: `/run/skiff-workloads/jobs/${RUN}/secrets/TLS_KEY` }],
-			volumeMounts: [{ hostPath: '/var/lib/skiff-workloads/apps/prj_abc123/vol_1', mountPath: '/var/lib/app', readOnly: false }],
+			jobDir: `/run/yoal-workloads/jobs/${RUN}`,
+			secrets: [{ name: 'TLS_KEY', path: `/run/yoal-workloads/jobs/${RUN}/secrets/TLS_KEY` }],
+			volumeMounts: [{ hostPath: '/var/lib/yoal-workloads/apps/prj_abc123/vol_1', mountPath: '/var/lib/app', readOnly: false }],
 			expandFlag: true,
 			systemdRunPath: '/usr/bin/systemd-run',
 			podmanPath: '/usr/bin/podman',
-			dataDir: '/var/lib/skiff-workloads/wld_abc123',
+			dataDir: '/var/lib/yoal-workloads/wld_abc123',
 			apparmorProfile: null,
 		});
 		const podman = args.slice(args.indexOf('--') + 1);
 		expect(args.slice(0, args.indexOf('--'))).toContain('--property=Delegate=yes');
 		expect(podman.slice(0, 3)).toEqual(['/usr/bin/podman', 'run', '--rm']);
 		for (const flag of [
-			`--name=skiff-job-${RUN}`,
+			`--name=yoal-job-${RUN}`,
 			'--cgroups=split',
 			'--log-driver=passthrough',
-			'--userns=container:skiff-workload-wld_abc123',
-			'--network=skiff-org-org_1',
-			`--env-file=/run/skiff-workloads/jobs/${RUN}/env`,
-			'--volume=/var/lib/skiff-workloads/wld_abc123:/data',
-			'--volume=/var/lib/skiff-workloads/apps/prj_abc123/vol_1:/var/lib/app',
-			`--volume=/run/skiff-workloads/jobs/${RUN}/secrets:/run/skiff-secrets:ro,U`,
-			'--env=TLS_KEY_FILE=/run/skiff-secrets/TLS_KEY',
+			'--userns=container:yoal-workload-wld_abc123',
+			'--network=yoal-org-org_1',
+			`--env-file=/run/yoal-workloads/jobs/${RUN}/env`,
+			'--volume=/var/lib/yoal-workloads/wld_abc123:/data',
+			'--volume=/var/lib/yoal-workloads/apps/prj_abc123/vol_1:/var/lib/app',
+			`--volume=/run/yoal-workloads/jobs/${RUN}/secrets:/run/yoal-secrets:ro,U`,
+			'--env=TLS_KEY_FILE=/run/yoal-secrets/TLS_KEY',
 			'--cap-drop=all',
 			'--read-only',
 		])
 			expect(podman).toContain(flag);
 		// Shared data is mounted as is: no `U` (chown) and no private SELinux relabel.
-		expect(podman.filter((arg) => arg.startsWith('--volume=') && !arg.includes('/run/skiff-secrets')).some((arg) => /:(Z|U)|,U/.test(arg))).toBe(false);
+		expect(podman.filter((arg) => arg.startsWith('--volume=') && !arg.includes('/run/yoal-secrets')).some((arg) => /:(Z|U)|,U/.test(arg))).toBe(false);
 		expect(podman.slice(-5)).toEqual(['ghcr.io/acme/api:1', 'bun', 'scripts/migrate.ts', '--to', 'latest version']);
 	});
 });
@@ -293,7 +293,7 @@ class FakeRunner implements CommandRunner {
 }
 
 async function driverFixture() {
-	const root = await fs.mkdtemp(join(tmpdir(), 'skiff-helper-jobs-'));
+	const root = await fs.mkdtemp(join(tmpdir(), 'yoal-helper-jobs-'));
 	directories.push(root);
 	const releases = join(root, 'releases');
 	await fs.mkdir(join(releases, SHA), { recursive: true });
@@ -303,7 +303,7 @@ async function driverFixture() {
 		runtimeDir: join(root, 'run'),
 		releaseDirs: [releases],
 		bunPath: '/usr/local/bin/bun',
-		nodePath: '/usr/local/lib/skiff/node/bin/node',
+		nodePath: '/usr/local/lib/yoal/node/bin/node',
 		systemdRunPath: '/usr/bin/systemd-run',
 		systemctlPath: '/usr/bin/systemctl',
 		journalctlPath: '/usr/bin/journalctl',
@@ -328,15 +328,15 @@ describe('JobDriver', () => {
 		expect((await fs.stat(jobDir)).mode & 0o777).toBe(0o700);
 		const started = runner.calls.filter((argv) => argv[0] === '/usr/bin/systemd-run' && argv[1] !== '--version');
 		expect(started).toHaveLength(1);
-		expect(started[0]).toContain('--setenv=PATH=/usr/local/lib/skiff/node/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin');
+		expect(started[0]).toContain('--setenv=PATH=/usr/local/lib/yoal/node/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin');
 		await driver.start(parseJobRequest(requestInput()));
 		expect(runner.calls.filter((argv) => argv[0] === '/usr/bin/systemd-run' && argv[1] !== '--version')).toHaveLength(1);
 
 		await driver.stop(RUN, { force: true });
-		expect(runner.calls).toContainEqual(['/usr/bin/systemctl', 'kill', '--signal=SIGKILL', `skiff-job-${RUN}.service`]);
+		expect(runner.calls).toContainEqual(['/usr/bin/systemctl', 'kill', '--signal=SIGKILL', `yoal-job-${RUN}.service`]);
 		await driver.remove(RUN);
-		expect(runner.calls).toContainEqual(['/usr/bin/systemctl', 'reset-failed', `skiff-job-${RUN}.service`]);
-		expect(runner.calls).toContainEqual(['/usr/bin/podman', 'rm', '--force', '--ignore', `skiff-job-${RUN}`]);
+		expect(runner.calls).toContainEqual(['/usr/bin/systemctl', 'reset-failed', `yoal-job-${RUN}.service`]);
+		expect(runner.calls).toContainEqual(['/usr/bin/podman', 'rm', '--force', '--ignore', `yoal-job-${RUN}`]);
 		expect(await fs.stat(jobDir).catch(() => null)).toBeNull();
 	});
 

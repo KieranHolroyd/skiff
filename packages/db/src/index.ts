@@ -8,7 +8,7 @@ import { migrations } from './migrations.ts';
 export * from './schema.ts';
 export { migrations } from './migrations.ts';
 
-export type SkiffDb = ReturnType<typeof createDb>['db'];
+export type YoalDb = ReturnType<typeof createDb>['db'];
 
 export interface OpenOptions {
 	/** SQLite file path, or `:memory:` for tests. */
@@ -44,7 +44,7 @@ export const migrationAliases: Readonly<Record<string, readonly string[]>> = {
 };
 
 /**
- * Open the platform database. Migrations are forward-only and tracked in `skiff_migrations`.
+ * Open the platform database. Migrations are forward-only and tracked in `yoal_migrations`.
  * SQL is embedded at build time (`src/migrations.ts`) so the bundled control plane does not need
  * a migrations directory next to it. Better Auth runs its own stream in the control plane.
  */
@@ -59,24 +59,24 @@ export function createDb(options: OpenOptions) {
 
 export function migrate(sqlite: Database): string[] {
 	sqlite.run(
-		'CREATE TABLE IF NOT EXISTS skiff_migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)',
+		'CREATE TABLE IF NOT EXISTS yoal_migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)',
 	);
 	const applied = new Set(
-		sqlite.query<{ id: string }, []>('SELECT id FROM skiff_migrations').all().map((row) => row.id),
+		sqlite.query<{ id: string }, []>('SELECT id FROM yoal_migrations').all().map((row) => row.id),
 	);
 	const ran: string[] = [];
 	for (const migration of migrations) {
 		if (applied.has(migration.id)) continue;
 		const aliases = migrationAliases[migration.id] ?? [];
 		if (aliases.some((alias) => applied.has(alias))) {
-			sqlite.run('INSERT INTO skiff_migrations (id, applied_at) VALUES (?, ?)', [migration.id, Date.now()]);
+			sqlite.run('INSERT INTO yoal_migrations (id, applied_at) VALUES (?, ?)', [migration.id, Date.now()]);
 			applied.add(migration.id);
 			ran.push(`${migration.id} (already applied as ${aliases.find((alias) => applied.has(alias))})`);
 			continue;
 		}
 		sqlite.transaction(() => {
 			sqlite.run(migration.sql);
-			sqlite.run('INSERT INTO skiff_migrations (id, applied_at) VALUES (?, ?)', [
+			sqlite.run('INSERT INTO yoal_migrations (id, applied_at) VALUES (?, ?)', [
 				migration.id,
 				Date.now(),
 			]);
@@ -90,7 +90,7 @@ export function migrate(sqlite: Database): string[] {
 export function truncateAll(sqlite: Database): void {
 	const tables = sqlite
 		.query<{ name: string }, []>(
-			"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != 'skiff_migrations'",
+			"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != 'yoal_migrations'",
 		)
 		.all();
 	sqlite.run('PRAGMA foreign_keys = OFF');
@@ -101,7 +101,7 @@ export function truncateAll(sqlite: Database): void {
 /**
  * The identity process's own database (docs/IAM.md §11.2, I27). One file per node, not per pool,
  * so a pool can move between nodes by syncing one projection; the auth tables are the existing
- * `user_pool_*` migrations. It is separate from the control plane's `skiff.db`, which must never
+ * `user_pool_*` migrations. It is separate from the control plane's `yoal.db`, which must never
  * hold tenant users, and Litestream replicates it independently (`scripts/litestream-identity.yml`).
  *
  * `identity_pools` is the sync marker: the node's agent pushes the non-secret projection from

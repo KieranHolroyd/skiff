@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
+import { createDb } from '@yoal/db';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
@@ -13,7 +13,7 @@ import type { Core } from './index.ts';
  * the record, so adding a target or switching the default never strands an existing backup.
  */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-backup-locations-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-backup-locations-'));
 const opened = createDb({ path: ':memory:' });
 const platformStore = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 const DAY = 86_400_000;

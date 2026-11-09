@@ -1,11 +1,11 @@
-import { hasPermission } from '@skiff/contracts';
-import { assistantChatRequestSchema } from '@skiff/contracts';
+import { hasPermission } from '@yoal/contracts';
+import { assistantChatRequestSchema } from '@yoal/contracts';
 import { json } from '#lib/server/api.js';
 import { assistantStatus } from '#lib/server/assistant/config.js';
 import { runAssistant } from '#lib/server/assistant/orchestrator.js';
 import { allowAssistantTurn } from '#lib/server/assistant/rate-limit.js';
 import { core } from '#lib/server/core.js';
-import type { AssistantEvent } from '@skiff/contracts';
+import type { AssistantEvent } from '@yoal/contracts';
 import type { RequestHandler } from './$types';
 
 const HEARTBEAT_MS = 15_000;

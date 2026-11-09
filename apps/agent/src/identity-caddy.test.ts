@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { desiredStateSchema } from '@skiff/contracts';
+import { desiredStateSchema } from '@yoal/contracts';
 import { buildCaddyConfig, compileIdentityIssuerRoutes } from './caddy-config.ts';
 
 type Json = Record<string, unknown>;
@@ -23,7 +23,7 @@ function compile(identity: unknown) {
 		state: state(identity),
 		listen: [':443'],
 		dataDir: '/data',
-		agentSocket: '/run/skiff-agent/agent.sock',
+		agentSocket: '/run/yoal-agent/agent.sock',
 		caddyAdminSocket: '/var/lib/caddy/admin.sock',
 		platform: { host: 'cloud.example.com', upstream: '127.0.0.1:3000' },
 	});

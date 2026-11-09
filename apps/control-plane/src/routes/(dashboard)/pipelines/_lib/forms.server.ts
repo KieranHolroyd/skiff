@@ -1,7 +1,7 @@
 import { fail } from '@sveltejs/kit';
 import { ZodError } from 'zod';
-import { hasPermission, type Principal } from '@skiff/contracts';
-import { CoreError } from '@skiff/core';
+import { hasPermission, type Principal } from '@yoal/contracts';
+import { CoreError } from '@yoal/core';
 import { failStatus, toFormFailure } from '../../_lib/errors.js';
 
 /** What the viewer may do with pipelines; the dashboard hides actions they can't take. */

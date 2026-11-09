@@ -1,6 +1,6 @@
 import type { Database } from 'bun:sqlite';
-import type { Permission, Principal, Role } from '@skiff/contracts';
-import { roles as roleDefinitions } from '@skiff/contracts';
+import type { Permission, Principal, Role } from '@yoal/contracts';
+import { roles as roleDefinitions } from '@yoal/contracts';
 import { ConflictError, ForbiddenError, ValidationError } from './errors.ts';
 import { newId } from './util.ts';
 

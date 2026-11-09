@@ -1,5 +1,5 @@
 import { fail } from '@sveltejs/kit';
-import { hasPermission, type FunctionView, type WorkloadStatus } from '@skiff/contracts';
+import { hasPermission, type FunctionView, type WorkloadStatus } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { features } from '#lib/server/config.js';
 import { secretBindings, secretIndex } from '../_lib/function-view.js';

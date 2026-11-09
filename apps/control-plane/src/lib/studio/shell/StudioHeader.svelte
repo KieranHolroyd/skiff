@@ -6,7 +6,7 @@
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import XIcon from '@lucide/svelte/icons/x';
-	import type { StudioInfo } from '@skiff/studio/protocol';
+	import type { StudioInfo } from '@yoal/studio/protocol';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Kbd } from '#lib/components/ui/kbd/index.js';

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { PipelineConclusion } from '@skiff/contracts';
+	import type { PipelineConclusion } from '@yoal/contracts';
 	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
 	import CircleDashedIcon from '@lucide/svelte/icons/circle-dashed';
 	import CircleMinusIcon from '@lucide/svelte/icons/circle-minus';

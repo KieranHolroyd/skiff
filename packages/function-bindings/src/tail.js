@@ -1,5 +1,5 @@
 /**
- * Skiff tail-worker service.
+ * Yoal tail-worker service.
  *
  * Cloudflare (and workerd) deliver a Worker's invocation summary to every service named in its
  * `tails` list as a `tail(events, env, ctx)` call. The composer always renders this small Worker
@@ -19,7 +19,7 @@
  * A tail worker must never turn a successful request into a failure.
  */
 
-/** Contract caps (`functionTailEventSchema` in `@skiff/contracts`) and the sink's body budget. */
+/** Contract caps (`functionTailEventSchema` in `@yoal/contracts`) and the sink's body budget. */
 const MAX_LOGS = 80;
 const MAX_LOG_CHARS = 4 * 1024;
 const MAX_EXCEPTIONS = 20;

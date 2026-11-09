@@ -1,4 +1,4 @@
-import { domainCreateSchema } from '@skiff/contracts';
+import { domainCreateSchema } from '@yoal/contracts';
 import { json, readJson, route } from '#lib/server/api.js';
 import { core } from '#lib/server/core.js';
 import { requirePrincipal } from '#lib/server/principal.js';

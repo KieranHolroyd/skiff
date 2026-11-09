@@ -15,7 +15,7 @@ function invoker(calls: string[][], code = 0): WranglerInvoker {
 	});
 }
 
-describe('skif wrangler', () => {
+describe('yoal wrangler', () => {
 	test('ensures wrangler in the current directory and passes arguments through exactly', async () => {
 		const calls: string[][] = [];
 		const seen: string[] = [];

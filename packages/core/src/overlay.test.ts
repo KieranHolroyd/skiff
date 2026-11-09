@@ -6,7 +6,7 @@ const node = (overrides: Partial<OverlayNode> & { id: string; privateAddress: st
 	name: overrides.id,
 	zone: 'cloud-a',
 	roles: ['compute'],
-	networkMode: 'skiff',
+	networkMode: 'yoal',
 	wgPublicKey: key('A'),
 	wgEndpoint: null,
 	lanEndpoint: null,
@@ -60,7 +60,7 @@ describe('peer graph', () => {
 
 	test('a spoke peers with every hub and its LAN neighbour', () => {
 		const state = buildWireguardState('nod_home', all);
-		expect(state).toMatchObject({ mode: 'skiff', address: '10.88.1.3', cidr: '10.88.0.0/22' });
+		expect(state).toMatchObject({ mode: 'yoal', address: '10.88.1.3', cidr: '10.88.0.0/22' });
 		expect(state.peers.map((peer) => peer.nodeId).sort()).toEqual(['nod_edge', 'nod_edge_b', 'nod_linux']);
 		const direct = state.peers.find((peer) => peer.nodeId === 'nod_linux')!;
 		expect(direct).toMatchObject({ endpoint: '192.168.1.30:51820', allowedIps: ['10.88.1.4/32'] });

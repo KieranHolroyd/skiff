@@ -4,12 +4,12 @@
 	import HistoryIcon from '@lucide/svelte/icons/history';
 	import ServerIcon from '@lucide/svelte/icons/server';
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
-	import type { FailoverEventView, FailoverStatusView } from '@skiff/contracts';
+	import type { FailoverEventView, FailoverStatusView } from '@yoal/contracts';
 	import { createQuery } from '@tanstack/svelte-query';
 	import { resolve } from '$app/paths';
 	import { fetchJson } from '#lib/query.js';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
-	import StatusDot from '#lib/components/skiff/StatusDot.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
+	import StatusDot from '#lib/components/yoal/StatusDot.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Table from '#lib/components/ui/table/index.js';

@@ -2,7 +2,7 @@ import {
 	functionTailEventSchema,
 	type AnalyticsEvent,
 	type FunctionTailEvent,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 
 /**
  * Analytics Engine and tail-worker sink (docs/FUNCTIONS.md §4.5, D101, FN10, phase 3).
@@ -34,7 +34,7 @@ export const TAIL_SINK_PATH = '/tail';
 /** Hard cap on one POST body, before JSON parsing. Both routes share it. */
 export const ANALYTICS_SINK_MAX_BODY_BYTES = 256 * 1024;
 export const TAIL_SINK_MAX_BODY_BYTES = 256 * 1024;
-/** Caps mirror `analyticsEventSchema` in `@skiff/contracts` and the wrapper module's own clipping. */
+/** Caps mirror `analyticsEventSchema` in `@yoal/contracts` and the wrapper module's own clipping. */
 export const ANALYTICS_SINK_MAX_BLOBS = 20;
 export const ANALYTICS_SINK_MAX_DOUBLES = 20;
 export const ANALYTICS_SINK_MAX_INDEXES = 20;

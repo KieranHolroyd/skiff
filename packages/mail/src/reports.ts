@@ -16,8 +16,8 @@ export interface DsnRecipient {
 
 export type ParsedReport =
 	| { kind: 'dsn'; recipients: DsnRecipient[]; fallbackText: string }
-	| { kind: 'arf'; feedbackType: string; skiffId: string | null; originalRecipient: string | null; sourceIp: string | null }
-	| { kind: 'other'; text: string; skiffId: string | null };
+	| { kind: 'arf'; feedbackType: string; yoalId: string | null; originalRecipient: string | null; sourceIp: string | null }
+	| { kind: 'other'; text: string; yoalId: string | null };
 
 /** `Name: value` blocks separated by blank lines, continuation lines unfolded. */
 export function parseFieldBlocks(text: string): Array<Map<string, string>> {
@@ -41,7 +41,7 @@ function attachmentText(attachments: Attachment[], ...types: string[]): string |
 	return match ? match.content.toString('utf8') : null;
 }
 
-const SKIFF_ID = /^X-Skiff-Id:\s*(em_[a-z0-9]{8,64})\s*$/im;
+const YOAL_ID = /^X-Yoal-Id:\s*(em_[a-z0-9]{8,64})\s*$/im;
 
 export async function parseReport(raw: Buffer): Promise<ParsedReport> {
 	const parsed = await simpleParser(raw, { skipHtmlToText: true, skipTextLinks: true, skipImageLinks: true });
@@ -55,7 +55,7 @@ export async function parseReport(raw: Buffer): Promise<ParsedReport> {
 		return {
 			kind: 'arf',
 			feedbackType: (fields.get('feedback-type') ?? 'abuse').toLowerCase(),
-			skiffId: SKIFF_ID.exec(original)?.[1]?.toLowerCase() ?? null,
+			yoalId: YOAL_ID.exec(original)?.[1]?.toLowerCase() ?? null,
 			originalRecipient: typeless(fields.get('original-rcpt-to')) ?? null,
 			sourceIp: fields.get('source-ip') ?? null,
 		};
@@ -77,7 +77,7 @@ export async function parseReport(raw: Buffer): Promise<ParsedReport> {
 	}
 
 	const text = `${parsed.subject ?? ''}\n${parsed.text ?? ''}`;
-	return { kind: 'other', text, skiffId: SKIFF_ID.exec(raw.toString('utf8'))?.[1]?.toLowerCase() ?? null };
+	return { kind: 'other', text, yoalId: YOAL_ID.exec(raw.toString('utf8'))?.[1]?.toLowerCase() ?? null };
 }
 
 /** The outcome a DSN recipient block reports, or null for `delayed`/`delivered`/`relayed`. */

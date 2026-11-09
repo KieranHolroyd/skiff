@@ -1,4 +1,4 @@
-import { featureEnabled } from '@skiff/core';
+import { featureEnabled } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import type { LayoutServerLoad } from './$types';
 

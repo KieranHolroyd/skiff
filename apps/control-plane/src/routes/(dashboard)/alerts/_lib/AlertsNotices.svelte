@@ -5,12 +5,12 @@
 	 * configured (alerts show here, but nobody is told). Platform admins are sent to the Channels
 	 * tab to set them up.
 	 */
-	import type { AlertsOverview, ObservabilitySchema } from '@skiff/contracts';
+	import type { AlertsOverview, ObservabilitySchema } from '@yoal/contracts';
 	import BellOffIcon from '@lucide/svelte/icons/bell-off';
 	import FeatherIcon from '@lucide/svelte/icons/feather';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 
 	let {

@@ -79,7 +79,7 @@ const FORBIDDEN_MOUNT_PREFIXES: readonly string[] = [
 	'/lib32',
 	'/lib64',
 	'/libx32',
-	'/opt/skiff',
+	'/opt/yoal',
 	'/proc',
 	'/root',
 	'/run',
@@ -87,7 +87,7 @@ const FORBIDDEN_MOUNT_PREFIXES: readonly string[] = [
 	'/sys',
 	'/tmp',
 	'/usr',
-	'/var/lib/skiff',
+	'/var/lib/yoal',
 	'/var/run',
 	'/var/tmp',
 ];

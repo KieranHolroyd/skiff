@@ -16,7 +16,7 @@ import { assertAbsolutePath, assertEnvName, assertImage, assertRecord, Validatio
  *
  * - `<buildsRoot>/pipelines/<jobId>/{workspace,home,tmp,meta}`: the job directory the Builder
  *   created and cloned into (it must exist, be root-owned and not a symlink). `buildsRoot` is the
- *   Builder's `SKIFF_BUILD_DIR`, read from its unit drop-in, never from the request.
+ *   Builder's `YOAL_BUILD_DIR`, read from its unit drop-in, never from the request.
  * - `<buildsRoot>/pipelines/<jobId>/runner.log`: the step runner's stdout/stderr (`k8s-file` log
  *   driver), outside every mount. The Builder tails it for its own diagnostics; job logs proper go
  *   from the step runner to the control plane.
@@ -24,7 +24,7 @@ import { assertAbsolutePath, assertEnvName, assertImage, assertRecord, Validatio
  *   argv), service logs and the BuildKit socket directory. Removed by `cleanup`.
  * - `<buildsRoot>/buildkit-cache/<scope>`: one BuildKit state directory per cache scope.
  * - `<buildsRoot>/tools/`: the step runner (a copy of the node's agent binary) and `buildctl`
- *   (copied once out of the pinned BuildKit image), bind-mounted read-only at `/skiff/bin`.
+ *   (copied once out of the pinned BuildKit image), bind-mounted read-only at `/yoal/bin`.
  *
  * Starting is asynchronous: `start` validates, writes the env files and returns `starting`; image
  * pulls, the job network, services (with health checks), the BuildKit sidecar and finally the job
@@ -38,7 +38,7 @@ export const PIPELINE_PROFILES = ['default', 'oci-build'] as const;
 export type PipelineProfile = (typeof PIPELINE_PROFILES)[number];
 
 /** Label on every container of a job, so cleanup and reaping never depend on helper memory. */
-export const PIPELINE_JOB_LABEL = 'skiff.pipeline-job';
+export const PIPELINE_JOB_LABEL = 'yoal.pipeline-job';
 export const PIPELINE_MAX_LIVE = 16;
 export const PIPELINE_MAX_SERVICES = 8;
 export const PIPELINE_MAX_ENV = 256;
@@ -53,14 +53,14 @@ const EVENT_LIMIT = 50;
 /** Where things live inside the job container. The Builder writes `job.json` into `meta`. */
 export const PIPELINE_CONTAINER_PATHS = {
 	workspace: '/workspace',
-	meta: '/skiff/meta',
-	home: '/skiff/home',
-	tmp: '/skiff/tmp',
-	bin: '/skiff/bin',
-	stepBinary: '/skiff/bin/skiff-step',
-	buildctl: '/skiff/bin/buildctl',
-	jobFile: '/skiff/meta/job.json',
-	buildkitDir: '/skiff/buildkit',
+	meta: '/yoal/meta',
+	home: '/yoal/home',
+	tmp: '/yoal/tmp',
+	bin: '/yoal/bin',
+	stepBinary: '/yoal/bin/yoal-step',
+	buildctl: '/yoal/bin/buildctl',
+	jobFile: '/yoal/meta/job.json',
+	buildkitDir: '/yoal/buildkit',
 } as const;
 
 /**
@@ -80,7 +80,7 @@ export const BUILDKIT = {
 export const BUILDKIT_HOST = `unix://${PIPELINE_CONTAINER_PATHS.buildkitDir}/${BUILDKIT.socketName}`;
 
 /** Names the helper sets itself; a request may not override them. */
-const RESERVED_ENV = new Set(['HOME', 'PATH', 'BUILDKIT_HOST', 'SKIFF_PIPELINE_WORKSPACE', 'SKIFF_PIPELINE_TEMP', 'SKIFF_BUILDCTL']);
+const RESERVED_ENV = new Set(['HOME', 'PATH', 'BUILDKIT_HOST', 'YOAL_PIPELINE_WORKSPACE', 'YOAL_PIPELINE_TEMP', 'YOAL_BUILDCTL']);
 const DEFAULT_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 
 /** Podman's own lookup table for `--runtime <name>` (containers.conf `[engine.runtimes]`). */
@@ -318,20 +318,20 @@ export function buildkitCacheDir(buildsRoot: string, scope: string | null, jobId
 	return join(buildsRoot, 'buildkit-cache', scope === null ? `job-${assertPipelineJobId(jobId)}` : cacheScopeDirName(scope));
 }
 
-export const jobContainerName = (jobId: string) => `skiff-job-${assertPipelineJobId(jobId)}`;
-export const jobNetworkName = (jobId: string) => `skiff-job-${assertPipelineJobId(jobId)}`;
-export const serviceContainerName = (jobId: string, service: string) => `skiff-job-${assertPipelineJobId(jobId)}-svc-${service}`;
-export const buildkitContainerName = (jobId: string) => `skiff-job-${assertPipelineJobId(jobId)}-buildkit`;
+export const jobContainerName = (jobId: string) => `yoal-job-${assertPipelineJobId(jobId)}`;
+export const jobNetworkName = (jobId: string) => `yoal-job-${assertPipelineJobId(jobId)}`;
+export const serviceContainerName = (jobId: string, service: string) => `yoal-job-${assertPipelineJobId(jobId)}-svc-${service}`;
+export const buildkitContainerName = (jobId: string) => `yoal-job-${assertPipelineJobId(jobId)}-buildkit`;
 
-/** The Builder's `SKIFF_BUILD_DIR`: the helper's override, else the D48 drop-in, else the default. */
-export const DEFAULT_BUILDS_ROOT = '/var/lib/skiff-builder';
-export const BUILDER_STORAGE_DROP_IN = 'skiff-builder.service.d/skiff-storage.conf';
+/** The Builder's `YOAL_BUILD_DIR`: the helper's override, else the D48 drop-in, else the default. */
+export const DEFAULT_BUILDS_ROOT = '/var/lib/yoal-builder';
+export const BUILDER_STORAGE_DROP_IN = 'yoal-builder.service.d/yoal-storage.conf';
 
 export async function resolveBuildsRoot(options: { override?: string | null; unitDir: string }): Promise<string> {
-	if (options.override) return assertAbsolutePath(options.override, 'SKIFF_HELPER_BUILDS_DIR');
+	if (options.override) return assertAbsolutePath(options.override, 'YOAL_HELPER_BUILDS_DIR');
 	const text = await fs.readFile(join(options.unitDir, BUILDER_STORAGE_DROP_IN), 'utf8').catch(() => '');
-	const match = /^Environment=SKIFF_BUILD_DIR=(\S+)\s*$/m.exec(text);
-	return match ? assertAbsolutePath(match[1], 'SKIFF_BUILD_DIR in the Builder drop-in') : DEFAULT_BUILDS_ROOT;
+	const match = /^Environment=YOAL_BUILD_DIR=(\S+)\s*$/m.exec(text);
+	return match ? assertAbsolutePath(match[1], 'YOAL_BUILD_DIR in the Builder drop-in') : DEFAULT_BUILDS_ROOT;
 }
 
 // -------------------------------------------------------------------- rendering
@@ -502,7 +502,7 @@ export function renderBuildkitArgs(input: BuildkitArgsInput): string[] {
 	];
 }
 
-/** `PATH=/skiff/bin:<the image's PATH>`, so `buildctl` and `skiff-step` resolve without hiding the image's tools. */
+/** `PATH=/yoal/bin:<the image's PATH>`, so `buildctl` and `yoal-step` resolve without hiding the image's tools. */
 export function jobPath(imageEnv: readonly string[] | null | undefined): string {
 	const path = imageEnv?.find((entry) => entry.startsWith('PATH='))?.slice(5) || DEFAULT_PATH;
 	return `${PIPELINE_CONTAINER_PATHS.bin}:${path}`;
@@ -515,9 +515,9 @@ export function jobEnv(request: PipelineJobStartRequest, imagePath: string): Arr
 		...request.env,
 		['HOME', p.home],
 		['PATH', imagePath],
-		['SKIFF_PIPELINE_WORKSPACE', p.workspace],
-		['SKIFF_PIPELINE_TEMP', p.tmp],
-		...(request.buildkit ? ([['BUILDKIT_HOST', BUILDKIT_HOST], ['SKIFF_BUILDCTL', p.buildctl]] as Array<[string, string]>) : []),
+		['YOAL_PIPELINE_WORKSPACE', p.workspace],
+		['YOAL_PIPELINE_TEMP', p.tmp],
+		...(request.buildkit ? ([['BUILDKIT_HOST', BUILDKIT_HOST], ['YOAL_BUILDCTL', p.buildctl]] as Array<[string, string]>) : []),
 	];
 }
 
@@ -620,11 +620,11 @@ export interface PipelineJobApi {
 export interface PipelineJobDriverOptions {
 	runner: CommandRunner;
 	podmanPath: string;
-	/** `/run/skiff-workloads`: per-job env files live under `<runtimeDir>/pipeline-jobs`. */
+	/** `/run/yoal-workloads`: per-job env files live under `<runtimeDir>/pipeline-jobs`. */
 	runtimeDir: string;
 	/** Resolved on every call: storage relocation (D48) can move the Builder's directory. */
 	buildsRoot: () => Promise<string>;
-	/** The node's agent binary (`skiff-agent pipeline-step`); copied, never mounted in place. */
+	/** The node's agent binary (`yoal-agent pipeline-step`); copied, never mounted in place. */
 	stepBinary: string;
 	apparmorProfile?: string | null;
 	subidFiles?: SubidFiles;
@@ -911,7 +911,7 @@ export class PipelineJobDriver implements PipelineJobApi {
 		const stat = source ? await fs.stat(source).catch(() => null) : null;
 		if (!source || !stat?.isFile()) throw new Error(`The step runner ${this.options.stepBinary} is missing on this node`);
 		const tools = join(buildsRoot, 'tools');
-		const name = `skiff-step-${stat.size}-${Math.floor(stat.mtimeMs)}`;
+		const name = `yoal-step-${stat.size}-${Math.floor(stat.mtimeMs)}`;
 		const target = join(tools, name);
 		if (await this.exists(target)) return target;
 		await fs.mkdir(tools, { recursive: true, mode: 0o755 });
@@ -920,7 +920,7 @@ export class PipelineJobDriver implements PipelineJobApi {
 		await fs.chmod(temp, 0o755);
 		await fs.rename(temp, target);
 		for (const entry of await fs.readdir(tools))
-			if (entry.startsWith('skiff-step-') && entry !== name) await fs.rm(join(tools, entry), { force: true }).catch(() => undefined);
+			if (entry.startsWith('yoal-step-') && entry !== name) await fs.rm(join(tools, entry), { force: true }).catch(() => undefined);
 		return target;
 	}
 
@@ -930,7 +930,7 @@ export class PipelineJobDriver implements PipelineJobApi {
 		const target = join(tools, `buildctl-${BUILDKIT.version}`);
 		if (await this.exists(target)) return target;
 		await fs.mkdir(tools, { recursive: true, mode: 0o755 });
-		const name = `skiff-buildctl-copy-${randomUUID().slice(0, 8)}`;
+		const name = `yoal-buildctl-copy-${randomUUID().slice(0, 8)}`;
 		const created = await this.podman(['create', '--pull=never', `--name=${name}`, BUILDKIT.image]);
 		if (created.code !== 0) throw new Error(`Could not prepare buildctl: ${detail(created)}`);
 		const temp = join(tools, `.buildctl.${randomUUID()}`);

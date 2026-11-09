@@ -26,7 +26,7 @@ import {
 	type Principal,
 	type ResourceRef,
 	type ScopeRef
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from '../context.ts';
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../errors.ts';
 import { notifyIam, type IamNotification } from '../notify.ts';
@@ -763,7 +763,7 @@ export class GovernanceService {
 				`Reason: ${reason}`,
 				changeRef ? `Change reference: ${changeRef}` : null,
 				this.#approversLine(principal.orgId, scope, principal.userId),
-				`Request ${id}; it expires ${formatTime(now + REQUEST_TTL_MS)}. Approve or deny it in Skiff → Access.`
+				`Request ${id}; it expires ${formatTime(now + REQUEST_TTL_MS)}. Approve or deny it in Yoal → Access.`
 			]
 				.filter((line): line is string => line !== null)
 				.join('\n'),

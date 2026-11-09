@@ -111,7 +111,7 @@
 	{/if}
 </form>
 <p class="mt-3 text-xs text-muted-foreground">
-	The IP the node sends from, the one its provider sets reverse DNS on. Left blank, Skiff uses a
+	The IP the node sends from, the one its provider sets reverse DNS on. Left blank, Yoal uses a
 	public IPv4 in the node's address, or for the edge the platform host's record in the Cloudflare
 	zone, and asks when it finds neither.
 </p>

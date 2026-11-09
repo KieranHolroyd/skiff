@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { TreeNode } from '@skiff/studio/protocol';
+import type { TreeNode } from '@yoal/studio/protocol';
 import { findItem, formatBytes, formatCount, toItem, visibleItems, type TreeItem } from './tree.ts';
 
 const node = (path: string[], browsable = true): TreeNode => ({

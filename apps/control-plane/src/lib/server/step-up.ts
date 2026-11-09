@@ -1,4 +1,4 @@
-import type { StepUpClass } from '@skiff/contracts';
+import type { StepUpClass } from '@yoal/contracts';
 import { userHasSecondFactor } from './second-factor';
 import { sqlite } from './db';
 import type { SignInMethod } from './sso-enforcement';

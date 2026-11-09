@@ -8,13 +8,13 @@ import * as z from 'zod';
  */
 
 /** The `LOGIN REPLICATION` role on a primary; it can stream WAL and nothing else. */
-export const DATABASE_REPLICATION_USER = 'skiff_repl';
+export const DATABASE_REPLICATION_USER = 'yoal_repl';
 
 /** The heartbeat capability an agent needs before it is handed replica work (`nodeCapabilities`). */
 export const DATABASE_REPLICAS_CAPABILITY = 'database-replicas';
 
 /** Where the walreceiver finds its upstream inside a replica container (the agent's link socket). */
-export const DATABASE_REPLICA_UPSTREAM_DIR = '/run/skiff-upstream';
+export const DATABASE_REPLICA_UPSTREAM_DIR = '/run/yoal-upstream';
 
 /** How often the primary's agent samples `pg_replication_slots` ⋈ `pg_stat_replication`. */
 export const DATABASE_REPLICATION_SAMPLE_SECONDS = 30;
@@ -22,8 +22,8 @@ export const DATABASE_REPLICATION_SAMPLE_SECONDS = 30;
 /** A slot report older than this counts as stale: promotion then needs `acceptDataLoss`. */
 export const DATABASE_REPLICA_REPORT_STALE_SECONDS = 120;
 
-/** Physical slot names Skiff owns; the helper never touches a slot outside this pattern. */
-export const DATABASE_REPLICATION_SLOT_PATTERN = /^skiff_[a-z0-9_]{1,56}$/;
+/** Physical slot names Yoal owns; the helper never touches a slot outside this pattern. */
+export const DATABASE_REPLICATION_SLOT_PATTERN = /^yoal_[a-z0-9_]{1,56}$/;
 
 /** Most replicas a primary serves (`max_wal_senders` / `max_replication_slots` default to 10). */
 export const DATABASE_REPLICATION_MAX_SLOTS = 8;
@@ -38,7 +38,7 @@ export const DATABASE_PROMOTION_MAX_LAG_SECONDS = 60;
 
 const slotSchema = z.string().regex(DATABASE_REPLICATION_SLOT_PATTERN);
 
-/** The primary's node keeps the role, `pg_hba` rule and these slots, and drops other `skiff_*` slots. */
+/** The primary's node keeps the role, `pg_hba` rule and these slots, and drops other `yoal_*` slots. */
 export const databaseReplicationTaskSchema = z.object({
 	databaseId: z.string().min(1).max(100),
 	/** Hash of slots + secret; a new value means "configure again". */
@@ -57,7 +57,7 @@ export const databaseReplicationActivationSchema = z.object({
 });
 export type DatabaseReplicationActivation = z.infer<typeof databaseReplicationActivationSchema>;
 
-/** One `skiff_*` slot as the primary sees it (`pg_replication_slots` ⟕ `pg_stat_replication`). */
+/** One `yoal_*` slot as the primary sees it (`pg_replication_slots` ⟕ `pg_stat_replication`). */
 export const databaseReplicationSlotStatusSchema = z.object({
 	slot: slotSchema,
 	active: z.boolean(),

@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite';
-import type { SkiffDb } from '@skiff/db';
+import type { YoalDb } from '@yoal/db';
 import type { CoreConfig } from './config.ts';
 import type { CoreContext } from './context.ts';
 import { AuditService } from './audit.ts';
@@ -183,11 +183,11 @@ export * from './config-export.ts';
 export { ConfigImportService, parseDocument as parseConfigExportDocument } from './config-import/service.ts';
 
 export interface CoreOptions {
-	db: SkiffDb;
+	db: YoalDb;
 	sqlite: Database;
 	config: CoreConfig;
 	version?: string;
-	/** Email DNS/Cloudflare seams (docs/EMAIL.md); defaults read `SKIFF_CLOUDFLARE_*` and `SKIFF_MAIL_DOMAIN`. */
+	/** Email DNS/Cloudflare seams (docs/EMAIL.md); defaults read `YOAL_CLOUDFLARE_*` and `YOAL_MAIL_DOMAIN`. */
 	email?: EmailServiceOptions;
 }
 
@@ -241,7 +241,7 @@ export interface Core {
 	usage: UsageService;
 	upgrades: UpgradeService;
 	githubRunners: GithubRunnerService;
-	/** Skiff's GitHub App (docs/GITHUB.md). */
+	/** Yoal's GitHub App (docs/GITHUB.md). */
 	githubApp: GithubAppService;
 	/** Deploy from Git (docs/GITHUB.md §9, docs/FORGES.md §7). */
 	githubImport: GithubImportService;
@@ -292,7 +292,7 @@ export interface Core {
 	workloadIdentity: WorkloadIdentityService;
 	/** RFC 8693 token exchange against federation trusts (IAM.md I16–I17). */
 	sts: TokenService;
-	/** Skiff Access policies (IAM.md I25). */
+	/** Yoal Access policies (IAM.md I25). */
 	accessPolicies: AccessPolicyService;
 	/** Managed user pools: OIDC clients and discovery for tenant apps (IAM.md I26–I29). */
 	userPools: UserPoolService;
@@ -300,7 +300,7 @@ export interface Core {
 	userPoolEngine: UserPoolEngineService;
 	/** SCIM bearer tokens and directory reconciliation (IAM.md I20). */
 	scim: ScimTokenService;
-	/** Email: Skiff's self-hosted SES (docs/EMAIL.md). */
+	/** Email: Yoal's self-hosted SES (docs/EMAIL.md). */
 	email: EmailService;
 	/** Log drains: forward stored log lines to webhooks and OTLP receivers (DESIGN §8). */
 	logDrains: LogDrainService;
@@ -315,7 +315,7 @@ function defaultEmailOptions(): EmailServiceOptions {
 	return {
 		cloudflare: cloudflare ? new HttpCloudflareClient(cloudflare) : null,
 		cloudflareZoneName: cloudflare?.zoneName ?? null,
-		mailDomain: process.env.SKIFF_MAIL_DOMAIN?.trim() || null
+		mailDomain: process.env.YOAL_MAIL_DOMAIN?.trim() || null
 	};
 }
 

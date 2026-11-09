@@ -64,7 +64,7 @@ policy, logs, and history, running the same immutable release in the same sandbo
 2. Agent receives `jobTasks` in desired state (or claims from `SchedulerService` via a new agent
    endpoint); fetches activation for env/secrets.
 3. Helper `jobs.run` renders a transient systemd unit:
-   - Same `DynamicUser`/sandbox, `MemoryMax`, `CPUQuota`, `skiff-workloads.slice`.
+   - Same `DynamicUser`/sandbox, `MemoryMax`, `CPUQuota`, `yoal-workloads.slice`.
    - Release dir read-only, `/data` or volumes as configured, env file + secret files.
    - `ExecStart` is the validated argv; no shell.
    - `TimeoutStartSec`, `Restart=no`.
@@ -83,7 +83,7 @@ policy, logs, and history, running the same immutable release in the same sandbo
 
 - REST: `/api/v1/projects/:slug/jobs`, `/:name`, `/:name/run`, `/:name/runs`, `/:name/pause`.
 - MCP: `list_jobs`, `create_job`, `run_job`, `get_job_runs`, `pause_job` (confirmed for delete).
-- CLI: `skif jobs list|create|run|logs|pause|delete`.
+- CLI: `yoal jobs list|create|run|logs|pause|delete`.
 - Dashboard: Jobs tab, cron builder, next run, history, log tail, run now.
 - Permissions: `project:update` for manage; `project:read` for list/logs. MCP scoped.
 
@@ -128,7 +128,7 @@ policy, logs, and history, running the same immutable release in the same sandbo
 
 ## Rollout
 
-`SKIFF_FEATURE_JOBS` off by default. Backups use F4 internally regardless. Enable user jobs after
+`YOAL_FEATURE_JOBS` off by default. Backups use F4 internally regardless. Enable user jobs after
 the transient-unit test passes on Debian 13.
 
 ## Open questions

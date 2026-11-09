@@ -7,7 +7,7 @@ import { PipelineExecutor, resolveStepCommand } from './executor.ts';
 import { gitRepo } from './git-fixture.ts';
 import { jobClaim, startFakeControlPlane, stepSpec, type FakeControlPlane } from './test-server.ts';
 
-const root = mkdtempSync(join(tmpdir(), 'skiff-executor-'));
+const root = mkdtempSync(join(tmpdir(), 'yoal-executor-'));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
 
@@ -23,7 +23,7 @@ afterEach(() => fake.stop());
 function config(overrides: Partial<BuilderConfig> = {}): BuilderConfig {
 	return {
 		...loadConfig(
-			{ SKIFF_CONTROL_URL: fake.url, SKIFF_NODE_TOKEN: 'node', SKIFF_BUILD_DIR: join(root, 'build'), SKIFF_BUILDER_SYSTEMD: 'false' },
+			{ YOAL_CONTROL_URL: fake.url, YOAL_NODE_TOKEN: 'node', YOAL_BUILD_DIR: join(root, 'build'), YOAL_BUILDER_SYSTEMD: 'false' },
 			{ platform: 'darwin', isRoot: false, has: () => false, arch: 'arm64', exists: () => false },
 		),
 		...overrides,
@@ -32,11 +32,11 @@ function config(overrides: Partial<BuilderConfig> = {}): BuilderConfig {
 
 describe('resolveStepCommand', () => {
 	test('explicit binary, compiled self, or the agent entry point from source', () => {
-		expect(resolveStepCommand({ explicit: '/opt/x/skiff-step', isolation: 'container', main: '/src/main.ts', execPath: '/bun' })).toEqual([
-			'/opt/x/skiff-step',
+		expect(resolveStepCommand({ explicit: '/opt/x/yoal-step', isolation: 'container', main: '/src/main.ts', execPath: '/bun' })).toEqual([
+			'/opt/x/yoal-step',
 		]);
-		expect(resolveStepCommand({ explicit: null, isolation: 'container', main: '/$bunfs/root/skiff-agent', execPath: '/opt/skiff/bin/skiff-agent' })).toEqual([
-			'/opt/skiff/bin/skiff-agent',
+		expect(resolveStepCommand({ explicit: null, isolation: 'container', main: '/$bunfs/root/yoal-agent', execPath: '/opt/yoal/bin/yoal-agent' })).toEqual([
+			'/opt/yoal/bin/yoal-agent',
 		]);
 		expect(resolveStepCommand({ explicit: null, isolation: 'sandbox', main: '/repo/x.ts', execPath: '/bun', agentMain: '/repo/apps/agent/src/main.ts' })).toEqual([
 			'/bun',
@@ -47,12 +47,12 @@ describe('resolveStepCommand', () => {
 });
 
 describe.skipIf(isRoot)('PipelineExecutor (direct sandbox mode)', () => {
-	test('clones the exact commit, runs the step runner through `skiff-agent pipeline-step`, and cleans up', async () => {
+	test('clones the exact commit, runs the step runner through `yoal-agent pipeline-step`, and cleans up', async () => {
 		const claim = jobClaim({
 			cloneUrl: origin.dir,
 			sha,
 			token: fake.token,
-			steps: [stepSpec({ run: 'cat README.md\necho "secret=${{ secrets.TOKEN }}"\ntest -z "${SKIFF_JOB_TOKEN:-}" && echo no-token-in-env' })],
+			steps: [stepSpec({ run: 'cat README.md\necho "secret=${{ secrets.TOKEN }}"\ntest -z "${YOAL_JOB_TOKEN:-}" && echo no-token-in-env' })],
 		});
 		await new PipelineExecutor(config(), () => undefined).run(claim);
 		expect(fake.completes).toHaveLength(1);

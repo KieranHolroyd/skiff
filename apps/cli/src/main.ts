@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Skiff CLI. Published as the `skif` npm package and installed under two command names,
- * `skif` and `skiff` (D33), both pointing at this entrypoint.
+ * Yoal CLI. Published as the `@yoal/cli` npm package and installed as the `yoal`
+ * command (D33), pointing at this entrypoint.
  */
 import pkg from '../package.json' with { type: 'json' };
 import { ApiError, CliError, UsageError } from './errors.ts';
@@ -56,7 +56,7 @@ import { workloadCommand } from './commands/workload.ts';
 import { wranglerCommand } from './commands/wrangler.ts';
 import { PROFILE_ENV, setProfileOverride } from './config.ts';
 
-const invokedAs = 'skif';
+const invokedAs = 'yoal';
 
 const commands: Record<string, (argv: string[]) => Promise<void>> = {
 	login: loginCommand,
@@ -152,9 +152,9 @@ const commands: Record<string, (argv: string[]) => Promise<void>> = {
 	wrangler: wranglerCommand,
 };
 
-const help = `${invokedAs} ${pkg.version} — deploy to your own Skiff cloud
+const help = `${invokedAs} ${pkg.version} — deploy to your own Yoal cloud
 
-Usage: ${invokedAs} <command> [options]   (\`skiff\` works too)
+Usage: ${invokedAs} <command> [options]
 
 Commands:
   login [--url <platform>] [--token <key>]  Sign in (browser by default)
@@ -169,13 +169,13 @@ Commands:
   projects delete|restore|purge <slug…>      Bulk actions: shows the plan, then asks
   projects trash                             List the trash with purge dates
   deployments <project>                      List deployments
-  workload [show|set|reset|capacity]         Runtime spec: command, image, port, memory, idle stop (\`skif workload --help\`)
+  workload [show|set|reset|capacity]         Runtime spec: command, image, port, memory, idle stop (\`yoal workload --help\`)
   environments [list|create|update|remove|promote]  Named environments and their pointers
   domains [list|add|check|remove]            Custom project domains and DNS verification
   promote <project> <deploymentId>           Move production to a deployment
   rollback <project>                         Move production back one deployment
   logs <project>                             Show recent project logs
-  container [inspect|ls|cat|cp|restart] <p>  Inspect a container project, read its files, restart it (\`skif container --help\`)
+  container [inspect|ls|cat|cp|restart] <p>  Inspect a container project, read its files, restart it (\`yoal container --help\`)
   shell <project>                            Interactive shell inside a container project
   open <project>                             Open the site in a browser
   prune [--apply] [--plan <id>]              Find and remove orphaned data (dry run by default)
@@ -184,37 +184,37 @@ Commands:
   volume prune                               Delete old unpinned volume snapshots
   operations [list|show|watch|cancel]        Inspect and follow bulk and prune operations
   blueprint <validate|plan|apply> [file]     Declare a stack in one file; plan shows the diff, apply runs it
-  db [list|create|info|attach|detach|…]      Managed PostgreSQL databases (\`skif db --help\`)
+  db [list|create|info|attach|detach|…]      Managed PostgreSQL databases (\`yoal db --help\`)
   upgrade <plan|apply|rollback>              Preflight, install or roll back the platform
-  storage [list|create|info|buckets|…]       Managed S3-compatible object storage (\`skif storage --help\`)
-  broker [list|create|info|attach|…]         Managed queue brokers, NATS with JetStream (\`skif broker --help\`)
+  storage [list|create|info|buckets|…]       Managed S3-compatible object storage (\`yoal storage --help\`)
+  broker [list|create|info|attach|…]         Managed queue brokers, NATS with JetStream (\`yoal broker --help\`)
                                              Queue tools: send, peek, redrive, queue-purge, …
-  function [invoke|cron]                     Test a function on its node: a request, or a cron run now (\`skif function --help\`)
-  jobs [list|create|run|runs|logs|…]       Cron jobs and manual commands on an app (\`skif jobs --help\`)
+  function [invoke|cron]                     Test a function on its node: a request, or a cron run now (\`yoal function --help\`)
+  jobs [list|create|run|runs|logs|…]       Cron jobs and manual commands on an app (\`yoal jobs --help\`)
   run <project> -- <command…>               Run a one-off command against the app's current release
-  repo [list|show|add|remove]                Git repositories for pipelines (\`skif repo --help\`)
-  run [list|view|watch|logs|cancel|rerun]    Pipeline runs: jobs, steps, logs (\`skif run --help\`)
-  workflow [dispatch|run|lint]               Start a workflow, run a local file, or lint one (\`skif workflow --help\`)
-  secret|var [list|set|rm] <repo>            Pipeline secrets and variables (\`skif secret --help\`)
-  events [list|create|test|deliveries|…]    Publish platform events (uploads, alerts, deploys, backups) to a function queue (\`skif events --help\`)
-  email [status|domains|send|log|…]          Send email from your own domains, a self-hosted SES (\`skif email --help\`)
-  backup-target [list|add|test|remove]       Where backups are written (\`skif backup-target --help\`)
-  log-drain [list|create|test|update|…]      Forward logs to a webhook or OTLP receiver (\`skif log-drain --help\`)
-  iam [roles|bindings|groups|bind|…]         Roles, bindings and groups, and why access is allowed (\`skif iam --help\`)
-  identity token [--audience <aud>]          Workload token for Skiff or a cloud audience (\`skif identity --help\`)
-  sts exchange --subject-token-file <path>   Exchange a subject token for a short-lived Skiff token (\`skif sts --help\`)
-  sa [list|create|disable|enable|delete|…]   Service accounts, tokens and keys; secrets print once (\`skif sa --help\`)
-  federation [list|create|delete]            Map an OIDC issuer to a service account (\`skif federation --help\`)
-  access [request|approve|deny]              Just-in-time access requests (\`skif access --help\`)
+  repo [list|show|add|remove]                Git repositories for pipelines (\`yoal repo --help\`)
+  run [list|view|watch|logs|cancel|rerun]    Pipeline runs: jobs, steps, logs (\`yoal run --help\`)
+  workflow [dispatch|run|lint]               Start a workflow, run a local file, or lint one (\`yoal workflow --help\`)
+  secret|var [list|set|rm] <repo>            Pipeline secrets and variables (\`yoal secret --help\`)
+  events [list|create|test|deliveries|…]    Publish platform events (uploads, alerts, deploys, backups) to a function queue (\`yoal events --help\`)
+  email [status|domains|send|log|…]          Send email from your own domains, a self-hosted SES (\`yoal email --help\`)
+  backup-target [list|add|test|remove]       Where backups are written (\`yoal backup-target --help\`)
+  log-drain [list|create|test|update|…]      Forward logs to a webhook or OTLP receiver (\`yoal log-drain --help\`)
+  iam [roles|bindings|groups|bind|…]         Roles, bindings and groups, and why access is allowed (\`yoal iam --help\`)
+  identity token [--audience <aud>]          Workload token for Yoal or a cloud audience (\`yoal identity --help\`)
+  sts exchange --subject-token-file <path>   Exchange a subject token for a short-lived Yoal token (\`yoal sts --help\`)
+  sa [list|create|disable|enable|delete|…]   Service accounts, tokens and keys; secrets print once (\`yoal sa --help\`)
+  federation [list|create|delete]            Map an OIDC issuer to a service account (\`yoal federation --help\`)
+  access [request|approve|deny]              Just-in-time access requests (\`yoal access --help\`)
   org switch <org-id>                        Switch the active organisation for this session
-  key [list|create|revoke]                   Access keys; the secret is printed once (\`skif key --help\`)
-  pool [list|create|disable|clients]         Managed user pools and their OIDC clients (\`skif pool --help\`)
-  access-policy [list|create|assign]         Skiff Access allow/deny policies (\`skif access-policy --help\`)
-  registry [status|login|repos|credentials|deploy]  The platform registry, private registry logins, image deploys (\`skif registry --help\`)
+  key [list|create|revoke]                   Access keys; the secret is printed once (\`yoal key --help\`)
+  pool [list|create|disable|clients]         Managed user pools and their OIDC clients (\`yoal pool --help\`)
+  access-policy [list|create|assign]         Yoal Access allow/deny policies (\`yoal access-policy --help\`)
+  registry [status|login|repos|credentials|deploy]  The platform registry, private registry logins, image deploys (\`yoal registry --help\`)
   audit [--from] [--to] [--all]              Org audit log, newest first, with a date range and paging
   export [--out <file>] [--project <slug>]   Write the org's configuration to one YAML/JSON file; no data, no secret values
   import <file> [--apply] [--secrets <f>]   Recreate an export's configuration here (create-only; plan by default)
-  volume [list|show|snapshot|restore|…]      Persistent app volumes and their snapshots (\`skif volume --help\`)
+  volume [list|show|snapshot|restore|…]      Persistent app volumes and their snapshots (\`yoal volume --help\`)
   ha status                                  Failover controller: lease, lost nodes, recent failovers (platform admin)
 
 Global:
@@ -223,19 +223,19 @@ Global:
   -v, --version     Print the version
 
 Environment:
-  SKIFF_URL              Platform URL, e.g. https://control.example.com (overrides the config)
-  SKIFF_TOKEN            API key (overrides the config)
-  SKIFF_CONTENT_DOMAIN   Domain deployed sites use, e.g. sites.example.com (overrides the config)
-  SKIFF_PROFILE          Profile to use (overrides the active profile)
+  YOAL_URL              Platform URL, e.g. https://control.example.com (overrides the config)
+  YOAL_TOKEN            API key (overrides the config)
+  YOAL_CONTENT_DOMAIN   Domain deployed sites use, e.g. sites.example.com (overrides the config)
+  YOAL_PROFILE          Profile to use (overrides the active profile)
 
-Settings and credentials are stored per profile at ~/.config/skiff/config.json with
+Settings and credentials are stored per profile at ~/.config/yoal/config.json with
 mode 0600. With one profile commands use it automatically; with several, run
-\`skif profile use <name>\` or pass --profile. \`logout\` removes only the selected
+\`yoal profile use <name>\` or pass --profile. \`logout\` removes only the selected
 profile's API key; \`logout --all\` removes the file.
 
 Bulk and prune commands exit 0 when everything succeeded, 3 when some items failed,
 and 1 when the run failed or was cancelled. Ctrl-C detaches: the run keeps going on
-the server and \`skif operations watch <id>\` picks it up again.`;
+the server and \`yoal operations watch <id>\` picks it up again.`;
 
 async function run(): Promise<void> {
 	let argv: string[];
@@ -269,7 +269,7 @@ async function run(): Promise<void> {
 	if (!handler) {
 		if (command === 'agent') {
 			console.error(
-				`${invokedAs}: 'agent join' is handled by the Skiff agent installer, not the CLI.`,
+				`${invokedAs}: 'agent join' is handled by the Yoal agent installer, not the CLI.`,
 			);
 		} else {
 			console.error(`${invokedAs}: '${command}' is not a command. Run \`${invokedAs} --help\`.`);
@@ -302,7 +302,7 @@ async function run(): Promise<void> {
 			console.error(`${invokedAs}: ${cliError.message}`);
 			for (const suggestion of cliError.suggestions) console.error(`  ${suggestion}`);
 		}
-		if (process.env.SKIFF_DEBUG === '1') console.error(cliError);
+		if (process.env.YOAL_DEBUG === '1') console.error(cliError);
 		process.exitCode = cliError.exitCode;
 	}
 }

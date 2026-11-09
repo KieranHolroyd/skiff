@@ -12,8 +12,8 @@ import * as z from 'zod';
  * activation payload (fetched by the authenticated node) and the workload's own 0400 file carry it.
  */
 
-/** The audience for Skiff's own API (IAM.md §7.4). */
-export const WORKLOAD_IDENTITY_AUDIENCE = 'skiff';
+/** The audience for Yoal's own API (IAM.md §7.4). */
+export const WORKLOAD_IDENTITY_AUDIENCE = 'yoal';
 
 /** Workload tokens are valid for one hour; the agent refreshes them at 50% of their lifetime. */
 export const WORKLOAD_IDENTITY_TOKEN_TTL_SECONDS = 60 * 60;
@@ -22,19 +22,19 @@ export const WORKLOAD_IDENTITY_TOKEN_TTL_SECONDS = 60 * 60;
 export const WORKLOAD_IDENTITY_CAPABILITY = 'workload-identity';
 
 /** The environment variable naming the 0400 token file a workload reads. */
-export const WORKLOAD_IDENTITY_TOKEN_ENV = 'SKIFF_TOKEN_FILE';
+export const WORKLOAD_IDENTITY_TOKEN_ENV = 'YOAL_TOKEN_FILE';
 
 /** The environment variable naming the node-local metadata endpoint, when one is available. */
-export const WORKLOAD_IDENTITY_URL_ENV = 'SKIFF_IDENTITY_URL';
+export const WORKLOAD_IDENTITY_URL_ENV = 'YOAL_IDENTITY_URL';
 
 /** The environment variables the control plane injects for workload identity. */
 export type WorkloadIdentityEnvName = typeof WORKLOAD_IDENTITY_TOKEN_ENV | typeof WORKLOAD_IDENTITY_URL_ENV;
 
 /** Where the workload sees its rotated token file. */
-export const WORKLOAD_IDENTITY_MOUNT_PATH = '/var/run/skiff/token';
+export const WORKLOAD_IDENTITY_MOUNT_PATH = '/var/run/yoal/token';
 
 /** Root-owned host directory holding one directory and token file per workload. */
-export const WORKLOAD_IDENTITY_HOST_DIR = '/run/skiff/identity';
+export const WORKLOAD_IDENTITY_HOST_DIR = '/run/yoal/identity';
 
 /** Fixed loopback port for the agent's metadata endpoint (the analytics sink uses 8085). */
 export const WORKLOAD_IDENTITY_PORT = 8086;
@@ -46,7 +46,7 @@ export const WORKLOAD_IDENTITY_PORT = 8086;
 export const WORKLOAD_IDENTITY_LOCAL_URL = `http://127.0.0.1:${WORKLOAD_IDENTITY_PORT}`;
 export const WORKLOAD_IDENTITY_CONTAINER_URL = `http://host.containers.internal:${WORKLOAD_IDENTITY_PORT}`;
 
-/** The host path of one workload's token: `/run/skiff/identity/<workload>/token`. */
+/** The host path of one workload's token: `/run/yoal/identity/<workload>/token`. */
 export function workloadIdentityTokenPath(workloadId: string): string {
 	return `${WORKLOAD_IDENTITY_HOST_DIR}/${workloadId}/token`;
 }
@@ -59,7 +59,7 @@ export function workloadIdentityUrl(runtime: 'process' | 'container' | 'function
 }
 
 /**
- * The claims Skiff's workload issuer sets. `sub` is the workload's service-account id; `act`
+ * The claims Yoal's workload issuer sets. `sub` is the workload's service-account id; `act`
  * names the workload itself, so an audit row can tell which deployment used the token.
  */
 export const workloadIdentityClaimSchema = z.object({

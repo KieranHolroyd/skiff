@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import type { Column } from '@skiff/studio/protocol';
+	import type { Column } from '@yoal/studio/protocol';
 	import type { EditorKind } from './edit.js';
 
 	/**

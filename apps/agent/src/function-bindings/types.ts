@@ -1,11 +1,11 @@
-import type { FunctionRuntimeBinding, WorkloadDesired } from '@skiff/contracts';
+import type { FunctionRuntimeBinding, WorkloadDesired } from '@yoal/contracts';
 
 /**
  * A binding backend rendered for one function host (docs/FUNCTIONS.md §4.5, FN10).
  *
  * Phase 2 bindings fall into two shapes:
  * - native workerd capabilities (Durable Objects, Hyperdrive) add a binding to the user Worker;
- * - Skiff-supplied service Workers (KV, Cache, R2, Analytics, queues) add a sibling service to the
+ * - Yoal-supplied service Workers (KV, Cache, R2, Analytics, queues) add a sibling service to the
  *   same workerd process and a capability binding to the user Worker.
  *
  * Each backend is a pure renderer: it returns config fragments and worker source files, never

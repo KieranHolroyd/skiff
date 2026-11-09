@@ -5,7 +5,7 @@
  * sessions) that counts `[field, $type]` pairs over a fresh sample. A sentinel pair per document
  * gives the sample size in the same pass: field names can never contain NUL.
  */
-import type { Cell, Column } from '@skiff/studio/protocol';
+import type { Cell, Column } from '@yoal/studio/protocol';
 import { cellToDisplay, type Json } from './ejson.js';
 
 export const SCHEMA_SAMPLE_SIZE = 1_000;

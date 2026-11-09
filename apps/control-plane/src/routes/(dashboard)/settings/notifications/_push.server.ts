@@ -1,5 +1,5 @@
 import { fail, type Actions } from '@sveltejs/kit';
-import { deliverPush } from '@skiff/core';
+import { deliverPush } from '@yoal/core';
 import { configAvailability } from '#lib/server/platform-config.js';
 import { pushStore, vapid } from '#lib/server/push.js';
 import { formString } from '../../_lib/errors.js';
@@ -69,8 +69,8 @@ export const pushActions = {
 			pushStore,
 			targets,
 			{
-				title: 'Skiff: Test alert',
-				body: `This is a test push from Skiff, sent by ${locals.user?.email ?? principal.userId}. Real alerts look like this.`,
+				title: 'Yoal: Test alert',
+				body: `This is a test push from Yoal, sent by ${locals.user?.email ?? principal.userId}. Real alerts look like this.`,
 				tag: 'test',
 				url: '/settings/notifications',
 				severity: 'info',

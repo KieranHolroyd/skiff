@@ -1,5 +1,5 @@
 <script lang="ts">
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
+	import DetailList from '#lib/components/yoal/DetailList.svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -31,10 +31,10 @@
 	import { toast } from 'svelte-sonner';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import SecretDialog from '#lib/components/skiff/SecretDialog.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import SecretDialog from '#lib/components/yoal/SecretDialog.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
@@ -365,7 +365,7 @@
 </script>
 
 <svelte:head>
-	<title>{data.project.name} · Skiff</title>
+	<title>{data.project.name} · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">
@@ -388,7 +388,7 @@
 			</div>
 		{/snippet}
 		{#if data.can.createDeployment}
-			<Button onclick={openDeploy} data-skiff-target="project.deploy">
+			<Button onclick={openDeploy} data-yoal-target="project.deploy">
 				<UploadIcon />
 				Deploy
 			</Button>
@@ -681,7 +681,7 @@
 				<EmptyState
 					icon={ClockIcon}
 					title="Jobs are not enabled"
-					description="A platform admin turns jobs on with SKIFF_FEATURE_JOBS=1."
+					description="A platform admin turns jobs on with YOAL_FEATURE_JOBS=1."
 				/>
 			{:else if data.project.runtime === 'static'}
 				<EmptyState
@@ -730,7 +730,7 @@
 					description="Deploy a built .zip from this page, or use the CLI, MCP clients or the REST API. Every deploy gets an immutable preview URL."
 				>
 					<code class="rounded-md border bg-card px-2.5 py-1.5 font-mono text-xs"
-						><span class="text-muted-foreground select-none">$ </span>skif deploy ./dist --project {data
+						><span class="text-muted-foreground select-none">$ </span>yoal deploy ./dist --project {data
 							.project.slug}</code
 					>
 				</EmptyState>
@@ -967,11 +967,11 @@
 				<Card.Root>
 					<Card.Header>
 						<Card.Title class="flex items-center gap-2"
-							><ShieldCheckIcon class="size-4" />Skiff Access</Card.Title
+							><ShieldCheckIcon class="size-4" />Yoal Access</Card.Title
 						>
 						<Card.Description>
 							An identity-aware proxy in front of every host: a policy decides who gets in, and
-							the app receives <code class="font-mono text-xs">Skiff-Access-Email</code> and a
+							the app receives <code class="font-mono text-xs">Yoal-Access-Email</code> and a
 							signed JWT.
 						</Card.Description>
 					</Card.Header>
@@ -994,7 +994,7 @@
 													</span>
 												{/if}
 											{:else}
-												Not using Skiff Access.
+												Not using Yoal Access.
 											{/if}
 										</Item.Description>
 									</Item.Content>
@@ -1006,7 +1006,7 @@
 							<EmptyState
 								icon={ShieldCheckIcon}
 								title="No policies for this project"
-								description="Create a policy under Settings → Skiff Access, then assign it to production, previews or a named environment."
+								description="Create a policy under Settings → Yoal Access, then assign it to production, previews or a named environment."
 							/>
 						{/if}
 					</Card.Content>
@@ -1396,7 +1396,7 @@
 						{/each}
 					</NativeSelect.Root>
 					<Field.Description
-						>Manage the ordered rules under Settings → Skiff Access.</Field.Description
+						>Manage the ordered rules under Settings → Yoal Access.</Field.Description
 					>
 					{#if result?.fieldErrors?.policyId}<Field.Error>{result.fieldErrors.policyId}</Field.Error>{/if}
 				</Field.Field>

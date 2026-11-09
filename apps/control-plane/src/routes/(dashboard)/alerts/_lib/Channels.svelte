@@ -1,18 +1,18 @@
 <script lang="ts">
 	/**
-	 * Where alerts can go (docs/ALERTS.md §3): every channel Skiff knows, whether it is set up,
+	 * Where alerts can go (docs/ALERTS.md §3): every channel Yoal knows, whether it is set up,
 	 * and a per-channel test. Setting a channel up (SMTP, Twilio, chat webhooks, push keys) stays
 	 * in Settings → Notifications, which writes the host's environment.
 	 */
 	import { resolve } from '$app/paths';
-	import type { SystemAlertsView } from '@skiff/contracts';
+	import type { SystemAlertsView } from '@yoal/contracts';
 	import { createQuery } from '@tanstack/svelte-query';
 	import { toast } from 'svelte-sonner';
 	import BellRingIcon from '@lucide/svelte/icons/bell-ring';
 	import SendIcon from '@lucide/svelte/icons/send';
 	import SettingsIcon from '@lucide/svelte/icons/settings-2';
-	import Notice from '#lib/components/skiff/Notice.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Skeleton } from '#lib/components/ui/skeleton/index.js';
 	import { Spinner } from '#lib/components/ui/spinner/index.js';

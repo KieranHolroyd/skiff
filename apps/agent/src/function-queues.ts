@@ -6,7 +6,7 @@ import {
 	type FunctionRuntimeSpec,
 	type WorkloadActivation,
 	type WorkloadDesired,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import {
 	NatsConnection,
 	QUEUE_HEADERS,
@@ -25,11 +25,11 @@ import { connectTcp } from './tcp-stream.ts';
  *
  * A function that declares `triggers.queues` consumes those queues from its managed broker. The
  * agent, not the function host, does the pulling: like cron, a batch is POSTed to the shim's
- * internal `/__skiff/queue` route over the host socket, which socket-activates an idle-stopped
+ * internal `/__yoal/queue` route over the host socket, which socket-activates an idle-stopped
  * host. One loop per (workload, queue) holds its own broker connection and:
  *
  * 1. pulls up to `maxBatchSize` messages, waiting at most `maxBatchTimeout` for the batch to fill;
- * 2. holds back delayed messages (`Skiff-Not-Before`) with a timed NAK;
+ * 2. holds back delayed messages (`Yoal-Not-Before`) with a timed NAK;
  * 3. delivers the rest and applies the shim's per-message verdict: ack, or retry with a delay;
  * 4. after `maxRetries` retries, moves a message to `deadLetterQueue` (or drops it, with a warning).
  *
@@ -293,7 +293,7 @@ export class FunctionQueueConsumers {
 		const pass = env[`${prefix}_PASSWORD`];
 		if (!Number.isInteger(port) || port < 1 || port > 65_535 || !user || !pass)
 			throw new Error(`the activation has no ${prefix}_PORT/_USER/_PASSWORD; attach broker "${consumer.broker}" to this project`);
-		return { host: '127.0.0.1', port, user, pass, name: `skiff-agent:${workload.projectSlug}:${consumer.queue}` };
+		return { host: '127.0.0.1', port, user, pass, name: `yoal-agent:${workload.projectSlug}:${consumer.queue}` };
 	}
 
 	/** Hold back delayed messages, deliver the due ones, then apply the verdicts. */
@@ -320,12 +320,12 @@ export class FunctionQueueConsumers {
 		const ids = due.map((item) => item.delivered.id);
 		let outcomes: Map<string, MessageOutcome>;
 		try {
-			const response = await this.doFetch('http://localhost/__skiff/queue', {
+			const response = await this.doFetch('http://localhost/__yoal/queue', {
 				method: 'POST',
 				unix: `${this.socketDir}/${workload.id}.sock`,
 				headers: {
 					[FUNCTION_INTERNAL_HEADER]: FUNCTION_INTERNAL_VALUE,
-					'x-skiff-queue': consumer.queue,
+					'x-yoal-queue': consumer.queue,
 					'content-type': 'application/json',
 				},
 				body: JSON.stringify(due.map((item) => item.delivered)),

@@ -10,7 +10,7 @@ import type {
 	PanelOptions,
 	PanelQuery,
 	VizType
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import ChartColumnIcon from '@lucide/svelte/icons/chart-column';
 import ChartBarIcon from '@lucide/svelte/icons/chart-bar';
 import ChartLineIcon from '@lucide/svelte/icons/chart-line';

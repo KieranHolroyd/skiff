@@ -23,7 +23,7 @@ import {
 	type EnsureClickHouseOptions,
 } from './clickhouse.ts';
 
-const root = mkdtempSync(join(tmpdir(), 'skiff-clickhouse-'));
+const root = mkdtempSync(join(tmpdir(), 'yoal-clickhouse-'));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 /** `Key=value` lines of one section, comments and blanks dropped. */
@@ -83,7 +83,7 @@ describe('config.xml', () => {
 		const custom = clickhouseConfigXml({ dataDir: '/srv/ch' });
 		for (const name of ['path', 'tmp_path', 'user_files_path', 'format_schema_path', 'user_scripts_path', 'user_defined_path'])
 			expect(tag(custom, name)!.startsWith('/srv/ch/')).toBe(true);
-		expect(tag(config, 'path')).toBe('/var/lib/skiff/clickhouse/');
+		expect(tag(config, 'path')).toBe('/var/lib/yoal/clickhouse/');
 	});
 
 	test('small footprint: memory ceiling, small caches and pools', () => {
@@ -136,13 +136,13 @@ describe('users.xml', () => {
 		expect(users.match(/<access_management>0<\/access_management>/g)).toHaveLength(2);
 	});
 
-	test('writer owns the skiff database; reader may only SELECT it', () => {
-		const writer = /<skiff>([\s\S]*?)<\/skiff>/.exec(users)![1]!;
-		const reader = /<skiff_reader>([\s\S]*?)<\/skiff_reader>/.exec(users)![1]!;
-		expect(writer).toContain('GRANT ALL ON skiff.*');
+	test('writer owns the yoal database; reader may only SELECT it', () => {
+		const writer = /<yoal>([\s\S]*?)<\/yoal>/.exec(users)![1]!;
+		const reader = /<yoal_reader>([\s\S]*?)<\/yoal_reader>/.exec(users)![1]!;
+		expect(writer).toContain('GRANT ALL ON yoal.*');
 		expect(writer).not.toContain('ON *.*</query>\n\t\t\t\t<query>GRANT ALL');
 		expect(writer).toContain('<profile>default</profile>');
-		expect(reader).toContain('GRANT SELECT ON skiff.*');
+		expect(reader).toContain('GRANT SELECT ON yoal.*');
 		expect(reader.match(/GRANT/g)).toHaveLength(1);
 		expect(reader).toContain('<profile>readonly</profile>');
 	});
@@ -169,21 +169,21 @@ describe('users.xml', () => {
 	test('rejects empty passwords and odd identifiers', () => {
 		expect(() => clickhouseUsersXml({ writerPassword: '', readerPassword: 'x' })).toThrow();
 		expect(() => clickhouseUsersXml({ writerPassword: 'x', readerPassword: 'y', database: 'a-b' })).toThrow();
-		expect(() => clickhouseUsersXml({ writerPassword: 'x', readerPassword: 'y', readerUser: 'skiff' })).toThrow();
+		expect(() => clickhouseUsersXml({ writerPassword: 'x', readerPassword: 'y', readerUser: 'yoal' })).toThrow();
 	});
 });
 
-describe('skiff-clickhouse unit', () => {
+describe('yoal-clickhouse unit', () => {
 	const unit = clickhouseUnit();
 	const service = directives(unit, 'Service');
 
 	test('runs the versioned binary as its own user with config as credentials', () => {
-		expect(service.get('ExecStart')).toEqual([`/opt/skiff/clickhouse/${CLICKHOUSE_VERSION}/clickhouse server --config-file=%d/config.xml`]);
-		expect(service.get('User')).toEqual(['skiff-clickhouse']);
-		expect(service.get('Group')).toEqual(['skiff-clickhouse']);
+		expect(service.get('ExecStart')).toEqual([`/opt/yoal/clickhouse/${CLICKHOUSE_VERSION}/clickhouse server --config-file=%d/config.xml`]);
+		expect(service.get('User')).toEqual(['yoal-clickhouse']);
+		expect(service.get('Group')).toEqual(['yoal-clickhouse']);
 		expect(service.get('LoadCredential')).toEqual([
-			'config.xml:/etc/skiff/clickhouse/config.xml',
-			'users.xml:/etc/skiff/clickhouse/users.xml',
+			'config.xml:/etc/yoal/clickhouse/config.xml',
+			'users.xml:/etc/yoal/clickhouse/users.xml',
 		]);
 		expect(service.has('EnvironmentFile')).toBe(false);
 		expect(service.get('Type')).toEqual(['simple']);
@@ -193,7 +193,7 @@ describe('skiff-clickhouse unit', () => {
 	test('limits and sandbox match the sibling units', () => {
 		expect(service.get('MemoryMax')).toEqual(['1G']);
 		expect(service.get('LimitNOFILE')).toEqual(['262144']);
-		const litestream = directives(readFileSync(join(import.meta.dir, 'skiff-litestream.service'), 'utf8'), 'Service');
+		const litestream = directives(readFileSync(join(import.meta.dir, 'yoal-litestream.service'), 'utf8'), 'Service');
 		for (const key of [
 			'NoNewPrivileges',
 			'PrivateTmp',
@@ -210,19 +210,19 @@ describe('skiff-clickhouse unit', () => {
 			'AmbientCapabilities',
 		])
 			expect([key, service.get(key)]).toEqual([key, litestream.get(key)]);
-		expect(service.get('ReadWritePaths')).toEqual(['/var/lib/skiff/clickhouse']);
+		expect(service.get('ReadWritePaths')).toEqual(['/var/lib/yoal/clickhouse']);
 	});
 
 	test('alerts on failure only when asked', () => {
 		expect(directives(unit, 'Unit').has('OnFailure')).toBe(false);
-		expect(directives(clickhouseUnit({ alert: true }), 'Unit').get('OnFailure')).toEqual(['skiff-alert@%n.service']);
+		expect(directives(clickhouseUnit({ alert: true }), 'Unit').get('OnFailure')).toEqual(['yoal-alert@%n.service']);
 	});
 });
 
 describe('ensureClickHouseEnv', () => {
 	test('appends only the missing keys and never overwrites', () => {
 		const file = join(root, 'env-a');
-		writeFileSync(file, '# keep me\nNODE_ENV=production\nSKIFF_CLICKHOUSE_PASSWORD=existing');
+		writeFileSync(file, '# keep me\nNODE_ENV=production\nYOAL_CLICKHOUSE_PASSWORD=existing');
 		let n = 0;
 		const { env, added } = ensureClickHouseEnv(file, { generate: () => `gen${++n}` });
 		expect(env.password).toBe('existing');
@@ -236,8 +236,8 @@ describe('ensureClickHouseEnv', () => {
 			CLICKHOUSE_ENV.readerPassword,
 		]);
 		const text = readFileSync(file, 'utf8');
-		expect(text.startsWith('# keep me\nNODE_ENV=production\nSKIFF_CLICKHOUSE_PASSWORD=existing\n')).toBe(true);
-		expect(text).toContain('SKIFF_CLICKHOUSE_READER_PASSWORD=gen1\n');
+		expect(text.startsWith('# keep me\nNODE_ENV=production\nYOAL_CLICKHOUSE_PASSWORD=existing\n')).toBe(true);
+		expect(text).toContain('YOAL_CLICKHOUSE_READER_PASSWORD=gen1\n');
 		expect(ensureClickHouseEnv(file).added).toEqual([]);
 		expect(readFileSync(file, 'utf8')).toBe(text);
 	});
@@ -281,7 +281,7 @@ function harness(name: string, overrides: Partial<EnsureClickHouseOptions> = {})
 		installRoot: join(dir, 'opt'),
 		configDir: join(dir, 'etc', 'clickhouse'),
 		dataDir: join(dir, 'var', 'clickhouse'),
-		envFile: join(dir, 'etc', 'skiff.env'),
+		envFile: join(dir, 'etc', 'yoal.env'),
 		systemdDir: join(dir, 'systemd'),
 		platform: 'linux',
 		arch: 'arm64',
@@ -327,8 +327,8 @@ describe('ensureClickHouse', () => {
 		expect(Bun.spawnSync({ cmd: ['ls', '-A', join(h.dir, 'opt')] }).stdout.toString().trim()).toBe(CLICKHOUSE_VERSION);
 
 		expect(result.envAdded).toHaveLength(6);
-		const env = readFileSync(join(h.dir, 'etc', 'skiff.env'), 'utf8');
-		const password = /SKIFF_CLICKHOUSE_PASSWORD=(.+)/.exec(env)![1]!;
+		const env = readFileSync(join(h.dir, 'etc', 'yoal.env'), 'utf8');
+		const password = /YOAL_CLICKHOUSE_PASSWORD=(.+)/.exec(env)![1]!;
 		const users = readFileSync(join(h.dir, 'etc', 'clickhouse', 'users.xml'), 'utf8');
 		expect(users).toContain(sha256Hex(password));
 		expect(statSync(join(h.dir, 'etc', 'clickhouse', 'users.xml')).mode & 0o777).toBe(0o640);
@@ -338,10 +338,10 @@ describe('ensureClickHouse', () => {
 
 		const privileged = h.calls.filter((call) => !call.startsWith('tar '));
 		expect(privileged).toContain(
-			'useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin skiff-clickhouse',
+			'useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin yoal-clickhouse',
 		);
-		expect(privileged).toContain(`chown skiff-clickhouse:skiff-clickhouse ${join(h.dir, 'var', 'clickhouse')}`);
-		expect(privileged).toContain(`chown root:skiff-clickhouse ${join(h.dir, 'etc', 'clickhouse', 'users.xml')}`);
+		expect(privileged).toContain(`chown yoal-clickhouse:yoal-clickhouse ${join(h.dir, 'var', 'clickhouse')}`);
+		expect(privileged).toContain(`chown root:yoal-clickhouse ${join(h.dir, 'etc', 'clickhouse', 'users.xml')}`);
 		expect(privileged.slice(-3)).toEqual(['systemctl daemon-reload', `systemctl enable ${CLICKHOUSE_UNIT}`, `systemctl restart ${CLICKHOUSE_UNIT}`]);
 	});
 
@@ -358,11 +358,11 @@ describe('ensureClickHouse', () => {
 		expect(readFileSync(join(h.dir, 'etc', 'clickhouse', 'users.xml'), 'utf8')).toBe(before);
 	});
 
-	test('a changed password in skiff.env regenerates users.xml and restarts', async () => {
+	test('a changed password in yoal.env regenerates users.xml and restarts', async () => {
 		const h = harness('rotate');
 		await ensureClickHouse(h.options);
-		const envFile = join(h.dir, 'etc', 'skiff.env');
-		writeFileSync(envFile, readFileSync(envFile, 'utf8').replace(/SKIFF_CLICKHOUSE_READER_PASSWORD=.*/, 'SKIFF_CLICKHOUSE_READER_PASSWORD=rotated'));
+		const envFile = join(h.dir, 'etc', 'yoal.env');
+		writeFileSync(envFile, readFileSync(envFile, 'utf8').replace(/YOAL_CLICKHOUSE_READER_PASSWORD=.*/, 'YOAL_CLICKHOUSE_READER_PASSWORD=rotated'));
 		h.calls.length = 0;
 		const result = await ensureClickHouse(h.options);
 		expect(result.changed).toBe(true);
@@ -439,13 +439,13 @@ describe('ensureClickHouse', () => {
 		const h = harness('dry', { dryRun: true });
 		const result = await ensureClickHouse(h.options);
 		expect(result.ok).toBe(true);
-		expect(existsSync(join(h.dir, 'etc', 'skiff.env'))).toBe(false);
+		expect(existsSync(join(h.dir, 'etc', 'yoal.env'))).toBe(false);
 		expect(h.calls).toEqual([]);
 		expect(h.downloads).toEqual([]);
 	});
 });
 
-describe('memory ceiling (SKIFF_CLICKHOUSE_MEMORY_MB)', () => {
+describe('memory ceiling (YOAL_CLICKHOUSE_MEMORY_MB)', () => {
 	const MIB = 1024 * 1024;
 
 	test('the default budget renders exactly the historical limits', () => {
@@ -470,14 +470,14 @@ describe('memory ceiling (SKIFF_CLICKHOUSE_MEMORY_MB)', () => {
 		expect(parseClickHouseMemoryMb(undefined)).toEqual({ mb: 768 });
 		expect(parseClickHouseMemoryMb(' 1024 ')).toEqual({ mb: 1024 });
 		for (const bad of ['128', '1e3', '1024MB', '-1', '999999'])
-			expect(parseClickHouseMemoryMb(bad)).toMatchObject({ mb: 768, warning: expect.stringContaining('SKIFF_CLICKHOUSE_MEMORY_MB') });
+			expect(parseClickHouseMemoryMb(bad)).toMatchObject({ mb: 768, warning: expect.stringContaining('YOAL_CLICKHOUSE_MEMORY_MB') });
 	});
 
 	test('ensureClickHouse applies the env value and restarts only when it changes', async () => {
 		const h = harness('memory');
 		const envFile = h.options.envFile!;
 		expect((await ensureClickHouse(h.options)).changed).toBe(true);
-		writeFileSync(envFile, `${readFileSync(envFile, 'utf8')}SKIFF_CLICKHOUSE_MEMORY_MB=1536\n`);
+		writeFileSync(envFile, `${readFileSync(envFile, 'utf8')}YOAL_CLICKHOUSE_MEMORY_MB=1536\n`);
 		h.calls.length = 0;
 		expect(await ensureClickHouse(h.options)).toMatchObject({ ok: true, changed: true });
 		expect(h.calls).toContain(`systemctl restart ${CLICKHOUSE_UNIT}`);

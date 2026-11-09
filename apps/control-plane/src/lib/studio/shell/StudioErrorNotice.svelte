@@ -1,6 +1,6 @@
 <script lang="ts">
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { getStudioShell } from './context.js';
 	import { describeStudioError } from './errors.js';

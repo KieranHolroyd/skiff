@@ -7,7 +7,7 @@ import {
 	KEY_ROTATION_OVERLAP_MS,
 	rotatesAutomatically,
 	signingKeyRotationDecision,
-} from '@skiff/core';
+} from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import { route } from '#lib/server/api.js';
 import { requirePrincipal } from '#lib/server/principal.js';

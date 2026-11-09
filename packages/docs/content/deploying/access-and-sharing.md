@@ -35,7 +35,7 @@ With the REST API, call `POST /api/v1/projects/{slug}/access`. The `scope` field
 
 ```sh
 curl -X POST https://control.example.com/api/v1/projects/my-site/access \
-  -H "Authorization: Bearer skif_…" \
+  -H "Authorization: Bearer yoal_…" \
   -H "Content-Type: application/json" \
   -d '{"scope":"previews","mode":"platform"}'
 ```
@@ -57,12 +57,12 @@ sequenceDiagram
   participant A as Node agent
   participant CP as Control plane
   B->>C: GET my-site.example.com/pricing
-  C->>A: forward_auth /_skiff/verify
+  C->>A: forward_auth /_yoal/verify
   A-->>C: 302 to login (no valid cookie)
   C-->>B: 302 to login with return URL
-  B->>CP: GET /_skiff/site-login
+  B->>CP: GET /_yoal/site-login
   Note over B,CP: Password form, platform sign-in or share link
-  CP-->>B: 302 to /_skiff/callback?token (60 s, one use)
+  CP-->>B: 302 to /_yoal/callback?token (60 s, one use)
 ```
 
 The callback then sets the host-only session cookie, and later requests are checked against it:
@@ -72,18 +72,18 @@ sequenceDiagram
   participant B as Browser
   participant C as "Caddy (edge)"
   participant A as Node agent
-  B->>C: GET /_skiff/callback?token
+  B->>C: GET /_yoal/callback?token
   C->>A: forward_auth (callback)
   Note over A: Check the HMAC with the project key, the host, the expiry and that the token is unused
-  A-->>C: 302 to / with __skiff_s cookie
+  A-->>C: 302 to / with __yoal_s cookie
   C-->>B: 302 to / and cookie
-  B->>C: GET / with __skiff_s
-  C->>A: forward_auth /_skiff/verify
+  B->>C: GET / with __yoal_s
+  C->>A: forward_auth /_yoal/verify
   A-->>C: 200 (cookie valid)
   C-->>B: Site content
 ```
 
-- **Session cookie.** A visitor's session is a cookie called `__skiff_s` (the name is configurable). Its value is an expiry time and an HMAC over the host and that expiry. The HMAC key is derived per project from the platform's site cookie secret, so a cookie for one project does not verify for another. Signing out everyone replaces the project's key. The cookie is host-only, `HttpOnly`, `Secure` and `SameSite=Lax`, so it is never sent to any other host.
+- **Session cookie.** A visitor's session is a cookie called `__yoal_s` (the name is configurable). Its value is an expiry time and an HMAC over the host and that expiry. The HMAC key is derived per project from the platform's site cookie secret, so a cookie for one project does not verify for another. Signing out everyone replaces the project's key. The cookie is host-only, `HttpOnly`, `Secure` and `SameSite=Lax`, so it is never sent to any other host.
 - **Login.** If the cookie is missing or expired, the visitor is redirected to the control plane. The control plane checks their platform session, the password, or the share link, then redirects back to the site with a one-time token. That token is valid for 60 seconds and can be used only once. The agent exchanges it for the host-only cookie.
 - **Separation.** Platform session cookies stay on the control plane's domain. Content hosts never receive them.
 - **Revocation.** Revoked links and sessions, and the project's current key, are part of the state each node agent pulls from the control plane. The agent refuses a revoked session cookie, or any cookie signed with a replaced key, from that point on. This usually takes a few seconds.
@@ -103,7 +103,7 @@ In the dashboard, open **Projects → my-site** and choose **Create share link**
 - **Max visits**: an optional cap on redemptions.
 - **Note**: an optional internal note of up to 500 characters, shown only to your organisation.
 
-The link is shown once, straight after creation. Copy it then, because Skiff keeps only a hash of the token and cannot show it again.
+The link is shown once, straight after creation. Copy it then, because Yoal keeps only a hash of the token and cannot show it again.
 
 The REST API and MCP accept more options than the dashboard. These are the fields for `POST /api/v1/projects/{slug}/shares`:
 
@@ -114,24 +114,24 @@ The REST API and MCP accept more options than the dashboard. These are the field
 | `maxRedemptions` | positive integer | Unlimited | Total number of visits that start a session. Returning visitors use up this count too. |
 | `maxVisitors` | positive integer | Unlimited | Number of distinct visitors. A visitor is identified by IP address and browser user agent. |
 | `sessionTtlSeconds` | integer, 1 to 2,592,000 | 3600 | How long each session started by the link lasts. The maximum is 30 days. |
-| `allowedEmails` | up to 100 addresses | Anyone | Visitors must be signed in to Skiff with one of these addresses. |
+| `allowedEmails` | up to 100 addresses | Anyone | Visitors must be signed in to Yoal with one of these addresses. |
 | `note` | string, up to 500 characters | None | An internal note. |
 
 ```sh
 curl -X POST https://control.example.com/api/v1/projects/my-site/shares \
-  -H "Authorization: Bearer skif_…" \
+  -H "Authorization: Bearer yoal_…" \
   -H "Content-Type: application/json" \
   -d '{"expiresAt":"2026-12-01T09:00:00Z","maxRedemptions":20,"sessionTtlSeconds":7200,"allowedEmails":["alex@example.com"],"note":"Design review"}'
 ```
 
-The response is `201 Created`, and its `url` field holds the link in the form `https://my-site.example.com/?_skiff_share=…`. The clear-text token appears only in this response.
+The response is `201 Created`, and its `url` field holds the link in the form `https://my-site.example.com/?_yoal_share=…`. The clear-text token appears only in this response.
 
 > [!NOTE]
 > Expiry stops new visits, but it does not shorten sessions that have already started. A session lasts for its full `sessionTtlSeconds`, even if the link expires part-way through. Revoking the link ends those sessions at once.
 
 ### Use a link
 
-When a visitor opens the link, Skiff checks it and starts a session. The visitor then goes to the site and stays signed in for `sessionTtlSeconds`. A visit counts once against `maxRedemptions`, and a new distinct visitor counts once against `maxVisitors`. Visitors whose link is revoked, expired or used up see a **Link unavailable** page that says why. Links to public sites are not needed, because the site is open already.
+When a visitor opens the link, Yoal checks it and starts a session. The visitor then goes to the site and stays signed in for `sessionTtlSeconds`. A visit counts once against `maxRedemptions`, and a new distinct visitor counts once against `maxVisitors`. Visitors whose link is revoked, expired or used up see a **Link unavailable** page that says why. Links to public sites are not needed, because the site is open already.
 
 ### List and revoke links
 
@@ -169,7 +169,7 @@ Each listed session has `id` (`red_…`), `kind` (always `share`), `shareLinkId`
 
 ```sh
 curl -X DELETE https://control.example.com/api/v1/projects/my-site/sessions \
-  -H "Authorization: Bearer skif_…"
+  -H "Authorization: Bearer yoal_…"
 ```
 
 > [!NOTE]
@@ -200,4 +200,4 @@ The share link permissions come from your role. The standard roles grant them as
 
 An API key or MCP token can never do more than its user's role allows, even if it was granted a broader scope. See [organisations and roles](/accounts/organizations-and-roles) and [API keys and tokens](/accounts/api-keys-and-tokens).
 
-Visitor cookies are signed with a key derived from the platform's site cookie secret, `SKIFF_SITE_COOKIE_SECRET`, which falls back to `BETTER_AUTH_SECRET` when it is not set. Set it explicitly on a self-hosted install. See [configuration](/self-hosting/configuration).
+Visitor cookies are signed with a key derived from the platform's site cookie secret, `YOAL_SITE_COOKIE_SECRET`, which falls back to `BETTER_AUTH_SECRET` when it is not set. Set it explicitly on a self-hosted install. See [configuration](/self-hosting/configuration).

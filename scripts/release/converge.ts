@@ -36,23 +36,23 @@ export interface HostPaths {
 	varDir: string;
 	runDir: string;
 	systemdDir: string;
-	/** The host's shared Bun (`/opt/skiff/runtime/bin/bun`), which host commands run on. */
+	/** The host's shared Bun (`/opt/yoal/runtime/bin/bun`), which host commands run on. */
 	bunBin: string;
 	updaterDir: string;
 	updateRequestFile: string;
 }
 
 export function hostPathsFromEnv(env: Record<string, string | undefined> = process.env): HostPaths {
-	const optDir = env.SKIFF_OPT_DIR ?? '/opt/skiff';
+	const optDir = env.YOAL_OPT_DIR ?? '/opt/yoal';
 	return {
 		optDir,
-		etcDir: env.SKIFF_ETC_DIR ?? '/etc/skiff',
-		varDir: env.SKIFF_VAR_DIR ?? '/var/lib/skiff',
-		runDir: env.SKIFF_RUN_DIR ?? '/run/skiff',
-		systemdDir: env.SKIFF_SYSTEMD_DIR ?? '/etc/systemd/system',
-		bunBin: env.SKIFF_BUN_BIN ?? join(optDir, 'runtime', 'bin', 'bun'),
-		updaterDir: env.SKIFF_UPDATER_DIR ?? '/usr/local/lib/skiff-updater',
-		updateRequestFile: env.SKIFF_UPDATE_REQUEST_FILE ?? SELF_UPDATE_DEFAULTS.requestFile,
+		etcDir: env.YOAL_ETC_DIR ?? '/etc/yoal',
+		varDir: env.YOAL_VAR_DIR ?? '/var/lib/yoal',
+		runDir: env.YOAL_RUN_DIR ?? '/run/yoal',
+		systemdDir: env.YOAL_SYSTEMD_DIR ?? '/etc/systemd/system',
+		bunBin: env.YOAL_BUN_BIN ?? join(optDir, 'runtime', 'bin', 'bun'),
+		updaterDir: env.YOAL_UPDATER_DIR ?? '/usr/local/lib/yoal-updater',
+		updateRequestFile: env.YOAL_UPDATE_REQUEST_FILE ?? SELF_UPDATE_DEFAULTS.requestFile,
 	};
 }
 
@@ -92,7 +92,7 @@ export interface ConvergeReport {
 }
 
 export interface ConvergeInput {
-	/** The release the host should match (`/opt/skiff/releases/<name>`). */
+	/** The release the host should match (`/opt/yoal/releases/<name>`). */
 	release: string;
 	paths?: HostPaths;
 	/**
@@ -105,7 +105,7 @@ export interface ConvergeInput {
 }
 
 /** The backup units the installer adds on R2 hosts; refreshed only where already installed. */
-export const BACKUP_UNITS = ['skiff-litestream.service', 'skiff-restore-drill.service', 'skiff-restore-drill.timer', 'skiff-alert@.service'];
+export const BACKUP_UNITS = ['yoal-litestream.service', 'yoal-restore-drill.service', 'yoal-restore-drill.timer', 'yoal-alert@.service'];
 
 async function step(report: ConvergeReport, name: string, fn: () => boolean | void | Promise<boolean | void>): Promise<void> {
 	try {
@@ -116,21 +116,21 @@ async function step(report: ConvergeReport, name: string, fn: () => boolean | vo
 }
 
 /**
- * Before the release boots anywhere (canary, standby): additive settings it needs in skiff.env.
+ * Before the release boots anywhere (canary, standby): additive settings it needs in yoal.env.
  * Only things the running release tolerates belong here, since it keeps serving with them.
  */
 export async function prepareHost(input: Omit<ConvergeInput, 'mode'>): Promise<ConvergeReport> {
 	const paths = input.paths ?? hostPathsFromEnv();
 	const runner = input.runner ?? systemRunner();
 	const report: ConvergeReport = { changed: [], warnings: [] };
-	const envFile = join(paths.etcDir, 'skiff.env');
+	const envFile = join(paths.etcDir, 'yoal.env');
 	// Web Push alerts (D108). Never replaces a valid pair: that would orphan every subscription.
 	await step(report, 'vapid-keys', () => {
 		if (!existsSync(envFile)) return false;
 		const env = readEnvFile(envFile);
 		if (!ensureVapidKeys(env)) return false;
 		writeEnvFile(envFile, env);
-		runner.run(['chown', 'root:skiff', envFile]);
+		runner.run(['chown', 'root:yoal', envFile]);
 		runner.run(['chmod', '0640', envFile]);
 		input.log?.('generated the Web Push (VAPID) key pair');
 		return true;
@@ -149,7 +149,7 @@ export async function convergeHost(input: ConvergeInput): Promise<ConvergeReport
 	const { release } = input;
 	const mode = input.mode ?? 'update';
 	const report: ConvergeReport = { changed: [], warnings: [] };
-	const envFile = join(paths.etcDir, 'skiff.env');
+	const envFile = join(paths.etcDir, 'yoal.env');
 	const agentEnvFile = join(paths.etcDir, 'agent.env');
 	const tolerant = (cmd: string[]) => {
 		try {
@@ -179,10 +179,10 @@ export async function convergeHost(input: ConvergeInput): Promise<ConvergeReport
 		);
 	}
 
-	// Dashboard updates: the path unit, its oneshot service and /usr/local/sbin/skiff-update-self.
+	// Dashboard updates: the path unit, its oneshot service and /usr/local/sbin/yoal-update-self.
 	await step(report, 'update-trigger', () => {
 		let changed = false;
-		const command = '/usr/local/sbin/skiff-update-self';
+		const command = '/usr/local/sbin/yoal-update-self';
 		const script = updateCommandScript({ optDir: paths.optDir, bunBin: paths.bunBin, updaterDir: paths.updaterDir });
 		if (!existsSync(command) || readFileSync(command, 'utf8') !== script) {
 			mkdirSync(dirname(command), { recursive: true });
@@ -197,7 +197,7 @@ export async function convergeHost(input: ConvergeInput): Promise<ConvergeReport
 			changed = true;
 		}
 		mkdirSync(dirname(paths.updateRequestFile), { recursive: true, mode: 0o750 });
-		tolerant(['chown', 'skiff:skiff', dirname(paths.updateRequestFile)]);
+		tolerant(['chown', 'yoal:yoal', dirname(paths.updateRequestFile)]);
 		if (changed) {
 			runner.run(['systemctl', 'daemon-reload']);
 			tolerant(['systemctl', 'enable', '--now', TRIGGER_PATH_UNIT]);
@@ -252,7 +252,7 @@ export async function convergeHost(input: ConvergeInput): Promise<ConvergeReport
 			}),
 		);
 		await step(report, 'agent-commands', () => void linkAgentCommands(release));
-		// PartOf=skiff-agent.service: it restarts with the agent, so never start it here.
+		// PartOf=yoal-agent.service: it restarts with the agent, so never start it here.
 		await step(report, 'builder', () =>
 			ensureBuilder({
 				systemdDir: paths.systemdDir,
@@ -309,10 +309,10 @@ export async function convergeHost(input: ConvergeInput): Promise<ConvergeReport
 		const nodeModule = join(release, 'repo', 'scripts', 'install', 'node.ts');
 		if (existsSync(nodeModule)) {
 			await step(report, 'node', async () => {
-				const { ensureNode, nodeArch, hasSkiffNode, NODE_BIN_DIR, NODE_OPT_OUT_MARKER, NODE_PINNED_VERSION } =
+				const { ensureNode, nodeArch, hasYoalNode, NODE_BIN_DIR, NODE_OPT_OUT_MARKER, NODE_PINNED_VERSION } =
 					await import(nodeModule);
 				if (existsSync(NODE_OPT_OUT_MARKER)) return false;
-				if (!hasSkiffNode() && existsSync(join(NODE_BIN_DIR, 'node'))) return false;
+				if (!hasYoalNode() && existsSync(join(NODE_BIN_DIR, 'node'))) return false;
 				const arch = nodeArch(process.arch);
 				if (!arch) throw new Error(`no Node.js build for ${process.arch}`);
 				const result = await ensureNode({ arch, log });
@@ -321,7 +321,7 @@ export async function convergeHost(input: ConvergeInput): Promise<ConvergeReport
 			});
 		}
 		// PHP process apps run on a pinned FrankenPHP (D121). It is opt-in, so only a node that
-		// already has Skiff's install (the PATH link into /usr/lib/skiff/frankenphp) follows a pin
+		// already has Yoal's install (the PATH link into /usr/lib/yoal/frankenphp) follows a pin
 		// bump; nothing is downloaded on a node that never asked for PHP.
 		const frankenphpModule = join(release, 'repo', 'scripts', 'install', 'frankenphp.ts');
 		if (existsSync(frankenphpModule)) {
@@ -358,7 +358,7 @@ export async function convergeHost(input: ConvergeInput): Promise<ConvergeReport
 			}
 			if (!changed.length) return false;
 			runner.run(['systemctl', 'daemon-reload']);
-			if (changed.includes('skiff-litestream.service')) tolerant(['systemctl', 'try-restart', 'skiff-litestream.service']);
+			if (changed.includes('yoal-litestream.service')) tolerant(['systemctl', 'try-restart', 'yoal-litestream.service']);
 			log(`refreshed ${changed.join(', ')}`);
 			return true;
 		});

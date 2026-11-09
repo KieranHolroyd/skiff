@@ -25,7 +25,7 @@ export const GET: RequestHandler = (event) =>
 		const headers = new Headers({
 			...SOURCE_SECURITY_HEADERS,
 			'content-length': String(data.byteLength),
-			'x-skiff-sha256': file.sha256,
+			'x-yoal-sha256': file.sha256,
 			// Releases are immutable, but the response is user-scoped: never let a shared proxy cache it.
 			'cache-control': 'private, max-age=3600'
 		});

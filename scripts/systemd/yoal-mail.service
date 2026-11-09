@@ -1,0 +1,72 @@
+[Unit]
+Description=Yoal mail (MTA)
+Documentation=https://github.com/KieranHolroyd/yoal/blob/main/docs/EMAIL.md
+After=network-online.target
+Wants=network-online.target
+# Started only by the helper's POST /v1/mail/start verb on the mail node. An agent update runs
+# `systemctl try-restart yoal-mail.service` after restarting the agent, so a running MTA moves to the
+# new binary and a stopped one stays stopped. The spool survives restarts.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=yoal
+Group=yoal
+# /run/yoal is setgid caddy (2770), so creating mail.sock there needs the group. The
+# socket comes out 0660 yoal:caddy; the agent (also yoal) is the only client.
+SupplementaryGroups=caddy
+UMask=0007
+WorkingDirectory=/opt/yoal/current/agent
+
+# No EnvironmentFile with secrets: yoal-mail never talks to the control plane and holds no node
+# token. DKIM keys and credential hashes arrive from the agent over the socket, into memory only.
+Environment=YOAL_MAIL_SOCKET=/run/yoal/mail.sock
+Environment=YOAL_MAIL_DATA_DIR=/var/lib/yoal/mail
+Environment=YOAL_MAIL_TLS_DIR=/run/yoal/mail-tls
+# Optional operator overrides (listen address, ports, YOAL_MAIL_IPV6=1).
+EnvironmentFile=-/etc/yoal/mail.env
+
+ExecStart=/opt/yoal/current/agent/yoal-agent mail
+
+Restart=always
+RestartSec=2
+# Long enough for in-flight SMTP transactions to finish before SIGKILL.
+TimeoutStopSec=30
+KillSignal=SIGTERM
+LimitNOFILE=16384
+TasksMax=256
+# Its own cgroup, separate from the agent's MemoryMax: an OOM kill here never picks the agent.
+MemoryMax=512M
+
+# The spool. StateDirectory creates it owned by User= and keeps it writable under ProtectSystem.
+StateDirectory=yoal/mail
+StateDirectoryMode=0700
+
+# The only privilege: binding ports below 1024. Nothing else.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service io_uring_setup io_uring_enter io_uring_register
+SystemCallErrorNumber=EPERM
+
+ReadWritePaths=/run/yoal
+
+# Deliberately no [Install] section: the unit is static, so `systemctl enable` refuses it and
+# nothing starts it at boot except the mail node's agent.

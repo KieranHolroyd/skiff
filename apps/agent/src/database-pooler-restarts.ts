@@ -1,4 +1,4 @@
-import type { DesiredState } from '@skiff/contracts';
+import type { DesiredState } from '@yoal/contracts';
 import type { HelperApi } from './helper-client.ts';
 
 /**

@@ -1,4 +1,4 @@
-import { ConflictError, CoreError } from '@skiff/core';
+import { ConflictError, CoreError } from '@yoal/core';
 import { reportRequestError } from '#lib/server/server-errors.js';
 
 export interface FormFailure {
@@ -12,7 +12,7 @@ export interface FormFailure {
 }
 
 /**
- * `@skiff/contracts`' `StepUpRequiredError` is not a (core) `CoreError`; recognise it by name so a
+ * `@yoal/contracts`' `StepUpRequiredError` is not a (core) `CoreError`; recognise it by name so a
  * form action answers 403 with the same `step_up_required` payload the REST API sends.
  */
 function stepUpFailure(error: unknown): FormFailure | undefined {

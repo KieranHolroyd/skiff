@@ -1,8 +1,8 @@
-import type { PipelineJobClaim } from '@skiff/contracts';
+import type { PipelineJobClaim } from '@yoal/contracts';
 import { truthyInput } from './context.ts';
 
 /**
- * Pure pieces of `skiff/build-image` (docs/PIPELINES.md §4.3, W6, W10, W11): input parsing, the
+ * Pure pieces of `yoal/build-image` (docs/PIPELINES.md §4.3, W6, W10, W11): input parsing, the
  * BuildKit cache scope and the `buildctl build` argv. The action in `actions.ts` does the I/O.
  */
 
@@ -14,8 +14,8 @@ export class ImageInputError extends Error {
 }
 
 /** Where `buildctl` and the BuildKit socket appear when the runner starts the sidecar (W6). */
-export const BUILDKIT_BIN_DIR = '/skiff/bin';
-export const BUILDKIT_DEFAULT_HOST = 'unix:///skiff/buildkit/buildkitd.sock';
+export const BUILDKIT_BIN_DIR = '/yoal/bin';
+export const BUILDKIT_DEFAULT_HOST = 'unix:///yoal/buildkit/buildkitd.sock';
 
 export interface BuildSecret {
 	id: string;
@@ -121,11 +121,11 @@ export function sanitizeCacheScope(scope: string): string {
 }
 
 /**
- * W10: never shared between trusted and untrusted runs. `SKIFF_CACHE_SCOPE`, else the claim's
+ * W10: never shared between trusted and untrusted runs. `YOAL_CACHE_SCOPE`, else the claim's
  * `buildkitCacheScope`, else `trusted` / `untrusted:<ref>`.
  */
 export function buildkitCacheScope(claim: Pick<PipelineJobClaim, 'trust' | 'checkout' | 'buildkitCacheScope'>, env: Record<string, string | undefined>): string {
-	const raw = env.SKIFF_CACHE_SCOPE?.trim() || claim.buildkitCacheScope?.trim() || (claim.trust === 'trusted' ? 'trusted' : `untrusted:${claim.checkout.ref}`);
+	const raw = env.YOAL_CACHE_SCOPE?.trim() || claim.buildkitCacheScope?.trim() || (claim.trust === 'trusted' ? 'trusted' : `untrusted:${claim.checkout.ref}`);
 	// An untrusted run can never name its way into the trusted scope.
 	const scope = claim.trust === 'untrusted' && !raw.startsWith('untrusted') ? `untrusted:${raw}` : raw;
 	return sanitizeCacheScope(scope);

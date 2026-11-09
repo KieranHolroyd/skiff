@@ -1,9 +1,9 @@
 /**
  * Runtime feature flags (docs/OPS.md §2.5).
  *
- * Every flag is read once from the environment as `SKIFF_FEATURE_<NAME>` and resolved here. The
+ * Every flag is read once from the environment as `YOAL_FEATURE_<NAME>` and resolved here. The
  * registry is the single source of truth: a flag that is not in it cannot be switched on.
- * Every flag defaults on and acts as a kill switch: set `SKIFF_FEATURE_<NAME>=0` to turn a feature
+ * Every flag defaults on and acts as a kill switch: set `YOAL_FEATURE_<NAME>=0` to turn a feature
  * off. Turning one off must be reversible without a migration.
  */
 
@@ -20,7 +20,7 @@ export type FeatureArea =
 	| 'workloads';
 
 export interface FeatureFlagDefinition {
-	/** `SKIFF_FEATURE_<name>`. */
+	/** `YOAL_FEATURE_<name>`. */
 	readonly name: string;
 	readonly default: boolean;
 	readonly area: FeatureArea;
@@ -28,12 +28,12 @@ export interface FeatureFlagDefinition {
 }
 
 /** Prefix for the environment variable that controls a flag. */
-export const FEATURE_ENV_PREFIX = 'SKIFF_FEATURE_';
+export const FEATURE_ENV_PREFIX = 'YOAL_FEATURE_';
 
 export const FEATURE_FLAGS = {
 	FUNCTIONS: {
 		name: 'FUNCTIONS',
-		// Shipped: Functions is enabled by default (D110). Set SKIFF_FEATURE_FUNCTIONS=0 to turn the
+		// Shipped: Functions is enabled by default (D110). Set YOAL_FEATURE_FUNCTIONS=0 to turn the
 		// tier off without removing already-deployed functions.
 		default: true,
 		area: 'workloads',
@@ -43,7 +43,7 @@ export const FEATURE_FLAGS = {
 	BROKERS: {
 		name: 'BROKERS',
 		// D111: managed queue brokers. Purely additive (nothing runs until someone creates a broker),
-		// so it ships on; set SKIFF_FEATURE_BROKERS=0 to hide the surfaces and refuse new brokers.
+		// so it ships on; set YOAL_FEATURE_BROKERS=0 to hide the surfaces and refuse new brokers.
 		default: true,
 		area: 'queues',
 		description: 'Create managed queue brokers (NATS with JetStream) and attach them to apps (docs/BROKERS.md).'
@@ -54,7 +54,7 @@ export const FEATURE_FLAGS = {
 		// mail node in Email → Mail server, so the flag ships on; 0 hides the surfaces and refuses sends.
 		default: true,
 		area: 'email',
-		description: 'Send and receive email on verified domains through Skiff\'s own MTA (docs/EMAIL.md).'
+		description: 'Send and receive email on verified domains through Yoal\'s own MTA (docs/EMAIL.md).'
 	},
 	BACKUPS_RESTORE: {
 		name: 'BACKUPS_RESTORE',
@@ -89,7 +89,7 @@ export const FEATURE_FLAGS = {
 		default: true,
 		area: 'databases',
 		description:
-			'Open the native database studio (per-engine plugins in the on-demand skiff-studio process, D96). Set 0 to hide it.'
+			'Open the native database studio (per-engine plugins in the on-demand yoal-studio process, D96). Set 0 to hide it.'
 	},
 	COMPOSE: {
 		name: 'COMPOSE',
@@ -173,7 +173,7 @@ export const FEATURE_FLAGS = {
 		name: 'BLUEPRINTS',
 		default: true,
 		area: 'automation',
-		description: 'Plan and apply blueprint files (skiff.blueprint.yaml) that declare a stack, including pruning what they manage.'
+		description: 'Plan and apply blueprint files (yoal.blueprint.yaml) that declare a stack, including pruning what they manage.'
 	},
 	MEDIA: {
 		name: 'MEDIA',
@@ -211,7 +211,7 @@ export const DEFAULT_FEATURES: FeatureFlags = Object.freeze(
 const TRUE_VALUES = new Set(['1', 'true', 'on', 'yes']);
 const FALSE_VALUES = new Set(['0', 'false', 'off', 'no']);
 
-/** `SKIFF_FEATURE_<NAME>` for a registered flag. */
+/** `YOAL_FEATURE_<NAME>` for a registered flag. */
 export function featureEnvKey(name: FeatureName): string {
 	return `${FEATURE_ENV_PREFIX}${name}`;
 }
@@ -230,10 +230,10 @@ export function parseFeatureFlagValue(value: string | undefined): boolean | unde
 
 /**
  * Flags that existed in an earlier release and were removed. Setting one is harmless: it is
- * ignored like any unknown `SKIFF_FEATURE_*`, and `retiredFeatureFlagsSet` lets startup warn.
+ * ignored like any unknown `YOAL_FEATURE_*`, and `retiredFeatureFlagsSet` lets startup warn.
  */
 export const RETIRED_FEATURE_FLAGS: Readonly<Record<string, string>> = Object.freeze({
-	DB_CONSOLE: 'The D60 studio console was replaced by the native studio (D96); use SKIFF_FEATURE_DB_STUDIO.'
+	DB_CONSOLE: 'The D60 studio console was replaced by the native studio (D96); use YOAL_FEATURE_DB_STUDIO.'
 });
 
 /** Retired flags that are still set in `env`, with the reason each was removed. */

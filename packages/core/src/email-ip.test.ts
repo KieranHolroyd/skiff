@@ -2,8 +2,8 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import { DEFAULT_FEATURES } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import { DEFAULT_FEATURES } from '@yoal/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
@@ -16,7 +16,7 @@ import type { Core } from './index.ts';
  * the edge proxies to, so the edge has none; its IP comes from the zone's platform-host record.
  */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-email-ip-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-email-ip-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 const dns: EmailDnsResolver = {
@@ -30,7 +30,7 @@ const dns: EmailDnsResolver = {
 
 /** The platform host is proxied: public DNS would give Cloudflare's IPs, the zone holds the origin. */
 const zone = new Map<string, CloudflareRecord>([
-	['rec_0', { id: 'rec_0', type: 'A', name: 'control.skiff.test', content: '203.0.113.7' }],
+	['rec_0', { id: 'rec_0', type: 'A', name: 'control.yoal.test', content: '203.0.113.7' }],
 ]);
 let seq = 0;
 const cloudflare: CloudflareClient = {
@@ -58,8 +58,8 @@ const core: Core = createCore({
 	version: '0.1.0',
 	config: {
 		dataDir: dir,
-		platformOrigin: 'https://control.skiff.test',
-		contentDomain: 'skiff.test',
+		platformOrigin: 'https://control.yoal.test',
+		contentDomain: 'yoal.test',
 		objectStore: store,
 		masterKey: new Uint8Array(32).fill(7),
 		siteCookieSecret: 'site-cookie-secret-123',
@@ -67,7 +67,7 @@ const core: Core = createCore({
 		desiredAgentVersion: '0.1.0',
 		features: { ...DEFAULT_FEATURES },
 	},
-	email: { dns, cloudflare, cloudflareZoneName: 'skiff.test' },
+	email: { dns, cloudflare, cloudflareZoneName: 'yoal.test' },
 });
 
 const admin = buildPrincipal({ kind: 'user', userId: 'user_1', orgId: 'org_1', role: 'owner', platformAdmin: true });

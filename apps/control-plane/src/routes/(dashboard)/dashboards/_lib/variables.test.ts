@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { DashboardVariable } from '@skiff/contracts';
+import type { DashboardVariable } from '@yoal/contracts';
 import {
 	ALL,
 	customOptions,

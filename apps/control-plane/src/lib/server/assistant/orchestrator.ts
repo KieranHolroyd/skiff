@@ -4,7 +4,7 @@ import {
 	type AssistantEvent,
 	type AssistantGuide,
 	type Principal
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '../core';
 import { PANEL_FORMAT } from './agents';
 import { assistantConfig, type AssistantRuntimeConfig } from './config';

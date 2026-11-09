@@ -4,7 +4,7 @@
 	 * acknowledged and silenced markers. Acknowledge and Silence are on-call actions (owners,
 	 * admins and deployers), shown inline rather than in a menu.
 	 */
-	import type { AlertInstanceView } from '@skiff/contracts';
+	import type { AlertInstanceView } from '@yoal/contracts';
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import { toast } from 'svelte-sonner';
 	import { resolve } from '$app/paths';
@@ -14,7 +14,7 @@
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import UndoIcon from '@lucide/svelte/icons/undo-2';
 	import { assistant } from '#lib/assistant/assistant.svelte.js';
-	import DataTable, { type DataColumn } from '#lib/components/skiff/DataTable.svelte';
+	import DataTable, { type DataColumn } from '#lib/components/yoal/DataTable.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Spinner } from '#lib/components/ui/spinner/index.js';

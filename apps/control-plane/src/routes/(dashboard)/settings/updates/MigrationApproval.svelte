@@ -4,7 +4,7 @@
 	import DatabaseZapIcon from '@lucide/svelte/icons/database-zap';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
-	import type { SelfUpdateApproval, SelfUpdateMethod } from '@skiff/contracts';
+	import type { SelfUpdateApproval, SelfUpdateMethod } from '@yoal/contracts';
 	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
@@ -60,7 +60,7 @@
 	icon={ShieldAlertIcon}
 	description="It ships {one
 		? 'a database migration that changes or removes existing data'
-		: `${approval.migrations.length} database migrations that change or remove existing data`}. Skiff never runs these unattended. Review the SQL, then approve it to install the update."
+		: `${approval.migrations.length} database migrations that change or remove existing data`}. Yoal never runs these unattended. Review the SQL, then approve it to install the update."
 >
 	<div class="space-y-3">
 		{#each approval.migrations as migration (migration.id)}
@@ -161,7 +161,7 @@
 					<Field.Label for="approve-reviewed">I've reviewed the SQL and want it applied</Field.Label
 					>
 					<Field.Description>
-						The approval covers exactly this SQL. If the release changes it, Skiff asks again.
+						The approval covers exactly this SQL. If the release changes it, Yoal asks again.
 					</Field.Description>
 				</Field.Content>
 			</Field.Field>

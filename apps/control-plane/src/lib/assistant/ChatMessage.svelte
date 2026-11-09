@@ -98,7 +98,7 @@
 		</div>
 		<div class="min-w-0 flex-1 space-y-2">
 			<p class="flex items-baseline gap-2 text-xs">
-				<span class="font-medium text-muted-foreground">Skiff</span>
+				<span class="font-medium text-muted-foreground">Yoal</span>
 				<span class="text-[10px] text-muted-foreground/70" title={fullTime}
 					>{formatClock(message.createdAt)}</span
 				>

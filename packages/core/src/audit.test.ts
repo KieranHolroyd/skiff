@@ -2,14 +2,14 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import type { Principal } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import type { Principal } from '@yoal/contracts';
 import { MAX_AUDIT_PAGE, parseAuditTime } from './audit.ts';
 import { createCore, type Core } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import { buildPrincipal } from './orgs.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-audit-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-audit-'));
 const opened = createDb({ path: ':memory:' });
 const core: Core = createCore({
 	db: opened.db,

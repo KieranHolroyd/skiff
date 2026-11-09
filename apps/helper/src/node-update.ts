@@ -12,20 +12,20 @@ import {
 import { ValidationError } from './validate.ts';
 
 /**
- * The fixed `node/update` verb (D99): install a signed Skiff release's agent and helper on a worker.
+ * The fixed `node/update` verb (D99): install a signed Yoal release's agent and helper on a worker.
  *
  * The only inputs are a release version and a repository name. Everything that decides what runs as
  * root is checked here, on the node: the release manifest must verify against a release-signing key
- * compiled into this binary (or one an operator dropped into /etc/skiff/updater/keys), the bundle
+ * compiled into this binary (or one an operator dropped into /etc/yoal/updater/keys), the bundle
  * must match the manifest's size and sha256, and the version may not go backwards. A compromised
- * control plane or agent can therefore at most install a genuine, newer Skiff release.
+ * control plane or agent can therefore at most install a genuine, newer Yoal release.
  *
- * A control-plane host is refused: its binaries belong to the release `skiff-update-self` manages
- * (`/opt/skiff/current` is a symlink into /opt/skiff/releases there), and replacing them in place
+ * A control-plane host is refused: its binaries belong to the release `yoal-update-self` manages
+ * (`/opt/yoal/current` is a symlink into /opt/yoal/releases there), and replacing them in place
  * would break that release's rollback.
  */
 
-export const NODE_BUNDLE_FILES = ['skiff-agent', 'skiff-helper'] as const;
+export const NODE_BUNDLE_FILES = ['yoal-agent', 'yoal-helper'] as const;
 
 export interface NodeUpdateRequest {
 	version: string;
@@ -39,7 +39,7 @@ export interface NodeUpdateResult {
 }
 
 export interface NodeUpdatePaths {
-	/** The agent binary the units run (`skiff-builder`/`skiff-storage` are symlinks to it). */
+	/** The agent binary the units run (`yoal-builder`/`yoal-storage` are symlinks to it). */
 	agentBinary: string;
 	/** This helper's own binary. */
 	helperBinary: string;
@@ -172,8 +172,8 @@ export class NodeUpdater {
 
 			// Stage both before swapping either, so a failure leaves the old pair in place.
 			const targets = [
-				{ source: join(stage, 'skiff-agent'), dest: paths.agentBinary },
-				{ source: join(stage, 'skiff-helper'), dest: paths.helperBinary },
+				{ source: join(stage, 'yoal-agent'), dest: paths.agentBinary },
+				{ source: join(stage, 'yoal-helper'), dest: paths.helperBinary },
 			];
 			for (const { source, dest } of targets) {
 				if (!(await isFile(source))) throw new NodeUpdateError(`${entry.file} did not unpack ${source}`);
@@ -187,7 +187,7 @@ export class NodeUpdater {
 				if (await isFile(dest)) await fs.copyFile(dest, `${dest}.previous`);
 				await fs.rename(`${dest}.new`, dest);
 			}
-			this.log('info', `installed skiff-agent and skiff-helper ${version} (was ${currentVersion}); restarting`);
+			this.log('info', `installed yoal-agent and yoal-helper ${version} (was ${currentVersion}); restarting`);
 			return { version, previous: currentVersion, installed: targets.map((target) => target.dest) };
 		} finally {
 			for (const dest of [paths.agentBinary, paths.helperBinary])
@@ -200,7 +200,7 @@ export class NodeUpdater {
 		const stat = await fs.lstat(this.deps.paths.releaseLink).catch(() => null);
 		if (stat?.isSymbolicLink())
 			throw new NodeUpdateError(
-				`${this.deps.paths.releaseLink} is a control-plane release; this node updates with skiff-update-self, not from the node list`,
+				`${this.deps.paths.releaseLink} is a control-plane release; this node updates with yoal-update-self, not from the node list`,
 			);
 	}
 
@@ -233,7 +233,7 @@ export class NodeUpdater {
 }
 
 function assertBundleEntry(entry: ManifestArtifact): void {
-	if (!/^skiff-node-[\w.-]+\.tar\.gz$/.test(entry.file)) throw new NodeUpdateError(`unexpected node bundle name ${entry.file}`);
+	if (!/^yoal-node-[\w.-]+\.tar\.gz$/.test(entry.file)) throw new NodeUpdateError(`unexpected node bundle name ${entry.file}`);
 	if (!/^[0-9a-f]{64}$/.test(entry.sha256)) throw new NodeUpdateError('the node bundle has no sha256');
 	if (!Number.isInteger(entry.size) || entry.size <= 0 || entry.size > MAX_BUNDLE_BYTES)
 		throw new NodeUpdateError(`the node bundle size (${entry.size}) is out of range`);
@@ -290,7 +290,7 @@ async function tarExtract(archive: string, dest: string): Promise<void> {
 export function restartNodeServices(systemctl = '/usr/bin/systemctl'): void {
 	setTimeout(() => {
 		const queue = (args: string[]) => spawn(systemctl, ['--no-block', ...args], { stdio: 'ignore', detached: true }).unref();
-		queue(['try-restart', 'skiff-builder.service', 'skiff-studio.service', 'skiff-mail.service']);
-		queue(['restart', 'skiff-agent.service', 'skiff-helper.service']);
+		queue(['try-restart', 'yoal-builder.service', 'yoal-studio.service', 'yoal-mail.service']);
+		queue(['restart', 'yoal-agent.service', 'yoal-helper.service']);
 	}, 500);
 }

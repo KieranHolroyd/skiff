@@ -1,33 +1,33 @@
 /**
- * `skiff-identity.service`: the standalone user-pool identity process (docs/IAM.md §11.2). It runs
+ * `yoal-identity.service`: the standalone user-pool identity process (docs/IAM.md §11.2). It runs
  * the agent binary's `identity` entrypoint in its own cgroup and sandbox, as the agent's user, with
  * no extra capabilities: it listens on a loopback HTTP port and a group-readable unix socket.
  *
- * Like the studio and `skiff-mail`, the unit is static: installed beside the agent unit on every
+ * Like the studio and `yoal-mail`, the unit is static: installed beside the agent unit on every
  * host but never enabled. The identity node's agent starts it through the helper's fixed
  * `POST /v1/identity/start` verb (and again after every boot, when desired state says so).
- * `scripts/systemd/skiff-identity.service` is the rendered default, kept identical by a test.
+ * `scripts/systemd/yoal-identity.service` is the rendered default, kept identical by a test.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-export const IDENTITY_UNIT = 'skiff-identity.service';
-export const IDENTITY_LITESTREAM_UNIT = 'skiff-litestream-identity.service';
+export const IDENTITY_UNIT = 'yoal-identity.service';
+export const IDENTITY_LITESTREAM_UNIT = 'yoal-litestream-identity.service';
 
 export interface IdentityUnitPaths {
 	optDir?: string;
 	runDir?: string;
-	/** The group of the setgid runtime directory (`d /run/skiff 2770 root caddy`). */
+	/** The group of the setgid runtime directory (`d /run/yoal 2770 root caddy`). */
 	socketGroup?: string;
 }
 
 export function identityUnit(paths: IdentityUnitPaths = {}): string {
-	const optDir = paths.optDir ?? '/opt/skiff';
-	const runDir = paths.runDir ?? '/run/skiff';
+	const optDir = paths.optDir ?? '/opt/yoal';
+	const runDir = paths.runDir ?? '/run/yoal';
 	const socketGroup = paths.socketGroup ?? 'caddy';
 	return `[Unit]
-Description=Skiff identity (user pools)
-Documentation=https://github.com/KieranHolroyd/skiff/blob/main/docs/IAM.md
+Description=Yoal identity (user pools)
+Documentation=https://github.com/KieranHolroyd/yoal/blob/main/docs/IAM.md
 After=network-online.target
 Wants=network-online.target
 # Started only by the helper's POST /v1/identity/start verb on the identity node. An agent update
@@ -38,10 +38,10 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-User=skiff
-Group=skiff
+User=yoal
+Group=yoal
 # ${runDir} is setgid ${socketGroup} (2770), so creating identity.sock there needs the group. The
-# socket comes out 0660 skiff:${socketGroup}; the agent (also skiff) is the only client.
+# socket comes out 0660 yoal:${socketGroup}; the agent (also yoal) is the only client.
 SupplementaryGroups=${socketGroup}
 UMask=0007
 WorkingDirectory=${optDir}/current/agent
@@ -49,13 +49,13 @@ WorkingDirectory=${optDir}/current/agent
 # No EnvironmentFile with secrets: the identity process holds pool signing keys in its own SQLite
 # file and never sees the node token. The agent pushes the non-secret pool projection over the
 # unix socket. Optional operator overrides (data dir, origin, mail relay, master key).
-Environment=SKIFF_IDENTITY_SOCKET=${runDir}/identity.sock
-Environment=SKIFF_IDENTITY_DATA_DIR=/var/lib/skiff/identity
-Environment=SKIFF_IDENTITY_PORT=8788
-Environment=SKIFF_IDENTITY_HOST=127.0.0.1
-EnvironmentFile=-/etc/skiff/identity.env
+Environment=YOAL_IDENTITY_SOCKET=${runDir}/identity.sock
+Environment=YOAL_IDENTITY_DATA_DIR=/var/lib/yoal/identity
+Environment=YOAL_IDENTITY_PORT=8788
+Environment=YOAL_IDENTITY_HOST=127.0.0.1
+EnvironmentFile=-/etc/yoal/identity.env
 
-ExecStart=${optDir}/current/agent/skiff-agent identity
+ExecStart=${optDir}/current/agent/yoal-agent identity
 
 Restart=always
 RestartSec=2
@@ -68,7 +68,7 @@ MemoryMax=256M
 
 # The SQLite file and its -wal/-shm companions. StateDirectory creates it owned by User= and keeps
 # it writable under ProtectSystem.
-StateDirectory=skiff/identity
+StateDirectory=yoal/identity
 StateDirectoryMode=0700
 
 NoNewPrivileges=yes
@@ -101,16 +101,16 @@ ReadWritePaths=${runDir}
 }
 
 /**
- * `skiff-litestream-identity.service`: continuous replication of the identity database, kept apart
+ * `yoal-litestream-identity.service`: continuous replication of the identity database, kept apart
  * from the control-plane Litestream unit so a loss of the identity node never disturbs platform
  * backups (and vice versa). Static for the same reason as the process unit.
  */
 export function identityLitestreamUnit(paths: { etcDir?: string; binPath?: string } = {}): string {
-	const etcDir = paths.etcDir ?? '/etc/skiff';
+	const etcDir = paths.etcDir ?? '/etc/yoal';
 	const binPath = paths.binPath ?? '/usr/local/bin/litestream';
 	return `[Unit]
-Description=Skiff identity SQLite continuous replication (Litestream)
-Documentation=https://github.com/KieranHolroyd/skiff/blob/main/docs/IAM.md
+Description=Yoal identity SQLite continuous replication (Litestream)
+Documentation=https://github.com/KieranHolroyd/yoal/blob/main/docs/IAM.md
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=60
@@ -118,10 +118,10 @@ StartLimitBurst=10
 
 [Service]
 Type=simple
-User=skiff
-Group=skiff
+User=yoal
+Group=yoal
 UMask=0027
-EnvironmentFile=/etc/skiff/skiff.env
+EnvironmentFile=/etc/yoal/yoal.env
 
 ExecStart=${binPath} replicate -config ${etcDir}/litestream-identity.yml
 
@@ -155,7 +155,7 @@ SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=
 AmbientCapabilities=
 
-ReadWritePaths=/var/lib/skiff/identity
+ReadWritePaths=/var/lib/yoal/identity
 
 # Deliberately no [Install] section: the identity node's helper starts it with the process.
 `;

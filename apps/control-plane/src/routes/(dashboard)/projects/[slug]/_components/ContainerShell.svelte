@@ -8,7 +8,7 @@
 	}
 
 	function storageKey(slug: string): string {
-		return `skiff:container-shell:${slug}`;
+		return `yoal:container-shell:${slug}`;
 	}
 
 	function loadShell(slug: string): StoredShell | null {
@@ -34,7 +34,7 @@
 	import { onMount, untrack } from 'svelte';
 	import { browser } from '$app/env';
 	import { createQuery } from '@tanstack/svelte-query';
-	import type { ContainerShell, ContainerTarget } from '@skiff/contracts';
+	import type { ContainerShell, ContainerTarget } from '@yoal/contracts';
 	import type { Terminal } from '@xterm/xterm';
 	import type { FitAddon } from '@xterm/addon-fit';
 	import '@xterm/xterm/css/xterm.css';

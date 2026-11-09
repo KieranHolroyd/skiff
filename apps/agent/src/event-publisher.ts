@@ -5,7 +5,7 @@ import {
 	type DesiredState,
 	type WorkloadActivation,
 	type WorkloadDesired,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { NatsConnection, QUEUE_HEADERS, publishToQueue } from '../../../packages/function-bindings/src/nats.js';
 import { connectTcp } from './tcp-stream.ts';
 import type { BrokerConnector } from './function-queues.ts';
@@ -15,7 +15,7 @@ import type { BrokerConnector } from './function-queues.ts';
  *
  * Every rule targets a managed broker, and only the broker's own node can reach it (it listens on
  * loopback). So the agent on a node that runs brokers leases pending deliveries for them, publishes
- * each one to `skiff.q.<queue>` and acks the result. The function that consumes the queue then gets
+ * each one to `yoal.q.<queue>` and acks the result. The function that consumes the queue then gets
  * the event through its ordinary queue trigger, with the queue's retries and dead-letter queue.
  *
  * - JetStream dedupes on `Nats-Msg-Id` (the delivery id), so a lease that expires mid-publish and
@@ -136,10 +136,10 @@ export class EventPublisher {
 		if (cached && cached.activationVersion === broker.activationVersion) return cached.connection;
 		this.drop(broker.id);
 		const activation = await this.fetchActivation(broker.id, signal);
-		const user = activation.env.SKIFF_BROKER_USER;
-		const pass = activation.env.SKIFF_BROKER_PASSWORD;
+		const user = activation.env.YOAL_BROKER_USER;
+		const pass = activation.env.YOAL_BROKER_PASSWORD;
 		if (!user || !pass) throw new Error(`Broker ${broker.id} has no credentials in its activation`);
-		const connection = await this.connect({ host: '127.0.0.1', port: broker.port, user, pass, name: 'skiff-events' });
+		const connection = await this.connect({ host: '127.0.0.1', port: broker.port, user, pass, name: 'yoal-events' });
 		this.brokers.set(broker.id, { activationVersion: broker.activationVersion, connection });
 		return connection;
 	}

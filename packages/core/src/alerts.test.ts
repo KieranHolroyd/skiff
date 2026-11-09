@@ -2,8 +2,8 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { alertRuleInputSchema, alertRuleTemplate, alertRuleTemplates, type AlertRuleInput, type MetricBucket } from '@skiff/contracts';
-import { createDb } from '@skiff/db';
+import { alertRuleInputSchema, alertRuleTemplate, alertRuleTemplates, type AlertRuleInput, type MetricBucket } from '@yoal/contracts';
+import { createDb } from '@yoal/db';
 import {
 	advanceInstance,
 	fingerprintOf,
@@ -138,7 +138,7 @@ describe('alert helpers', () => {
 });
 
 describe.skipIf(!hasClickHouse)('alert service', () => {
-	const dir = mkdtempSync(join(tmpdir(), 'skiff-alerts-'));
+	const dir = mkdtempSync(join(tmpdir(), 'yoal-alerts-'));
 	const opened = createDb({ path: ':memory:' });
 	let clock = T0;
 	const sent: Array<{ via: string; alert: AlertMessage }> = [];
@@ -408,7 +408,7 @@ describe.skipIf(!hasClickHouse)('alert service', () => {
 });
 
 describe('system alert settings', () => {
-	const dir = mkdtempSync(join(tmpdir(), 'skiff-system-alerts-'));
+	const dir = mkdtempSync(join(tmpdir(), 'yoal-system-alerts-'));
 	const opened = createDb({ path: ':memory:' });
 	let clock = T0;
 	const sent: Array<{ via: string; alert: AlertMessage }> = [];

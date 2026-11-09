@@ -1,8 +1,8 @@
 <script lang="ts">
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
+	import DetailList from '#lib/components/yoal/DetailList.svelte';
 	import { resolve } from '$app/paths';
-	import type { ProjectView } from '@skiff/core';
-	import { FORGE_LABELS, type BuildView, type GitRepositoryView, type GitSourceView } from '@skiff/contracts';
+	import type { ProjectView } from '@yoal/core';
+	import { FORGE_LABELS, type BuildView, type GitRepositoryView, type GitSourceView } from '@yoal/contracts';
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
 	import CircleSlashIcon from '@lucide/svelte/icons/circle-slash';
 	import GitBranchIcon from '@lucide/svelte/icons/git-branch';
@@ -16,12 +16,12 @@
 	import WebhookIcon from '@lucide/svelte/icons/webhook';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import GitRepoPicker from '#lib/components/skiff/GitRepoPicker.svelte';
-	import ForgeMark from '#lib/components/skiff/ForgeMark.svelte';
-	import GitHubMark from '#lib/components/skiff/GitHubMark.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import GitRepoPicker from '#lib/components/yoal/GitRepoPicker.svelte';
+	import ForgeMark from '#lib/components/yoal/ForgeMark.svelte';
+	import GitHubMark from '#lib/components/yoal/GitHubMark.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
@@ -257,17 +257,17 @@
 					{/if}
 					<span>
 						{#if gitSource.githubAppInstallationId}
-							Connected through Skiff’s GitHub App: pushes arrive without this webhook, private
+							Connected through Yoal’s GitHub App: pushes arrive without this webhook, private
 							clones need no node token, and each build reports a commit status and a GitHub
 							deployment. A hand-made webhook for the same repository is ignored.
 						{:else if gitSource.gitProvider?.delivered}
-							Connected through {FORGE_LABELS[gitSource.gitProvider.kind]} ({gitSource.gitProvider.via}): Skiff created
+							Connected through {FORGE_LABELS[gitSource.gitProvider.kind]} ({gitSource.gitProvider.via}): Yoal created
 							the webhook there, clones privately and reports a commit status for each build{gitSource.gitProvider.kind ===
 							'gitlab'
 								? ' and a deployment'
 								: ''}. A hand-made webhook for the same repository is ignored.
 						{:else if gitSource.gitProvider?.connectionId}
-							{FORGE_LABELS[gitSource.gitProvider.kind]} is connected, but Skiff could not create the webhook yet; see
+							{FORGE_LABELS[gitSource.gitProvider.kind]} is connected, but Yoal could not create the webhook yet; see
 							Settings → Git providers. Private clones and commit statuses already work.
 						{:else if gitSource.hasWebhookSecret}
 							Signed deliveries only. Add the webhook in GitHub, GitLab, Gitea or Forgejo with the same secret you set
@@ -455,10 +455,10 @@
 					class="font-mono text-sm"
 				/>
 				<Field.Description>
-					Public HTTPS, SSH or git URL. Repositories Skiff’s GitHub App can see clone without any
+					Public HTTPS, SSH or git URL. Repositories Yoal’s GitHub App can see clone without any
 					setup. Any other private repository needs a credential on each Builder node:
-					<code class="font-mono text-xs">SKIFF_GIT_TOKEN</code> for HTTPS, or
-					<code class="font-mono text-xs">SKIFF_GIT_SSH_KEY</code> for SSH.
+					<code class="font-mono text-xs">YOAL_GIT_TOKEN</code> for HTTPS, or
+					<code class="font-mono text-xs">YOAL_GIT_SSH_KEY</code> for SSH.
 					<a
 						class="underline underline-offset-2"
 						href="{resolve('/(dashboard)/docs/[...slug]', { slug: 'deploying/git-builds' })}#private-repositories"

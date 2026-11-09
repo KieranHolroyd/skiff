@@ -2,12 +2,12 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { sqlite } from './db';
 
 /**
- * Browser login for the CLI (`skif login --web`).
+ * Browser login for the CLI (`yoal login --web`).
  *
  * The CLI generates a PKCE verifier and a random state, then opens `<platform>/cli/login`.
  * After dashboard sign-in, the user approves the request and the control plane redirects a
  * one-time code to the CLI's loopback listener. The CLI posts the code and verifier to
- * `/api/v1/cli/token`, which mints a regular API key (`skif_…`) for the REST API.
+ * `/api/v1/cli/token`, which mints a regular API key (`yoal_…`) for the REST API.
  */
 
 export const CLI_LOGIN_CODE_TTL_MS = 5 * 60_000;

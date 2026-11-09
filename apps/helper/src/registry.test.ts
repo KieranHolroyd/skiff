@@ -6,7 +6,7 @@ import { assertAdminHtpasswd, parseRegistryProfile, renderZotConfig } from './re
 import { MIRROR_CONF_NAME, applyMirror, parseMirrorRequest, renderMirrorConf } from './registry-mirror.ts';
 
 const base = { engine: 'zot', version: '2.1.23', service: 'registry.example.com', realm: 'https://control.example.com/api/registry/token' };
-const htpasswd = `skiff-admin:$2b$10$${'a'.repeat(53)}`;
+const htpasswd = `yoal-admin:$2b$10$${'a'.repeat(53)}`;
 
 describe('zot config (G4–G6)', () => {
 	test('mirrors sync on demand under their upstream prefix', () => {
@@ -23,7 +23,7 @@ describe('zot config (G4–G6)', () => {
 		expect(() => renderZotConfig(registry, null)).toThrow(/admin htpasswd/);
 		const config = JSON.parse(renderZotConfig(registry, { certificatePem: '', eventsUrl: null, adminHtpasswd: `${htpasswd}\n`, s3: null }));
 		expect(config.http.auth.htpasswd).toEqual({ path: '/etc/zot/htpasswd' });
-		expect(config.http.accessControl.adminPolicy.users).toEqual(['skiff-admin']);
+		expect(config.http.accessControl.adminPolicy.users).toEqual(['yoal-admin']);
 		expect(config.extensions.trust).toEqual({ enable: true, cosign: true, notation: true });
 		expect(config.extensions.search.cve).toEqual({ updateInterval: '24h' });
 		expect(config.http.auth.bearer.service).toBe('registry.example.com');
@@ -65,7 +65,7 @@ describe('zot config (G4–G6)', () => {
 });
 
 describe('registry mirror on a node (G4)', () => {
-	const dir = mkdtempSync(join(tmpdir(), 'skiff-mirror-'));
+	const dir = mkdtempSync(join(tmpdir(), 'yoal-mirror-'));
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 	const paths = { confDir: join(dir, 'registries.conf.d'), authFile: join(dir, 'run', 'auth.json') };
 

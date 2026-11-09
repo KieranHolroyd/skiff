@@ -1,14 +1,14 @@
 /**
  * Pipelines end-to-end on real Linux (docs/PIPELINES.md §14): the real control-plane engine runs
  * here (macOS or Linux) behind a small HTTP server that mirrors the SvelteKit routes, and a Podman
- * machine VM runs the real, compiled `skiff-helper` and `skiff-agent builder` as the systemd units
+ * machine VM runs the real, compiled `yoal-helper` and `yoal-agent builder` as the systemd units
  * the installer writes (`scripts/systemd/{helper,builder}.ts`). Jobs run in real job containers
- * started by the helper, with the real `skiff-agent pipeline-step` inside.
+ * started by the helper, with the real `yoal-agent pipeline-step` inside.
  *
  * Scenarios:
  *   a  outputs/needs, secret masking, artifacts and cache (two runs) under container isolation
  *   b  a postgres:17 service with a health command, reached by name from the job container
- *   c  skiff/build-image through the per-job BuildKit sidecar (push: false), twice: the second is cached
+ *   c  yoal/build-image through the per-job BuildKit sidecar (push: false), twice: the second is cached
  *   d  a repository whose trusted minimum is gvisor: the job runs under runsc
  *   e  cancelling a running `sleep 300`: the always() step runs, the run is cancelled, nothing is left behind
  *
@@ -16,10 +16,10 @@
  * loopback), from the VM itself and from containers on any Podman network. The test repository is
  * served over smart HTTP by `git http-backend`.
  *
- *   E2E_VM=skiff-spike bun tests/e2e/pipelines-linux.e2e.ts [a,b,c,d,e]
+ *   E2E_VM=yoal-spike bun tests/e2e/pipelines-linux.e2e.ts [a,b,c,d,e]
  *
  * Needs a rootful Podman machine with runsc on PATH, the `containers` subuid range and
- * /var/lib/skiff-builder. E2E_KEEP=1 leaves the units running; E2E_SKIP_BUILD=1 reuses the binaries.
+ * /var/lib/yoal-builder. E2E_KEEP=1 leaves the units running; E2E_SKIP_BUILD=1 reuses the binaries.
  */
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -42,15 +42,15 @@ import { gitRepo } from '../../apps/builder/src/pipeline/git-fixture.ts';
 import { builderUnit } from '../../scripts/systemd/builder.ts';
 import { helperUnit } from '../../scripts/systemd/helper.ts';
 
-const VM = process.env.E2E_VM ?? 'skiff-spike';
+const VM = process.env.E2E_VM ?? 'yoal-spike';
 const PORT = Number(process.env.E2E_PORT ?? 47820);
 const ORIGIN = `http://host.containers.internal:${PORT}`;
-const OPT = '/opt/skiff-e2e';
-const ETC = '/etc/skiff-e2e';
+const OPT = '/opt/yoal-e2e';
+const ETC = '/etc/yoal-e2e';
 const scenarios = new Set((process.argv[2] ?? 'a,b,c,d,e').split(','));
 const repoRoot = join(import.meta.dir, '../..');
 
-const root = mkdtempSync(join(tmpdir(), 'skiff-pipelines-linux-e2e-'));
+const root = mkdtempSync(join(tmpdir(), 'yoal-pipelines-linux-e2e-'));
 let core: Core;
 let store: LocalObjectStore;
 
@@ -76,7 +76,7 @@ function installBinaries(): void {
 	const arch = vmOk('uname -m') === 'aarch64' ? 'arm64' : 'x64';
 	const out = join(root, 'bin');
 	mkdirSync(out, { recursive: true });
-	const binaries = { 'skiff-agent': 'apps/agent/src/main.ts', 'skiff-helper': 'apps/helper/src/main.ts' };
+	const binaries = { 'yoal-agent': 'apps/agent/src/main.ts', 'yoal-helper': 'apps/helper/src/main.ts' };
 	for (const [name, entry] of Object.entries(binaries)) {
 		const target = join(process.env.E2E_BIN_DIR ?? out, name);
 		if (process.env.E2E_SKIP_BUILD !== '1') {
@@ -97,62 +97,62 @@ function installBinaries(): void {
 function installUnits(nodeToken: string): void {
 	vmOk(
 		[
-			'getent group skiff >/dev/null || groupadd --system skiff',
-			'id -u skiff-build >/dev/null 2>&1 || useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin skiff-build',
+			'getent group yoal >/dev/null || groupadd --system yoal',
+			'id -u yoal-build >/dev/null 2>&1 || useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin yoal-build',
 			`mkdir -p ${OPT}/current/agent ${OPT}/helper ${ETC}`,
-			`cp -f ${OPT}/bin/skiff-agent ${OPT}/current/agent/skiff-agent`,
-			`ln -sfn skiff-agent ${OPT}/current/agent/skiff-builder`,
-			`cp -f ${OPT}/bin/skiff-helper ${OPT}/helper/skiff-helper`,
+			`cp -f ${OPT}/bin/yoal-agent ${OPT}/current/agent/yoal-agent`,
+			`ln -sfn yoal-agent ${OPT}/current/agent/yoal-builder`,
+			`cp -f ${OPT}/bin/yoal-helper ${OPT}/helper/yoal-helper`,
 		].join(' && '),
 	);
-	vmOk('cat > /etc/systemd/system/skiff-helper.service', helperUnit({ optDir: OPT, etcDir: ETC }));
-	// The test VM is Fedora with SELinux enforcing, which Skiff does not support (D27: Debian and
+	vmOk('cat > /etc/systemd/system/yoal-helper.service', helperUnit({ optDir: OPT, etcDir: ETC }));
+	// The test VM is Fedora with SELinux enforcing, which Yoal does not support (D27: Debian and
 	// Ubuntu). There, the unit's NoNewPrivileges=yes blocks podman/conmon/crun from transitioning to
 	// container_runtime_t, so crun's device eBPF filter is refused and no job container starts. The
 	// production unit keeps NoNewPrivileges; only this VM gets the override.
 	vmOk(
-		'mkdir -p /etc/systemd/system/skiff-helper.service.d && cat > /etc/systemd/system/skiff-helper.service.d/selinux-test.conf',
+		'mkdir -p /etc/systemd/system/yoal-helper.service.d && cat > /etc/systemd/system/yoal-helper.service.d/selinux-test.conf',
 		'[Service]\nNoNewPrivileges=no\n',
 	);
-	vmOk('cat > /etc/systemd/system/skiff-builder.service', builderUnit({ optDir: OPT, agentEnvFile: `${ETC}/agent.env` }));
+	vmOk('cat > /etc/systemd/system/yoal-builder.service', builderUnit({ optDir: OPT, agentEnvFile: `${ETC}/agent.env` }));
 	vmOk(
 		`umask 077 && cat > ${ETC}/helper.env`,
 		[
-			`SKIFF_HELPER_AGENT_BINARY=${OPT}/current/agent/skiff-agent`,
-			'SKIFF_HELPER_CONTROL_SOCKET_GROUP=skiff',
-			'SKIFF_HELPER_APPARMOR_PROFILE=none',
-			'SKIFF_HELPER_STORAGE_TOOLS=0',
+			`YOAL_HELPER_AGENT_BINARY=${OPT}/current/agent/yoal-agent`,
+			'YOAL_HELPER_CONTROL_SOCKET_GROUP=yoal',
+			'YOAL_HELPER_APPARMOR_PROFILE=none',
+			'YOAL_HELPER_STORAGE_TOOLS=0',
 			'',
 		].join('\n'),
 	);
 	vmOk(
 		`umask 077 && cat > ${ETC}/agent.env`,
 		[
-			`SKIFF_CONTROL_URL=${ORIGIN}`,
-			`SKIFF_NODE_TOKEN=${nodeToken}`,
-			'SKIFF_PIPELINE_ISOLATION=auto',
-			'SKIFF_PIPELINE_POLL_MS=1000',
-			'SKIFF_BUILDER_POLL_MS=60000',
+			`YOAL_CONTROL_URL=${ORIGIN}`,
+			`YOAL_NODE_TOKEN=${nodeToken}`,
+			'YOAL_PIPELINE_ISOLATION=auto',
+			'YOAL_PIPELINE_POLL_MS=1000',
+			'YOAL_BUILDER_POLL_MS=60000',
 			'',
 		].join('\n'),
 	);
-	vmOk('systemctl daemon-reload && systemctl restart skiff-helper.service && sleep 1 && systemctl restart skiff-builder.service');
+	vmOk('systemctl daemon-reload && systemctl restart yoal-helper.service && sleep 1 && systemctl restart yoal-builder.service');
 }
 
 /** The Builder's `[pipeline]` lines since its current start. */
 function builderJournal(): string {
-	const since = vm('systemctl show -p ActiveEnterTimestamp --value skiff-builder.service').out;
-	return vm(`journalctl -u skiff-builder.service --since "${since}" --no-pager -o cat | grep "\\[pipeline\\]" | tail -5`).out;
+	const since = vm('systemctl show -p ActiveEnterTimestamp --value yoal-builder.service').out;
+	return vm(`journalctl -u yoal-builder.service --since "${since}" --no-pager -o cat | grep "\\[pipeline\\]" | tail -5`).out;
 }
 
 function stopUnits(): void {
-	vm('systemctl stop skiff-builder.service skiff-helper.service; systemctl reset-failed skiff-builder.service skiff-helper.service 2>/dev/null; true');
+	vm('systemctl stop yoal-builder.service yoal-helper.service; systemctl reset-failed yoal-builder.service yoal-helper.service 2>/dev/null; true');
 }
 
 /** Job containers and networks the helper labelled, and job directories, still in the VM. */
 function leftovers(): string {
 	return vm(
-		"podman ps -a --filter label=skiff.pipeline-job --format '{{.Names}}'; podman network ls --format '{{.Name}}' | grep '^skiff-job-'; ls /var/lib/skiff-builder/pipelines 2>/dev/null; true",
+		"podman ps -a --filter label=yoal.pipeline-job --format '{{.Names}}'; podman network ls --format '{{.Name}}' | grep '^yoal-job-'; ls /var/lib/yoal-builder/pipelines 2>/dev/null; true",
 	).out;
 }
 
@@ -328,8 +328,8 @@ jobs:
       - uses: actions/checkout@v4
       - id: meta
         run: |
-          echo "version=1.2.\${{ skiff.run_number }}" >> "$SKIFF_OUTPUT"
-          echo "$GREETING from \${{ skiff.repository }} at $(head -c 7 <<< "$SKIFF_SHA")"
+          echo "version=1.2.\${{ yoal.run_number }}" >> "$YOAL_OUTPUT"
+          echo "$GREETING from \${{ yoal.repository }} at $(head -c 7 <<< "$YOAL_SHA")"
           echo "token is $API_TOKEN"
           echo "uid=$(id -u) kernel=$(uname -r) image=$(. /etc/os-release; echo $PRETTY_NAME)"
         env:
@@ -385,9 +385,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: build
-        uses: skiff/build-image@v1
+        uses: yoal/build-image@v1
         with:
-          tags: localhost/e2e/app:\${{ skiff.run_number }}
+          tags: localhost/e2e/app:\${{ yoal.run_number }}
           push: false
       - run: echo "built \${{ steps.build.outputs.image }}"
 `;
@@ -511,7 +511,7 @@ try {
 		await Bun.sleep(1000);
 	}
 	console.log(journal);
-	check('Builder chose container isolation via skiff-helper', /polling for jobs \(container isolation, runtimes [a-z,]*runsc/.test(journal), journal);
+	check('Builder chose container isolation via yoal-helper', /polling for jobs \(container isolation, runtimes [a-z,]*runsc/.test(journal), journal);
 
 	await scenario('a', async () => {
 		const first = await dispatch('demo', workflowA);
@@ -618,11 +618,11 @@ try {
 	console.error(error);
 	failed = true;
 } finally {
-	const journal = vm('journalctl -u skiff-builder.service -u skiff-helper.service --since "-30min" --no-pager -o cat | tail -400').out;
+	const journal = vm('journalctl -u yoal-builder.service -u yoal-helper.service --since "-30min" --no-pager -o cat | tail -400').out;
 	await Bun.write(join(process.env.E2E_LOG_DIR ?? root, 'vm-journal.log'), journal);
 	if (process.env.E2E_KEEP !== '1') {
 		stopUnits();
-		vm("podman rm -f $(podman ps -aq --filter label=skiff.pipeline-job) 2>/dev/null; podman network ls --format '{{.Name}}' | grep '^skiff-job-' | xargs -r podman network rm -f; rm -rf /var/lib/skiff-builder/pipelines; true");
+		vm("podman rm -f $(podman ps -aq --filter label=yoal.pipeline-job) 2>/dev/null; podman network ls --format '{{.Name}}' | grep '^yoal-job-' | xargs -r podman network rm -f; rm -rf /var/lib/yoal-builder/pipelines; true");
 	}
 	server.stop(true);
 	opened.sqlite.close();

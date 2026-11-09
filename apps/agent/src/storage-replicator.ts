@@ -6,7 +6,7 @@ import {
 	type StorageReplicationBucketReport,
 	type StorageReplicationDesired,
 	type StorageReplicationReport,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { StorageApiError, blocks, escapeXml, tagValue, type StorageTarget, type StorageTargetSource } from './storage-admin.ts';
 import { atomicWriteFile } from './state.ts';
 
@@ -100,7 +100,7 @@ export interface S3ReplicaStoreOptions {
 	fetch?: (input: string, init: RequestInit) => Promise<Response>;
 }
 
-/** Path-style S3 client for one side of a link, SigV4-signed (service `s3`, Skiff's region). */
+/** Path-style S3 client for one side of a link, SigV4-signed (service `s3`, Yoal's region). */
 export class S3ReplicaStore implements ReplicaStore {
 	private readonly endpoint: string;
 	private readonly host: string | null;

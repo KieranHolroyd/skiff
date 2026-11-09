@@ -4,7 +4,7 @@
 	import LinkIcon from '@lucide/svelte/icons/link';
 	import { enhance } from '$app/forms';
 	import { toast } from 'svelte-sonner';
-	import type { MetricsSection } from '@skiff/contracts';
+	import type { MetricsSection } from '@yoal/contracts';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
@@ -51,17 +51,17 @@
 
 	const origin = $derived(data.platformOrigin.replace(/\/$/, ''));
 	const scrapeConfig = $derived(`scrape_configs:
-  - job_name: skiff
+  - job_name: yoal
     scheme: https
     metrics_path: /metrics/apps   # or /metrics, /metrics/apps/<slug>, …
     scrape_interval: 60s
     authorization:
-      credentials: skif_…         # an API key with metrics:read
+      credentials: yoal_…         # an API key with metrics:read
     static_configs:
       - targets: ['${origin.replace(/^https?:\/\//, '')}']`);
 </script>
 
-<svelte:head><title>Metrics · Settings · Skiff</title></svelte:head>
+<svelte:head><title>Metrics · Settings · Yoal</title></svelte:head>
 
 <SettingsHeader id="metrics" />
 
@@ -145,7 +145,7 @@
 				<Input id="metrics-max-apps" name="maxApps" type="number" min={1} max={10000} required bind:value={maxApps} />
 				<Field.Description>
 					Caps <code class="font-mono text-xs">/metrics</code> and <code class="font-mono text-xs">/metrics/apps</code>
-					(alphabetical); <code class="font-mono text-xs">skiff_scrape_truncated</code> reports a cut. Per-app paths are never capped.
+					(alphabetical); <code class="font-mono text-xs">yoal_scrape_truncated</code> reports a cut. Per-app paths are never capped.
 				</Field.Description>
 			</Field.Field>
 		</div>

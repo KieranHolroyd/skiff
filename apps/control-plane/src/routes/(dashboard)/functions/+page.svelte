@@ -14,12 +14,12 @@
 	import Settings2Icon from '@lucide/svelte/icons/settings-2';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import ZapIcon from '@lucide/svelte/icons/zap';
-	import { WORKERD_MAX_COMPATIBILITY_DATE, WORKERD_PINNED_VERSION } from '@skiff/contracts';
+	import { WORKERD_MAX_COMPATIBILITY_DATE, WORKERD_PINNED_VERSION } from '@yoal/contracts';
 	import { toast } from 'svelte-sonner';
 	import { runAction } from '#lib/actions.js';
-	import DataTable, { type DataColumn } from '#lib/components/skiff/DataTable.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import DataTable, { type DataColumn } from '#lib/components/yoal/DataTable.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Collapsible from '#lib/components/ui/collapsible/index.js';
@@ -110,7 +110,7 @@
 	];
 
 	const QUICKSTART =
-		'npm create cloudflare@latest my-function -- --type hello-world\ncd my-function\nskif wrangler dev\nskif deploy';
+		'npm create cloudflare@latest my-function -- --type hello-world\ncd my-function\nyoal wrangler dev\nyoal deploy';
 	const newHref = resolve('/(dashboard)/functions/new');
 	const functionHref = (slug: string) => resolve('/(dashboard)/functions/[slug]', { slug });
 	function openSection(slug: string, tab: string) {
@@ -203,12 +203,12 @@
 </script>
 
 <svelte:head>
-	<title>Functions · Skiff</title>
+	<title>Functions · Yoal</title>
 </svelte:head>
 
 <div class="space-y-5">
 	<header
-		data-skiff-target="page.functions"
+		data-yoal-target="page.functions"
 		class="flex flex-wrap items-end justify-between gap-x-6 gap-y-3"
 	>
 		<div class="space-y-1">
@@ -241,7 +241,7 @@
 				restarts the control plane.
 			</p>
 			<code class="mt-4 inline-block rounded-md border bg-card px-2.5 py-1.5 font-mono text-xs"
-				>SKIFF_FEATURE_FUNCTIONS=1</code
+				>YOAL_FEATURE_FUNCTIONS=1</code
 			>
 		</div>
 	{:else if data.denied}
@@ -399,7 +399,7 @@
 					</p>
 				</div>
 				<ol class="space-y-3 text-sm">
-					{#each [{ n: 1, title: 'Create a function', body: 'Pick a name, placement and who may call it.' }, { n: 2, title: 'Develop locally', body: 'skif wrangler dev runs the same workerd runtime on your machine.' }, { n: 3, title: 'Deploy', body: 'skif deploy bundles with Wrangler and ships it. Every deploy gets a preview URL.' }] as step (step.n)}
+					{#each [{ n: 1, title: 'Create a function', body: 'Pick a name, placement and who may call it.' }, { n: 2, title: 'Develop locally', body: 'yoal wrangler dev runs the same workerd runtime on your machine.' }, { n: 3, title: 'Deploy', body: 'yoal deploy bundles with Wrangler and ships it. Every deploy gets a preview URL.' }] as step (step.n)}
 						<li class="flex gap-3">
 							<span
 								class="flex size-6 shrink-0 items-center justify-center rounded-full border font-mono text-xs"

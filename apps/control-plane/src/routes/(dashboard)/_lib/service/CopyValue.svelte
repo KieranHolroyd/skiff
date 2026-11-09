@@ -1,7 +1,7 @@
 <script lang="ts">
 	import EyeIcon from '@lucide/svelte/icons/eye';
 	import EyeOffIcon from '@lucide/svelte/icons/eye-off';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 
 	/**

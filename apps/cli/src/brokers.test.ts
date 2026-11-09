@@ -100,9 +100,9 @@ describe('brokerQueuesTable', () => {
 			truncated: false,
 			streams: [
 				{
-					stream: 'SKIFF_Q_jobs',
+					stream: 'YOAL_Q_jobs',
 					queue: 'jobs',
-					subjects: ['skiff.q.jobs'],
+					subjects: ['yoal.q.jobs'],
 					storage: 'file',
 					retention: 'workqueue',
 					messages: 25,
@@ -115,7 +115,7 @@ describe('brokerQueuesTable', () => {
 					ackPending: 0,
 					redelivered: 0,
 					consumers: [
-						{ name: 'skiff-consumer', pending: 25, ackPending: 0, redelivered: 0, waiting: 1, lastDeliveredAt: null },
+						{ name: 'yoal-consumer', pending: 25, ackPending: 0, redelivered: 0, waiting: 1, lastDeliveredAt: null },
 					],
 				},
 				{
@@ -141,7 +141,7 @@ describe('brokerQueuesTable', () => {
 		expect(lines[0]).toContain('REDELIVERED');
 		expect(lines[2]).toMatch(/^jobs\s+queue\s+25\s/);
 		expect(lines[2]).toContain('5m');
-		expect(lines[3]).toContain('└ skiff-consumer');
+		expect(lines[3]).toContain('└ yoal-consumer');
 		expect(lines[4]).toMatch(/^EVENTS\s+limits\s+0\s/);
 	});
 });
@@ -149,21 +149,21 @@ describe('brokerQueuesTable', () => {
 describe('queue tools (D124)', () => {
 	const message = (overrides: Partial<PeekedMessage> = {}): PeekedMessage => ({
 		seq: 7,
-		subject: 'skiff.q.jobs',
+		subject: 'yoal.q.jobs',
 		time: '2026-11-07T10:00:00.000Z',
 		size: 13,
-		headers: { 'Skiff-Content-Type': 'json', 'Skiff-Attempts': '2', 'Nats-Msg-Id': 'nt_1', 'X-Trace': 'abc' },
+		headers: { 'Yoal-Content-Type': 'json', 'Yoal-Attempts': '2', 'Nats-Msg-Id': 'nt_1', 'X-Trace': 'abc' },
 		encoding: 'utf8',
 		body: '{"hello":"world"}',
 		truncated: false,
 		...overrides,
 	});
 
-	test('a queue maps to SKIFF_Q_<queue>; --stream is taken as is', () => {
-		expect(queueStreamName('jobs')).toBe('SKIFF_Q_jobs');
-		expect(queueOfStream('SKIFF_Q_jobs')).toBe('jobs');
+	test('a queue maps to YOAL_Q_<queue>; --stream is taken as is', () => {
+		expect(queueStreamName('jobs')).toBe('YOAL_Q_jobs');
+		expect(queueOfStream('YOAL_Q_jobs')).toBe('jobs');
 		expect(queueOfStream('EVENTS')).toBeNull();
-		expect(resolveStream('jobs', undefined)).toEqual({ stream: 'SKIFF_Q_jobs', label: 'queue jobs (SKIFF_Q_jobs)' });
+		expect(resolveStream('jobs', undefined)).toEqual({ stream: 'YOAL_Q_jobs', label: 'queue jobs (YOAL_Q_jobs)' });
 		expect(resolveStream(undefined, 'EVENTS')).toEqual({ stream: 'EVENTS', label: 'stream EVENTS' });
 	});
 
@@ -210,10 +210,10 @@ describe('queue tools (D124)', () => {
 
 	test('sendSummary names the queue, sequences, time and delay', () => {
 		const text = sendSummary(
-			{ stream: 'SKIFF_Q_jobs', sent: 3, seqs: [4, 5, 6], durationMs: 3.4, state: { stream: 'SKIFF_Q_jobs', messages: 6, bytes: 2048, firstAt: null, lastAt: null } },
+			{ stream: 'YOAL_Q_jobs', sent: 3, seqs: [4, 5, 6], durationMs: 3.4, state: { stream: 'YOAL_Q_jobs', messages: 6, bytes: 2048, firstAt: null, lastAt: null } },
 			30,
 		);
-		expect(text).toBe('Sent 3 messages to queue jobs (seq 4–6) in 3 ms.\nConsumers see them after 30s.\nSKIFF_Q_jobs now holds 6 messages (2.0 KiB).');
+		expect(text).toBe('Sent 3 messages to queue jobs (seq 4–6) in 3 ms.\nConsumers see them after 30s.\nYOAL_Q_jobs now holds 6 messages (2.0 KiB).');
 		expect(sendSummary({ stream: 'EVENTS', sent: 1, seqs: [9], durationMs: 1200, state: null })).toBe(
 			'Sent 1 message to stream EVENTS (seq 9) in 1.20 s.',
 		);
@@ -221,29 +221,29 @@ describe('queue tools (D124)', () => {
 
 	test('bodies: JSON pretty-printed, text and cut bodies as they are, binary noted', () => {
 		expect(formatPeekedBody(message())).toBe('{\n  "hello": "world"\n}');
-		expect(formatPeekedBody(message({ headers: { 'Skiff-Content-Type': 'text' }, body: '{"a":1}' }))).toBe('{"a":1}');
+		expect(formatPeekedBody(message({ headers: { 'Yoal-Content-Type': 'text' }, body: '{"a":1}' }))).toBe('{"a":1}');
 		expect(formatPeekedBody(message({ body: '{"hel', truncated: true, size: 40_000 }))).toBe('{"hel\n… (cut; 39 KiB in all)');
 		expect(formatPeekedBody(message({ encoding: 'base64', body: 'AAEC', size: 3 }))).toBe('<binary, 3 B, base64> AAEC');
 		expect(formatPeekedBody(message({ body: '' }))).toBe('<empty>');
 	});
 
-	test('peekedHeaderLines puts Skiff headers on one line and lists the rest', () => {
+	test('peekedHeaderLines puts Yoal headers on one line and lists the rest', () => {
 		expect(peekedHeaderLines(message())).toEqual(['json · attempts 2 · id nt_1', 'X-Trace: abc']);
 		expect(peekedHeaderLines(message({ headers: {} }))).toEqual([]);
 	});
 
 	test('peekReport lists messages and the next page', () => {
 		const text = peekReport(
-			{ stream: 'SKIFF_Q_jobs', messages: [message()], total: 30, firstSeq: 7, lastSeq: 36, nextSeq: 8 },
-			(seq) => `skif broker peek mq jobs --from ${seq}`,
+			{ stream: 'YOAL_Q_jobs', messages: [message()], total: 30, firstSeq: 7, lastSeq: 36, nextSeq: 8 },
+			(seq) => `yoal broker peek mq jobs --from ${seq}`,
 		);
 		const lines = text.split('\n');
-		expect(lines[0]).toBe('jobs (SKIFF_Q_jobs): 30 messages held, seq 7–36. Showing 1.');
+		expect(lines[0]).toBe('jobs (YOAL_Q_jobs): 30 messages held, seq 7–36. Showing 1.');
 		expect(lines[2]).toBe('#7  2026-11-07 10:00:00Z  13 B');
 		expect(lines[3]).toBe('    json · attempts 2 · id nt_1');
 		expect(lines[5]).toBe('    {');
 		expect(text).toContain('    "hello": "world"');
-		expect(lines.at(-1)).toBe('More: skif broker peek mq jobs --from 8');
+		expect(lines.at(-1)).toBe('More: yoal broker peek mq jobs --from 8');
 		expect(peekReport({ stream: 'EVENTS', messages: [], total: 0, firstSeq: 0, lastSeq: 0, nextSeq: null })).toBe('EVENTS is empty.');
 	});
 

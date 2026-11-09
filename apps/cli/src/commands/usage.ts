@@ -8,7 +8,7 @@ const flags: FlagSpec = {
 	help: { type: 'boolean', short: 'h' },
 };
 
-const usage = `Usage: skif usage [project] [--json]
+const usage = `Usage: yoal usage [project] [--json]
 
 Show org usage and quota percentages. With a project, show only that project's resources.
 Counts are current; database/storage bytes are the latest samples; egress is a 30-day estimate.`;

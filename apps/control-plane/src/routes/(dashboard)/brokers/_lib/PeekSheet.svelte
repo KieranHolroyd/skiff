@@ -2,7 +2,7 @@
 	import InboxIcon from '@lucide/svelte/icons/inbox';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import TrashIcon from '@lucide/svelte/icons/trash';
-	import type { BrokerStreamPeekResult, PeekedMessage } from '@skiff/contracts';
+	import type { BrokerStreamPeekResult, PeekedMessage } from '@yoal/contracts';
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import { runNodeTask } from '#lib/node-tasks.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
@@ -10,7 +10,7 @@
 	import { ScrollArea } from '#lib/components/ui/scroll-area/index.js';
 	import * as Sheet from '#lib/components/ui/sheet/index.js';
 	import { Spinner } from '#lib/components/ui/spinner/index.js';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
 	import EmptyState from '../../_lib/EmptyState.svelte';
 	import { formatBytes, formatDateTime } from '../../_lib/format.js';
 
@@ -73,10 +73,10 @@
 		}
 	}
 
-	const SKIFF_HEADERS: Record<string, string> = {
+	const YOAL_HEADERS: Record<string, string> = {
 		'nats-msg-id': 'id',
-		'skiff-content-type': 'type',
-		'skiff-attempts': 'attempts'
+		'yoal-content-type': 'type',
+		'yoal-attempts': 'attempts'
 	};
 
 	function remove(message: PeekedMessage) {
@@ -134,8 +134,8 @@
 									{/if}
 									<span class="text-muted-foreground">{formatBytes(message.size)}</span>
 									{#each Object.entries(message.headers) as [name, value] (name)}
-										{#if SKIFF_HEADERS[name]}
-											<Badge variant="outline" class="font-mono font-normal">{SKIFF_HEADERS[name]}: {value}</Badge>
+										{#if YOAL_HEADERS[name]}
+											<Badge variant="outline" class="font-mono font-normal">{YOAL_HEADERS[name]}: {value}</Badge>
 										{/if}
 									{/each}
 									{#if message.encoding === 'base64'}<Badge variant="secondary">binary (base64)</Badge>{/if}
@@ -155,7 +155,7 @@
 									Showing the first {formatBytes(new TextEncoder().encode(message.body).length)} of {formatBytes(message.size)}.
 								</p>
 							{/if}
-							{#if Object.keys(message.headers).some((name) => !SKIFF_HEADERS[name] && name !== 'skiff-timestamp')}
+							{#if Object.keys(message.headers).some((name) => !YOAL_HEADERS[name] && name !== 'yoal-timestamp')}
 								<details class="border-t px-3 py-1.5 text-xs">
 									<summary class="cursor-pointer text-muted-foreground">Headers</summary>
 									<dl class="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 font-mono">

@@ -18,16 +18,16 @@ export const NODE_TASK_LIMITS = {
 /** Mirrors `functionRequestMethods`. */
 export const FUNCTION_REQUEST_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] as const;
 
-/** Mirrors `BROKER_QUEUE_STREAM_PREFIX`: a function queue `jobs` lives in stream `SKIFF_Q_jobs` (D112). */
-export const QUEUE_STREAM_PREFIX = 'SKIFF_Q_';
+/** Mirrors `BROKER_QUEUE_STREAM_PREFIX`: a function queue `jobs` lives in stream `YOAL_Q_jobs` (D112). */
+export const QUEUE_STREAM_PREFIX = 'YOAL_Q_';
 
-/** Mirrors `QUEUE_HEADERS` in @skiff/function-bindings. */
+/** Mirrors `QUEUE_HEADERS` in @yoal/function-bindings. */
 export const QUEUE_HEADERS = {
 	id: 'Nats-Msg-Id',
-	contentType: 'Skiff-Content-Type',
-	notBefore: 'Skiff-Not-Before',
-	timestamp: 'Skiff-Timestamp',
-	attempts: 'Skiff-Attempts',
+	contentType: 'Yoal-Content-Type',
+	notBefore: 'Yoal-Not-Before',
+	timestamp: 'Yoal-Timestamp',
+	attempts: 'Yoal-Attempts',
 } as const;
 
 export type NodeTaskStatus = 'pending' | 'running' | 'succeeded' | 'failed';

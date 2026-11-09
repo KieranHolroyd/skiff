@@ -1,5 +1,5 @@
 /**
- * The edge agent shares a host with the control plane. With `SKIFF_CONTROL_SOCKET` set it sends
+ * The edge agent shares a host with the control plane. With `YOAL_CONTROL_SOCKET` set it sends
  * every request for the control-plane origin (desired state, heartbeats, task results, release
  * downloads from presigned `/api/objects/` URLs) straight to the control plane's unix socket
  * instead of out through public DNS and back in through Caddy (D105).

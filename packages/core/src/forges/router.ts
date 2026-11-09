@@ -9,7 +9,7 @@ import {
 	type GitRepositoryList,
 	type GitRepositoryView,
 	type Principal,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from '../context.ts';
 import type { GithubPathContent } from '../github-app.ts';
 import type { ForgeStatusReport } from './clients.ts';
@@ -85,7 +85,7 @@ export class GitProviders {
 	}
 
 	/**
-	 * A Skiff-managed delivery already covers this repository, so a hand-made webhook is ignored.
+	 * A Yoal-managed delivery already covers this repository, so a hand-made webhook is ignored.
 	 * `payloadFullName` (the repository the delivery names) wins over the configured URL's name, as
 	 * the hand-made webhook may sit on another repository than the one configured.
 	 */

@@ -21,7 +21,7 @@
  * still open when the run ends, so transactions never span runs.
  */
 import { SQL, type ReservedSQL } from 'bun';
-import type { DatabaseEngine } from '@skiff/contracts';
+import type { DatabaseEngine } from '@yoal/contracts';
 import { bytesCell, CELL_PREVIEW_BYTES, textCell } from '../../cells.ts';
 import type { RunOptions, SessionOptions, StudioPlugin, StudioSession, StudioTarget } from '../../driver.ts';
 import {
@@ -108,7 +108,7 @@ WHERE n.nspname = $1::text AND t.relname = $2::text AND i.relname = $3::text`;
 
 /** Rows per FETCH and per `rows` event. */
 const BATCH = 500;
-const CURSOR = 'skiff_studio_cursor';
+const CURSOR = 'yoal_studio_cursor';
 const DECLARE_PREFIX = `DECLARE ${CURSOR} NO SCROLL CURSOR FOR `;
 /** Describe results are reused this long by browse/apply/value (a write `run` clears them). */
 const DESCRIBE_TTL_MS = 10_000;
@@ -135,7 +135,7 @@ export const postgresPlugin: StudioPlugin = {
 			// Unnamed statements: user SQL is rarely repeated, and named ones pin server memory.
 			prepare: false,
 			connection: {
-				application_name: 'skiff-studio',
+				application_name: 'yoal-studio',
 				// Cells are UTC ISO 8601, and the splitter assumes standard strings.
 				TimeZone: 'UTC',
 				DateStyle: 'ISO, MDY',

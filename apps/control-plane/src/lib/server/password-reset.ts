@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite';
-import type { AuditService } from '@skiff/core';
+import type { AuditService } from '@yoal/core';
 
 /**
  * Password reset (Better Auth `emailAndPassword.sendResetPassword`, wired in auth.ts). Plain

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { DatabaseBackupResult, DatabaseBackupTask, DesiredState } from '@skiff/contracts';
+import type { DatabaseBackupResult, DatabaseBackupTask, DesiredState } from '@yoal/contracts';
 import type { HelperApi } from './helper-client.ts';
 
 /**

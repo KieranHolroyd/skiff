@@ -1,6 +1,6 @@
 <script lang="ts">
 	/** The row of variable pickers above the panels. Owns each query variable's loaded options. */
-	import type { DashboardVariable, QueryVariables } from '@skiff/contracts';
+	import type { DashboardVariable, QueryVariables } from '@yoal/contracts';
 	import type { Names } from './series.js';
 	import type { ResolvedRange } from './time.js';
 	import VariablePicker from './VariablePicker.svelte';

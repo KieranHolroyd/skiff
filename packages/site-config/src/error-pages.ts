@@ -86,7 +86,7 @@ const PAGES: Record<ErrorPageKind, ErrorPage> = {
 		title: 'Nothing deployed yet',
 		message: 'This project is set up, but it has no deployment yet.',
 		hint: 'If this is your project, deploy a directory to put your site here:',
-		command: 'skiff deploy',
+		command: 'yoal deploy',
 		action: 'dashboard',
 		icon: ICONS.rocket,
 		subject: 'host',

@@ -2,21 +2,21 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
+import { createDb } from '@yoal/db';
 import {
 	databaseStudioActivationSchema,
 	databaseStudioHost,
 	DEFAULT_FEATURES,
 	DEFAULT_STUDIO_LIMITS,
 	studioSessionIdPattern,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import { studioFingerprint } from './database-studio.ts';
 import type { Core } from './index.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-database-studio-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-database-studio-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 let clock = Date.parse('2026-11-06T10:00:00Z');
@@ -252,7 +252,7 @@ describe('native database studio sessions', () => {
 			port: credentials.port,
 			database: 'studio_db',
 			// A read-only session connects as the read-only principal, never the owner.
-			user: 'skiff_studio_ro',
+			user: 'yoal_studio_ro',
 			password: readOnly.password,
 			tls: null,
 			readOnly: true,
@@ -295,7 +295,7 @@ describe('native database studio sessions', () => {
 		expect(core.databaseStudio.activation(edgeId, cache.sessionId, cache.token)).toMatchObject({
 			engine: 'valkey',
 			database: '0',
-			user: 'skiff_studio_ro',
+			user: 'yoal_studio_ro',
 		});
 		core.databaseStudio.open(owner, 'docs-db');
 		const docs = core.databaseStudio.endpoint(owner, 'docs-db');

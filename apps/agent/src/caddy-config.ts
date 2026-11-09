@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import type { DesiredState, IdentityDesired, RouteSpec } from '@skiff/contracts';
+import type { DesiredState, IdentityDesired, RouteSpec } from '@yoal/contracts';
 import {
 	compileAwaitingDeployRoute,
 	compileCaddyConfig,
@@ -7,7 +7,7 @@ import {
 	type CaddyRoute,
 	type SiteCompileInput,
 	type TlsOptions,
-} from '@skiff/site-config';
+} from '@yoal/site-config';
 import { compileFunctionRoute } from './function-routing.ts';
 import { normalizeHost } from './verify.ts';
 
@@ -30,7 +30,7 @@ export interface CompileAgentConfigOptions {
 	accessLog?: string | null;
 }
 
-const ACCESS_LOGGER = 'skiff_access';
+const ACCESS_LOGGER = 'yoal_access';
 
 type DesiredDomain = DesiredState['domains'][number];
 
@@ -219,39 +219,39 @@ export function compileStorageRoute(route: DesiredState['storageRoutes'][number]
  *
  * Requirements outside this file: the content domain's wildcard (`*.example.com`) already covers
  * `auth`, so DNS must resolve it like any project host, and Caddy must be able to issue its
- * certificate. The agent only adds these routes when `SKIFF_PLATFORM_HOST` and
- * `SKIFF_PLATFORM_UPSTREAM` are configured, i.e. on the node that serves the platform.
+ * certificate. The agent only adds these routes when `YOAL_PLATFORM_HOST` and
+ * `YOAL_PLATFORM_UPSTREAM` are configured, i.e. on the node that serves the platform.
  */
 const USER_POOL_ISSUER_ROUTES: ReadonlyArray<{ id: string; name: string; pattern: string; uri: string }> = [
 	{
 		id: 'discovery',
-		name: 'skiff_pool_discovery',
+		name: 'yoal_pool_discovery',
 		pattern: '^/(?P<pool>[A-Za-z0-9_-]+)/[.]well-known/(?P<doc>openid-configuration|jwks[.]json)$',
-		uri: '/api/v1/user-pools/{http.regexp.skiff_pool_discovery.pool}/.well-known/{http.regexp.skiff_pool_discovery.doc}'
+		uri: '/api/v1/user-pools/{http.regexp.yoal_pool_discovery.pool}/.well-known/{http.regexp.yoal_pool_discovery.doc}'
 	},
 	{
 		id: 'oauth',
-		name: 'skiff_pool_oauth',
+		name: 'yoal_pool_oauth',
 		pattern: '^/(?P<pool>[A-Za-z0-9_-]+)/oauth2/(?P<action>authorize|token|userinfo|logout)/?$',
-		uri: '/api/v1/user-pools/{http.regexp.skiff_pool_oauth.pool}/oauth/{http.regexp.skiff_pool_oauth.action}'
+		uri: '/api/v1/user-pools/{http.regexp.yoal_pool_oauth.pool}/oauth/{http.regexp.yoal_pool_oauth.action}'
 	},
 	{
 		id: 'hosted-root',
-		name: 'skiff_pool_root',
+		name: 'yoal_pool_root',
 		pattern: '^/(?P<pool>[A-Za-z0-9_-]+)/?$',
-		uri: '/pool/{http.regexp.skiff_pool_root.pool}'
+		uri: '/pool/{http.regexp.yoal_pool_root.pool}'
 	},
 	{
 		id: 'hosted',
-		name: 'skiff_pool_hosted',
+		name: 'yoal_pool_hosted',
 		pattern: '^/(?P<pool>[A-Za-z0-9_-]+)/(?P<page>login|signup|logout|verify)$',
-		uri: '/pool/{http.regexp.skiff_pool_hosted.pool}/{http.regexp.skiff_pool_hosted.page}'
+		uri: '/pool/{http.regexp.yoal_pool_hosted.pool}/{http.regexp.yoal_pool_hosted.page}'
 	},
 	{
 		id: 'hosted-nested',
-		name: 'skiff_pool_hosted_nested',
+		name: 'yoal_pool_hosted_nested',
 		pattern: '^/(?P<pool>[A-Za-z0-9_-]+)/(?P<page>login|signup|logout|verify)(?P<rest>/.*)$',
-		uri: '/pool/{http.regexp.skiff_pool_hosted_nested.pool}/{http.regexp.skiff_pool_hosted_nested.page}{http.regexp.skiff_pool_hosted_nested.rest}'
+		uri: '/pool/{http.regexp.yoal_pool_hosted_nested.pool}/{http.regexp.yoal_pool_hosted_nested.page}{http.regexp.yoal_pool_hosted_nested.rest}'
 	}
 ];
 
@@ -324,7 +324,7 @@ export function compileIdentityIssuerRoutes(identity: IdentityDesired): CaddyRou
 					{
 						host: [host],
 						path_regexp: {
-							name: `skiff_identity_${pool.id.replace(/[^A-Za-z0-9_]/g, '_')}`,
+							name: `yoal_identity_${pool.id.replace(/[^A-Za-z0-9_]/g, '_')}`,
 							pattern: `^(?:pool/)?${id}(/|$)`,
 						},
 					},
@@ -340,7 +340,7 @@ export function compileIdentityIssuerRoutes(identity: IdentityDesired): CaddyRou
 					{
 						host: [host],
 						path_regexp: {
-							name: `skiff_identity_callback_${pool.id.replace(/[^A-Za-z0-9_]/g, '_')}`,
+							name: `yoal_identity_callback_${pool.id.replace(/[^A-Za-z0-9_]/g, '_')}`,
 							pattern: `^/api/v1/user-pools/${id}/oauth/callback/`,
 						},
 					},
@@ -382,7 +382,7 @@ function normalizeHandlers(value: unknown): unknown {
 
 /**
  * Caddy's `forward_auth` copies named response headers onto the upstream request; the long-form
- * JSON the compiler emits has to say so explicitly. Only Skiff Access routes need the two headers,
+ * JSON the compiler emits has to say so explicitly. Only Yoal Access routes need the two headers,
  * so the patch is limited to their hosts (IAM.md I25).
  */
 function enableAccessHeaderCopy(routes: CaddyRoute[], hosts: ReadonlySet<string>): void {
@@ -399,7 +399,7 @@ function patchAccessAuthHandlers(handlers: CaddyHandler[] | undefined): void {
 	for (const handler of handlers) {
 		if (handler.handler === 'reverse_proxy') {
 			const rewrite = handler.rewrite as { uri?: string } | undefined;
-			if (rewrite?.uri !== '/_skiff/verify') continue;
+			if (rewrite?.uri !== '/_yoal/verify') continue;
 			const responses = handler.handle_response as
 				| Array<{ match?: { status_code?: number[] }; routes?: Array<{ handle?: CaddyHandler[] }> }>
 				| undefined;
@@ -413,8 +413,8 @@ function patchAccessAuthHandlers(handlers: CaddyHandler[] | undefined): void {
 						handler: 'headers',
 						request: {
 							set: {
-								'Skiff-Access-Jwt': ['{rp.header.Skiff-Access-Jwt}'],
-								'Skiff-Access-Email': ['{rp.header.Skiff-Access-Email}'],
+								'Yoal-Access-Jwt': ['{rp.header.Yoal-Access-Jwt}'],
+								'Yoal-Access-Email': ['{rp.header.Yoal-Access-Email}'],
 							},
 						},
 					});
@@ -534,7 +534,7 @@ export function buildCaddyConfig(options: CompileAgentConfigOptions): Record<str
 	const storageRoutes = options.state.storageRoutes.map(compileStorageRoute);
 	server.routes = [...storageRoutes, ...redirects, ...domainRedirects, ...placeholderRoutes, ...server.routes];
 
-	// Skiff Access needs its two response headers copied from the auth response to the upstream.
+	// Yoal Access needs its two response headers copied from the auth response to the upstream.
 	const accessHosts = new Set(
 		entries
 			.filter((entry) => entry.route.accessMode === 'access')
@@ -605,7 +605,7 @@ export function buildCaddyConfig(options: CompileAgentConfigOptions): Record<str
 
 	// Email (docs/EMAIL.md §3.2): on the mail node Caddy obtains the submission and MX certificates.
 	// No route serves these names; `automate` manages a certificate without one. The helper copies
-	// the submission certificate out of Caddy's storage for skiff-mail.
+	// the submission certificate out of Caddy's storage for yoal-mail.
 	if (options.state.mail && apps && options.tls) {
 		const names = [...new Set([options.state.mail.hostnames.submission, options.state.mail.hostnames.mx].map(normalizeHost))];
 		const tls = (apps.tls ??= {});

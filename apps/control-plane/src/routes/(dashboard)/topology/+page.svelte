@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import type { BlastRadiusView, TopologyNodeView, TopologyView } from '@skiff/contracts';
+	import type { BlastRadiusView, TopologyNodeView, TopologyView } from '@yoal/contracts';
 	import NetworkIcon from '@lucide/svelte/icons/network';
 	import ServerIcon from '@lucide/svelte/icons/server';
 	import { Badge } from '#lib/components/ui/badge/index.js';

@@ -4,7 +4,7 @@
 -- end users, sessions, one-time OIDC authorization codes, email-verification tokens and invites.
 -- The control plane hosts these rows for the email/password slice; passwords use `Bun.password`
 -- (argon2id), never Better Auth's `user`/`session`/`account` tables, so a pool is fully isolated
--- from platform sign-in. A future `skiff-identity` process owns the same shape in its own SQLite
+-- from platform sign-in. A future `yoal-identity` process owns the same shape in its own SQLite
 -- file per pool (I27); the seaming is in `packages/core/src/user-pool-engine.ts`.
 --
 -- Tokens are never stored raw: `user_pool_sessions.id`, `user_pool_codes.code_hash`,

@@ -7,7 +7,7 @@ import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
 import Settings2Icon from '@lucide/svelte/icons/settings-2';
 import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 import TableIcon from '@lucide/svelte/icons/table';
-import type { DatabaseView } from '@skiff/contracts';
+import type { DatabaseView } from '@yoal/contracts';
 import type { Subnav, SubnavItem, RouteUrl } from '#lib/nav/subnav.js';
 import { readTab, tabHref } from '../../_lib/service/sections.js';
 import { DATABASE_DEFAULT_TAB, DATABASE_TABS, type DatabaseTab } from './database-tabs.js';

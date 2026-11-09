@@ -1,6 +1,6 @@
 <script lang="ts">
-	import type { DeploymentView } from '@skiff/core';
-	import { contentUrl, type EnvironmentView } from '@skiff/contracts';
+	import type { DeploymentView } from '@yoal/core';
+	import { contentUrl, type EnvironmentView } from '@yoal/contracts';
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
 	import GitBranchIcon from '@lucide/svelte/icons/git-branch';
 	import GlobeIcon from '@lucide/svelte/icons/globe';
@@ -11,8 +11,8 @@
 	import TrashIcon from '@lucide/svelte/icons/trash';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
@@ -312,7 +312,7 @@
 			</Field.Field>
 			{#if createAccess === 'access'}
 				<Field.Field>
-					<Field.Label for="env-policy">Skiff Access policy</Field.Label>
+					<Field.Label for="env-policy">Yoal Access policy</Field.Label>
 					<NativeSelect.Root id="env-policy" name="policyId" bind:value={createPolicy} required>
 						<NativeSelect.Option value="">Choose a policy</NativeSelect.Option>
 						{#each accessPolicies as policy (policy.id)}
@@ -360,7 +360,7 @@
 			</Field.Field>
 			{#if editAccess === 'access'}
 				<Field.Field>
-					<Field.Label for="env-edit-policy">Skiff Access policy</Field.Label>
+					<Field.Label for="env-edit-policy">Yoal Access policy</Field.Label>
 					<NativeSelect.Root id="env-edit-policy" name="policyId" bind:value={editPolicy} required>
 						<NativeSelect.Option value="">Choose a policy</NativeSelect.Option>
 						{#each accessPolicies as policy (policy.id)}

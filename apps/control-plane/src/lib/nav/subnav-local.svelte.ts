@@ -18,7 +18,7 @@ class SubnavLocalHost {
 	current = $state.raw<SubnavLocal | null>(null);
 }
 
-const KEY = Symbol('skiff.subnav-local');
+const KEY = Symbol('yoal.subnav-local');
 
 /** Called once by the dashboard layout. */
 export function provideSubnavLocal(): SubnavLocalHost {

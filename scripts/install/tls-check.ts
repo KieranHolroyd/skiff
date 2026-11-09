@@ -17,11 +17,11 @@ import { checkServerIdentity, connect, type PeerCertificate } from 'node:tls';
  */
 export function wildcardProbeHost(contentDomain: string, probe = randomBytes(4).toString('hex')): string {
 	const domain = contentDomain.trim().toLowerCase().replace(/^\.+/, '').replace(/\.+$/, '');
-	return `skiff-tls-check-${probe}.${domain}`;
+	return `yoal-tls-check-${probe}.${domain}`;
 }
 
 /**
- * The TLS port from `SKIFF_CADDY_LISTEN` (`:443,:80`). Port 80 is Caddy's redirect listener, so it
+ * The TLS port from `YOAL_CADDY_LISTEN` (`:443,:80`). Port 80 is Caddy's redirect listener, so it
  * is skipped; the default is 443.
  */
 export function tlsPortFromListen(listen: string | null | undefined): number {

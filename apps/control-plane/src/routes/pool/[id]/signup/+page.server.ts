@@ -1,5 +1,5 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { CoreError } from '@skiff/core';
+import { CoreError } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import { platformOrigin } from '#lib/server/config.js';
 import { safeRedirect } from '#lib/redirect.js';

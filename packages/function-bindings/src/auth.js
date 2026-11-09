@@ -1,5 +1,5 @@
 /**
- * Skiff user-pool `env.AUTH` service Worker (IAM.md I28, §11.2).
+ * Yoal user-pool `env.AUTH` service Worker (IAM.md I28, §11.2).
  *
  * The agent renders one of these next to a function that has a pool attachment. The pool's
  * public JWKS and issuer arrive as text bindings at deploy time, so `verify(request)` is local:

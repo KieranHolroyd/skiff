@@ -3,11 +3,11 @@ import { X509Certificate, verify } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import { DEFAULT_FEATURES } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import { DEFAULT_FEATURES } from '@yoal/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
-import { serviceAccountPrincipalFromSkiffToken, verifySkiffToken } from './iam/token-consumers.ts';
+import { serviceAccountPrincipalFromYoalToken, verifyYoalToken } from './iam/token-consumers.ts';
 import { LocalObjectStore } from './object-store.ts';
 import type { Core } from './index.ts';
 
@@ -33,12 +33,12 @@ const registryFetch = (async (input: string | URL | Request, init: RequestInit =
 	if (!match) return new Response(null, { status: 404 });
 	const granted = claims(authorization)?.access?.find((entry) => entry.name === match[1]);
 	if (!granted) return new Response(null, { status: 401 });
-	if (match[2] === 'tags') return Response.json({ name: match[1], tags: ['2', '1', 'skiff-d-dep_x'] });
+	if (match[2] === 'tags') return Response.json({ name: match[1], tags: ['2', '1', 'yoal-d-dep_x'] });
 	if ((init.method ?? 'GET') === 'DELETE') return granted.actions.includes('delete') ? new Response(null, { status: 202 }) : new Response(null, { status: 401 });
 	return new Response(null, { status: 200, headers: { 'Docker-Content-Digest': DIGEST } });
 }) as typeof fetch;
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-registry-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-registry-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 const core: Core = createCore({
@@ -141,9 +141,9 @@ describe('registry settings', () => {
 		]);
 		const activation = core.workloads.activation(workerId, desired!.id);
 		expect(activation.activationVersion).toBe(desired!.activationVersion);
-		lastCert = activation.env.SKIFF_REGISTRY_TOKEN_CERT!;
-		expect(new X509Certificate(lastCert).subject).toBe('CN=skiff-registry-token');
-		expect(activation.env.SKIFF_REGISTRY_EVENTS_URL).toMatch(/^https:\/\/control\.test\/api\/webhooks\/registry\/.+/);
+		lastCert = activation.env.YOAL_REGISTRY_TOKEN_CERT!;
+		expect(new X509Certificate(lastCert).subject).toBe('CN=yoal-registry-token');
+		expect(activation.env.YOAL_REGISTRY_EVENTS_URL).toMatch(/^https:\/\/control\.test\/api\/webhooks\/registry\/.+/);
 		expect(() => core.workloads.activation(edgeId, desired!.id)).toThrow(/another node/);
 	});
 
@@ -193,16 +193,16 @@ describe('token realm', () => {
 			'workload',
 			{
 				sub: 'sa_registry',
-				aud: 'skiff',
+				aud: 'yoal',
 				org_id: 'org_a',
 				project_id: 'prj_x',
 				environment: 'production',
 			},
 			3600,
 		);
-		const workloadIdentity = await verifySkiffToken(core.ctx, workloadToken);
+		const workloadIdentity = await verifyYoalToken(core.ctx, workloadToken);
 		expect(workloadIdentity).not.toBeNull();
-		const workloadPrincipal = serviceAccountPrincipalFromSkiffToken(core.ctx, workloadIdentity!);
+		const workloadPrincipal = serviceAccountPrincipalFromYoalToken(core.ctx, workloadIdentity!);
 		expect(
 			decode(
 				core.registry.issueToken({ kind: 'principal', principal: workloadPrincipal }, HOST, [
@@ -218,7 +218,7 @@ describe('token realm', () => {
 			'sts',
 			{
 				sub: 'sa_registry',
-				aud: 'skiff',
+				aud: 'yoal',
 				org_id: 'org_a',
 				trust_id: 'ft_registry',
 				scope: 'image:pull',
@@ -226,9 +226,9 @@ describe('token realm', () => {
 			},
 			900,
 		);
-		const stsIdentity = await verifySkiffToken(core.ctx, stsToken);
+		const stsIdentity = await verifyYoalToken(core.ctx, stsToken);
 		expect(stsIdentity).not.toBeNull();
-		const stsPrincipal = serviceAccountPrincipalFromSkiffToken(core.ctx, stsIdentity!);
+		const stsPrincipal = serviceAccountPrincipalFromYoalToken(core.ctx, stsIdentity!);
 		expect(
 			decode(
 				core.registry.issueToken({ kind: 'principal', principal: stsPrincipal }, HOST, [
@@ -243,7 +243,7 @@ describe('token realm', () => {
 			'sts',
 			{
 				sub: 'sa_registry',
-				aud: 'skiff',
+				aud: 'yoal',
 				org_id: 'org_a',
 				trust_id: 'ft_registry',
 				scope: 'image:pull',
@@ -251,9 +251,9 @@ describe('token realm', () => {
 			},
 			900,
 		);
-		const elsewherePrincipal = serviceAccountPrincipalFromSkiffToken(
+		const elsewherePrincipal = serviceAccountPrincipalFromYoalToken(
 			core.ctx,
-			(await verifySkiffToken(core.ctx, elsewhereToken))!,
+			(await verifyYoalToken(core.ctx, elsewhereToken))!,
 		);
 		expect(
 			decode(
@@ -305,10 +305,10 @@ describe('deploying an image from the registry', () => {
 
 	test('push events update the repository; pins and unknown sinks are ignored or refused', () => {
 		const secret = core.registry.desiredForNode(workerId).length
-			? core.workloads.activation(workerId, core.registry.desiredForNode(workerId)[0]!.id).env.SKIFF_REGISTRY_EVENTS_URL!.split('/').pop()!
+			? core.workloads.activation(workerId, core.registry.desiredForNode(workerId)[0]!.id).env.YOAL_REGISTRY_EVENTS_URL!.split('/').pop()!
 			: '';
 		expect(core.registry.recordEvent(secret, 'zotregistry.image.updated', { name: 'acme/shop', reference: '2', digest: DIGEST })).toBe(true);
-		expect(core.registry.recordEvent(secret, 'zotregistry.image.updated', { name: 'acme/shop', reference: 'skiff-d-dep_1', digest: DIGEST })).toBe(false);
+		expect(core.registry.recordEvent(secret, 'zotregistry.image.updated', { name: 'acme/shop', reference: 'yoal-d-dep_1', digest: DIGEST })).toBe(false);
 		expect(core.registry.recordEvent(secret, 'zotregistry.repository.created', { name: 'acme/shop' })).toBe(false);
 		expect(() => core.registry.recordEvent('wrong', 'zotregistry.image.updated', {})).toThrow(/Unknown event sink/);
 		expect(core.registry.listRepositories(viewer)[0]).toMatchObject({ pushes: 1, lastTag: '2', lastDigest: DIGEST });
@@ -318,7 +318,7 @@ describe('deploying an image from the registry', () => {
 		expect(await core.registry.tags(viewer, 'acme/shop')).toEqual([{ tag: '1', digest: null }, { tag: '2', digest: null }]);
 		await expect(core.registry.tags(outsider, 'acme/shop')).rejects.toThrow(/Repository/);
 		await expect(core.registry.deleteTag(deployer, 'acme/shop', '1')).rejects.toThrow(/image:delete/);
-		await expect(core.registry.deleteTag(admin, 'acme/shop', 'skiff-d-dep_x')).rejects.toThrow(/managed by Skiff/);
+		await expect(core.registry.deleteTag(admin, 'acme/shop', 'yoal-d-dep_x')).rejects.toThrow(/managed by Yoal/);
 		await core.registry.deleteTag(admin, 'acme/shop', '1');
 		expect(zotCalls.at(-1)).toMatchObject({ method: 'DELETE', url: `https://${HOST}/v2/acme/shop/manifests/1` });
 	});
@@ -497,9 +497,9 @@ describe('mirrors, signatures, CVEs, S3 and quotas (G2, G4–G6)', () => {
 		expect(desired!.registry!.s3).toEqual({ endpoint: 's3.example.com:9000', bucket: 'images', region: 'us-east-1', secure: true });
 		const activation = core.workloads.activation(workerId, desired!.id);
 		expect(activation.env).toMatchObject({
-			SKIFF_REGISTRY_S3_ACCESS_KEY: 'AKIA1',
-			SKIFF_REGISTRY_S3_SECRET_KEY: 'secret-123',
-			SKIFF_REGISTRY_CACHE_URL: 'redis://cache:6379/0',
+			YOAL_REGISTRY_S3_ACCESS_KEY: 'AKIA1',
+			YOAL_REGISTRY_S3_SECRET_KEY: 'secret-123',
+			YOAL_REGISTRY_CACHE_URL: 'redis://cache:6379/0',
 		});
 		core.registry.update(admin, { s3: null });
 	});
@@ -509,7 +509,7 @@ describe('mirrors, signatures, CVEs, S3 and quotas (G2, G4–G6)', () => {
 		expect(view).toMatchObject({ signatures: 'enforce', cosignKeys: 1, cveScanning: true });
 		const [desired] = core.registry.desiredForNode(workerId);
 		expect(desired!.registry).toMatchObject({ trust: true, cve: true });
-		expect(core.workloads.activation(workerId, desired!.id).env.SKIFF_REGISTRY_ADMIN_HTPASSWD).toMatch(/^skiff-admin:\$2[aby]\$10\$/);
+		expect(core.workloads.activation(workerId, desired!.id).env.YOAL_REGISTRY_ADMIN_HTPASSWD).toMatch(/^yoal-admin:\$2[aby]\$10\$/);
 		expect(await core.registry.syncTrustKeys()).toBe(true);
 		expect(await core.registry.syncTrustKeys()).toBe(true);
 		expect(uploads).toEqual(['Basic |-----BEGIN PUBLIC KEY-----']);

@@ -8,10 +8,10 @@
 	import PlugIcon from '@lucide/svelte/icons/plug';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import UnplugIcon from '@lucide/svelte/icons/unplug';
-	import { nextEnvPrefix, storageEnvNames, type StorageAttachmentView } from '@skiff/contracts';
+	import { nextEnvPrefix, storageEnvNames, type StorageAttachmentView } from '@yoal/contracts';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';

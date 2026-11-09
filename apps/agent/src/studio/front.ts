@@ -5,7 +5,7 @@
  * and forwards each call over the studio socket with both bodies streaming and the client's
  * abort passed through.
  *
- * It never loads a plugin and never parses result rows: the only `@skiff/studio` import is the
+ * It never loads a plugin and never parses result rows: the only `@yoal/studio` import is the
  * protocol module, so the agent's memory does not change while results stream.
  */
 import { createHash, timingSafeEqual } from 'node:crypto';
@@ -15,14 +15,14 @@ import {
 	STUDIO_TOKEN_HEADER,
 	type DatabaseStudioActivation,
 	type NodeStudioDesired,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import {
 	idempotentOps,
 	StudioError,
 	studioErrorBodySchema,
 	studioOps,
 	type StudioOp,
-} from '@skiff/studio/protocol';
+} from '@yoal/studio/protocol';
 
 export type FetchStudioActivation = (
 	sessionId: string,
@@ -34,7 +34,7 @@ export interface StudioFrontOptions {
 	/** Ask the control plane for a session's activation; throws a `StudioError` when refused. */
 	fetchActivation: FetchStudioActivation;
 	helper: { studioStart(): Promise<void> };
-	/** Defaults to `SKIFF_STUDIO_SOCKET`, then `/run/skiff/studio.sock`. */
+	/** Defaults to `YOAL_STUDIO_SOCKET`, then `/run/yoal/studio.sock`. */
 	socketPath?: string;
 	/** Used for the unix-socket calls; injected for tests. */
 	fetch?: typeof fetch;
@@ -84,7 +84,7 @@ export class StudioFront {
 	constructor(options: StudioFrontOptions) {
 		this.fetchActivation = options.fetchActivation;
 		this.helper = options.helper;
-		this.socketPath = options.socketPath ?? process.env.SKIFF_STUDIO_SOCKET ?? '/run/skiff/studio.sock';
+		this.socketPath = options.socketPath ?? process.env.YOAL_STUDIO_SOCKET ?? '/run/yoal/studio.sock';
 		this.fetchImpl = options.fetch ?? fetch;
 		this.now = options.now ?? Date.now;
 		this.hostname = options.hostname ?? '127.0.0.1';

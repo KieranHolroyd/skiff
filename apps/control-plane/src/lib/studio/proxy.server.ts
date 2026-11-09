@@ -10,8 +10,8 @@ import {
 	type SchemaChange,
 	type SchemaChangeOp,
 	type StudioOp
-} from '@skiff/studio/protocol';
-import { STUDIO_SESSION_HEADER, STUDIO_TOKEN_HEADER, type Principal } from '@skiff/contracts';
+} from '@yoal/studio/protocol';
+import { STUDIO_SESSION_HEADER, STUDIO_TOKEN_HEADER, type Principal } from '@yoal/contracts';
 
 /**
  * The control-plane hop of the native studio (plan 22): browser → here → internal gateway → the
@@ -54,7 +54,7 @@ export interface StudioProxyDeps {
 		endpoint(principal: Principal, name: string): StudioEndpoint;
 		recordActivity(principal: Principal, name: string, activity: StudioActivity): void;
 	};
-	/** Loopback port of the edge's internal database gateway (`SKIFF_DATABASE_GATEWAY_PORT`). */
+	/** Loopback port of the edge's internal database gateway (`YOAL_DATABASE_GATEWAY_PORT`). */
 	gatewayPort: () => number;
 	fingerprint: (input: string) => string;
 	fetch?: typeof fetch;

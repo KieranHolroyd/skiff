@@ -84,7 +84,7 @@ describe('serviceAccountKeyTable', () => {
 			{
 				id: 'ak_1',
 				name: 'ci',
-				start: 'skif_abc',
+				start: 'yoal_abc',
 				expiresAt: Date.UTC(2026, 11, 1, 9, 0, 0),
 				lastUsedAt: null,
 				revokedAt: null,
@@ -92,14 +92,14 @@ describe('serviceAccountKeyTable', () => {
 			{
 				id: 'ak_2',
 				name: 'old',
-				start: 'skif_def',
+				start: 'yoal_def',
 				expiresAt: null,
 				lastUsedAt: Date.UTC(2026, 10, 9, 12, 0, 0),
 				revokedAt: Date.UTC(2026, 10, 10, 12, 0, 0),
 			},
 		];
 		const table = serviceAccountKeyTable(keys);
-		expect(table).toContain('skif_abc');
+		expect(table).toContain('yoal_abc');
 		expect(table).toContain('2026-12-01 09:00:00Z');
 		expect(table).toContain('never');
 		expect(table).toContain('2026-11-09 12:00:00Z');

@@ -19,7 +19,7 @@ function requiredKey(value: string | undefined, dataDir: string): Uint8Array {
 	mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 	if (value) {
 		const raw = /^[A-Za-z0-9+/=]{43,44}$/.test(value) ? Buffer.from(value, 'base64') : Buffer.from(value, 'utf8');
-		if (raw.length !== 32) throw new Error('SKIFF_IDENTITY_MASTER_KEY must be 32 bytes (base64 or raw)');
+		if (raw.length !== 32) throw new Error('YOAL_IDENTITY_MASTER_KEY must be 32 bytes (base64 or raw)');
 		return raw;
 	}
 	// A process-local key is enough for one identity node: no other process verifies these tokens.
@@ -40,18 +40,18 @@ function port(value: string | undefined): number {
 }
 
 export function loadIdentityConfig(env: NodeJS.ProcessEnv = process.env): IdentityConfig {
-	const dataDir = env.SKIFF_IDENTITY_DATA_DIR?.trim() || '/var/lib/skiff/identity';
-	const dbPath = env.SKIFF_IDENTITY_DB?.trim() || join(dataDir, 'identity.db');
-	const socketPath = env.SKIFF_IDENTITY_SOCKET?.trim() || '/run/skiff/identity.sock';
-	const contentDomain = (env.SKIFF_IDENTITY_CONTENT_DOMAIN ?? env.SKIFF_CONTENT_DOMAIN ?? 'localhost').trim().toLowerCase();
-	const platformOrigin = (env.SKIFF_IDENTITY_ORIGIN ?? `https://auth.${contentDomain}`).replace(/\/+$/, '');
-	const masterKey = requiredKey(env.SKIFF_IDENTITY_MASTER_KEY, dataDir);
+	const dataDir = env.YOAL_IDENTITY_DATA_DIR?.trim() || '/var/lib/yoal/identity';
+	const dbPath = env.YOAL_IDENTITY_DB?.trim() || join(dataDir, 'identity.db');
+	const socketPath = env.YOAL_IDENTITY_SOCKET?.trim() || '/run/yoal/identity.sock';
+	const contentDomain = (env.YOAL_IDENTITY_CONTENT_DOMAIN ?? env.YOAL_CONTENT_DOMAIN ?? 'localhost').trim().toLowerCase();
+	const platformOrigin = (env.YOAL_IDENTITY_ORIGIN ?? `https://auth.${contentDomain}`).replace(/\/+$/, '');
+	const masterKey = requiredKey(env.YOAL_IDENTITY_MASTER_KEY, dataDir);
 	return {
 		dataDir,
 		dbPath,
 		socketPath,
-		host: env.SKIFF_IDENTITY_HOST?.trim() || '127.0.0.1',
-		port: port(env.SKIFF_IDENTITY_PORT),
+		host: env.YOAL_IDENTITY_HOST?.trim() || '127.0.0.1',
+		port: port(env.YOAL_IDENTITY_PORT),
 		contentDomain,
 		platformOrigin,
 		masterKey,

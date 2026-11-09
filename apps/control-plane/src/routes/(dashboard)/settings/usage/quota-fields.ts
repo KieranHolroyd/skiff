@@ -1,4 +1,4 @@
-import type { QuotaField, QuotaUsageMetricKey } from '@skiff/contracts';
+import type { QuotaField, QuotaUsageMetricKey } from '@yoal/contracts';
 
 /** How a quota reads in the dashboard; shared by the usage meters and the "Edit limits" form. */
 export interface QuotaFieldMeta {

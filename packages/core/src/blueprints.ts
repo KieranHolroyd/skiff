@@ -9,7 +9,7 @@ import {
 	storageAttachments,
 	storageBuckets,
 	workloads,
-} from '@skiff/db';
+} from '@yoal/db';
 import {
 	BLUEPRINT_MAX_BYTES,
 	attachmentTarget,
@@ -44,7 +44,7 @@ import {
 	type Principal,
 	type StorageGrant,
 	type WorkloadSpec,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { BrokerRow } from './brokers.ts';
 import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
@@ -141,7 +141,7 @@ export function parseBlueprintText(text: string): unknown {
 export function parseBlueprint(document: string | Record<string, unknown>): Blueprint {
 	const raw = typeof document === 'string' ? parseBlueprintText(document) : document;
 	if (!raw || typeof raw !== 'object' || Array.isArray(raw))
-		throw new ValidationError('A blueprint is one mapping with `apiVersion: skiff/v1` and a `name` at the top.');
+		throw new ValidationError('A blueprint is one mapping with `apiVersion: yoal/v1` and a `name` at the top.');
 	const parsed = blueprintSchema.safeParse(coerceVersions(raw as Record<string, unknown>));
 	if (!parsed.success) {
 		const issues = parsed.error.issues.map((issue) => ({ path: issue.path.map(String), message: issue.message }));
@@ -470,7 +470,7 @@ export class BlueprintService {
 		const fail = (key: string, message: string) => problems.push({ path: [key], message });
 
 		if (Object.keys(doc.brokers).length > 0 && !featureEnabled(this.ctx.config, 'BROKERS'))
-			fail('brokers', 'Queue brokers are not enabled on this platform (SKIFF_FEATURE_BROKERS).');
+			fail('brokers', 'Queue brokers are not enabled on this platform (YOAL_FEATURE_BROKERS).');
 
 		// projects, then their environments
 		for (const [slug, project] of Object.entries(doc.projects)) {
@@ -599,7 +599,7 @@ export class BlueprintService {
 			const check = checkSlug(slug, this.slugTakenElsewhere(principal.orgId, slug) ? [slug] : []);
 			if (!check.ok) problems.push(check.reason ?? `"${slug}" cannot be used.`);
 			if (project.runtime === 'function' && !featureEnabled(this.ctx.config, 'FUNCTIONS'))
-				problems.push('Functions are not enabled on this platform (SKIFF_FEATURE_FUNCTIONS).');
+				problems.push('Functions are not enabled on this platform (YOAL_FEATURE_FUNCTIONS).');
 			changes.push({ path: 'runtime', from: null, to: project.runtime });
 			change(changes, 'name', null, project.name ?? slug);
 			change(changes, 'placement', null, project.placement ?? 'edge');
@@ -654,7 +654,7 @@ export class BlueprintService {
 		if (database.version !== undefined && database.version !== row.version && row.engine === database.engine) {
 			if (row.engine === 'postgres' && isPostgresMajorChange(row.version, database.version))
 				problems.push(
-					`PostgreSQL ${row.version} → ${database.version} is a major-version upgrade. Run \`skif db upgrade ${name} --to ${database.version} --plan\` first; a blueprint never switches a major.`,
+					`PostgreSQL ${row.version} → ${database.version} is a major-version upgrade. Run \`yoal db upgrade ${name} --to ${database.version} --plan\` first; a blueprint never switches a major.`,
 				);
 			else if (row.engine !== 'postgres') {
 				const forward = live.versions.indexOf(database.version) < live.versions.indexOf(row.version);
@@ -749,7 +749,7 @@ export class BlueprintService {
 		const patch: { access?: 'private' | 'public-read'; versioning?: boolean; quotaBytes?: number | null } = {};
 		const needsFlag = config.versioning === true || (quotaBytes !== undefined && quotaBytes !== null);
 		if (needsFlag && !featureEnabled(this.ctx.config, 'OBJECT_BROWSER') && (!live || live.versioning !== config.versioning || live.quotaBytes !== quotaBytes))
-			problems.push('Bucket versioning and quotas need the OBJECT_BROWSER feature (SKIFF_FEATURE_OBJECT_BROWSER).');
+			problems.push('Bucket versioning and quotas need the OBJECT_BROWSER feature (YOAL_FEATURE_OBJECT_BROWSER).');
 		if (live?.deleteRequestedAt && !live.deleteBlocked)
 			problems.push(`Bucket "${bucket}" is being deleted. Plan again once it is gone.`);
 		if (!live || (live.deleteRequestedAt && live.deleteBlocked)) {
@@ -1272,7 +1272,7 @@ export class BlueprintService {
 
 	private requireFeature(): void {
 		if (!featureEnabled(this.ctx.config, 'BLUEPRINTS'))
-			throw new CoreError('feature_disabled', 'Blueprints are not enabled on this platform (SKIFF_FEATURE_BLUEPRINTS).', 403);
+			throw new CoreError('feature_disabled', 'Blueprints are not enabled on this platform (YOAL_FEATURE_BLUEPRINTS).', 403);
 	}
 
 	private require(principal: Principal, permission: Permission): void {
@@ -1553,7 +1553,7 @@ export const blueprintApplyAction: ActionDefinition = {
 	info: operationActions['blueprint.apply'],
 	authorize(principal, params) {
 		if (!params.blueprint)
-			throw new ValidationError('Blueprint plans are made with POST /api/v1/blueprints/plan (or `skif blueprint plan`), not POST /operations.');
+			throw new ValidationError('Blueprint plans are made with POST /api/v1/blueprints/plan (or `yoal blueprint plan`), not POST /operations.');
 		if (!hasPermission(principal, 'project:read')) throw new ForbiddenError('project:read');
 	},
 	beforeApply(ctx, principal, params, input) {

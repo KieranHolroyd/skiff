@@ -1,6 +1,6 @@
--- Skiff's GitHub App (docs/GITHUB.md, D163–D166). Additive only.
+-- Yoal's GitHub App (docs/GITHUB.md, D163–D166). Additive only.
 -- The App's own credentials live sealed in `settings` (`github.app`); this table records every
--- installation GitHub reports, and which Skiff organisation (if any) it is linked to. An
+-- installation GitHub reports, and which Yoal organisation (if any) it is linked to. An
 -- installation is unclaimed (org_id NULL) until someone who can see it on GitHub links it.
 
 CREATE TABLE IF NOT EXISTS github_installations (

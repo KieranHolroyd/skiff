@@ -3,7 +3,7 @@
  *
  * The SCIM protocol itself is served by Better Auth's `@better-auth/scim` plugin at
  * `/api/auth/scim/v2`. The plugin owns its boot-migrated resource tables but deliberately has no
- * organisation model: this service supplies the missing Skiff pieces.
+ * organisation model: this service supplies the missing Yoal pieces.
  *
  * - `ScimTokenService` mints the per-organisation bearer token. Only `sha256(raw)` is stored, and
  *   the raw value is returned once, when it is created. `verify` is the plugin's
@@ -14,10 +14,10 @@
  *   `source = 'scim'` and membership `source = 'scim'`. Because the SCIM group is authoritative,
  *   the dashboard must not edit that membership (`IamService.addGroupMember` already refuses).
  *
- * The plugin stays the protocol implementation; this module is the Skiff behavioural layer.
+ * The plugin stays the protocol implementation; this module is the Yoal behavioural layer.
  */
 import type { Database } from 'bun:sqlite';
-import type { Principal } from '@skiff/contracts';
+import type { Principal } from '@yoal/contracts';
 import type { CoreContext } from '../context.ts';
 import { NotFoundError } from '../errors.ts';
 import { newId, randomToken, sha256Hex } from '../util.ts';
@@ -538,7 +538,7 @@ export class ScimTokenService {
 		return changed;
 	}
 
-	/** SCIM display names are not constrained like Skiff group names; guarantee uniqueness. */
+	/** SCIM display names are not constrained like Yoal group names; guarantee uniqueness. */
 	#uniqueGroupName(orgId: string, raw: string, ownId: string | null): string {
 		const base = raw.trim().slice(0, 80) || 'SCIM group';
 		for (let attempt = 0; attempt < 100; attempt += 1) {

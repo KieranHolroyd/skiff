@@ -5,7 +5,7 @@ import {
 	storageEngineRegistry,
 	type NodeCapacityView,
 	type StorageView
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { failStatus, formBoolean, formString, toFormFailure } from '../_lib/errors.js';
 import { fieldErrorsFrom, optionalNumber } from '../databases/_lib/forms.server.js';

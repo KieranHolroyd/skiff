@@ -3,14 +3,14 @@ import { promises as fs } from 'node:fs';
 import { createServer, connect, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { desiredStateSchema, type DatabaseReplicationSlotStatus, type DesiredState } from '@skiff/contracts';
+import { desiredStateSchema, type DatabaseReplicationSlotStatus, type DesiredState } from '@yoal/contracts';
 import { DatabaseReplicationRunner } from './database-replication.ts';
 import { REPLICA_LINK_SOCKET, ReplicaLinkForwarder } from './replica-links.ts';
 import { withOptionalSpec } from './runtime.ts';
 
 const PRIMARY = 'db_0123456789abcdef0123456789abcdef';
 const REPLICA = 'db_dbr_0123456789abcdef0123456789abcdef';
-const SLOT = 'skiff_dbr_0123456789abcdef0123456789abcdef';
+const SLOT = 'yoal_dbr_0123456789abcdef0123456789abcdef';
 const cleanup: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
@@ -37,7 +37,7 @@ describe('ReplicaLinkForwarder', () => {
 		await new Promise<void>((resolve) => primary.listen(0, '127.0.0.1', resolve));
 		cleanup.push(() => new Promise((resolve) => primary.close(() => resolve())));
 		const port = (primary.address() as { port: number }).port;
-		const root = await fs.mkdtemp(join(tmpdir(), 'skiff-links-'));
+		const root = await fs.mkdtemp(join(tmpdir(), 'yoal-links-'));
 		cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
 		const links = new ReplicaLinkForwarder({ root: join(root, 'replication') });
 		cleanup.push(() => links.close());
@@ -63,7 +63,7 @@ describe('ReplicaLinkForwarder', () => {
 	});
 
 	test('a changed upstream restarts the socket and drops open streams; stale dirs are swept', async () => {
-		const root = await fs.mkdtemp(join(tmpdir(), 'skiff-links-'));
+		const root = await fs.mkdtemp(join(tmpdir(), 'yoal-links-'));
 		cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
 		const stale = 'db_dbr_ffffffffffffffffffffffffffffffff';
 		await fs.mkdir(join(root, stale), { recursive: true });

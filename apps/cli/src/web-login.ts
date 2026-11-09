@@ -1,5 +1,5 @@
 /**
- * Browser login for the CLI (`skif login --web`).
+ * Browser login for the CLI (`yoal login --web`).
  *
  * The CLI starts a loopback listener, generates a PKCE verifier + state, and opens the
  * dashboard at `<platform>/cli/login`. After the user approves, the control plane redirects a
@@ -65,7 +65,7 @@ export async function webLogin(
 					error === 'access_denied'
 						? 'Login was cancelled in the browser.'
 						: `The platform rejected the login (${error}).`,
-					{ code: 'login_cancelled', suggestions: ['Run `skif login --web` to try again.'] },
+					{ code: 'login_cancelled', suggestions: ['Run `yoal login --web` to try again.'] },
 				),
 			);
 			return callbackPage('Login cancelled', 'You can close this tab and return to the terminal.');
@@ -78,7 +78,7 @@ export async function webLogin(
 		}
 
 		resolveCode(code);
-		return callbackPage('Skiff CLI authorized', 'You can close this tab and return to the terminal.');
+		return callbackPage('Yoal CLI authorized', 'You can close this tab and return to the terminal.');
 	};
 
 	// node:http rather than Bun.serve so the published CLI runs under Node as well as Bun.
@@ -111,7 +111,7 @@ export async function webLogin(
 			() =>
 				new CliError('Timed out waiting for browser approval.', {
 					code: 'login_timeout',
-					suggestions: ['Run `skif login --web` to try again.'],
+					suggestions: ['Run `yoal login --web` to try again.'],
 				}),
 		);
 
@@ -185,7 +185,7 @@ function callbackPage(title: string, message: string, status = 200): CallbackRes
 		html: true,
 		body: `<!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>${title} · Skiff</title>
+<head><meta charset="utf-8"><title>${title} · Yoal</title>
 <style>
 body{font-family:ui-sans-serif,system-ui,sans-serif;background:#0b0b0c;color:#f5f5f5;display:grid;place-items:center;min-height:100vh;margin:0}
 main{max-width:28rem;padding:2rem;text-align:center}

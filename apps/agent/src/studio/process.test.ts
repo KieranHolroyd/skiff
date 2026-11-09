@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync } from 'node:fs';
-import { STUDIO_SESSION_HEADER, type DatabaseStudioActivation } from '@skiff/contracts';
-import { decodeEvents, type StudioEvent } from '@skiff/studio/protocol';
+import { STUDIO_SESSION_HEADER, type DatabaseStudioActivation } from '@yoal/contracts';
+import { decodeEvents, type StudioEvent } from '@yoal/studio/protocol';
 import { runStudioProcess, type StudioProcess, type StudioProcessOptions } from './process.ts';
 import { tempSocket, testActivation, trackedFake } from './test-support.ts';
 

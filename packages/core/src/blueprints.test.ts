@@ -2,8 +2,8 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_FEATURES, type BlueprintPlanView, type Principal } from '@skiff/contracts';
-import { createDb } from '@skiff/db';
+import { DEFAULT_FEATURES, type BlueprintPlanView, type Principal } from '@yoal/contracts';
+import { createDb } from '@yoal/db';
 import { blueprintPlanHash, parseBlueprint, parseResourceKey } from './blueprints.ts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
@@ -11,7 +11,7 @@ import { LocalObjectStore } from './object-store.ts';
 import type { Core } from './index.ts';
 
 /** Blueprints (plan 11, docs/OPERATIONS.md §12): parse, plan, apply, re-apply, prune. */
-const dir = mkdtempSync(join(tmpdir(), 'skiff-blueprints-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-blueprints-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 let clock = Date.parse('2026-11-07T10:00:00Z');
@@ -46,7 +46,7 @@ afterAll(() => {
 });
 
 const yaml = `
-apiVersion: skiff/v1
+apiVersion: yoal/v1
 name: shop
 projects:
   shop-web:
@@ -100,11 +100,11 @@ describe('parsing', () => {
 	});
 
 	test('errors name the path; bad syntax and non-mappings are refused', () => {
-		expect(() => parseBlueprint('apiVersion: skiff/v1\nname: shop\nprojects:\n  web:\n    spa: true\n')).toThrow(
+		expect(() => parseBlueprint('apiVersion: yoal/v1\nname: shop\nprojects:\n  web:\n    spa: true\n')).toThrow(
 			/projects\.web: Unrecognized key/,
 		);
 		try {
-			parseBlueprint('apiVersion: skiff/v1\nname: shop\nprojects:\n  web:\n    spa: true\n');
+			parseBlueprint('apiVersion: yoal/v1\nname: shop\nprojects:\n  web:\n    spa: true\n');
 		} catch (error) {
 			expect((error as { issues: Array<{ path: string[] }> }).issues[0]?.path).toEqual(['projects', 'web']);
 		}
@@ -176,8 +176,8 @@ describe('plan and apply', () => {
 	test('the feature flag gates every entry point', async () => {
 		features.BLUEPRINTS = false;
 		try {
-			await expect(core.blueprints.plan(owner, { document: yaml })).rejects.toThrow(/SKIFF_FEATURE_BLUEPRINTS/);
-			expect(() => core.blueprints.validate(owner, yaml)).toThrow(/SKIFF_FEATURE_BLUEPRINTS/);
+			await expect(core.blueprints.plan(owner, { document: yaml })).rejects.toThrow(/YOAL_FEATURE_BLUEPRINTS/);
+			expect(() => core.blueprints.validate(owner, yaml)).toThrow(/YOAL_FEATURE_BLUEPRINTS/);
 		} finally {
 			features.BLUEPRINTS = true;
 		}
@@ -237,7 +237,7 @@ describe('plan and apply', () => {
 		// Slugs are platform-wide: another org's project holds this one.
 		await core.projects.create(outsider, { slug: 'taken-site', runtime: 'static', placement: 'edge', productionAccess: 'public', previewAccess: 'platform' });
 		await expect(
-			core.blueprints.plan(owner, { document: 'apiVersion: skiff/v1\nname: other\nprojects:\n  taken-site: {}\n' }),
+			core.blueprints.plan(owner, { document: 'apiVersion: yoal/v1\nname: other\nprojects:\n  taken-site: {}\n' }),
 		).rejects.toThrow(/projects\.taken-site: "taken-site" is already taken/);
 		// A deployer cannot add custom domains.
 		await expect(core.blueprints.plan(deployer, { document: yaml })).rejects.toThrow(/Needs the domain:create permission/);
@@ -418,7 +418,7 @@ describe('plan and apply', () => {
 	test('an agent applies a reviewed plan; resources it did not create are adopted', async () => {
 		await core.projects.create(owner, { slug: 'adopt-me', runtime: 'static', placement: 'edge', productionAccess: 'public', previewAccess: 'platform' });
 		const plan = await core.blueprints.plan(agent, {
-			document: 'apiVersion: skiff/v1\nname: adopted\nprojects:\n  adopt-me:\n    access: { production: platform }\n',
+			document: 'apiVersion: yoal/v1\nname: adopted\nprojects:\n  adopt-me:\n    access: { production: platform }\n',
 		});
 		expect(plan.resources).toEqual([
 			{
@@ -437,7 +437,7 @@ describe('plan and apply', () => {
 
 	test('a pending plan can be read back by its author until it runs or expires', async () => {
 		const plan = await core.blueprints.plan(owner, {
-			document: 'apiVersion: skiff/v1\nname: adopted\nprojects:\n  adopt-me:\n    access: { production: public }\n',
+			document: 'apiVersion: yoal/v1\nname: adopted\nprojects:\n  adopt-me:\n    access: { production: public }\n',
 		});
 		expect(core.blueprints.pendingPlan(owner, plan.planHash)).toMatchObject({
 			planHash: plan.planHash,

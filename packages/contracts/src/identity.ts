@@ -4,7 +4,7 @@ import * as z from 'zod';
  * The separate user-pool identity process (docs/IAM.md §11.2, I27).
  *
  * A user pool's issuer is `https://auth.<sitesDomain>/<poolId>`. The control plane used to answer
- * that host through Caddy's platform fallback; `skiff-identity` is the target process, one per
+ * that host through Caddy's platform fallback; `yoal-identity` is the target process, one per
  * install for now. This module carries the non-secret projection the identity database needs, the
  * authenticated per-node secret bundle the agent fetches separately, the node capability that
  * marks the process's host, and the key bundle that lets a pool move without invalidating tokens.
@@ -15,10 +15,10 @@ import * as z from 'zod';
  */
 
 export const IDENTITY_CAPABILITY = 'identity';
-/** Fixed loopback port `skiff-identity` listens on for Caddy. */
+/** Fixed loopback port `yoal-identity` listens on for Caddy. */
 export const IDENTITY_DEFAULT_PORT = 8788;
 /** Fixed unix socket the node's agent uses to push state and read health. */
-export const IDENTITY_DEFAULT_SOCKET = '/run/skiff/identity.sock';
+export const IDENTITY_DEFAULT_SOCKET = '/run/yoal/identity.sock';
 /** A sealed key bundle larger than this is reported, not silently pushed through desired state. */
 export const IDENTITY_KEY_BUNDLE_MAX_BYTES = 64 * 1024;
 
@@ -80,7 +80,7 @@ export const identityPoolDesiredSchema = z
 export type IdentityPoolDesired = z.infer<typeof identityPoolDesiredSchema>;
 
 /**
- * `DesiredState.identity`: present only on the node that runs `skiff-identity`. `generation` is a
+ * `DesiredState.identity`: present only on the node that runs `yoal-identity`. `generation` is a
  * content hash, so the agent re-pushes only when the projection changes. `upstream` is the Caddy
  * dial target and is not a secret.
  */
@@ -149,7 +149,7 @@ export type IdentitySecrets = z.infer<typeof identitySecretsSchema>;
  * The signing-key rows that keep pool tokens valid when a pool moves between identity nodes.
  * `privateSealed` is already sealed with the identity master key, so the bundle can be copied
  * without ever exposing a private key; the destination node must be configured with the same
- * `SKIFF_IDENTITY_MASTER_KEY` (or import while that file is shared).
+ * `YOAL_IDENTITY_MASTER_KEY` (or import while that file is shared).
  */
 export const identityKeyBundleSchema = z
 	.object({

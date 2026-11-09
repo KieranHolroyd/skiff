@@ -7,7 +7,7 @@ import {
 	type FunctionRuntimeBinding,
 	type FunctionRuntimeSpec,
 	type WorkloadDesired,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { PHASE_ONE_BINDING_TYPES, bindingRenderer } from './function-bindings/index.ts';
 import { renderTailWorker } from './function-bindings/tail.ts';
 
@@ -48,7 +48,7 @@ export interface RenderedWorkerdConfig {
 /** Module name (and credential/embed name) of the generated shim. Fixed contract with the helper. */
 const SHIM_MODULE_NAME = 'function-shim';
 /** The shim's own Worker on a Python host (D121); the user's Worker stays `main`. */
-const PYTHON_SHIM_SERVICE = 'skiff-shim';
+const PYTHON_SHIM_SERVICE = 'yoal-shim';
 
 /** `Worker.modules` union member for each manifest module type (workerd.capnp). */
 const MODULE_KINDS: Record<FunctionModule['type'], string> = {
@@ -194,7 +194,7 @@ export function renderWorkerdConfigParts(input: RenderWorkerdConfigInput): Rende
 	];
 
 	const header = [
-		`# Skiff function host for workload ${commentText(workload.id)} (project ${commentText(workload.projectSlug)}).`,
+		`# Yoal function host for workload ${commentText(workload.id)} (project ${commentText(workload.projectSlug)}).`,
 		'# Rendered by the agent from desired state on every apply; local edits are overwritten.',
 		`# Module sources are embedded as helper credentials from the release at ${commentText(releaseDir)}.`,
 		// Hyperdrive credentials are literals in this file; say so where a reader will see it.
@@ -319,7 +319,7 @@ function collectBindingFragments(
 
 		// Defence in depth: the control plane refuses unsupported bindings before a node sees them.
 		throw new Error(
-			`Binding "${binding.name}" uses type "${binding.type}", which has no node renderer in this Skiff build yet; ` +
+			`Binding "${binding.name}" uses type "${binding.type}", which has no node renderer in this Yoal build yet; ` +
 				'this build renders Durable Objects, Hyperdrive, KV, Cache, R2, D1, queues, assets, Analytics Engine and user-pool auth on the node.',
 		);
 	}
@@ -474,7 +474,7 @@ export function capnpText(value: string): string {
 /**
  * Map the contract's upstream spelling to workerd's `ExternalServer.address`.
  *
- * The control plane stores what Caddy uses: `unix//run/skiff-workloads/<id>.sock` (Caddy's network
+ * The control plane stores what Caddy uses: `unix//run/yoal-workloads/<id>.sock` (Caddy's network
  * `unix` plus the absolute path) or `127.0.0.1:<port>` (optionally with an `http(s)://` scheme).
  * workerd wants `unix:/path` or `host:port`, so normalise the former and strip the scheme from the
  * latter. Anything that is neither a unix socket nor a loopback host:port is a capability we did
@@ -552,7 +552,7 @@ function renderBinding(binding: FunctionRuntimeBinding, byAddress: Map<string, s
 			const unsupported = binding as { type: string; name?: string };
 			const phases: Record<string, number | undefined> = FUNCTION_BINDING_PHASE;
 			const phase = phases[unsupported.type];
-			const when = phase === undefined ? 'not supported by Skiff functions' : `served from phase ${phase}`;
+			const when = phase === undefined ? 'not supported by Yoal functions' : `served from phase ${phase}`;
 			throw new Error(
 				`Binding "${unsupported.name ?? 'unnamed'}" uses type "${unsupported.type}", which is ${when}; ` +
 					'phase 1 functions support text, json, secret, service and app bindings.',

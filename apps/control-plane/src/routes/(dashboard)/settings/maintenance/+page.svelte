@@ -2,7 +2,7 @@
 	import { invalidateAll } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import HistoryIcon from '@lucide/svelte/icons/history';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import * as Table from '#lib/components/ui/table/index.js';
 	import EmptyState from '../../_lib/EmptyState.svelte';
 	import Panel from '../../_lib/Panel.svelte';
@@ -20,13 +20,13 @@
 	let { data }: PageProps = $props();
 
 	function actorName(id: string | null, type: string) {
-		if (!id) return type === 'system' ? 'Skiff' : '—';
+		if (!id) return type === 'system' ? 'Yoal' : '—';
 		if (id === data.userId) return 'You';
 		return data.actors[id] ?? id;
 	}
 </script>
 
-<svelte:head><title>Maintenance · Settings · Skiff</title></svelte:head>
+<svelte:head><title>Maintenance · Settings · Yoal</title></svelte:head>
 
 <SettingsHeader id="maintenance" />
 

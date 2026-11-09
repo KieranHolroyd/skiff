@@ -1,4 +1,4 @@
-import { FUNCTION_ANALYTICS_PORT, type WorkloadDesired } from '@skiff/contracts';
+import { FUNCTION_ANALYTICS_PORT, type WorkloadDesired } from '@yoal/contracts';
 import type { RenderedBinding } from './types.ts';
 import { capnpText } from '../function-config.ts';
 import tailWorkerSource from '../../../../packages/function-bindings/src/tail.js' with { type: 'text' };

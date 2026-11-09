@@ -15,7 +15,7 @@
  * Edits go back as `{ $t: 'ejson', v }` cells, so the plugin's `fromCell` decodes them with
  * `relaxed: false` and keeps the types the user sees.
  */
-import type { Cell, Column, RowChange, TaggedCell } from '@skiff/studio/protocol';
+import type { Cell, Column, RowChange, TaggedCell } from '@yoal/studio/protocol';
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 type JsonObject = { [key: string]: Json };

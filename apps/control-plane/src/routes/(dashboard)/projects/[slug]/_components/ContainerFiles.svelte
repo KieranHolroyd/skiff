@@ -8,7 +8,7 @@
 		ContainerFileEntry,
 		ContainerFilePreview,
 		ContainerTarget
-	} from '@skiff/contracts';
+	} from '@yoal/contracts';
 	import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
 	import DownloadIcon from '@lucide/svelte/icons/download';
 	import FileIcon from '@lucide/svelte/icons/file';

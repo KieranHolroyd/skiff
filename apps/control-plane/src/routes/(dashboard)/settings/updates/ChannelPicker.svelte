@@ -2,7 +2,7 @@
 	import { resolve } from '$app/paths';
 	import FlaskConicalIcon from '@lucide/svelte/icons/flask-conical';
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
-	import type { SelfUpdateChannel } from '@skiff/contracts';
+	import type { SelfUpdateChannel } from '@yoal/contracts';
 
 	/**
 	 * Canary or stable (docs/OPS.md §4.1, *Release channels*). Picking one only previews it (the

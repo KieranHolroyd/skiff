@@ -2,8 +2,8 @@
  * The two ways a step talks back to the runner, parsed exactly like GitHub's runner so existing
  * scripts work unchanged:
  *
- * - file commands: `$SKIFF_OUTPUT`/`$GITHUB_OUTPUT`, `$SKIFF_ENV`/`$GITHUB_ENV` (`name=value` or
- *   the heredoc form `name<<DELIMITER`), and `$SKIFF_PATH`/`$GITHUB_PATH` (one directory per line);
+ * - file commands: `$YOAL_OUTPUT`/`$GITHUB_OUTPUT`, `$YOAL_ENV`/`$GITHUB_ENV` (`name=value` or
+ *   the heredoc form `name<<DELIMITER`), and `$YOAL_PATH`/`$GITHUB_PATH` (one directory per line);
  * - workflow commands on stdout/stderr: `::add-mask::`, `::set-output name=x::`, `::group::`,
  *   `::error file=…::`, `::stop-commands::<token>` … `::<token>::`.
  */
@@ -65,8 +65,8 @@ export function parsePathFile(content: string): string[] {
 		.filter(Boolean);
 }
 
-/** Variables a step may not set through `$SKIFF_ENV` (GitHub refuses `NODE_OPTIONS` the same way). */
-export const PROTECTED_ENV_NAMES = new Set(['NODE_OPTIONS', 'SKIFF_JOB_TOKEN', 'SKIFF_CONTROL_URL']);
+/** Variables a step may not set through `$YOAL_ENV` (GitHub refuses `NODE_OPTIONS` the same way). */
+export const PROTECTED_ENV_NAMES = new Set(['NODE_OPTIONS', 'YOAL_JOB_TOKEN', 'YOAL_CONTROL_URL']);
 
 // --- workflow commands -----------------------------------------------------------------
 
@@ -153,7 +153,7 @@ export class WorkflowCommandProcessor {
 					line,
 					effect: {
 						kind: 'warning',
-						message: `The \`${parsed.command}\` command is disabled; use $SKIFF_ENV / $SKIFF_PATH (or the GITHUB_ names)`,
+						message: `The \`${parsed.command}\` command is disabled; use $YOAL_ENV / $YOAL_PATH (or the GITHUB_ names)`,
 					},
 				};
 			case 'save-state':

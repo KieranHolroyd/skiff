@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
-import { githubInstallations, settings } from '@skiff/db';
+import { githubInstallations, settings } from '@yoal/db';
 import {
 	githubAppManifest,
 	githubAppManifestStartSchema,
@@ -18,16 +18,16 @@ import {
 	type GithubRepositoryList,
 	type GithubRepositoryView,
 	type Principal,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { githubAppJwt } from './github-runners.ts';
 
 /**
- * Skiff's GitHub App (docs/GITHUB.md, D163–D166).
+ * Yoal's GitHub App (docs/GITHUB.md, D163–D166).
  *
  * One App per install. A platform admin registers it (GitHub's manifest flow, or pasted
- * credentials); every GitHub account that installs it is linked to one Skiff organisation. The
+ * credentials); every GitHub account that installs it is linked to one Yoal organisation. The
  * App's private key, webhook secret and OAuth secret are sealed with the platform data key and
  * only this service opens them. Everything else asks this service for what it needs:
  *
@@ -446,7 +446,7 @@ export class GithubAppService {
 		else if (!this.ctx.platformIam.canAdminister(principal))
 			throw new CoreError(
 				'github_state_invalid',
-				'Start the installation from Settings → GitHub → Install on GitHub so Skiff knows which organisation it is for.',
+				'Start the installation from Settings → GitHub → Install on GitHub so Yoal knows which organisation it is for.',
 				400,
 			);
 		let verified = false;
@@ -465,7 +465,7 @@ export class GithubAppService {
 		if (!installation?.id) throw new NotFoundError('Installation');
 		const row = this.upsertInstallation(installation);
 		if (row.orgId && row.orgId !== principal.orgId)
-			throw new ConflictError(`The installation on ${row.accountLogin} is already linked to another Skiff organisation.`);
+			throw new ConflictError(`The installation on ${row.accountLogin} is already linked to another Yoal organisation.`);
 		const linked = this.link(row, principal);
 		this.audit(principal, 'github.installation.link', String(row.installationId), {
 			account: row.accountLogin,
@@ -732,7 +732,7 @@ export class GithubAppService {
 		if (!access)
 			throw new CoreError(
 				'github_installation_missing',
-				`Skiff's GitHub App cannot reach ${fullName} for this organisation. Install it, or grant it the repository, in Settings → GitHub.`,
+				`Yoal's GitHub App cannot reach ${fullName} for this organisation. Install it, or grant it the repository, in Settings → GitHub.`,
 				409,
 			);
 		const clean = path.replace(/^\.?\/+/, '').replace(/\/+$/, '');
@@ -825,7 +825,7 @@ export class GithubAppService {
 		if (!installation)
 			throw new CoreError(
 				'github_installation_missing',
-				`Skiff's GitHub App is not installed on ${owner} for this organisation. Install it from Settings → GitHub.`,
+				`Yoal's GitHub App is not installed on ${owner} for this organisation. Install it from Settings → GitHub.`,
 				409,
 			);
 		return this.installationToken(installation.installationId, {
@@ -966,7 +966,7 @@ export class GithubAppService {
 		try {
 			response = await this.fetcher(`${WEB}/login/oauth/access_token`, {
 				method: 'POST',
-				headers: { accept: 'application/json', 'content-type': 'application/json', 'user-agent': 'skiff' },
+				headers: { accept: 'application/json', 'content-type': 'application/json', 'user-agent': 'yoal' },
 				body: JSON.stringify({ client_id: app.clientId, client_secret: this.open(app.clientSecretSealed!), code }),
 				signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
 			});
@@ -991,7 +991,7 @@ export class GithubAppService {
 	// --------------------------------------------------------------------------------- internals
 
 	private stateKey(): Buffer {
-		return createHmac('sha256', Buffer.from(this.ctx.config.masterKey)).update('skiff/github-app-state').digest();
+		return createHmac('sha256', Buffer.from(this.ctx.config.masterKey)).update('yoal/github-app-state').digest();
 	}
 
 	private signState(claims: { kind: 'manifest' | 'install'; userId: string; orgId: string }): string {
@@ -1032,7 +1032,7 @@ export class GithubAppService {
 					accept: 'application/vnd.github+json',
 					...(token ? { authorization: `Bearer ${token}` } : {}),
 					'x-github-api-version': API_VERSION,
-					'user-agent': 'skiff-github-app',
+					'user-agent': 'yoal-github-app',
 					...(body === undefined ? {} : { 'content-type': 'application/json' }),
 				},
 				...(body === undefined ? {} : { body: JSON.stringify(body) }),

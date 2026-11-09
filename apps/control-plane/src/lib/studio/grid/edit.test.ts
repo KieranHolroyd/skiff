@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { Cell, CellKind, Column } from '@skiff/studio/protocol';
+import type { Cell, CellKind, Column } from '@yoal/studio/protocol';
 import { editInitial, editorFor, parseEdit } from './edit.ts';
 
 const col = (kind: CellKind, extra: Partial<Column> = {}): Column => ({

@@ -1,5 +1,5 @@
 import { fail } from '@sveltejs/kit';
-import { PLATFORM_CONFIG_SECTIONS } from '@skiff/contracts';
+import { PLATFORM_CONFIG_SECTIONS } from '@yoal/contracts';
 import {
 	artifactsInR2,
 	backupHealth,

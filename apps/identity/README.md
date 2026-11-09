@@ -1,10 +1,10 @@
-# `skiff-identity` — the user-pool identity process
+# `yoal-identity` — the user-pool identity process
 
 This app is the standalone user-pool issuer described in [`docs/IAM.md` §11.2](../../docs/IAM.md)
 (I27). It is one Bun HTTP process per install (one node for now), launched by the static
-`skiff-identity.service` unit as `skiff-agent identity`, with its own cgroup, data directory and
+`yoal-identity.service` unit as `yoal-agent identity`, with its own cgroup, data directory and
 Litestream companion. It reuses the control plane's `UserPoolService` and `UserPoolEngineService`
-from `@skiff/core`: there is no second auth implementation.
+from `@yoal/core`: there is no second auth implementation.
 
 ## What it serves
 
@@ -38,7 +38,7 @@ this process. Hosted pages are dependency-free HTML with the pool's theme colour
 One SQLite file per **node**, not per pool:
 
 ```
-/var/lib/skiff/identity/identity.db   (WAL, 0600, owned by skiff)
+/var/lib/yoal/identity/identity.db   (WAL, 0600, owned by yoal)
 ```
 
 `packages/db`'s `openIdentityDb` opens it with the same forward-only migrations as the control
@@ -58,13 +58,13 @@ marker:
 
 1. `NodeService.desiredState` picks one identity node: the `identity.node_id` setting if that node
    still advertises the `identity` capability, else the edge, else the first online capable node
-   (`selectIdentityNode` in `@skiff/contracts`).
+   (`selectIdentityNode` in `@yoal/contracts`).
 2. It builds `DesiredState.identity` from the pool/client rows (`identityDesiredForNode` in
-   `@skiff/core`): pool id, org, host, issuer, name, signup mode, verification/MFA switches, theme
+   `@yoal/core`): pool id, org, host, issuer, name, signup mode, verification/MFA switches, theme
    and OIDC clients (ids, redirect URIs, public flag). **No secrets**: no client secret, private
    key or user row is in desired state.
 3. That node's agent (`IdentityBridge`) starts the unit through the helper and `PUT`s the
-   projection to `unix:/run/skiff/identity.sock/state`.
+   projection to `unix:/run/yoal/identity.sock/state`.
 4. The process applies it in one transaction: writes `identity_pools`, upserts
    `user_pools`/`user_pool_clients`, mirrors the verification/MFA settings, and deletes pools and
    clients that left the projection. It answers health with the applied generation, so the agent
@@ -88,8 +88,8 @@ Neither the desired state nor a log line ever carries a client secret.
 ### Signing keys and mail
 
 Pool tokens are signed by `pool:<id>` keys in this database, sealed with a local master key
-(`/var/lib/skiff/identity/master.key`, generated 0600 on first boot, or
-`SKIFF_IDENTITY_MASTER_KEY`). No other process verifies them, so the identity node is
+(`/var/lib/yoal/identity/master.key`, generated 0600 on first boot, or
+`YOAL_IDENTITY_MASTER_KEY`). No other process verifies them, so the identity node is
 self-contained.
 
 **Moving a pool without invalidating tokens.** The control socket exposes
@@ -97,13 +97,13 @@ self-contained.
 `signing_keys` rows for the pool (`next`, `active` and `retired`), base64-encoded; the private JWKs
 stay sealed with this node's master key, so the bundle contains no plaintext key material. Import
 replaces the rows and restores `user_pools.signing_key_id`, so tokens signed before the move keep
-verifying. The destination node must be configured with the same `SKIFF_IDENTITY_MASTER_KEY` (or
+verifying. The destination node must be configured with the same `YOAL_IDENTITY_MASTER_KEY` (or
 the same `master.key` file) to open them. A bundle larger than 64 KiB is reported with
 `tooLarge: true` and is not returned, which keeps it out of desired state; a projection may carry
 `keyBundle` (already sealed) for a move.
 
 Pool mail (verification, magic link, reset, invite, OTP) uses
-`SKIFF_IDENTITY_MAIL_URL` + optional `SKIFF_IDENTITY_MAIL_TOKEN` to hand the rendered message to
+`YOAL_IDENTITY_MAIL_URL` + optional `YOAL_IDENTITY_MAIL_TOKEN` to hand the rendered message to
 the control plane / mail path; without it, a development process logs the link and a production
 process refuses (`platform_mail_unavailable`), the same rule as the in-process engine.
 
@@ -111,7 +111,7 @@ process refuses (`platform_mail_unavailable`), the same rule as the in-process e
 
 `GET /health` returns `{ ok, ready, status, generation, secretsGeneration, pools, version,
 lastStateAt }`; `GET /readyz` is the cheap readiness probe. `GET /metrics` is Prometheus text with
-`skiff_identity_ready`, pool/generation gauges and `skiff_identity_requests_total{route,status}`.
+`yoal_identity_ready`, pool/generation gauges and `yoal_identity_requests_total{route,status}`.
 The agent reports the unit's status, version, generation, pool count and restart count in the
 heartbeat. While the unit is unhealthy, the agent omits the identity Caddy routes so the assigned
 pools fall back to the control plane's `/api/v1/user-pools/*` and `/pool/*` routes; they move back
@@ -120,10 +120,10 @@ assignment disappears, and restarts it after three consecutive failed health che
 
 ## Node placement and files
 
-- Unit: `scripts/systemd/skiff-identity.service` (static, never enabled).
-- Data dir: `StateDirectory=skiff/identity` → `/var/lib/skiff/identity`.
-- Replication: `scripts/litestream-identity.yml` and `skiff-litestream-identity.service`, separate
-  from the platform database. Replicas live under `skiff/identity-sqlite/`.
+- Unit: `scripts/systemd/yoal-identity.service` (static, never enabled).
+- Data dir: `StateDirectory=yoal/identity` → `/var/lib/yoal/identity`.
+- Replication: `scripts/litestream-identity.yml` and `yoal-litestream-identity.service`, separate
+  from the platform database. Replicas live under `yoal/identity-sqlite/`.
 - Helper verbs: `POST /v1/identity/start|stop`; the agent bridge owns start/stop and state.
 - Capability: agents now advertise `identity`; `DesiredState.identity` is present only on the
   selected node. Caddy proxies `auth.<sitesDomain>/<assigned-pool>/…` to
@@ -149,15 +149,15 @@ Everything above assumes one identity node. Real multi-node HA needs:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `SKIFF_IDENTITY_DATA_DIR` | `/var/lib/skiff/identity` | Database and master key |
-| `SKIFF_IDENTITY_DB` | `<data dir>/identity.db` | SQLite file |
-| `SKIFF_IDENTITY_SOCKET` | `/run/skiff/identity.sock` | Agent control socket |
-| `SKIFF_IDENTITY_HOST` / `_PORT` | `127.0.0.1` / `8788` | Loopback listener for Caddy |
-| `SKIFF_IDENTITY_CONTENT_DOMAIN` | `SKIFF_CONTENT_DOMAIN` or `localhost` | Issuer host `auth.<domain>` |
-| `SKIFF_IDENTITY_ORIGIN` | `https://auth.<content domain>` | Link origin and cookie security |
-| `SKIFF_IDENTITY_MASTER_KEY` | generated file | 32 bytes, base64 or raw |
-| `SKIFF_IDENTITY_VERSION` | `SKIFF_AGENT_VERSION` or `dev` | Reported in health and the heartbeat |
-| `SKIFF_IDENTITY_MAIL_URL` / `_TOKEN` | unset | Forward pool mail; otherwise dev log / refusal |
+| `YOAL_IDENTITY_DATA_DIR` | `/var/lib/yoal/identity` | Database and master key |
+| `YOAL_IDENTITY_DB` | `<data dir>/identity.db` | SQLite file |
+| `YOAL_IDENTITY_SOCKET` | `/run/yoal/identity.sock` | Agent control socket |
+| `YOAL_IDENTITY_HOST` / `_PORT` | `127.0.0.1` / `8788` | Loopback listener for Caddy |
+| `YOAL_IDENTITY_CONTENT_DOMAIN` | `YOAL_CONTENT_DOMAIN` or `localhost` | Issuer host `auth.<domain>` |
+| `YOAL_IDENTITY_ORIGIN` | `https://auth.<content domain>` | Link origin and cookie security |
+| `YOAL_IDENTITY_MASTER_KEY` | generated file | 32 bytes, base64 or raw |
+| `YOAL_IDENTITY_VERSION` | `YOAL_AGENT_VERSION` or `dev` | Reported in health and the heartbeat |
+| `YOAL_IDENTITY_MAIL_URL` / `_TOKEN` | unset | Forward pool mail; otherwise dev log / refusal |
 
 ## Tests
 

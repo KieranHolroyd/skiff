@@ -6,7 +6,7 @@
  * verifies against a trusted key and the artifact's sha256 and size match the manifest.
  *
  * Trust anchors: the keys compiled in below, plus any `*.pub` (SPKI PEM) in
- * /etc/skiff/updater/keys/. Rotation: publish a release signed by the old key that ships the
+ * /etc/yoal/updater/keys/. Rotation: publish a release signed by the old key that ships the
  * new key here, then retire the old one.
  */
 import { createHash, createPrivateKey, createPublicKey, sign, verify, type KeyObject } from 'node:crypto';
@@ -17,7 +17,7 @@ export const MANIFEST_SCHEMA = 1;
 
 /** Release-signing public keys (SPKI PEM). The private half lives only in CI secrets. */
 export const BUILTIN_RELEASE_KEYS: Record<string, string> = {
-	'skiff-release-2026-11': `-----BEGIN PUBLIC KEY-----
+	'yoal-release-2026-11': `-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAajsmEHd30hWuS8HEOXBApIBJSJGrZboNxHSP/qinb/k=
 -----END PUBLIC KEY-----
 `,
@@ -42,7 +42,7 @@ export interface ReleaseManifest {
 	 */
 	channel: 'stable' | 'edge';
 	createdAt: string;
-	/** Version of the stage-0 updater bundled in the artifacts (`updater/skiff-updated`). */
+	/** Version of the stage-0 updater bundled in the artifacts (`updater/yoal-updated`). */
 	updaterVersion: string | null;
 	/** Oldest stage-0 updater that can install this release. */
 	minUpdater: string | null;
@@ -51,7 +51,7 @@ export interface ReleaseManifest {
 	/** Keyed by platform, e.g. `linux-amd64`. */
 	artifacts: Record<string, ManifestArtifact>;
 	/**
-	 * Worker bundles (`skiff-node-<v>-<platform>.tar.gz`: `skiff-agent` + `skiff-helper` only), keyed
+	 * Worker bundles (`yoal-node-<v>-<platform>.tar.gz`: `yoal-agent` + `yoal-helper` only), keyed
 	 * by platform, for dashboard node updates (D99). Absent from releases that predate them.
 	 */
 	nodeArtifacts?: Record<string, ManifestArtifact>;
@@ -59,7 +59,7 @@ export interface ReleaseManifest {
 
 export class SignatureError extends Error {}
 
-export function loadTrustedKeys(dir = '/etc/skiff/updater/keys'): Map<string, KeyObject> {
+export function loadTrustedKeys(dir = '/etc/yoal/updater/keys'): Map<string, KeyObject> {
 	const keys = new Map<string, KeyObject>();
 	for (const [id, pem] of Object.entries(BUILTIN_RELEASE_KEYS)) keys.set(id, createPublicKey(pem));
 	if (existsSync(dir))

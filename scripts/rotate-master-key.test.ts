@@ -12,7 +12,7 @@ import { keyBytes, main, rewrapDatabase, rotateMasterKey, RotationError, verifyD
 import { PRIMARY_UNIT, STANDBY_UNIT } from './systemd/control-plane.ts';
 import { TRIGGER_SERVICE_UNIT } from './update-self/units.ts';
 
-const root = mkdtempSync(join(tmpdir(), 'skiff-rotate-'));
+const root = mkdtempSync(join(tmpdir(), 'yoal-rotate-'));
 let counter = 0;
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
@@ -41,7 +41,7 @@ function openCore(dataDir: string, dbPath: string, key: string): { core: Core; c
 }
 
 /**
- * A control-plane host: /etc/skiff + /var/lib/skiff/data/skiff.db with two org data keys (one
+ * A control-plane host: /etc/yoal + /var/lib/yoal/data/yoal.db with two org data keys (one
  * from a secret, one from a sealed database credential) and one GitHub webhook secret.
  */
 async function seededHost(options: { sealed?: boolean } = {}) {
@@ -49,7 +49,7 @@ async function seededHost(options: { sealed?: boolean } = {}) {
 	const etc = join(dir, 'etc');
 	const dataDir = join(dir, 'var', 'data');
 	mkdirSync(etc, { recursive: true });
-	const dbPath = join(dataDir, 'skiff.db');
+	const dbPath = join(dataDir, 'yoal.db');
 	const plainPath = join(etc, 'master.key');
 	const credsBin = fakeCredsBinary(dir);
 	const key = generateMasterKey();

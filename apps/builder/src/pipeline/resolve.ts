@@ -1,12 +1,12 @@
 import { lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm } from 'node:fs/promises';
 import { isAbsolute, join, relative, sep } from 'node:path';
-import type { PipelineResolveClaim, PipelineResolveReport } from '@skiff/contracts';
-import { PIPELINE_WORKFLOW_DIR } from '@skiff/contracts';
+import type { PipelineResolveClaim, PipelineResolveReport } from '@yoal/contracts';
+import { PIPELINE_WORKFLOW_DIR } from '@yoal/contracts';
 import { redactSecret } from '../command.ts';
 import { cloneAtSha, cloneRef, commitInfo, withCloneToken, type GitCredentials } from './git.ts';
 
 /**
- * Resolve claims (W1): read `.skiff/workflows/*.yml` at a ref for the control plane, which cannot
+ * Resolve claims (W1): read `.yoal/workflows/*.yml` at a ref for the control plane, which cannot
  * clone arbitrary git hosts itself. The node's git credentials are used; nothing in the
  * repository is executed. Any failure is reported as `{ error }` so the trigger never hangs.
  */
@@ -24,7 +24,7 @@ function isInside(root: string, path: string): boolean {
 }
 
 /**
- * Workflow files directly in `.skiff/workflows` (not recursive), sorted. Symlinks are followed
+ * Workflow files directly in `.yoal/workflows` (not recursive), sorted. Symlinks are followed
  * only while they stay inside the checkout; a link out (to `/etc/…`) is skipped, never read.
  */
 export async function readWorkflowFiles(checkout: string): Promise<Array<{ path: string; content: string }>> {

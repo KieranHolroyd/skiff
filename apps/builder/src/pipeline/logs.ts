@@ -1,4 +1,4 @@
-import type { PipelineLogBatch } from '@skiff/contracts';
+import type { PipelineLogBatch } from '@yoal/contracts';
 import type { Masker } from './masker.ts';
 
 /** The contract's per-line cap (`pipelineLogBatchSchema`). */

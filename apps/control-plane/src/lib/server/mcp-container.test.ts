@@ -3,17 +3,17 @@ import { principalStub } from './principal-stub.test-support';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_FEATURES, nodeCapabilities, type InlineFile } from '@skiff/contracts';
-import { LocalObjectStore, buildPrincipal, createCore, type Core } from '@skiff/core';
-import { createDb } from '@skiff/db';
+import { DEFAULT_FEATURES, nodeCapabilities, type InlineFile } from '@yoal/contracts';
+import { LocalObjectStore, buildPrincipal, createCore, type Core } from '@yoal/core';
+import { createDb } from '@yoal/db';
 import { needsConfirmation } from './assistant/confirm-policy';
 
 /**
  * Container console MCP tools (D127): read-only plus restart. There is deliberately no shell
- * tool: command execution stays with people (dashboard, `skif container shell`).
+ * tool: command execution stays with people (dashboard, `yoal container shell`).
  */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-mcp-container-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-mcp-container-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(
 	join(dir, 'objects'),
@@ -44,7 +44,7 @@ mock.module('./core', () => ({ core: realCore }));
 mock.module('./config', () => ({ platformOrigin: 'https://control.test', authSecret: 'test-secret' }));
 mock.module('./principal', () => principalStub({ principalFromMcp: () => null }));
 
-const { skiffToolDefinitions } = await import('./mcp');
+const { yoalToolDefinitions } = await import('./mcp');
 const { assistantTools } = await import('./assistant/tools');
 
 afterAll(() => {
@@ -117,7 +117,7 @@ describe('container console MCP tools', () => {
 	});
 
 	test('are registered with read-only hints and no shell tool', () => {
-		const definitions = skiffToolDefinitions(owner);
+		const definitions = yoalToolDefinitions(owner);
 		const names = new Set(definitions.map((entry) => entry.name));
 		for (const name of TOOLS) expect(names.has(name)).toBe(true);
 		expect([...names].some((name) => /container.*(exec|shell|command)/.test(name))).toBe(false);
@@ -143,7 +143,7 @@ describe('container console MCP tools', () => {
 	test('disappear with the feature flag', () => {
 		features.CONTAINER_CONSOLE = false;
 		try {
-			const names = new Set(skiffToolDefinitions(owner).map((entry) => entry.name));
+			const names = new Set(yoalToolDefinitions(owner).map((entry) => entry.name));
 			for (const name of TOOLS) expect(names.has(name)).toBe(false);
 		} finally {
 			features.CONTAINER_CONSOLE = true;

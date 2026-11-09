@@ -7,7 +7,7 @@ import { cronSchema } from './database-backup.ts';
  *
  * A run executes the project's **current release** on the project's node, in a transient systemd
  * unit with the app's sandbox, environment, secrets and volumes. The command is an argv array,
- * never a shell string. Schedules use Skiff's five-field cron parser, which is UTC only, so jobs
+ * never a shell string. Schedules use Yoal's five-field cron parser, which is UTC only, so jobs
  * have no time zone. After an outage the scheduler runs a missed job once, never every occurrence.
  *
  * Runs are leased by the node's agent over the agent protocol, like node tasks (D124): they are

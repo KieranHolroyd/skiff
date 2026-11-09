@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * skiff-rotate-master-key: replace the master key (D18, the KEK) without re-encrypting any
+ * yoal-rotate-master-key: replace the master key (D18, the KEK) without re-encrypting any
  * secret. The master key only wraps values directly in two places, and both are re-wrapped:
  *
  *   org_keys.wrapped_key        each organisation's data key (DEK); every secret, database,
@@ -8,13 +8,13 @@
  *                               with a DEK, so none of those change
  *   git_sources.webhook_secret  GitHub webhook secrets (sealed with the KEK itself)
  *
- *   sudo skiff-rotate-master-key --dry-run      # check the current key opens everything; change nothing
- *   sudo skiff-rotate-master-key [--yes]
+ *   sudo yoal-rotate-master-key --dry-run      # check the current key opens everything; change nothing
+ *   sudo yoal-rotate-master-key [--yes]
  *
  * Order, chosen so that every crash point leaves a key that opens the database:
  *
  *   1. prove the current key unwraps every row (refuse otherwise)
- *   2. snapshot the database to /var/lib/skiff/backups/pre-key-rotation-<UTC>.db
+ *   2. snapshot the database to /var/lib/yoal/backups/pre-key-rotation-<UTC>.db
  *   3. generate the new key and stage it beside the live one (`<store>.new`, sealed with
  *      systemd-creds when the live key is), read it back
  *   4. stop the control plane (it holds the old key in memory and would wrap new DEKs with it)
@@ -182,7 +182,7 @@ export interface RotateHost {
 }
 
 export interface RotateOptions {
-	/** `/etc/skiff/master.key` (the sealed store is `master.key.cred` beside it). */
+	/** `/etc/yoal/master.key` (the sealed store is `master.key.cred` beside it). */
 	plainPath: string;
 	dbPath: string;
 	backupsDir: string;
@@ -256,7 +256,7 @@ export async function rotateMasterKey(options: RotateOptions, host: RotateHost):
 	};
 
 	const store = locateMasterKey(options.plainPath);
-	if (!store) throw new RotationError(`no master key at ${options.plainPath} or ${options.plainPath}.cred (is Skiff installed?)`);
+	if (!store) throw new RotationError(`no master key at ${options.plainPath} or ${options.plainPath}.cred (is Yoal installed?)`);
 	if (!existsSync(options.dbPath)) throw new RotationError(`no database at ${options.dbPath}`);
 	const staged: MasterKeyStore = { kind: store.kind, path: `${store.path}.new` };
 	const previous: MasterKeyStore = { kind: store.kind, path: `${store.path}.old` };
@@ -391,7 +391,7 @@ export async function rotateMasterKey(options: RotateOptions, host: RotateHost):
 // CLI
 // ---------------------------------------------------------------------------------------------
 
-const USAGE = `Usage: skiff-rotate-master-key [--dry-run] [--yes]
+const USAGE = `Usage: yoal-rotate-master-key [--dry-run] [--yes]
 
 Replaces the master key and re-wraps every organisation data key and webhook secret with it in
 one transaction. The control plane restarts once; sites keep serving.
@@ -439,14 +439,14 @@ export async function main(argv: string[]): Promise<number> {
 		}
 	}
 	if (process.getuid?.() !== 0 && !flags.has('--dry-run')) {
-		process.stderr.write('skiff-rotate-master-key: error: run as root\n');
+		process.stderr.write('yoal-rotate-master-key: error: run as root\n');
 		return 1;
 	}
-	const etc = process.env.SKIFF_ETC_DIR ?? '/etc/skiff';
-	const env = readEnvFile(process.env.SKIFF_ENV_FILE ?? join(etc, 'skiff.env'));
-	const dataDir = env.get('SKIFF_DATA_DIR') || '/var/lib/skiff/data';
-	const dbPath = join(dataDir, 'skiff.db');
-	const socket = join(process.env.SKIFF_RUN_DIR ?? '/run/skiff', 'control.sock');
+	const etc = process.env.YOAL_ETC_DIR ?? '/etc/yoal';
+	const env = readEnvFile(process.env.YOAL_ENV_FILE ?? join(etc, 'yoal.env'));
+	const dataDir = env.get('YOAL_DATA_DIR') || '/var/lib/yoal/data';
+	const dbPath = join(dataDir, 'yoal.db');
+	const socket = join(process.env.YOAL_RUN_DIR ?? '/run/yoal', 'control.sock');
 	const host: RotateHost = {
 		log: (message) => console.log(`  • ${message}`),
 		isActive: (unit) => systemctl(['is-active', '--quiet', unit]).code === 0,
@@ -455,13 +455,13 @@ export async function main(argv: string[]): Promise<number> {
 			if (result.code !== 0) throw new RotationError(`systemctl stop ${unit}: ${result.stderr}`);
 		},
 		start: (unit) => void systemctl(['start', unit]),
-		healthy: () => controlPlaneReady(socket, Number(process.env.SKIFF_HEALTH_TIMEOUT ?? 90)),
+		healthy: () => controlPlaneReady(socket, Number(process.env.YOAL_HEALTH_TIMEOUT ?? 90)),
 		confirm: ask,
 	};
 	try {
 		const result = await rotateMasterKey(
 			{
-				plainPath: process.env.SKIFF_MASTER_KEY_PATH ?? join(etc, 'master.key'),
+				plainPath: process.env.YOAL_MASTER_KEY_PATH ?? join(etc, 'master.key'),
 				dbPath,
 				backupsDir: join(dirname(dataDir), 'backups'),
 				dryRun: flags.has('--dry-run'),
@@ -480,7 +480,7 @@ export async function main(argv: string[]): Promise<number> {
 				'',
 				'Next:',
 				'  1. Export a new recovery kit now; the old kit no longer matches this host:',
-				'       sudo skiff-recovery-kit export --include-env',
+				'       sudo yoal-recovery-kit export --include-env',
 				'  2. Keep the previous kit (it holds the old key) until Litestream snapshots and',
 				`     ${result.snapshot ? `${result.snapshot} and ` : ''}pre-update bundles from before today have aged out.`,
 				'  3. Storage instances with bucket event rules get a new notification token and restart',
@@ -490,7 +490,7 @@ export async function main(argv: string[]): Promise<number> {
 		);
 		return 0;
 	} catch (error) {
-		process.stderr.write(`skiff-rotate-master-key: error: ${(error as Error).message}\n`);
+		process.stderr.write(`yoal-rotate-master-key: error: ${(error as Error).message}\n`);
 		return 1;
 	}
 }

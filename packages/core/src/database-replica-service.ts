@@ -7,7 +7,7 @@ import {
 	nodeCertificates,
 	nodes,
 	serviceEndpoints,
-} from '@skiff/db';
+} from '@yoal/db';
 import {
 	DATABASE_PROMOTION_MAX_LAG_BYTES,
 	DATABASE_PROMOTION_MAX_LAG_SECONDS,
@@ -48,7 +48,7 @@ import {
 	type WorkloadDesired,
 	type WorkloadRuntime,
 	type WorkloadStatus,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
 import type { DatabaseRow } from './databases.ts';
@@ -73,7 +73,7 @@ const ACTIVE_FAILOVER = ['pending', 'promoting'] as const;
  * A replica is its own container workload, `db_dbr_<hex>`, on its node. On first start the helper's
  * standby unit runs `pg_basebackup` through a unix socket the agent serves (the "link"), which
  * reaches the primary's loopback port on the same node or the primary node's pinned-mTLS provider
- * listener over the overlay. The primary's node keeps the `skiff_repl` role, a `pg_hba` rule and
+ * listener over the overlay. The primary's node keeps the `yoal_repl` role, a `pg_hba` rule and
  * one physical slot per replica, and samples `pg_replication_slots` ⋈ `pg_stat_replication`;
  * those samples are the replica's status and lag.
  *
@@ -103,7 +103,7 @@ export class DatabaseReplicaService {
 			);
 		if (input.mode === 'sync')
 			throw new ValidationError(
-				'Synchronous replicas are not available yet: Skiff has no automatic downgrade when the sync replica is lost, so a sync replica could block every write. Use mode "async".',
+				'Synchronous replicas are not available yet: Yoal has no automatic downgrade when the sync replica is lost, so a sync replica could block every write. Use mode "async".',
 			);
 		if (this.pitrEnabled(database.id))
 			throw new ValidationError(
@@ -602,7 +602,7 @@ export class DatabaseReplicaService {
 			.sort((a, b) => a.databaseId.localeCompare(b.databaseId));
 	}
 
-	/** The `skiff_repl` password for one task; only the primary's own node may fetch it. */
+	/** The `yoal_repl` password for one task; only the primary's own node may fetch it. */
 	replicationActivation(nodeId: string, databaseId: string): DatabaseReplicationActivation {
 		const database = this.ctx.db.select().from(databases).where(eq(databases.id, databaseId)).get();
 		if (!database || database.deletedAt) throw new NotFoundError('Database');
@@ -1283,9 +1283,9 @@ export class DatabaseReplicaService {
 	}
 }
 
-/** `skiff_dbr_<hex>`: one physical slot per replica, inside the pattern the helper accepts. */
+/** `yoal_dbr_<hex>`: one physical slot per replica, inside the pattern the helper accepts. */
 export function slotName(replicaId: string): string {
-	return `skiff_${replicaId.toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 56)}`;
+	return `yoal_${replicaId.toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 56)}`;
 }
 
 /** The replica container gets the database's own env (owner, database name, PGDATA). */

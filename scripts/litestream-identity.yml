@@ -1,26 +1,26 @@
-# Skiff identity SQLite -> Cloudflare R2 continuous replication (docs/IAM.md §11.2).
+# Yoal identity SQLite -> Cloudflare R2 continuous replication (docs/IAM.md §11.2).
 #
-# Installed at /etc/skiff/litestream-identity.yml and read by
-# skiff-litestream-identity.service, which only the identity node runs. It is deliberately a
-# separate file and unit from the control plane's skiff.db replication: losing the identity node
+# Installed at /etc/yoal/litestream-identity.yml and read by
+# yoal-litestream-identity.service, which only the identity node runs. It is deliberately a
+# separate file and unit from the control plane's yoal.db replication: losing the identity node
 # must not disturb platform backups, and the identity database must never be restored into the
 # control plane.
 #
-# Required env (same as scripts/litestream.yml), from /etc/skiff/skiff.env:
+# Required env (same as scripts/litestream.yml), from /etc/yoal/yoal.env:
 #   R2_BUCKET
 #   R2_ENDPOINT
 #   R2_ACCESS_KEY_ID
 #   R2_SECRET_ACCESS_KEY
 #
-# Replicas live under skiff/identity-sqlite/ so a restore can never collide with the platform
-# database. Restore procedure: `skiff-restore`/Litestream docs, into /var/lib/skiff/identity.
+# Replicas live under yoal/identity-sqlite/ so a restore can never collide with the platform
+# database. Restore procedure: `yoal-restore`/Litestream docs, into /var/lib/yoal/identity.
 
 dbs:
-  - path: /var/lib/skiff/identity/identity.db
+  - path: /var/lib/yoal/identity/identity.db
     replicas:
       - type: s3
         bucket: ${R2_BUCKET}
-        path: skiff/identity-sqlite
+        path: yoal/identity-sqlite
         endpoint: ${R2_ENDPOINT}
         region: auto
         access-key-id: ${R2_ACCESS_KEY_ID}

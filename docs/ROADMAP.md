@@ -1,4 +1,4 @@
-# Skiff — Roadmap
+# Yoal — Roadmap
 
 > **Execution plans:** the data-platform work is broken into 20 independently assignable plans with
 > a dependency graph, file ownership, and a parallel build order in
@@ -22,12 +22,12 @@
 **Nodes**
 - [x] Agent: desired-state pull, on-disk cache, heartbeat, static driver (atomic release symlinks)
 - [x] Caddy management via admin API (unix socket), wildcard DNS-01 cert
-- [x] Node join flow (`skiff-agent join`), single-node mode over a unix socket; WireGuard itself is host provisioned
+- [x] Node join flow (`yoal-agent join`), single-node mode over a unix socket; WireGuard itself is host provisioned
 - [x] Edge proxy failures serve a branded 503 + `Retry-After` (active health checks and static mirror remain v2)
 
 **Deploy**
 - [x] Upload sessions: inline `deploy_files` (≤5 MB) and presigned R2 upload
-- [x] Finalize: limits, `_redirects` / `_headers` / `skiff.json` parse + compile, sha256, precompress
+- [x] Finalize: limits, `_redirects` / `_headers` / `yoal.json` parse + compile, sha256, precompress
 - [x] Deployments with preview URLs, production pointer, promote/rollback, retention GC
 - [x] Slug rules, reserved names, collision suggestions, rename redirects
 
@@ -41,17 +41,17 @@
 
 **MCP & CLI**
 - [x] MCP server: tools per DESIGN §6.3, annotations, resources/guides, elicitation for deletes
-- [x] `skif` CLI (npm `skif`, commands `skif` + `skiff`): login, deploy (presigned), status
+- [x] `yoal` CLI (npm `yoal`, commands `yoal` + `yoal`): login, deploy (presigned), status
 
 **Ops**
 - [x] Agent telemetry: pre-aggregated access buckets → ClickHouse (DuckDB until D101); rollups + Parquet to R2 (OTLP wire export remains)
 - [x] Observability dashboards (D101): see [Observability & dashboards](#observability--dashboards-d101-opsmd-36)
 - [x] Dashboard: fleet, projects, deployments, traffic/errors, audit log (live logs arrive with v2 runtime)
 - [x] Prometheus `/metrics` on control plane and agents (optional OTLP exporter remains)
-- [x] Alerts: email (SES SMTP) + webhook; node offline > 2 min, disk > 85%, backup/drill failure (`OnFailure=` → `skiff-alert`)
+- [x] Alerts: email (SES SMTP) + webhook; node offline > 2 min, disk > 85%, backup/drill failure (`OnFailure=` → `yoal-alert`)
 - [x] Cert expiring < 14 d (agent TLS probe) and 5xx spike after promote; drill results in Settings → Backups
 - [x] Backups: Litestream → R2, restore script, monthly restore drill, installed and enabled by the installer when R2 + the `litestream` binary are present
-- [x] Recovery kit: `skiff-recovery-kit` (age passphrase format), offered at install, `skiff-restore --recovery-kit`
+- [x] Recovery kit: `yoal-recovery-kit` (age passphrase format), offered at install, `yoal-restore --recovery-kit`
 
 **Release**
 - [x] CI: signed releases (control plane, agent, prebuilt Caddy)
@@ -63,13 +63,13 @@
 
 ## v2
 - [ ] Tier 2 process apps (sandboxed systemd units, privileged helper, socket activation), placeable on any node including the edge (D41)
-- [ ] `skiff-workloads.slice` budget per node, deploy-time admission, runtime-aware `auto` placement
+- [ ] `yoal-workloads.slice` budget per node, deploy-time admission, runtime-aware `auto` placement
 - [ ] Env vars & secrets UI/API/MCP (design already in place)
 - [ ] Tier 3 containers (Podman Quadlet)
 - [x] Container console for container projects: live overview and processes, read-only file browser, interactive shell, restart (permission-gated and audited; `CONTAINER_CONSOLE` kill switch)
 - [ ] Git builds on the homelab Builder + GitHub webhooks
-- [x] Pipelines WP1 ([PIPELINES.md](./PIPELINES.md), D148–D153): GitHub-Actions-shaped workflows on build nodes (DAG, matrix, secrets, environments + approvals, fork trust, artifacts, caches, schedules, `skiff/deploy`), dashboard, REST, CLI, MCP
-- [x] Pipelines WP2–WP6 (D151, D160–D162): helper-started job containers, per-job BuildKit, isolation tiers (container/gVisor/microVM), reusable workflows, remote/composite/JS actions, commit statuses, OIDC, `skiff_event`, `skif workflow run --local`, Skiff's release workflow ported
+- [x] Pipelines WP1 ([PIPELINES.md](./PIPELINES.md), D148–D153): GitHub-Actions-shaped workflows on build nodes (DAG, matrix, secrets, environments + approvals, fork trust, artifacts, caches, schedules, `yoal/deploy`), dashboard, REST, CLI, MCP
+- [x] Pipelines WP2–WP6 (D151, D160–D162): helper-started job containers, per-job BuildKit, isolation tiers (container/gVisor/microVM), reusable workflows, remote/composite/JS actions, commit statuses, OIDC, `yoal_event`, `yoal workflow run --local`, Yoal's release workflow ported
 - [x] GitHub App ([GITHUB.md](./GITHUB.md), D163–D166): one-click manifest registration, OAuth-verified installation linking, repo-scoped clone tokens for builds and pipelines, App webhook replacing per-repo webhooks, commit statuses, GitHub deployments, `secrets.GITHUB_TOKEN`, runner auth, repository pickers, sign-in fallback
 - [ ] Pipelines next: microVM tier on real KVM, a container-safe release canary (then retire GitHub Actions for releases), GitHub App check runs and PR comments, remote reusable workflows
 - [ ] Custom domains (TXT verify, on-demand TLS, Cloudflare auto-records, apex↔www)
@@ -94,19 +94,19 @@
 - [x] Attach to projects with `<PREFIX>_URL` injected at activation; same-node placement (D56)
 - [x] Sealed credentials, reveal for humans only (`database:credentials`, D58)
 - [x] Stats: agent sampler → telemetry batch → ClickHouse `db_metrics_1m/1h`, table snapshot, `/metrics`, size/connection alerts (D57)
-- [x] REST, MCP, CLI (`skif db`), dashboard list/detail/charts/attach
+- [x] REST, MCP, CLI (`yoal db`), dashboard list/detail/charts/attach
 - [ ] End-to-end on a Debian 13 node: Quadlet `.container`/`.network` from `/etc/containers/systemd`, installer installs/checks Podman ≥ 5 with netavark
-- [ ] Per-org Podman networks (today every container on a node shares `skiff-workloads`; databases still need a password)
+- [ ] Per-org Podman networks (today every container on a node shares `yoal-workloads`; databases still need a password)
 - [x] Backups: scheduled/manual `pg_dump -Fc` → `ObjectStore`, retention, restore into a new database with verification (D83)
 - [x] Extensions allowlist (`pgvector`, PostGIS, `pg_trgm`, `pgcrypto`, `citext`, `hstore`, `unaccent`, `pg_cron`) and `pg_stat_statements` slow queries (D84)
 - [x] PgBouncer transaction pooler sidecar with `<PREFIX>_POOL_URL` (D85)
 - [x] Owner/monitor credential rotation with node-side `ALTER ROLE` and verified swap (D86)
 - [x] Restart controls for the database (container + pooler) and the pooler alone (D87)
 - [x] Bulk actions: restart all services/databases/storage and back up all databases
-- [x] Database container logs: drained journal, `GET /databases/:name/logs`, dashboard tail, `skif db logs`, MCP `get_database_logs`
+- [x] Database container logs: drained journal, `GET /databases/:name/logs`, dashboard tail, `yoal db logs`, MCP `get_database_logs`
 - [ ] TLS in transit with a per-node CA and `sslmode=require` URLs
 - [x] On-demand studio: `database:console`, read-only default, write mode with `database:update`, audited and idle-stopped (D60's sidecar, replaced by D96)
-- [x] Native table editor and query history: per-engine studio plugins in the on-demand `skiff-studio` process, grid edits with conflict checks, read-only principal, browser query history; the D60 sidecar removed (plan 22, D96)
+- [x] Native table editor and query history: per-engine studio plugins in the on-demand `yoal-studio` process, grid edits with conflict checks, read-only principal, browser query history; the D60 sidecar removed (plan 22, D96)
 - [x] Structure editing in the studio: typed `alter` op with dry-run review for tables, columns, indexes, collections, fields and keys on all six engines (plan 22, DATABASES.md §14)
 - [ ] Database metrics in the Parquet archive; bulk actions and prune for databases; `restore_database` over MCP
 - [x] More engines: MySQL, MariaDB, MongoDB, Valkey and Redis with create/attach/credentials/rotation/studio/logs; logical backups for MySQL, MariaDB and MongoDB (D95)
@@ -122,11 +122,11 @@
 - [x] Sealed root credentials, reveal for humans only (`storage:credentials`, D67); console off (D63)
 - [x] Public endpoints on `<name>--s3.<contentDomain>` as byte-for-byte SigV4-only Caddy routes (D64)
 - [x] Stats: agent sampler → telemetry → ClickHouse `storage_metrics_1m/1h`, bucket snapshots, `/metrics`, disk alert (D68)
-- [x] REST, MCP, CLI (`skif storage`), dashboard list/detail/charts/buckets/attach
-- [x] Explicit restart control: dashboard, REST (`POST /storage/:name/restart`), `skif storage restart`, MCP `restart_storage` (D82)
-- [x] RustFS logs: agent journal drain → `service_log_events`, live dashboard tail, `GET /storage/:name/logs`, `skif storage logs --follow`, MCP `get_storage_logs`
+- [x] REST, MCP, CLI (`yoal storage`), dashboard list/detail/charts/buckets/attach
+- [x] Explicit restart control: dashboard, REST (`POST /storage/:name/restart`), `yoal storage restart`, MCP `restart_storage` (D82)
+- [x] RustFS logs: agent journal drain → `service_log_events`, live dashboard tail, `GET /storage/:name/logs`, `yoal storage logs --follow`, MCP `get_storage_logs`
 - [ ] Database logs surface (the drain and storage are shared; only the UI/API are missing)
-- [x] Control-plane object browser: list, upload, download, delete, folder markers, presigned links for public instances, REST + dashboard + `skif storage objects` (D82)
+- [x] Control-plane object browser: list, upload, download, delete, folder markers, presigned links for public instances, REST + dashboard + `yoal storage objects` (D82)
 - [x] MCP object tools: `list_objects`, `presign_object`, `create_object_folder`
 - [ ] Object delete over MCP (confirmed) and bulk folder delete in the dashboard
 - [ ] End-to-end on a Debian 13 node: RustFS container under Quadlet, health probe, SigV4 through edge → WireGuard → worker
@@ -140,17 +140,17 @@
 - [x] Helper-owned profile: own registry, `mq_` ids, helper-written config (single ACL user, capped stores), `GOMEMLIMIT`, loopback-only port
 - [x] Agent: `brokers` capability, NATS `INFO` health probe, `brokerPurges`/`purgedBrokers`
 - [x] Attachments inject `<PREFIX>_URL/_HOST/_PORT/_USER/_PASSWORD` (default `NATS`) and pin the app's node
-- [x] REST, MCP (`list/get/create/update/restart/attach/detach_broker`, `get_broker_logs`), CLI (`skif broker`), dashboard Queues pages, logs
+- [x] REST, MCP (`list/get/create/update/restart/attach/detach_broker`, `get_broker_logs`), CLI (`yoal broker`), dashboard Queues pages, logs
 - [ ] End-to-end on a Debian 13 node: NATS under Quadlet with a read-only root as uid 4222, JetStream publish/consume through an attached app
 - [x] Function queues on brokers (D112): JetStream-backed `queue` bindings and `triggers.queues` consumers, agent delivery with per-message verdicts, retries, delays and dead-letter queues; replaces the node-local Durable Object broker
-- [ ] Queue view: streams, backlog and dead letters per broker in the dashboard; a `skif broker queues` command
+- [ ] Queue view: streams, backlog and dead letters per broker in the dashboard; a `yoal broker queues` command
 - [ ] RabbitMQ as the second engine (registry entry + helper profile; AMQP probe; management UI off)
 - [ ] Metrics sampler (`/varz`, `/jsz` on a loopback monitor port) → ClickHouse, stream/consumer listing in the dashboard, store-full alert
 - [ ] Per-attachment users with subject permissions; cross-node endpoints (C2); backups (stream snapshots); bulk actions and prune; project-page attach panel
 
 ## Languages ([FUNCTIONS.md §4.13](./FUNCTIONS.md), D121)
 - [x] WebAssembly languages on functions (Rust/workers-rs, Go/TinyGo, C/C++, Zig): a JS entry importing `.wasm`, bundled as `CompiledWasm`
-- [x] Python Workers on the pinned workerd: `.py` main, `python_modules/` vendoring, `skiff-shim` Worker over a `USER` binding (`fetch`, cron and queue events), 384 MB default
+- [x] Python Workers on the pinned workerd: `.py` main, `python_modules/` vendoring, `yoal-shim` Worker over a `USER` binding (`fetch`, cron and queue events), 384 MB default
 - [x] Pyodide cache warmed by the installer and convergence; `functions-python` capability gates placement
 - [x] Process apps scale to zero (`idleStopSeconds`, socket activation, dashboard field)
 - [x] PHP via FrankenPHP on an inherited socket: pinned, digest-checked, opt-in `--with-php`; `examples/php-frankenphp`
@@ -158,16 +158,16 @@
 - [ ] Verify a Node.js app under the helper sandbox on a Linux node through idle stop and cold start (the preload and start-script path are checked in a Linux container, not yet under systemd)
 - [ ] Verify on a Linux node under the helper sandbox: a FrankenPHP process app through its idle stop and cold start, and a Python function host
 - [ ] Python memory snapshots (`--python-load-snapshot`) to cut the ~1.2 s cold start
-- [x] `skif` command for the workload spec (command, memory, idle stop); `skif workload show|set|reset|capacity`
-- [x] `skif environments` for named environment pointers, and `skif domains` for custom hostnames and DNS checks
+- [x] `yoal` command for the workload spec (command, memory, idle stop); `yoal workload show|set|reset|capacity`
+- [x] `yoal environments` for named environment pointers, and `yoal domains` for custom hostnames and DNS checks
 - [ ] A socket adapter for servers that cannot adopt fd 3 (Bun today), so they can scale to zero too (Node.js has one, D125)
 
 ## Email ([EMAIL.md](./EMAIL.md), D114–D120)
-- [x] E0 spike: `smtp-server` STARTTLS/465/AUTH, `mailauth` DKIM and `mailparser` under Bun 1.4; port 25 egress from the prod IP (SPIKES.md §6); KumoMTA dropped for Skiff's own MTA (D115)
+- [x] E0 spike: `smtp-server` STARTTLS/465/AUTH, `mailauth` DKIM and `mailparser` under Bun 1.4; port 25 egress from the prod IP (SPIKES.md §6); KumoMTA dropped for Yoal's own MTA (D115)
 - [ ] E0 delivery check: PTR for the prod IP, then DKIM/SPF/DMARC pass at Gmail and Outlook
-- [x] E1 MTA: `packages/mail` (`skiff-agent mail`): spool, retries/expiry, MX delivery, shaping, classification, DKIM signing, submission 587/465, port 25 for bounces and ARF, control socket; static `skiff-mail.service`; helper start/stop/cert verbs
+- [x] E1 MTA: `packages/mail` (`yoal-agent mail`): spool, retries/expiry, MX delivery, shaping, classification, DKIM signing, submission 587/465, port 25 for bounces and ARF, control socket; static `yoal-mail.service`; helper start/stop/cert verbs
 - [x] E1 control plane: migration 0050, `EmailService` (domains + DKIM + Cloudflare TXT/MX, platform records, outbox, send, credentials + `SMTP_*` attach env, suppression incl. platform list, sandbox/limits/auto-pause, message log, sweeps), agent routes, agent bridge, Caddy certificates for `smtp.`/`mx.`
-- [x] E1 surfaces: REST, MCP, CLI (`skif email`), dashboard Email pages and Email → Mail server
+- [x] E1 surfaces: REST, MCP, CLI (`yoal email`), dashboard Email pages and Email → Mail server
 - [ ] E1 remaining: automated preflight (port 25, FCrDNS, blocklists), ClickHouse `email_events`, built-in alert kinds in Settings → Alerts, an admin list of org email states
 - [ ] E2: inbound routes (function `email()` handler synchronous in `DATA`, webhook, bucket), `send_email` binding, tenant webhooks, address identities
 - [ ] E3: custom MAIL FROM, ed25519, MTA-STS/TLS-RPT, DMARC reports, smarthost relay (SES BYODKIM), rspamd, templates, tracking, hosted unsubscribe
@@ -184,9 +184,9 @@
 
 **Dashboards**
 - [x] Saved, org-scoped, versioned dashboards; REST `/api/v1/observability/*` (API.md)
-- [x] Query builder (datasets, measures, group-by, filters, auto interval) scoped to the caller's projects/databases/storage; admin-only SQL with Grafana-style macros as the read-only `skiff_reader`
+- [x] Query builder (datasets, measures, group-by, filters, auto interval) scoped to the caller's projects/databases/storage; admin-only SQL with Grafana-style macros as the read-only `yoal_reader`
 - [x] Grafana-style UI: 24-column grid, time/refresh pickers, variables, panel editor, Explore, starter templates
-- [ ] Shared templates: the UI's "new from template" uses `dashboardTemplates` from @skiff/contracts (one source with the agent tools)
+- [ ] Shared templates: the UI's "new from template" uses `dashboardTemplates` from @yoal/contracts (one source with the agent tools)
 - [x] Alert rules (D109, [ALERTS.md](./ALERTS.md)): builder/SQL query + threshold + `for`/keep-firing/no-data, per-series state, grouped notifications through the existing notifiers, silences, acks, history, outage templates, "Create alert" on panels, MCP tools
 - [ ] Draw firing periods as annotations on dashboard time series; per-org notification channels
 - [ ] Dashboard links and drill-downs (panel → project/database page, click a host to filter)
@@ -202,22 +202,22 @@
 - [x] The assistant's Platform agent has the tools and a build recipe; the router sends "make me a dashboard" there; `delete_dashboard` needs a click (chat) or elicitation (MCP)
 - [ ] `suggest_dashboard`: propose panels for a project/database from what it actually reports (no hand-written queries at all)
 - [ ] Natural-language panel edits in the panel editor ("show this per host", "make it p95") through the assistant
-- [ ] MCP resource `skiff://dashboards/{id}` and a prompt template for "build a dashboard for …"
+- [ ] MCP resource `yoal://dashboards/{id}` and a prompt template for "build a dashboard for …"
 - [ ] Per-panel `explain` tool: summarise what a panel shows over a range (trends, spikes) for incident triage
 
 ## Disks ([STORAGE.md](./STORAGE.md))
 - [x] Disks with a `fast`/`bulk` tier derived from the hardware and editable; the system disk on every node; fail-closed mount verification (D72, D76, D78, D169)
 - [x] One default per kind (databases, object storage, queues, app volumes, builds, site data) in Settings → Storage and the setup Storage step; `storage` on create, replica add, move and restore (REST, MCP), `--disk` on the CLI
-- [x] **Use this disk**: register a mounted filesystem at once, or mount an unmounted ext/xfs/btrfs/f2fs filesystem by UUID at `/mnt/skiff-disks/<name>`; everything else folded under **Not usable** with a reason. Skiff never formats
+- [x] **Use this disk**: register a mounted filesystem at once, or mount an unmounted ext/xfs/btrfs/f2fs filesystem by UUID at `/mnt/yoal-disks/<name>`; everything else folded under **Not usable** with a reason. Yoal never formats
 - [x] Network shares become `bulk`, network disks once mounted (D143)
 - [x] Disk profiling: sequential, random and sync-write benchmarks (fio, `dd` fallback)
 - [ ] `images` (podman `graphroot`) and `backups` (local backup target) storage kinds; capacity alerts per tier
 - [ ] Move a resource between disks on one node (stop → copy → re-point → start, D79)
-- [ ] Systemd mount units for disks Skiff mounts (today the agent remounts after boot)
+- [ ] Systemd mount units for disks Yoal mounts (today the agent remounts after boot)
 
 ## Clustering & HA ([CLUSTERING.md](./CLUSTERING.md), D107)
 - [ ] C0: hardware report and derived labels, zones/roles/labels, disk tiers, constraint placement with explained refusals, CPU budget, Topology page and blast radius
-- [ ] C1: Skiff-managed overlay (plan 23) generalised to hubs + LAN mesh; `private_address`; peer health
+- [ ] C1: Yoal-managed overlay (plan 23) generalised to hubs + LAN mesh; `private_address`; peer health
 - [ ] C2: node CA + mTLS, loopback service endpoints (`caddy-l4` or Bun forwarder), cross-node database/storage attachments
 - [ ] C3: cluster shares (NFS/SMB) mounted on demand, `backing: share`, blast-radius inheritance
 - [ ] C4: HTTP replicas across nodes, spread, health-checked load balancing, rolling deploys, drain, opt-in failover, singletons with run leases
@@ -225,16 +225,16 @@
 - [ ] C6: control-plane warm standby, Litestream follow, lease + epoch fencing, manual promote
 - [ ] C7: Postgres streaming replicas, read URLs, lag, manual promote/switchover, replica-based moves
 - [ ] C8: automatic failover (control plane, Postgres), self-fencing, failover drills, chaos harness
-- [ ] C9: RustFS bucket replication, Litestream for SQLite apps, app-volume snapshot shipping, Skiff-served NFS
+- [ ] C9: RustFS bucket replication, Litestream for SQLite apps, app-volume snapshot shipping, Yoal-served NFS
 - [ ] C10: MongoDB replica sets, Valkey/Redis and MySQL/MariaDB replicas
 - [ ] Ingress drivers `cloudflare-lb` and `cloudflare-tunnel` (homelab as an ingress behind CGNAT)
 
 ## Container registry ([REGISTRY.md](./REGISTRY.md), D145–D147, D154–D159)
 - [x] G0: deploys pin image digests (D145); org registry credentials via per-workload `--authfile` (D146); node image prune (D147)
-- [x] G1: zot `registry` helper profile (D154), Skiff token realm + `image:*` permissions + per-workload node logins (D155), push events (D156), `skif registry login|repos|deploy`, Settings → Container registries
+- [x] G1: zot `registry` helper profile (D154), Yoal token realm + `image:*` permissions + per-workload node logins (D155), push events (D156), `yoal registry login|repos|deploy`, Settings → Container registries
 - [ ] Not built (REGISTRY.md §13): zot cluster replicas, Podman policy.json checks, `registry` storage kind, R9 loopback mirror, Linux node conformance run
 - [x] G2: deployment pins, deploy on push, `registry.push` events, `registryBytes` quota, image picker, MCP read tools (D157)
-- [x] G3: Pipelines `skiff/build-image` pushes with the job login, `registry/<name>` tags, GitHub Actions OIDC trusts (D158)
+- [x] G3: Pipelines `yoal/build-image` pushes with the job login, `registry/<name>` tags, GitHub Actions OIDC trusts (D158)
 - [x] G4: pull-through cache for docker.io / ghcr.io / quay.io with node mirrors (D159)
 - [x] G5: cosign signature policy at deploy, CVE scanning (D159)
 - [x] G6: S3 storage + Valkey cache, single replica (D159)
@@ -243,8 +243,8 @@
 - [x] Permission catalog with metadata, principal v2, named system principals, the lint guard, the owner/admin split and audit actor columns (D181)
 - [x] Scoped bindings engine: platform/org/project/environment/resource scopes, custom roles, groups, guests, explain and who-can, Settings → Access and project Access tabs (D182)
 - [x] Service accounts and org-bound access keys (SHA-256, expiry, CIDR, restrictions, last-used) with REST and CLI, and an MCP service-account list (D183)
-- [x] Service-account keys and impersonation tokens: `/service-accounts/:id/keys`, `POST /service-accounts/:id/token` (`serviceAccount:impersonate`), `skif sa token|keys` and Settings → Access (D190)
-- [x] Federation-trust CRUD: `/api/v1/federation-trusts`, `skif federation`, and Settings → Access (D190)
+- [x] Service-account keys and impersonation tokens: `/service-accounts/:id/keys`, `POST /service-accounts/:id/token` (`serviceAccount:impersonate`), `yoal sa token|keys` and Settings → Access (D190)
+- [x] Federation-trust CRUD: `/api/v1/federation-trusts`, `yoal federation`, and Settings → Access (D190)
 - [x] One signing-key ring with a unified JWKS, monthly rotation sweep, operator list/rotate routes, RFC 8693 STS and federation trusts (D184, D196)
 - [x] Workload identity: a service account per workload, a rotated token file and the loopback metadata endpoint (D184)
 - [x] Workload and STS tokens accepted as `Bearer` by REST, MCP and the registry realm; the registry also takes one as its Basic password, narrowed by `scope`/`resources` (D195)
@@ -254,26 +254,26 @@
 - [x] SAML SP signing (per-provider RSA key and published certificate), IdP certificate rollover, and SLO: plugin endpoints for IdP-initiated logout plus local sign-out redirect (D193)
 - [x] SCIM 2.0 users and groups with deactivation revocation (D185)
 - [x] Guardrails, JIT access requests, usage rollup and access reviews (D186)
-- [x] Step-up verification: catalog rules, `/api/auth/step-up/*`, the VerifyDialog, the window and the failure budget (D186, gated by `SKIFF_STEP_UP`)
+- [x] Step-up verification: catalog rules, `/api/auth/step-up/*`, the VerifyDialog, the window and the failure budget (D186, gated by `YOAL_STEP_UP`)
 - [x] Platform IAM roles, platform-scope bindings (users and groups) and platform guardrails (D187)
-- [x] Skiff Access: the `access` protection mode, ordered policies, the agent's `forward_auth` and host-bound login (D188)
-- [x] Skiff Access service tokens evaluated before login, user-pool session/bearer identity with groups, SSO attribution and per-policy version revocation (D192)
-- [x] Skiff Access named machine tokens: `access_service_tokens`, list/create/revoke, last-used tracking, Settings → Access policies → Machines, with legacy rule matchers still working (D203)
+- [x] Yoal Access: the `access` protection mode, ordered policies, the agent's `forward_auth` and host-bound login (D188)
+- [x] Yoal Access service tokens evaluated before login, user-pool session/bearer identity with groups, SSO attribution and per-policy version revocation (D192)
+- [x] Yoal Access named machine tokens: `access_service_tokens`, list/create/revoke, last-used tracking, Settings → Access policies → Machines, with legacy rule matchers still working (D203)
 - [x] User pools and OIDC clients with discovery/JWKS; the native engine with password, magic link, reset, verification, invites and the OAuth code flow; attachments, `env.AUTH` and pool events (D189)
 - [x] Pool passkeys, TOTP MFA and groups: WebAuthn registration/sign-in with counter checks, sealed TOTP secrets with recovery codes and replay protection, pool-local groups in the `groups` claim, and Settings → Identity plus the hosted account page (D194)
 - [x] Pool social login: Google, GitHub, Microsoft and Apple through sealed per-pool OAuth clients, server-side state/PKCE and verified-email linking; hosted login buttons and Settings → Identity (D200)
 - [x] Storage STS (RustFS `AssumeRoleWithWebIdentity`): short-lived per-attachment S3 credentials at activation, with the sealed static key as fallback (D201)
 - [x] SAML encrypted assertions: a separate sealed SP encryption key, `use="encryption"` in SP metadata, a 30-day previous-certificate rollover and the Settings → SSO toggle (D202)
 - [ ] SAML encrypted-key rollover: the previous certificate stays published but only the current private key decrypts, so an IdP must import the new certificate before using the old one
-- [x] Identity process scaffold: `skiff-identity.service` with its own SQLite file, Litestream unit, agent bridge, node selection and `auth.<sitesDomain>` Caddy routes (D206)
+- [x] Identity process scaffold: `yoal-identity.service` with its own SQLite file, Litestream unit, agent bridge, node selection and `auth.<sitesDomain>` Caddy routes (D206)
 - [ ] Identity process completeness: project client secrets and the passkey/social/OTP/account/invite pages, move existing pool rows, and add per-pool placement/HA
-- [x] Pool import/export: `skiff.user-pool/v1` JSON, Auth0/Cognito/Firebase imports, dry run, duplicate skip, hash portability and forced resets (D204)
+- [x] Pool import/export: `yoal.user-pool/v1` JSON, Auth0/Cognito/Firebase imports, dry run, duplicate skip, hash portability and forced resets (D204)
 - [x] Pool auth extras: email OTP, Have I Been Pwned checks, per-pool+email lockout and suspicious-sign-in mail (D204)
 - [ ] B2B in pools: organisations, per-tenant federation, SCIM in and the Keycloak engine (on demand)
 - [ ] The dashboard binding editor's inline simulation diff
-- [ ] A Caddy-side Skiff Access decision cache (S6)
+- [ ] A Caddy-side Yoal Access decision cache (S6)
 - [x] Per-repository pipeline service accounts: `pipeline-<repo>` with managed roles and reconciled project bindings (D205)
-- [x] Better Auth `apikey` migration (S1 resolved; `skif iam migrate-keys`, D208)
+- [x] Better Auth `apikey` migration (S1 resolved; `yoal iam migrate-keys`, D208)
 - [ ] Automatic cloud-provider setup (AWS OIDC provider, GCP pool/provider, Azure federated credential and role)
 - [ ] Scope-filtered MCP `tools/list`
 

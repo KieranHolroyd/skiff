@@ -1,4 +1,4 @@
-import type { FunctionBinding, FunctionRuntimeBinding } from '@skiff/contracts';
+import type { FunctionBinding, FunctionRuntimeBinding } from '@yoal/contracts';
 import type { CoreContext } from '../context.ts';
 import type { ProjectRow } from '../projects.ts';
 

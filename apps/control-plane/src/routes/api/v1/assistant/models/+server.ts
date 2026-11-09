@@ -5,7 +5,7 @@ import type { RequestHandler } from './$types';
 
 /**
  * The owner-only model picker for Settings → Assistant. OpenRouter publishes its catalogue
- * publicly, so no key is needed for this call; the `x-title` header identifies Skiff. The route is
+ * publicly, so no key is needed for this call; the `x-title` header identifies Yoal. The route is
  * gated with the same rule as the settings page, so a deployer or an API key cannot browse it.
  */
 export const GET: RequestHandler = async ({ locals, url }) => {

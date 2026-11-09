@@ -1,4 +1,4 @@
-import type { Cell, Column, StudioEvent, StudioInfo } from '@skiff/studio/protocol';
+import type { Cell, Column, StudioEvent, StudioInfo } from '@yoal/studio/protocol';
 
 /**
  * How one `run` stream becomes result tabs (plan 22). Each `columns` … `result` group is one

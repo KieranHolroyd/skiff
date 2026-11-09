@@ -1,14 +1,14 @@
 <script lang="ts">
 	/** Active, upcoming and (optionally) recently expired silences, with create and end-now. */
-	import type { AlertSilenceView } from '@skiff/contracts';
+	import type { AlertSilenceView } from '@yoal/contracts';
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { toast } from 'svelte-sonner';
 	import { resolve } from '$app/paths';
 	import BellOffIcon from '@lucide/svelte/icons/bell-off';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import TimerOffIcon from '@lucide/svelte/icons/timer-off';
-	import DataTable, { type DataColumn } from '#lib/components/skiff/DataTable.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import DataTable, { type DataColumn } from '#lib/components/yoal/DataTable.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Badge, type BadgeVariant } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';

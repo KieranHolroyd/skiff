@@ -76,7 +76,7 @@ export const volumeDeviceSchema = z.object({
 	serial: z.string().max(120).nullable().default(null),
 	sizeBytes: z.number().int().nonnegative(),
 	fsType: z.string().max(32).nullable().default(null),
-	/** Filesystem UUID; what a disk Skiff mounts is addressed by, never the device name. */
+	/** Filesystem UUID; what a disk Yoal mounts is addressed by, never the device name. */
 	uuid: z.string().max(100).nullable().default(null),
 	label: z.string().max(120).nullable().default(null),
 	mountPath: z.string().max(200).nullable().default(null),
@@ -106,18 +106,18 @@ export type VolumeInventory = z.infer<typeof volumeInventorySchema>;
 // ------------------------------------------------------------------ disk mounts
 
 /**
- * Disks Skiff mounts (docs/STORAGE.md §3): *Use this disk* on an unmounted filesystem asks the
- * node's helper to mount it — by UUID, never by device name — at `/mnt/skiff-disks/<name>`. The
+ * Disks Yoal mounts (docs/STORAGE.md §3): *Use this disk* on an unmounted filesystem asks the
+ * node's helper to mount it — by UUID, never by device name — at `/mnt/yoal-disks/<name>`. The
  * disk turns ready once the inventory shows it there. Nothing is ever formatted.
  */
-export const DISK_MOUNT_ROOT = '/mnt/skiff-disks';
+export const DISK_MOUNT_ROOT = '/mnt/yoal-disks';
 export const DISK_MOUNT_CAPABILITY = 'disk-mounts';
 
 export function diskMountPath(name: string): string {
 	return `${DISK_MOUNT_ROOT}/${name}`;
 }
 
-/** Filesystems Skiff mounts for managed data: POSIX ownership and permissions are required. */
+/** Filesystems Yoal mounts for managed data: POSIX ownership and permissions are required. */
 export const mountableFsTypes = ['ext4', 'ext3', 'ext2', 'xfs', 'btrfs', 'f2fs'] as const;
 export function isMountableFsType(fsType: string | null | undefined): boolean {
 	return !!fsType && (mountableFsTypes as readonly string[]).includes(fsType.toLowerCase());
@@ -131,18 +131,18 @@ export const fsUuidSchema = z
 	.max(64)
 	.regex(/^[A-Fa-f0-9-]+$/, 'Unexpected characters in the filesystem UUID.');
 
-/** A disk Skiff mounts, in a node's desired state: a UUID and a name, never a device path. */
+/** A disk Yoal mounts, in a node's desired state: a UUID and a name, never a device path. */
 export const diskMountDesiredSchema = z.object({
 	/** The disk id; reports use it. */
 	id: z.string().min(1).max(100),
-	/** Mount directory name under `/mnt/skiff-disks`. */
+	/** Mount directory name under `/mnt/yoal-disks`. */
 	name: volumeNameSchema,
 	fsUuid: fsUuidSchema,
 	fsType: z.enum(mountableFsTypes),
 });
 export type DiskMountDesired = z.infer<typeof diskMountDesiredSchema>;
 
-/** A disk Skiff mounted that the node must unmount (the disk is `removing`). */
+/** A disk Yoal mounted that the node must unmount (the disk is `removing`). */
 export const diskUnmountDesiredSchema = z.object({
 	id: z.string().min(1).max(100),
 	name: volumeNameSchema,

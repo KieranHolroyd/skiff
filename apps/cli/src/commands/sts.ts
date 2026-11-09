@@ -14,14 +14,14 @@ import { parseAudience } from './identity.ts';
  * The subject token is read from a file and never printed or included in an error.
  */
 
-/** Mirrors the token endpoint's grant and token-type constants in `@skiff/core`. */
+/** Mirrors the token endpoint's grant and token-type constants in `@yoal/core`. */
 export const TOKEN_EXCHANGE_GRANT = 'urn:ietf:params:oauth:grant-type:token-exchange';
 export const JWT_TOKEN_TYPE = 'urn:ietf:params:oauth:token-type:jwt';
 
-const usage = `Usage: skif sts <command> [options]
+const usage = `Usage: yoal sts <command> [options]
 
 Commands:
-  exchange                     Exchange a subject token for a short-lived Skiff access token
+  exchange                     Exchange a subject token for a short-lived Yoal access token
 
 Options:
       --subject-token-file <path>  File holding the subject JWT (required; never printed)
@@ -32,15 +32,15 @@ Options:
   -h, --help                       Show this help
 
 The call is POST /api/iam/token with grant_type
-urn:ietf:params:oauth:grant-type:token-exchange. The subject token may be a Skiff workload JWT,
+urn:ietf:params:oauth:grant-type:token-exchange. The subject token may be a Yoal workload JWT,
 a pipeline OIDC token, a GitHub Actions OIDC token or any token from an issuer with a federation
 trust. The response token lasts 15 minutes by default (at most 1 hour) and is narrowed by the
 trust's restriction and --scope. The subject token is the credential: treat the file like a
 password and keep the platform URL on TLS.
 
 Examples:
-  skif sts exchange --subject-token-file $SKIFF_TOKEN_FILE --audience https://control.example.com
-  skif sts exchange --subject-token-file /tmp/github.jwt --audience skiff --scope project:read`;
+  yoal sts exchange --subject-token-file $YOAL_TOKEN_FILE --audience https://control.example.com
+  yoal sts exchange --subject-token-file /tmp/github.jwt --audience yoal --scope project:read`;
 
 const exchangeFlags: FlagSpec = {
 	json: { type: 'boolean' },
@@ -89,7 +89,7 @@ async function exchangeCommand(argv: string[]): Promise<void> {
 	rejectExtraPositionals(
 		args,
 		0,
-		'Usage: skif sts exchange --subject-token-file <path> --audience <a> [--scope <p>] [--json]',
+		'Usage: yoal sts exchange --subject-token-file <path> --audience <a> [--scope <p>] [--json]',
 	);
 
 	const file = args.string('subject-token-file')?.trim();

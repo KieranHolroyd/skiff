@@ -5,8 +5,8 @@
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import { toast } from 'svelte-sonner';
-	import type { DatabaseStudioPrincipalState } from '@skiff/contracts';
-	import type { SchemaChangeInput, StudioInfo, TreeNode } from '@skiff/studio/protocol';
+	import type { DatabaseStudioPrincipalState } from '@yoal/contracts';
+	import type { SchemaChangeInput, StudioInfo, TreeNode } from '@yoal/studio/protocol';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import { Kbd } from '#lib/components/ui/kbd/index.js';
@@ -198,7 +198,7 @@
 
 	// --- resizable tree ------------------------------------------------------------------------
 
-	const WIDTH_KEY = 'skiff:studio:tree-width';
+	const WIDTH_KEY = 'yoal:studio:tree-width';
 	const clampWidth = (value: number) => Math.min(520, Math.max(180, Math.round(value)));
 	let treeWidth = $state(256);
 	if (browser) {

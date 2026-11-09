@@ -1,5 +1,5 @@
 import { error, fail, redirect } from '@sveltejs/kit';
-import { CoreError, entriesFromZip, isFunctionTier } from '@skiff/core';
+import { CoreError, entriesFromZip, isFunctionTier } from '@yoal/core';
 import {
 	accessModes,
 	appVolumeAttachSchema,
@@ -26,8 +26,8 @@ import {
 	type StorageView,
 	type UserPoolAttachmentView,
 	type WorkloadView
-} from '@skiff/contracts';
-import type { SecretView } from '@skiff/core';
+} from '@yoal/contracts';
+import type { SecretView } from '@yoal/core';
 import { auth } from '#lib/server/auth.js';
 import { core } from '#lib/server/core.js';
 import { authErrorMessage } from '#lib/server/user-settings.js';
@@ -49,7 +49,7 @@ import {
 import type { Actions, PageServerLoad } from './$types';
 
 const FUNCTION_SPEC_MESSAGE =
-	"A function's runtime comes from its bundle's skiff-function.json. Change it there and deploy again.";
+	"A function's runtime comes from its bundle's yoal-function.json. Change it there and deploy again.";
 
 /** Run a read that a viewer may not be allowed to make without taking the page down. */
 function safely<T>(read: () => T, fallback: T): T {
@@ -303,7 +303,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			appVolumes,
 			/** Policies assignable to this project's scopes (IAM.md I25). */
 			accessPolicies: safely(() => core.accessPolicies.list(principal, { projectId: row.id }), []),
-			// Jobs (plan 09): the tab hides unless SKIFF_FEATURE_JOBS is on.
+			// Jobs (plan 09): the tab hides unless YOAL_FEATURE_JOBS is on.
 			jobsEnabled: core.jobs.enabled(),
 			/** Direct project-scope members, including guests (IAM.md §8.2). */
 			projectMembers: membersWithAccess,
@@ -459,7 +459,7 @@ export const actions: Actions = {
 		if (!(accessModes as readonly string[]).includes(mode))
 			fieldErrors.mode = 'Choose a valid access mode.';
 		if (mode === 'access' && !policyId)
-			fieldErrors.policyId = 'Choose a Skiff Access policy.';
+			fieldErrors.policyId = 'Choose a Yoal Access policy.';
 		// A blank password keeps the scope's current one; core refuses it when there is none.
 		if (mode === 'password' && password.length > 0 && password.length < 8) {
 			fieldErrors.password = 'Use at least 8 characters for password mode.';
@@ -783,8 +783,8 @@ export const actions: Actions = {
 			});
 		if (access === 'access' && !policyId)
 			return fail(400, {
-				message: 'Choose a Skiff Access policy.',
-				fieldErrors: { policyId: 'Required for Skiff Access.' }
+				message: 'Choose a Yoal Access policy.',
+				fieldErrors: { policyId: 'Required for Yoal Access.' }
 			});
 		if (access === 'password' && password.length < 8)
 			return fail(400, {
@@ -819,8 +819,8 @@ export const actions: Actions = {
 		if (!environmentSlug) return fail(400, { message: 'Missing environment.' });
 		if (access === 'access' && !policyId)
 			return fail(400, {
-				message: 'Choose a Skiff Access policy.',
-				fieldErrors: { policyId: 'Required for Skiff Access.' }
+				message: 'Choose a Yoal Access policy.',
+				fieldErrors: { policyId: 'Required for Yoal Access.' }
 			});
 		if (access === 'password' && password.length > 0 && password.length < 8)
 			return fail(400, {

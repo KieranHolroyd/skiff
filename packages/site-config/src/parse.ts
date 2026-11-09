@@ -2,7 +2,7 @@ import * as z from 'zod';
 
 /**
  * Static site configuration: Netlify-compatible `_redirects` and `_headers`, plus optional
- * `skiff.json` (DESIGN §4.1, D30). Parsing is strict: a deploy fails with a precise error
+ * `yoal.json` (DESIGN §4.1, D30). Parsing is strict: a deploy fails with a precise error
  * rather than silently serving the wrong thing.
  */
 
@@ -26,7 +26,7 @@ export interface HeaderRule {
 }
 
 export interface ConfigIssue {
-	file: '_redirects' | '_headers' | 'skiff.json';
+	file: '_redirects' | '_headers' | 'yoal.json';
 	line?: number;
 	message: string;
 }
@@ -67,33 +67,33 @@ function readText(files: FileMap, name: string): string | undefined {
 
 export function parseSiteConfig(files: FileMap): ParsedConfig {
 	const issues: ConfigIssue[] = [];
-	const config = parseSkiffJson(readText(files, 'skiff.json'), issues);
+	const config = parseYoalJson(readText(files, 'yoal.json'), issues);
 	const redirects = parseRedirects(readText(files, '_redirects'), issues);
 	const headers = parseHeaders(readText(files, '_headers'), issues);
 	if (issues.length) throw new SiteConfigError(issues);
 	return { config, redirects, headers };
 }
 
-function parseSkiffJson(text: string | undefined, issues: ConfigIssue[]): SiteConfig {
+function parseYoalJson(text: string | undefined, issues: ConfigIssue[]): SiteConfig {
 	if (text === undefined) return { ...DEFAULT_CONFIG };
 	let value: unknown;
 	try {
 		value = JSON.parse(text);
 	} catch (error) {
-		issues.push({ file: 'skiff.json', message: `Invalid JSON: ${(error as Error).message}` });
+		issues.push({ file: 'yoal.json', message: `Invalid JSON: ${(error as Error).message}` });
 		return { ...DEFAULT_CONFIG };
 	}
 	const parsed = siteConfigSchema.safeParse(value);
 	if (!parsed.success) {
 		for (const issue of parsed.error.issues)
-			issues.push({ file: 'skiff.json', message: `${issue.path.join('.') || 'root'}: ${issue.message}` });
+			issues.push({ file: 'yoal.json', message: `${issue.path.join('.') || 'root'}: ${issue.message}` });
 		return { ...DEFAULT_CONFIG };
 	}
 	if (parsed.data.notFound && !parsed.data.notFound.startsWith('/')) {
-		issues.push({ file: 'skiff.json', message: '`notFound` must start with "/".' });
+		issues.push({ file: 'yoal.json', message: '`notFound` must start with "/".' });
 	}
 	if (parsed.data.notFound?.includes('..')) {
-		issues.push({ file: 'skiff.json', message: '`notFound` may not contain "..".' });
+		issues.push({ file: 'yoal.json', message: '`notFound` may not contain "..".' });
 	}
 	return parsed.data;
 }

@@ -37,7 +37,7 @@ self.addEventListener('push', (event) => {
 			? payload.url
 			: '/';
 	event.waitUntil(
-		self.registration.showNotification(payload.title || 'Skiff', {
+		self.registration.showNotification(payload.title || 'Yoal', {
 			body: payload.body ?? '',
 			tag: payload.tag,
 			icon: '/icons/icon-192.png',

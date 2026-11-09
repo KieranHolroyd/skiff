@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { AgentEventAck, DesiredState, WorkloadDesired } from '@skiff/contracts';
+import type { AgentEventAck, DesiredState, WorkloadDesired } from '@yoal/contracts';
 import { EventPublisher, localBrokers } from './event-publisher.ts';
 
 /** Event notifications (docs/EVENTS.md, D122): the broker node publishes the outbox. */
@@ -49,7 +49,7 @@ function fakeBroker(options: { fail?: boolean } = {}) {
 			request: async (subject: string, body: Uint8Array, opts: { headers: Record<string, string> }) => {
 				if (options.fail) throw Object.assign(new Error('nats: connection refused'), { code: 'closed' });
 				published.push({ subject, body: JSON.parse(decoder.decode(body)), headers: opts.headers });
-				return { data: encoder.encode(JSON.stringify({ stream: 'SKIFF_Q_images', seq: published.length })) };
+				return { data: encoder.encode(JSON.stringify({ stream: 'YOAL_Q_images', seq: published.length })) };
 			},
 			close: async () => {
 				closed += 1;
@@ -80,7 +80,7 @@ function fakeControl(items: Array<{ id: string; brokerId: string; queue: string;
 const activation = async (id: string) => ({
 	workloadId: id,
 	activationVersion: 'v1',
-	env: { SKIFF_BROKER_USER: 'events', SKIFF_BROKER_PASSWORD: 'secret' },
+	env: { YOAL_BROKER_USER: 'events', YOAL_BROKER_PASSWORD: 'secret' },
 	files: {},
 });
 
@@ -110,9 +110,9 @@ describe('event publisher', () => {
 		const handled = await publisher.tick(new Map([['mq_a', broker('mq_a')]]), new AbortController().signal);
 		expect(handled).toBe(2);
 		expect(nats.connects).toEqual([{ host: '127.0.0.1', port: 14222, user: 'events' }]);
-		expect(nats.published.map((item) => item.subject)).toEqual(['skiff.q.images', 'skiff.q.pages']);
+		expect(nats.published.map((item) => item.subject)).toEqual(['yoal.q.images', 'yoal.q.pages']);
 		expect(nats.published[0]!.body).toEqual({ action: 'PutObject', object: { key: 'a.jpg' } });
-		expect(nats.published[0]!.headers).toEqual({ 'Nats-Msg-Id': 'evd_1', 'Skiff-Content-Type': 'json', 'Skiff-Timestamp': '1234' });
+		expect(nats.published[0]!.headers).toEqual({ 'Nats-Msg-Id': 'evd_1', 'Yoal-Content-Type': 'json', 'Yoal-Timestamp': '1234' });
 		expect(control.acks).toEqual([{ results: [{ id: 'evd_1', ok: true }, { id: 'evd_2', ok: true }] }]);
 		expect(control.auth.every((value) => value === 'Bearer node-token')).toBe(true);
 		// The connection is reused for the next round.

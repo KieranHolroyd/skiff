@@ -26,7 +26,7 @@ services:
           cpus: "0.5"
 volumes:
   uploads:
-x-skiff:
+x-yoal:
   routes:
     - service: web
       port: 3000
@@ -64,7 +64,7 @@ services:
     ports: ["8080"]
 `);
 		expect(parsed.spec.routes).toEqual([{ service: 'web', port: 8080, healthPath: '/', primary: true }]);
-		expect(parsed.warnings.some((warning) => warning.path === 'x-skiff.routes')).toBe(true);
+		expect(parsed.warnings.some((warning) => warning.path === 'x-yoal.routes')).toBe(true);
 	});
 
 	test('refuses host bind mounts and build without applying anything', () => {
@@ -108,7 +108,7 @@ services:
   web:
     image: nginx:1.27
     ports: ["80"]
-x-skiff:
+x-yoal:
   routes:
     - service: web
       port: 8080

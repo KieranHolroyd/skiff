@@ -3,7 +3,7 @@
 	 * Jobs (plan 09): cron jobs and one-off commands for a process or container project. Everything
 	 * is client-side over the REST API with TanStack Query; runs poll while one is going.
 	 */
-	import type { JobConcurrency, JobRunStatus, JobRunView, JobView } from '@skiff/contracts';
+	import type { JobConcurrency, JobRunStatus, JobRunView, JobView } from '@yoal/contracts';
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { toast } from 'svelte-sonner';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';

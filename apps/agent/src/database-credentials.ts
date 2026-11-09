@@ -2,7 +2,7 @@ import {
 	databaseCredentialActivationSchema,
 	type DatabaseCredentialResult,
 	type DesiredState,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { HelperApi } from './helper-client.ts';
 
 /**

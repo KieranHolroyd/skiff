@@ -34,9 +34,9 @@ import { indent, plural, printJson } from '../output.ts';
 import { authenticatedClient } from './common.ts';
 import { confirmOrRefuse } from './run-operation.ts';
 
-/** Email, Skiff's self-hosted SES (docs/EMAIL.md §9). Every check lives on the server; this is a thin client. */
+/** Email, Yoal's self-hosted SES (docs/EMAIL.md §9). Every check lives on the server; this is a thin client. */
 
-const usage = `Usage: skif email <command> [options]
+const usage = `Usage: yoal email <command> [options]
 
 Commands:
   status                           Org state, limits, sent today, bounce and complaint rates (the default)
@@ -48,7 +48,7 @@ Commands:
   send                             Send a message (--from, --to, --subject, --text|--text-file, --html-file)
   log                              Recent messages, newest first (--follow to keep watching)
   log <messageId>                  One message: each recipient's status and delivery timeline
-  suppressions list                Addresses Skiff won't send to (--address to look one up)
+  suppressions list                Addresses Yoal won't send to (--address to look one up)
   suppressions add <address>       Suppress an address (--reason manual|unsubscribe)
   suppressions rm <address>        Allow sending to an address again
   addresses list                   Sandbox recipients: single addresses you may send to while in the sandbox
@@ -93,16 +93,16 @@ Options:
 
 New organisations start in the sandbox: they can only send to their own verified domains and to
 sandbox recipients whose owners confirmed a link, 200 messages a day. An org owner or admin asks
-to leave it with \`skif email request-access\`; a platform admin reviews the request.
+to leave it with \`yoal email request-access\`; a platform admin reviews the request.
 
 Examples:
-  skif email domains add example.com             # prints the DKIM, SPF and DMARC records
-  skif email domains check example.com
-  skif email send --from hi@example.com --to you@example.com --subject Hello --text "It works"
-  skif email addresses add me@gmail.com          # a test inbox you can read, while in the sandbox
-  skif email request-access --volume 500 --use-case "Password resets and receipts for our customers"
-  skif email attach --project api                # api receives SMTP_HOST, SMTP_USER, …
-  skif email log --follow`;
+  yoal email domains add example.com             # prints the DKIM, SPF and DMARC records
+  yoal email domains check example.com
+  yoal email send --from hi@example.com --to you@example.com --subject Hello --text "It works"
+  yoal email addresses add me@gmail.com          # a test inbox you can read, while in the sandbox
+  yoal email request-access --volume 500 --use-case "Password resets and receipts for our customers"
+  yoal email attach --project api                # api receives SMTP_HOST, SMTP_USER, …
+  yoal email log --follow`;
 
 const baseFlags: FlagSpec = {
 	json: { type: 'boolean' },
@@ -144,7 +144,7 @@ const requestAccessFlags: FlagSpec = {
 };
 const attachFlags: FlagSpec = { ...baseFlags, project: { type: 'string', short: 'p' }, prefix: { type: 'string' } };
 
-/** How often `skif email log --follow` polls. */
+/** How often `yoal email log --follow` polls. */
 const FOLLOW_INTERVAL_MS = 3_000;
 
 type Handler = (argv: string[]) => Promise<void>;
@@ -239,7 +239,7 @@ function parse(argv: string[], spec: FlagSpec, line: string, maxPositionals: num
 
 /** Parse, handle --help, and return the single positional (`<name>`, `<address>`, `<id>`). */
 function parseNamed(argv: string[], spec: FlagSpec, command: string, what: string) {
-	const line = `Usage: skif email ${command} <${what}>`;
+	const line = `Usage: yoal email ${command} <${what}>`;
 	const args = parse(argv, spec, line, 1);
 	if (!args) return null;
 	return { args, name: requirePositional(args, 0, `${what}.\n\n${line}`) };
@@ -264,7 +264,7 @@ async function readBody(path: string, flag: string): Promise<string> {
 // ------------------------------------------------------------------------------------------ status
 
 async function emailStatus(argv: string[]): Promise<void> {
-	const args = parse(argv, baseFlags, 'Usage: skif email status [--json]', 0);
+	const args = parse(argv, baseFlags, 'Usage: yoal email status [--json]', 0);
 	if (!args) return;
 	const client = await authenticatedClient();
 	const { org, settings, raw } = await client.emailStatus();
@@ -278,7 +278,7 @@ async function emailStatus(argv: string[]): Promise<void> {
 // ----------------------------------------------------------------------------------------- domains
 
 async function listDomains(argv: string[]): Promise<void> {
-	const args = parse(argv, baseFlags, 'Usage: skif email domains list [--json]', 0);
+	const args = parse(argv, baseFlags, 'Usage: yoal email domains list [--json]', 0);
 	if (!args) return;
 	const client = await authenticatedClient();
 	const { domains, raw } = await client.listEmailDomains();
@@ -287,7 +287,7 @@ async function listDomains(argv: string[]): Promise<void> {
 		return;
 	}
 	if (domains.length === 0) {
-		console.log('No sending domains yet. Add one with `skif email domains add <domain>`.');
+		console.log('No sending domains yet. Add one with `yoal email domains add <domain>`.');
 		return;
 	}
 	console.log(emailDomainTable(domains));
@@ -310,14 +310,14 @@ async function addDomain(argv: string[]): Promise<void> {
 	const managed = domain.records.filter((record) => record.managed);
 	const toCreate = domain.records.filter((record) => !record.managed);
 	if (managed.length > 0)
-		console.log(`Skiff created ${plural(managed.length, 'record')} through Cloudflare: ${managed.map((record) => record.purpose.toUpperCase()).join(', ')}.`);
+		console.log(`Yoal created ${plural(managed.length, 'record')} through Cloudflare: ${managed.map((record) => record.purpose.toUpperCase()).join(', ')}.`);
 	if (toCreate.length > 0) {
 		console.log('\nCreate these records at your DNS provider:\n');
 		console.log(emailRecordsTable(toCreate));
 	}
 	console.log(`\nNext steps:\n${indent([
-		`Check DNS:  skif email domains check ${domain.name}   (public DNS can take a few minutes)`,
-		`Send:       skif email send --from hello@${domain.name} --to <address> --subject <text> --text <text>`,
+		`Check DNS:  yoal email domains check ${domain.name}   (public DNS can take a few minutes)`,
+		`Send:       yoal email send --from hello@${domain.name} --to <address> --subject <text> --text <text>`,
 	])}`);
 }
 
@@ -375,13 +375,13 @@ async function removeDomain(argv: string[]): Promise<void> {
 		printJson(raw ?? { ok: true });
 		return;
 	}
-	console.log(`Removed ${name}. Records Skiff created through Cloudflare are deleted; remove any you added by hand.`);
+	console.log(`Removed ${name}. Records Yoal created through Cloudflare are deleted; remove any you added by hand.`);
 }
 
 // -------------------------------------------------------------------------------------------- send
 
 async function sendEmail(argv: string[]): Promise<void> {
-	const args = parse(argv, sendFlags, 'Usage: skif email send --from <address> --to <address> --subject <text> --text <text>', 0);
+	const args = parse(argv, sendFlags, 'Usage: yoal email send --from <address> --to <address> --subject <text> --text <text>', 0);
 	if (!args) return;
 	const from = args.string('from');
 	if (!from) throw new UsageError('Name the sender: --from <address> (on a verified sending domain).');
@@ -417,20 +417,20 @@ async function sendEmail(argv: string[]): Promise<void> {
 	}
 	console.log(`Queued ${result.id} for ${plural(result.accepted.length, 'recipient')}${result.accepted.length ? `: ${result.accepted.join(', ')}` : ''}.`);
 	if (result.suppressed.length > 0)
-		console.log(`Not sent to ${result.suppressed.join(', ')}: on the suppression list (\`skif email suppressions list\`).`);
-	console.log(`Follow it: skif email log ${result.id}`);
+		console.log(`Not sent to ${result.suppressed.join(', ')}: on the suppression list (\`yoal email suppressions list\`).`);
+	console.log(`Follow it: yoal email log ${result.id}`);
 }
 
 // --------------------------------------------------------------------------------------------- log
 
 async function emailLog(argv: string[]): Promise<void> {
-	const args = parse(argv, logFlags, 'Usage: skif email log [<messageId>] [--limit n] [--recipient address] [--status s] [--follow]', 1);
+	const args = parse(argv, logFlags, 'Usage: yoal email log [<messageId>] [--limit n] [--recipient address] [--status s] [--follow]', 1);
 	if (!args) return;
 	const client = await authenticatedClient();
 	const id = args.positionals[0];
 	if (id) {
 		if (args.boolean('follow') || args.has('limit') || args.has('recipient') || args.has('status'))
-			throw new UsageError('`skif email log <messageId>` shows one message; drop --follow, --limit, --recipient and --status.');
+			throw new UsageError('`yoal email log <messageId>` shows one message; drop --follow, --limit, --recipient and --status.');
 		const { message, events, raw } = await client.getEmailMessage(id);
 		if (args.boolean('json')) {
 			printJson(raw);
@@ -453,7 +453,7 @@ async function emailLog(argv: string[]): Promise<void> {
 			return;
 		}
 		if (messages.length === 0) {
-			console.log('No messages yet. Send one with `skif email send`.');
+			console.log('No messages yet. Send one with `yoal email send`.');
 			return;
 		}
 		console.log(emailMessageTable(messages));
@@ -475,7 +475,7 @@ async function emailLog(argv: string[]): Promise<void> {
 // ------------------------------------------------------------------------------------ suppressions
 
 async function listSuppressions(argv: string[]): Promise<void> {
-	const args = parse(argv, suppressionListFlags, 'Usage: skif email suppressions list [--address a] [--limit n] [--json]', 0);
+	const args = parse(argv, suppressionListFlags, 'Usage: yoal email suppressions list [--address a] [--limit n] [--json]', 0);
 	if (!args) return;
 	const client = await authenticatedClient();
 	const { suppressions, raw } = await client.listEmailSuppressions({
@@ -506,7 +506,7 @@ async function addSuppression(argv: string[]): Promise<void> {
 		printJson(raw);
 		return;
 	}
-	console.log(`Suppressed ${suppression.address} (${suppression.reason}). Skiff won't send to it until it is removed.`);
+	console.log(`Suppressed ${suppression.address} (${suppression.reason}). Yoal won't send to it until it is removed.`);
 }
 
 async function removeSuppression(argv: string[]): Promise<void> {
@@ -525,7 +525,7 @@ async function removeSuppression(argv: string[]): Promise<void> {
 // --------------------------------------------------------------------- sandbox recipients (§4.3)
 
 async function listAddresses(argv: string[]): Promise<void> {
-	const args = parse(argv, baseFlags, 'Usage: skif email addresses list [--json]', 0);
+	const args = parse(argv, baseFlags, 'Usage: yoal email addresses list [--json]', 0);
 	if (!args) return;
 	const client = await authenticatedClient();
 	const { addresses, raw } = await client.listEmailAddresses();
@@ -534,7 +534,7 @@ async function listAddresses(argv: string[]): Promise<void> {
 		return;
 	}
 	if (addresses.length === 0) {
-		console.log('No sandbox recipients yet. Add a mailbox you can read with `skif email addresses add <address>`.');
+		console.log('No sandbox recipients yet. Add a mailbox you can read with `yoal email addresses add <address>`.');
 		return;
 	}
 	console.log(emailAddressTable(addresses));
@@ -579,7 +579,7 @@ async function requestAccess(argv: string[]): Promise<void> {
 	const args = parse(
 		argv,
 		requestAccessFlags,
-		'Usage: skif email request-access [--use-case <text> --volume <n> [--website <url>]] [--json]',
+		'Usage: yoal email request-access [--use-case <text> --volume <n> [--website <url>]] [--json]',
 		0,
 	);
 	if (!args) return;
@@ -594,7 +594,7 @@ async function requestAccess(argv: string[]): Promise<void> {
 			return;
 		}
 		if (!request) {
-			console.log('No production access request yet. Ask with `skif email request-access --use-case "…" --volume <per day>`.');
+			console.log('No production access request yet. Ask with `yoal email request-access --use-case "…" --volume <per day>`.');
 			return;
 		}
 		console.log(emailAccessRequestDetails(request));
@@ -609,13 +609,13 @@ async function requestAccess(argv: string[]): Promise<void> {
 		return;
 	}
 	console.log(`Requested production access (${request.id}). A platform admin reviews it; you get an email with the answer.`);
-	console.log('Check on it with `skif email request-access`.');
+	console.log('Check on it with `yoal email request-access`.');
 }
 
 // ------------------------------------------------------------------------------------- credentials
 
 async function listCredentials(argv: string[]): Promise<void> {
-	const args = parse(argv, baseFlags, 'Usage: skif email credentials list [--json]', 0);
+	const args = parse(argv, baseFlags, 'Usage: yoal email credentials list [--json]', 0);
 	if (!args) return;
 	const client = await authenticatedClient();
 	const { credentials, raw } = await client.listEmailCredentials();
@@ -624,7 +624,7 @@ async function listCredentials(argv: string[]): Promise<void> {
 		return;
 	}
 	if (credentials.length === 0) {
-		console.log('No SMTP credentials yet. Create one with `skif email credentials create <name>`.');
+		console.log('No SMTP credentials yet. Create one with `yoal email credentials create <name>`.');
 		return;
 	}
 	console.log(emailCredentialTable(credentials));
@@ -675,14 +675,14 @@ async function revokeCredential(argv: string[]): Promise<void> {
 
 function projectAndPrefix(args: ParsedArgs, command: string): { project: string; prefix: string | undefined } {
 	const project = args.string('project');
-	if (!project) throw new UsageError(`Name the project: skif email ${command} --project <slug>`);
+	if (!project) throw new UsageError(`Name the project: yoal email ${command} --project <slug>`);
 	const prefix = args.string('prefix');
 	if (prefix !== undefined) assertEnvPrefix(prefix);
 	return { project, prefix };
 }
 
 async function attachEmail(argv: string[]): Promise<void> {
-	const args = parse(argv, attachFlags, 'Usage: skif email attach --project <slug> [--prefix SMTP]', 0);
+	const args = parse(argv, attachFlags, 'Usage: yoal email attach --project <slug> [--prefix SMTP]', 0);
 	if (!args) return;
 	const { project, prefix } = projectAndPrefix(args, 'attach');
 	const client = await authenticatedClient();
@@ -698,7 +698,7 @@ async function attachEmail(argv: string[]): Promise<void> {
 }
 
 async function detachEmail(argv: string[]): Promise<void> {
-	const args = parse(argv, attachFlags, 'Usage: skif email detach --project <slug> [--prefix SMTP]', 0);
+	const args = parse(argv, attachFlags, 'Usage: yoal email detach --project <slug> [--prefix SMTP]', 0);
 	if (!args) return;
 	const { project, prefix } = projectAndPrefix(args, 'detach');
 	const client = await authenticatedClient();

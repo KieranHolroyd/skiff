@@ -3,14 +3,14 @@ import { createHmac, generateKeyPairSync } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import { githubAppManifest, missingPermissions, parseGithubRepoUrl, type PipelineClaimRequestInput, type PipelineJobClaim, type PipelineResolveClaim } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import { githubAppManifest, missingPermissions, parseGithubRepoUrl, type PipelineClaimRequestInput, type PipelineJobClaim, type PipelineResolveClaim } from '@yoal/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import type { Core } from './index.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-github-app-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-github-app-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -45,10 +45,10 @@ const githubFetch = (async (input: string | URL | Request, init?: RequestInit) =
 	calls.push({ method, url, auth: headers.get('authorization') ?? '', body });
 	const path = url.replace(/^https:\/\/(api\.)?github\.com/, '');
 	if (method === 'GET' && path === '/app')
-		return Response.json({ id: 42, slug: 'skiff-test', name: 'Skiff test', html_url: 'https://github.com/apps/skiff-test', owner: { login: 'Acme' }, client_id: 'Iv1.client' });
+		return Response.json({ id: 42, slug: 'yoal-test', name: 'Yoal test', html_url: 'https://github.com/apps/yoal-test', owner: { login: 'Acme' }, client_id: 'Iv1.client' });
 	if (method === 'POST' && path === '/app-manifests/manifest-code-123/conversions')
 		return Response.json(
-			{ id: 42, slug: 'skiff-test', name: 'Skiff test', html_url: 'https://github.com/apps/skiff-test', owner: { login: 'Acme' }, pem: PEM, webhook_secret: WEBHOOK_SECRET, client_id: 'Iv1.client', client_secret: 'client-secret-xyz' },
+			{ id: 42, slug: 'yoal-test', name: 'Yoal test', html_url: 'https://github.com/apps/yoal-test', owner: { login: 'Acme' }, pem: PEM, webhook_secret: WEBHOOK_SECRET, client_id: 'Iv1.client', client_secret: 'client-secret-xyz' },
 			{ status: 201 },
 		);
 	if (method === 'GET' && path.startsWith('/app/installations?')) return Response.json([installation()]);
@@ -131,8 +131,8 @@ describe('contracts', () => {
 		expect(parseGithubRepoUrl('https://gitlab.com/acme/app.git')).toBeNull();
 	});
 
-	test('the manifest points every URL at this install and asks for what Skiff uses', () => {
-		const manifest = githubAppManifest({ origin: 'https://control.test/', name: 'Skiff', public: false });
+	test('the manifest points every URL at this install and asks for what Yoal uses', () => {
+		const manifest = githubAppManifest({ origin: 'https://control.test/', name: 'Yoal', public: false });
 		expect(manifest.hook_attributes.url).toBe('https://control.test/api/webhooks/github-app');
 		expect(manifest.redirect_url).toBe('https://control.test/settings/github/created');
 		expect(manifest.callback_urls[0]).toBe('https://control.test/settings/github/installed');
@@ -149,17 +149,17 @@ describe('contracts', () => {
 
 describe('app registration', () => {
 	test('only a platform admin can start the manifest flow, and the state is bound to them', async () => {
-		expect(() => core.githubApp.startManifest(orgOwner, { name: 'Skiff' })).toThrow('platform admin');
-		const started = core.githubApp.startManifest(admin, { name: 'Skiff', owner: 'acme' });
+		expect(() => core.githubApp.startManifest(orgOwner, { name: 'Yoal' })).toThrow('platform admin');
+		const started = core.githubApp.startManifest(admin, { name: 'Yoal', owner: 'acme' });
 		expect(started.postUrl).toStartWith('https://github.com/organizations/acme/settings/apps/new?state=');
-		expect(JSON.parse(started.manifest).name).toBe('Skiff');
+		expect(JSON.parse(started.manifest).name).toBe('Yoal');
 		const someoneElse = buildPrincipal({ kind: 'user', userId: 'user_x', orgId: 'org_1', role: 'owner', platformAdmin: true });
 		await expect(core.githubApp.completeManifest(someoneElse, 'manifest-code-123', started.state)).rejects.toThrow('expired or was started by someone else');
 		await expect(core.githubApp.completeManifest(admin, 'manifest-code-123', `${started.state}x`)).rejects.toThrow();
 
 		const view = await core.githubApp.completeManifest(admin, 'manifest-code-123', started.state);
-		expect(view).toMatchObject({ configured: true, appId: 42, slug: 'skiff-test', source: 'manifest', signInReady: true });
-		expect(view.installUrl).toBe('https://github.com/apps/skiff-test/installations/new');
+		expect(view).toMatchObject({ configured: true, appId: 42, slug: 'yoal-test', source: 'manifest', signInReady: true });
+		expect(view.installUrl).toBe('https://github.com/apps/yoal-test/installations/new');
 		expect(core.githubApp.oauthCredentials()).toEqual({ clientId: 'Iv1.client', clientSecret: 'client-secret-xyz' });
 		// Secrets are sealed: nothing readable in the settings row.
 		const row = opened.sqlite.query<{ value: string }, []>("SELECT value FROM settings WHERE key = 'github.app'").get()!;
@@ -201,7 +201,7 @@ describe('linking installations', () => {
 		await expect(core.githubApp.completeInstallation(deployer, { installationId: INSTALLATION, code: 'oauth-code-123', state: stateFrom(deployerUrl) })).rejects.toThrow('owners and admins');
 		userInstallations = [8];
 		const url = core.githubApp.installUrl(orgOwner)!;
-		expect(url).toStartWith('https://github.com/apps/skiff-test/installations/new?state=');
+		expect(url).toStartWith('https://github.com/apps/yoal-test/installations/new?state=');
 		await expect(core.githubApp.completeInstallation(orgOwner, { installationId: INSTALLATION, code: 'oauth-code-123', state: stateFrom(url) })).rejects.toThrow('cannot see');
 		// Without a code only a platform admin may link.
 		await expect(core.githubApp.completeInstallation(orgOwner, { installationId: INSTALLATION, state: stateFrom(url) })).rejects.toThrow('platform admin');
@@ -221,7 +221,7 @@ describe('linking installations', () => {
 		expect(core.githubApp.installations(orgOwner).map((entry) => entry.id)).toEqual([INSTALLATION]);
 
 		const otherUrl = core.githubApp.installUrl(otherOrg)!;
-		await expect(core.githubApp.completeInstallation(otherOrg, { installationId: INSTALLATION, code: 'oauth-code-123', state: stateFrom(otherUrl) })).rejects.toThrow('another Skiff organisation');
+		await expect(core.githubApp.completeInstallation(otherOrg, { installationId: INSTALLATION, code: 'oauth-code-123', state: stateFrom(otherUrl) })).rejects.toThrow('another Yoal organisation');
 		expect(core.githubApp.installations(otherOrg)).toEqual([]);
 	});
 
@@ -287,7 +287,7 @@ describe('git builds through the App', () => {
 		await Bun.sleep(10);
 		const status = calls.find((call) => call.url.includes(`/statuses/${sha}`))!;
 		expect(status.url).toBe(`https://api.github.com/repos/acme/app/statuses/${sha}`);
-		expect(status.body).toMatchObject({ state: 'pending', context: `skiff-build/${slug}` });
+		expect(status.body).toMatchObject({ state: 'pending', context: `yoal-build/${slug}` });
 
 		const job = await core.builds.claim(builderNodeId);
 		expect(job?.commitSha).toBe(sha);
@@ -339,7 +339,7 @@ describe('pipelines through the App', () => {
 		expect(resolve.gitToken).toStartWith('ghs_');
 		engine.resolveTrigger(engine.authenticateTrigger(resolve.token), {
 			sha,
-			files: [{ path: '.skiff/workflows/ci.yml', content: 'name: ci\non: push\njobs:\n  a: { runs-on: linux, steps: [{ run: echo }] }\n' }],
+			files: [{ path: '.yoal/workflows/ci.yml', content: 'name: ci\non: push\njobs:\n  a: { runs-on: linux, steps: [{ run: echo }] }\n' }],
 		});
 		const job = (await engine.claim(nodeId, labels)) as PipelineJobClaim;
 		expect(job.kind).toBe('job');
@@ -350,7 +350,7 @@ describe('pipelines through the App', () => {
 		const minted = calls.filter((call) => call.url.endsWith('/access_tokens')).map((call) => call.body);
 		expect(minted).toContainEqual({ repositories: ['app'], permissions: { contents: 'read', pull_requests: 'read', statuses: 'write' } });
 		await Bun.sleep(10);
-		expect(calls.some((call) => call.url.includes(`/statuses/${sha}`) && call.body?.context === 'skiff/ci')).toBe(true);
+		expect(calls.some((call) => call.url.includes(`/statuses/${sha}`) && call.body?.context === 'yoal/ci')).toBe(true);
 	});
 
 	test('a fork pull request runs untrusted: no GITHUB_TOKEN', async () => {
@@ -371,7 +371,7 @@ describe('pipelines through the App', () => {
 		const resolve = claim as PipelineResolveClaim;
 		engine.resolveTrigger(engine.authenticateTrigger(resolve.token), {
 			sha: '1'.repeat(40),
-			files: [{ path: '.skiff/workflows/ci.yml', content: 'name: ci\non: pull_request\njobs:\n  a: { runs-on: linux, steps: [{ run: echo }] }\n' }],
+			files: [{ path: '.yoal/workflows/ci.yml', content: 'name: ci\non: pull_request\njobs:\n  a: { runs-on: linux, steps: [{ run: echo }] }\n' }],
 		});
 		const job = (await engine.claim(nodeId, labels)) as PipelineJobClaim;
 		expect(job.trust).toBe('untrusted');

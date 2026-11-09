@@ -1,5 +1,5 @@
 import { error, fail, redirect } from '@sveltejs/kit';
-import { CoreError } from '@skiff/core';
+import { CoreError } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import { failStatus, toFormFailure } from '../../../_lib/errors.js';
 import { actorNames } from '../../../_lib/operations/actors.server.js';

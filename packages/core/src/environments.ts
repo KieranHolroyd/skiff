@@ -1,12 +1,12 @@
 import { and, asc, eq, ne } from 'drizzle-orm';
-import { environments, deployments } from '@skiff/db';
+import { environments, deployments } from '@yoal/db';
 import {
 	environmentCreateSchema,
 	type EnvironmentCreateInput,
 	type EnvironmentUpdateInput,
 	type EnvironmentView,
 	type Principal,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, NotFoundError, ValidationError } from './errors.ts';
 import { hashPassword, newId } from './util.ts';
@@ -124,7 +124,7 @@ export class EnvironmentService {
 		if (clash) throw new ConflictError(`An environment named "${slug}" already exists.`);
 		const access = parsed.access ?? effectiveAccessMode(project.previewAccess, project.previewAccessPolicyId);
 		if (access === 'access' && !parsed.policyId && !project.previewAccessPolicyId)
-			throw new ValidationError('Choose a Skiff Access policy for this environment.');
+			throw new ValidationError('Choose a Yoal Access policy for this environment.');
 		const policyId =
 			access === 'access'
 				? (parsed.policyId ?? project.previewAccessPolicyId ?? null)
@@ -179,7 +179,7 @@ export class EnvironmentService {
 				? (input.policyId !== undefined ? input.policyId : (row.accessPolicyId ?? null))
 				: null;
 		if (access === 'access' && !policyId)
-			throw new ValidationError('Choose a Skiff Access policy for this environment.');
+			throw new ValidationError('Choose a Yoal Access policy for this environment.');
 		// The environment's own password; other scopes are never touched.
 		let passwordHash = row.passwordHash;
 		if (access !== 'password') passwordHash = null;

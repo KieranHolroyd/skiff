@@ -12,12 +12,12 @@
 	import UnlinkIcon from '@lucide/svelte/icons/unlink';
 	import WorkflowIcon from '@lucide/svelte/icons/workflow';
 	import { resolve } from '$app/paths';
-	import type { GithubInstallationView } from '@skiff/contracts';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import GitHubMark from '#lib/components/skiff/GitHubMark.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import type { GithubInstallationView } from '@yoal/contracts';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
+	import DetailList from '#lib/components/yoal/DetailList.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import GitHubMark from '#lib/components/yoal/GitHubMark.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
@@ -63,11 +63,11 @@
 		},
 		{
 			title: 'Deploy from Git',
-			body: 'Projects → Deploy from Git imports a repository: Skiff detects the framework, connects it and deploys every push. GitLab, Gitea and Forgejo connect in Settings → Git providers.'
+			body: 'Projects → Deploy from Git imports a repository: Yoal detects the framework, connects it and deploys every push. GitLab, Gitea and Forgejo connect in Settings → Git providers.'
 		},
 		{
 			title: 'Pipelines set themselves up',
-			body: 'A push to a repository with .skiff/workflows adds it to Pipelines and starts its workflows. Nothing to register, no webhook.'
+			body: 'A push to a repository with .yoal/workflows adds it to Pipelines and starts its workflows. Nothing to register, no webhook.'
 		},
 		{
 			title: 'Events without webhooks',
@@ -83,7 +83,7 @@
 		},
 		{
 			title: 'Runners without a PAT',
-			body: 'GitHub Actions runner pools can authenticate with “Skiff’s GitHub App” instead of a stored token or key.'
+			body: 'GitHub Actions runner pools can authenticate with “Yoal’s GitHub App” instead of a stored token or key.'
 		},
 		{
 			title: 'Repository pickers',
@@ -124,7 +124,7 @@
 
 	function removeApp() {
 		askConfirm({
-			title: 'Remove the GitHub App from Skiff?',
+			title: 'Remove the GitHub App from Yoal?',
 			description:
 				'Every organisation loses its installations here. Builds and pipelines fall back to hand-made webhooks, stored tokens and node credentials. The App itself stays registered on GitHub; delete it there as well if you no longer need it.',
 			confirmLabel: 'Remove App',
@@ -134,7 +134,7 @@
 	}
 </script>
 
-<svelte:head><title>GitHub · Settings · Skiff</title></svelte:head>
+<svelte:head><title>GitHub · Settings · Yoal</title></svelte:head>
 
 <SettingsHeader id="github" />
 
@@ -144,7 +144,7 @@
 	<Panel
 		title="GitHub App"
 		icon={SparklesIcon}
-		description="One App serves this whole Skiff install; each GitHub account that installs it is linked to one organisation."
+		description="One App serves this whole Yoal install; each GitHub account that installs it is linked to one organisation."
 	>
 		{#snippet actions()}
 			{#if data.isAdmin && data.app.configured}
@@ -186,7 +186,7 @@
 					<dt>Added</dt>
 					<dd class="text-xs text-muted-foreground">
 						{data.app.createdAt ? formatDateTime(data.app.createdAt) : '—'} · {data.app.source === 'manifest'
-							? 'created from Skiff'
+							? 'created from Yoal'
 							: 'credentials pasted'}
 					</dd>
 				{/if}
@@ -201,7 +201,7 @@
 				icon={SparklesIcon}
 				compact
 				title="Connect GitHub in one click"
-				description="Skiff registers an App on your GitHub account or organisation with exactly the permissions it uses, and stores its key sealed on the control plane."
+				description="Yoal registers an App on your GitHub account or organisation with exactly the permissions it uses, and stores its key sealed on the control plane."
 			>
 				<div class="flex flex-wrap justify-center gap-2">
 					<Button size="sm" onclick={() => (createOpen = true)}><GitHubMark class="size-3.5" />Create GitHub App</Button>
@@ -340,7 +340,7 @@
 		<Panel
 			title="Pipelines"
 			icon={WorkflowIcon}
-			description="Repositories the App covers run their .skiff/workflows without being added by hand."
+			description="Repositories the App covers run their .yoal/workflows without being added by hand."
 		>
 			<form
 				bind:this={autoForm}
@@ -475,7 +475,7 @@
 				<Checkbox id="app-public" name="public" />
 				<Field.Content>
 					<Field.Label for="app-public">Installable by any GitHub account</Field.Label>
-					<Field.Description>Needed when organisations in this Skiff use different GitHub accounts.</Field.Description>
+					<Field.Description>Needed when organisations in this Yoal use different GitHub accounts.</Field.Description>
 				</Field.Content>
 			</Field.Field>
 		</Field.Group>

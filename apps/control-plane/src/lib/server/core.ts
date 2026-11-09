@@ -14,7 +14,7 @@ import {
 	coreConfigFromEnv,
 	createCore,
 	type Notifier
-} from '@skiff/core';
+} from '@yoal/core';
 import {
 	alertEmail,
 	alertSms,
@@ -89,7 +89,7 @@ export const core = createCore({
 export { objectStore };
 
 /**
- * ClickHouse telemetry (DESIGN §8, D101), over HTTP to the local `skiff-clickhouse` server.
+ * ClickHouse telemetry (DESIGN §8, D101), over HTTP to the local `yoal-clickhouse` server.
  * Fail-open: if ClickHouse is down or unconfigured, the platform keeps serving, telemetry
  * reports unavailable, and the store reconnects by itself once the server answers. A
  * zero-downtime standby shares the server with the primary, so it needs no special case.

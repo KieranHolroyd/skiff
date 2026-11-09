@@ -1,0 +1,6 @@
+{
+	# Bootstrap only. The agent replaces this through the admin API on its first
+	# reconcile, and preserves the unix-socket admin endpoint in every config it
+	# writes. Never move this to TCP (D7).
+	admin unix//run/yoal/caddy-admin.sock|0660
+}

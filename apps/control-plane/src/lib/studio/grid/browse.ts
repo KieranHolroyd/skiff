@@ -6,7 +6,7 @@ import {
 	type Column,
 	type FilterOp,
 	type StudioCapabilities
-} from '@skiff/studio/protocol';
+} from '@yoal/studio/protocol';
 import { parseEdit } from './edit.js';
 
 /** Filter-builder and browse helpers for the relational workspace (plan 22). Pure. */

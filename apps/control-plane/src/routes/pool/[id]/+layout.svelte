@@ -20,7 +20,7 @@
 		</header>
 		{@render children()}
 		<footer class="pool-footer">
-			Secured by Skiff Identity · {data.pool.issuer}
+			Secured by Yoal Identity · {data.pool.issuer}
 		</footer>
 	</main>
 </div>

@@ -17,7 +17,7 @@
 	} = $props();
 
 	function href(key: string): string {
-		const url = new URL(links[key] ?? '?', 'http://skiff.local');
+		const url = new URL(links[key] ?? '?', 'http://yoal.local');
 		if (tab) url.searchParams.set('tab', tab);
 		return `${url.pathname}${url.search}`;
 	}

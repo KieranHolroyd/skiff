@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
-import { desiredStateSchema, type DatabaseStudioPrincipalTask, type DesiredState } from '@skiff/contracts';
+import { desiredStateSchema, type DatabaseStudioPrincipalTask, type DesiredState } from '@yoal/contracts';
 import { StudioPrincipalRunner } from './principal.ts';
 
 const PASSWORD = 'p'.repeat(32);
@@ -22,7 +22,7 @@ const server = Bun.serve({
 			databaseId,
 			generation: activationGeneration ?? 1,
 			engine: 'postgres',
-			user: 'skiff_studio_ro',
+			user: 'yoal_studio_ro',
 			password: PASSWORD,
 			database: 'shop_db',
 		});
@@ -82,7 +82,7 @@ describe('StudioPrincipalRunner', () => {
 		const desired = state([{ databaseId: 'db_1', generation: 1 }]);
 		await instance.runOnce(desired, signal());
 		expect(requests).toEqual([{ path: '/api/agent/database-studio-principal/db_1', auth: `Bearer ${NODE_TOKEN}` }]);
-		expect(calls).toEqual([`db_1:skiff_studio_ro:${PASSWORD}`]);
+		expect(calls).toEqual([`db_1:yoal_studio_ro:${PASSWORD}`]);
 		const results = instance.pendingResults();
 		expect(results).toEqual([{ databaseId: 'db_1', generation: 1, status: 'ok' }]);
 		// Not re-run while queued, nor after the heartbeat acknowledged it while the task is listed.

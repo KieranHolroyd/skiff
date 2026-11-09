@@ -4,7 +4,7 @@
  * A pool is an org resource like a database, but its purpose is authentication for one deployed
  * app's own end users. This slice owns the pool row, its OIDC clients, and the public discovery
  * and JWKS documents. It deliberately does **not** implement users, passwords, sessions, hosted
- * sign-in pages, MFA or email: those belong to the native `skiff-identity` engine (I27), which
+ * sign-in pages, MFA or email: those belong to the native `yoal-identity` engine (I27), which
  * runs as its own process with its own SQLite file per pool. The engine seam is recorded below so
  * the control plane never pretends it is already hosting users.
  *
@@ -53,7 +53,7 @@ import {
 	type UserPoolTheme,
 	type UserPoolUpdate,
 	type UserPoolView
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import type { ProjectRow } from './projects.ts';
 import type {
@@ -104,7 +104,7 @@ export function userPoolIssuer(contentDomain: string, poolId: string): string {
 /**
  * The engine seam (IAM.md I27). The native engine ships first; managed Keycloak and Authentik are
  * later registry entries. An engine owns the tenant's users, sessions, hosted pages and data file.
- * `implemented` is false until `skiff-agent identity` exists, so the dashboard can say so honestly.
+ * `implemented` is false until `yoal-agent identity` exists, so the dashboard can say so honestly.
  */
 export interface UserPoolEngine {
 	readonly id: UserPoolEngineId;
@@ -116,9 +116,9 @@ export interface UserPoolEngine {
 }
 
 export const USER_POOL_ENGINE_IMPLEMENTATIONS: Record<UserPoolEngineId, UserPoolEngine> = {
-	'skiff-identity': {
-		id: 'skiff-identity',
-		label: 'Skiff Identity',
+	'yoal-identity': {
+		id: 'yoal-identity',
+		label: 'Yoal Identity',
 		implemented: false,
 		owns: ['users', 'sessions', 'hosted-sign-in', 'mfa', 'social-login']
 	}
@@ -286,7 +286,7 @@ export class UserPoolService {
 	 * Start a short-lived support-impersonation session for one pool user (IAM.md I29).
 	 *
 	 * An impersonated session is a normal pool session with an `impersonatedBy` claim, so it is
-	 * accepted only by the pool's OAuth/hosted surfaces, never by Skiff's platform admin API (which
+	 * accepted only by the pool's OAuth/hosted surfaces, never by Yoal's platform admin API (which
 	 * takes a platform session, key or STS token). The app still sees the user's full identity: the
 	 * remaining risk is that an app which ignores `impersonated_by` cannot tell support apart. The
 	 * session is capped at one hour and every start/end is audited with the admin as `actingFor`.
@@ -593,7 +593,7 @@ export class UserPoolService {
 	}
 
 	/**
-	 * Import Auth0, Cognito, Firebase or a Skiff pool export. `dryRun` never writes and returns the
+	 * Import Auth0, Cognito, Firebase or a Yoal pool export. `dryRun` never writes and returns the
 	 * same counts as an apply. Duplicate addresses are skipped, never overwritten. A hash this
 	 * engine cannot verify forces a password reset instead of silently storing a dead password.
 	 */
@@ -1658,22 +1658,22 @@ function detectPoolImportFormat(data: unknown): UserPoolImportFormat {
 		const first = record(value[0]);
 		if (first?.localId) return 'firebase';
 		if (first?.user_id || first?.custom_password_hash) return 'auth0';
-		if (first?.passwordAlgorithm || first?.passwordHash) return 'skiff';
+		if (first?.passwordAlgorithm || first?.passwordHash) return 'yoal';
 		return 'auth0';
 	}
 	const root = record(value);
 	if (!root) throw new ValidationError('The import file is not a JSON object or a CSV export.');
-	if (root.schema === USER_POOL_EXPORT_SCHEMA) return 'skiff';
+	if (root.schema === USER_POOL_EXPORT_SCHEMA) return 'yoal';
 	if (Array.isArray(root.Users)) return 'cognito';
 	if (Array.isArray(root.users)) {
 		const first = record(root.users[0]);
-		if (root.pool && root.version) return 'skiff';
+		if (root.pool && root.version) return 'yoal';
 		if (first?.localId) return 'firebase';
 		if (first?.user_id || first?.custom_password_hash) return 'auth0';
-		if (first?.passwordAlgorithm) return 'skiff';
-		return 'skiff';
+		if (first?.passwordAlgorithm) return 'yoal';
+		return 'yoal';
 	}
-	throw new ValidationError('Could not recognise that user export. Use Auth0, Cognito, Firebase or a Skiff pool export.');
+	throw new ValidationError('Could not recognise that user export. Use Auth0, Cognito, Firebase or a Yoal pool export.');
 }
 
 /** Normalise every supported document into the same rows before the dry run or apply. */
@@ -1708,22 +1708,22 @@ function normalizeWithFormat(raw: unknown, format: UserPoolImportFormat): Normal
 			throw new ValidationError('The import file is not valid JSON.');
 		}
 	}
-	if (format === 'skiff') return normalizeSkiffImport(raw);
+	if (format === 'yoal') return normalizeYoalImport(raw);
 	if (format === 'auth0') return normalizeAuth0Import(raw);
 	if (format === 'cognito') return normalizeCognitoImport(raw);
 	return normalizeFirebaseImport(raw);
 }
 
-function normalizeSkiffImport(raw: unknown): NormalizedPoolImport {
+function normalizeYoalImport(raw: unknown): NormalizedPoolImport {
 	const root = record(raw) ?? {};
 	if (!Array.isArray(raw) && Object.keys(root).length === 0)
-		throw new ValidationError('A Skiff pool export must be a JSON object.');
+		throw new ValidationError('A Yoal pool export must be a JSON object.');
 	if (root.version !== undefined && root.version !== USER_POOL_EXPORT_VERSION)
 		throw new ValidationError(
 			`This pool export is version ${String(root.version)}; this platform imports version ${USER_POOL_EXPORT_VERSION}.`
 		);
 	const list = Array.isArray(root.users) ? root.users : Array.isArray(raw) ? raw : null;
-	if (!list) throw new ValidationError('The Skiff export has no users array.');
+	if (!list) throw new ValidationError('The Yoal export has no users array.');
 	const users = list.map((entry) => {
 		const user = record(entry) ?? {};
 		const email = importEmail(text(user.email));
@@ -1789,7 +1789,7 @@ function normalizeSkiffImport(raw: unknown): NormalizedPoolImport {
 			}
 		];
 	});
-	return { format: 'skiff', users, groups, clients, oauthProviders };
+	return { format: 'yoal', users, groups, clients, oauthProviders };
 }
 
 function normalizeAuth0Import(raw: unknown): NormalizedPoolImport {

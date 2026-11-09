@@ -2,7 +2,7 @@ import ArchiveRestoreIcon from '@lucide/svelte/icons/archive-restore';
 import DatabaseIcon from '@lucide/svelte/icons/database';
 import GlobeIcon from '@lucide/svelte/icons/globe';
 import SparklesIcon from '@lucide/svelte/icons/sparkles';
-import type { PlatformPolicyKey } from '@skiff/contracts';
+import type { PlatformPolicyKey } from '@yoal/contracts';
 
 /**
  * Platform policies are one stored row (packages/contracts/src/platform-policies.ts), but each group

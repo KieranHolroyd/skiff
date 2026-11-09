@@ -1,5 +1,5 @@
 import { error, fail, redirect } from '@sveltejs/kit';
-import { CoreError } from '@skiff/core';
+import { CoreError } from '@yoal/core';
 import {
 	brokerAttachSchema,
 	brokerUpdateSchema,
@@ -7,7 +7,7 @@ import {
 	type BrokerMetricPoint,
 	type BrokerQueuesView,
 	type BrokerView
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { parseTrafficRange, trafficRangeHref, trafficRanges } from '#lib/server/traffic-range.js';
 import { failStatus, formRawString, formString, toFormFailure } from '../../_lib/errors.js';
@@ -82,12 +82,12 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	};
 };
 
-/** A stream named in a form: a function queue maps to its `SKIFF_Q_<queue>` stream. */
+/** A stream named in a form: a function queue maps to its `YOAL_Q_<queue>` stream. */
 function streamField(data: FormData): string {
 	const stream = formString(data, 'stream');
 	if (stream) return stream;
 	const queue = formString(data, 'queue');
-	return queue ? `SKIFF_Q_${queue}` : '';
+	return queue ? `YOAL_Q_${queue}` : '';
 }
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;

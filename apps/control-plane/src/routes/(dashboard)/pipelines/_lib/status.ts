@@ -1,4 +1,4 @@
-import type { PipelineConclusion, PipelineRunSummary } from '@skiff/contracts';
+import type { PipelineConclusion, PipelineRunSummary } from '@yoal/contracts';
 
 /**
  * One vocabulary for run, job and step state. A completed item shows its conclusion; anything

@@ -13,7 +13,7 @@ import {
 	type RuntimeLogBatch,
 	type WorkloadActivation,
 	type WorkloadDesired,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { HelperLogResult, LogReadOptions } from './helper-client.ts';
 
 /**

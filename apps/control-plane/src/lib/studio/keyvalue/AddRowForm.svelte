@@ -1,6 +1,6 @@
 <script lang="ts">
 	import PlusIcon from '@lucide/svelte/icons/plus';
-	import type { RowChange } from '@skiff/studio/protocol';
+	import type { RowChange } from '@yoal/studio/protocol';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import { Label } from '#lib/components/ui/label/index.js';

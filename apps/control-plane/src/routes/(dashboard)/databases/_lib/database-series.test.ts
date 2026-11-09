@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { DatabaseMetricPoint } from '@skiff/contracts';
+import type { DatabaseMetricPoint } from '@yoal/contracts';
 import { chooseSpan, databaseChart, databaseTotals, storagePercent } from './database-series.ts';
 
 const MINUTE = 60_000;

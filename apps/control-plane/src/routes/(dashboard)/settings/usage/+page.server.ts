@@ -4,7 +4,7 @@ import {
 	quotaFieldNames,
 	quotaUpdateSchema,
 	type QuotaUpdate
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { formString } from '../../_lib/errors.js';
 import { QUOTA_FIELD_SCALE, QUOTA_FIELDS } from './quota-fields.js';

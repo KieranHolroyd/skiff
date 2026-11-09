@@ -6,7 +6,7 @@
 -- `scripts/generate-migrations.ts`.
 --
 -- Better Auth's `@better-auth/scim` plugin owns the SCIM resource tables (`scimUser`,
--- `scimGroup`, `scimGroupMember`, …) and creates them on boot. Skiff keeps the organisation's
+-- `scimGroup`, `scimGroupMember`, …) and creates them on boot. Yoal keeps the organisation's
 -- bearer credential here so it can be minted, shown once, listed and revoked from Settings → SSO.
 -- Only `sha256(token)` is stored; the raw token is never persisted or returned again.
 CREATE TABLE IF NOT EXISTS scim_tokens (
@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS scim_tokens (
 CREATE UNIQUE INDEX IF NOT EXISTS scim_tokens_hash_idx ON scim_tokens (token_hash);
 CREATE INDEX IF NOT EXISTS scim_tokens_org_idx ON scim_tokens (org_id);
 
--- IdP group claim → Skiff group (IAM.md I19, §8.3). One claim value maps to one group per
+-- IdP group claim → Yoal group (IAM.md I19, §8.3). One claim value maps to one group per
 -- provider. `claim_value` is stored normalised (trimmed, lowercased) so an IdP's casing changes
 -- do not silently stop the mapping; memberships written from a mapping carry `source = 'sso'`.
 CREATE TABLE IF NOT EXISTS sso_group_mappings (

@@ -1,4 +1,4 @@
-import type { FailoverPlan, FailoverStage } from '@skiff/contracts';
+import type { FailoverPlan, FailoverStage } from '@yoal/contracts';
 
 /** The only allowed forward steps; a failure may move to `detect` for a retry. */
 const NEXT: Record<FailoverStage, FailoverStage[]> = {

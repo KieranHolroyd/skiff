@@ -17,9 +17,9 @@
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import { askVerify } from '#lib/verify.svelte.js';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import GitHubMark from '#lib/components/skiff/GitHubMark.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import GitHubMark from '#lib/components/yoal/GitHubMark.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import * as Avatar from '#lib/components/ui/avatar/index.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
@@ -163,7 +163,7 @@
 </script>
 
 <svelte:head>
-	<title>Account settings · Skiff</title>
+	<title>Account settings · Yoal</title>
 </svelte:head>
 
 <SettingsHeader id="account" />
@@ -452,7 +452,7 @@
 				<Card.Title class="flex items-center gap-2">
 					<LinkIcon class="size-4 text-muted-foreground" />Linked sign-in methods
 				</Card.Title>
-				<Card.Description>External accounts connected to your Skiff identity.</Card.Description>
+				<Card.Description>External accounts connected to your Yoal identity.</Card.Description>
 			</Card.Header>
 			<Card.Content>
 				{#if data.accountsError}

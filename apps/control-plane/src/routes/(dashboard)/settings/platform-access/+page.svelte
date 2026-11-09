@@ -9,7 +9,7 @@
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import EmptyState from '../../_lib/EmptyState.svelte';
 	import { formatRelative } from '../../_lib/format.js';

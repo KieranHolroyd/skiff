@@ -1,7 +1,7 @@
 import { MailServer } from './server.ts';
 
 /**
- * Entry point for `skiff-agent mail`, run by `skiff-mail.service` (EMAIL.md §3.2). Configuration
+ * Entry point for `yoal-agent mail`, run by `yoal-mail.service` (EMAIL.md §3.2). Configuration
  * is environment only; the unit sets it. Nothing here reads the agent's config or token.
  */
 
@@ -16,22 +16,22 @@ function port(name: string, fallback: number | null): number | null {
 
 export async function runMailProcess(): Promise<void> {
 	const server = new MailServer({
-		dataDir: process.env.SKIFF_MAIL_DATA_DIR ?? '/var/lib/skiff/mail',
-		controlSocket: process.env.SKIFF_MAIL_SOCKET ?? '/run/skiff/mail.sock',
-		tlsDir: process.env.SKIFF_MAIL_TLS_DIR ?? '/run/skiff/mail-tls',
+		dataDir: process.env.YOAL_MAIL_DATA_DIR ?? '/var/lib/yoal/mail',
+		controlSocket: process.env.YOAL_MAIL_SOCKET ?? '/run/yoal/mail.sock',
+		tlsDir: process.env.YOAL_MAIL_TLS_DIR ?? '/run/yoal/mail-tls',
 		listen: {
-			host: process.env.SKIFF_MAIL_LISTEN ?? '0.0.0.0',
-			inbound: port('SKIFF_MAIL_PORT_INBOUND', 25),
-			submission: port('SKIFF_MAIL_PORT_SUBMISSION', 587),
-			submissions: port('SKIFF_MAIL_PORT_SUBMISSIONS', 465),
+			host: process.env.YOAL_MAIL_LISTEN ?? '0.0.0.0',
+			inbound: port('YOAL_MAIL_PORT_INBOUND', 25),
+			submission: port('YOAL_MAIL_PORT_SUBMISSION', 587),
+			submissions: port('YOAL_MAIL_PORT_SUBMISSIONS', 465),
 		},
-		deliveryPort: port('SKIFF_MAIL_DELIVERY_PORT', 25) ?? 25,
-		ipv6: process.env.SKIFF_MAIL_IPV6 === '1',
+		deliveryPort: port('YOAL_MAIL_DELIVERY_PORT', 25) ?? 25,
+		ipv6: process.env.YOAL_MAIL_IPV6 === '1',
 	});
 	await server.start();
-	console.log(`[skiff-mail] listening; spool ${process.env.SKIFF_MAIL_DATA_DIR ?? '/var/lib/skiff/mail'}`);
+	console.log(`[yoal-mail] listening; spool ${process.env.YOAL_MAIL_DATA_DIR ?? '/var/lib/yoal/mail'}`);
 	const shutdown = async (signal: string) => {
-		console.log(`[skiff-mail] ${signal}: stopping`);
+		console.log(`[yoal-mail] ${signal}: stopping`);
 		await server.stop();
 		process.exit(0);
 	};

@@ -1,7 +1,7 @@
-import type { PanelQuery } from '@skiff/contracts';
+import type { PanelQuery } from '@yoal/contracts';
 
 /** Explore's recent queries, per browser. Storage can be missing or full; that just means no history. */
-const KEY = 'skiff.observability.explore-history';
+const KEY = 'yoal.observability.explore-history';
 const LIMIT = 30;
 
 export interface HistoryEntry {

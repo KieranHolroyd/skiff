@@ -26,11 +26,11 @@
 	import XIcon from '@lucide/svelte/icons/x';
 	import { toast } from 'svelte-sonner';
 	import { SvelteSet } from 'svelte/reactivity';
-	import type { StorageObject } from '@skiff/contracts';
+	import type { StorageObject } from '@yoal/contracts';
 	import { previewOf, THUMBNAIL_MAX_BYTES } from '#lib/storage-preview.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as ButtonGroup from '#lib/components/ui/button-group/index.js';
@@ -385,7 +385,7 @@
 </script>
 
 <svelte:head>
-	<title>Objects · {data.storage.name} · Skiff</title>
+	<title>Objects · {data.storage.name} · Yoal</title>
 </svelte:head>
 
 <svelte:window ondragover={swallowStrayDrop} ondrop={swallowStrayDrop} />
@@ -828,7 +828,7 @@
 		bind:open={folderOpen}
 		icon={FolderPlusIcon}
 		title="New folder"
-		description="S3 has no real folders; Skiff writes an empty marker object so the prefix shows up here."
+		description="S3 has no real folders; Yoal writes an empty marker object so the prefix shows up here."
 		action="?/folder"
 		submitLabel="Create folder"
 	>

@@ -1,5 +1,5 @@
 import * as z from 'zod';
-import { CoreError, ForbiddenError } from '@skiff/core';
+import { CoreError, ForbiddenError } from '@yoal/core';
 import { ZodError } from 'zod';
 import { reportRequestError } from './server-errors';
 
@@ -34,7 +34,7 @@ export function errorResponse(error: unknown): Response {
 			403
 		);
 	if (error instanceof ForbiddenError) return json({ error: 'forbidden', permission: error.permission, message: error.message }, 403);
-	// `@skiff/contracts`' requirePermission throws its own ForbiddenError, which is not a CoreError.
+	// `@yoal/contracts`' requirePermission throws its own ForbiddenError, which is not a CoreError.
 	// Match it by name + permission so a missing permission is a 403 rather than a 500.
 	const contractForbidden = forbiddenFromContracts(error);
 	if (contractForbidden)
@@ -67,7 +67,7 @@ export function errorResponse(error: unknown): Response {
 }
 
 /**
- * `@skiff/contracts`' `StepUpRequiredError` is not a `CoreError`, so identify it by its class name
+ * `@yoal/contracts`' `StepUpRequiredError` is not a `CoreError`, so identify it by its class name
  * and required `permission`/`level` fields (the same treatment as `forbiddenFromContracts`).
  */
 function stepUpRequiredFrom(
@@ -83,7 +83,7 @@ function stepUpRequiredFrom(
 }
 
 /**
- * `@skiff/contracts`' ForbiddenError is a separate class from `@skiff/core`'s. Identify it by its
+ * `@yoal/contracts`' ForbiddenError is a separate class from `@yoal/core`'s. Identify it by its
  * class name and required `permission` property instead of relying on `instanceof`.
  */
 function forbiddenFromContracts(

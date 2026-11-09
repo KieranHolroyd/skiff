@@ -23,7 +23,7 @@ import { parsePairs, printJobLogs, waitForTrigger, watchRun } from './commands/p
 import { importGithubWorkflow, lintDocument, toYaml } from './pipelines.ts';
 import { runLocalWorkflow } from './pipelines-local.ts';
 
-/** `skif repo|run|workflow|secret|var` (docs/PIPELINES.md §8) against a fake control plane. */
+/** `yoal repo|run|workflow|secret|var` (docs/PIPELINES.md §8) against a fake control plane. */
 
 let dir = '';
 let server: ReturnType<typeof Bun.serve> | undefined;
@@ -35,7 +35,7 @@ interface Seen {
 }
 
 beforeEach(async () => {
-	dir = await mkdtemp(join(tmpdir(), 'skiff-cli-pipelines-'));
+	dir = await mkdtemp(join(tmpdir(), 'yoal-cli-pipelines-'));
 });
 
 afterEach(async () => {
@@ -81,7 +81,7 @@ function runView(overrides: Partial<RunView> = {}): RunView {
 		repository: 'shop',
 		number: 42,
 		workflowName: 'CI',
-		workflowPath: '.skiff/workflows/ci.yml',
+		workflowPath: '.yoal/workflows/ci.yml',
 		event: 'push',
 		ref: 'refs/heads/main',
 		sha: 'abcdef1234567890',
@@ -136,11 +136,11 @@ async function cli(args: string[], stdin?: string) {
 		cwd: join(import.meta.dir, '..'),
 		env: {
 			...process.env,
-			SKIFF_CONFIG_DIR: dir,
-			SKIFF_URL: `http://127.0.0.1:${server?.port ?? 1}`,
-			SKIFF_TOKEN: 'skif_test',
-			SKIFF_CONTENT_DOMAIN: '',
-			SKIFF_PROFILE: '',
+			YOAL_CONFIG_DIR: dir,
+			YOAL_URL: `http://127.0.0.1:${server?.port ?? 1}`,
+			YOAL_TOKEN: 'yoal_test',
+			YOAL_CONTENT_DOMAIN: '',
+			YOAL_PROFILE: '',
 		},
 		stdin: stdin === undefined ? 'ignore' : new Blob([stdin]),
 		stdout: 'pipe',
@@ -165,8 +165,8 @@ describe('helpers', () => {
 		expect(parseInputs(['env=staging', 'note=a=b', 'empty='])).toEqual({ env: 'staging', note: 'a=b', empty: '' });
 		expect(() => parseInputs(['nokey'])).toThrow(/key=value/);
 		expect(() => parseInputs(['=x'])).toThrow(/key=value/);
-		expect(workflowPath('ci.yml')).toBe('.skiff/workflows/ci.yml');
-		expect(workflowPath('./.skiff/workflows/ci.yml')).toBe('.skiff/workflows/ci.yml');
+		expect(workflowPath('ci.yml')).toBe('.yoal/workflows/ci.yml');
+		expect(workflowPath('./.yoal/workflows/ci.yml')).toBe('.yoal/workflows/ci.yml');
 		expect(statusFilter('in_progress')).toEqual({ status: 'in_progress' });
 		expect(statusFilter('failure')).toEqual({ status: 'completed', conclusion: 'failure' });
 		expect(statusFilter('failed')).toEqual({ status: 'completed', conclusion: 'failure' });
@@ -203,7 +203,7 @@ describe('helpers', () => {
 		expect(text).toContain('>> ✗ 2. Run tests');
 		expect(text).not.toContain('>> ✓');
 		expect(text).toMatch(/dist\s+2\.0 KiB/);
-		expect(text).toContain('skif run logs shop 42 --job pj_test');
+		expect(text).toContain('yoal run logs shop 42 --job pj_test');
 	});
 
 	test('run table', () => {
@@ -295,7 +295,7 @@ describe('polling', () => {
 	});
 });
 
-describe('skif CLI', () => {
+describe('yoal CLI', () => {
 	test('repo list, add and remove', async () => {
 		const repository = {
 			id: 'prp_1',
@@ -342,7 +342,7 @@ describe('skif CLI', () => {
 		});
 		const result = await cli(['run', 'list', 'shop', '--status', 'failure', '--workflow', 'ci.yml', '-n', '5']);
 		expect(result.code).toBe(0);
-		expect(seen[0]?.path).toBe('/api/v1/repositories/shop/runs?status=completed&workflow=.skiff%2Fworkflows%2Fci.yml&limit=100');
+		expect(seen[0]?.path).toBe('/api/v1/repositories/shop/runs?status=completed&workflow=.yoal%2Fworkflows%2Fci.yml&limit=100');
 		expect(result.stdout).toContain('#42');
 		expect(result.stdout).not.toContain('#41');
 		const json = await cli(['run', 'list', 'shop', '--json']);
@@ -375,10 +375,10 @@ describe('skif CLI', () => {
 		const result = await cli(['run', 'watch', 'shop', '42']);
 		expect(result.code).toBe(1);
 		expect(result.stdout).toContain('Run #42 failure');
-		expect(result.stderr).toContain('skif run logs shop 42 --job pj_test');
+		expect(result.stderr).toContain('yoal run logs shop 42 --job pj_test');
 	});
 
-	test('skif run <project> -- <command> is still a one-off job run', async () => {
+	test('yoal run <project> -- <command> is still a one-off job run', async () => {
 		const seen = serve({
 			'POST /api/v1/projects/list/jobs/runs': Response.json({ error: 'not_found', message: 'Project not found' }, { status: 404 }),
 		});
@@ -452,7 +452,7 @@ describe('skif CLI', () => {
 	});
 });
 
-describe('skif workflow lint --import', () => {
+describe('yoal workflow lint --import', () => {
 	const github = {
 		name: 'CI',
 		on: { push: { branches: ['main'] }, release: { types: ['published'] }, workflow_dispatch: null },
@@ -502,7 +502,7 @@ describe('skif workflow lint --import', () => {
 		const tricky = { a: 'yes', b: '1.0', c: 'x: y', d: "it's", e: '', f: ' lead', g: '#hash', h: [], i: {}, j: 'line\n  indented\n', k: '${{ a }}-b' };
 		expect(Bun.YAML.parse(toYaml(tricky))).toEqual(tricky);
 		// Docker actions still fail the parser, so the import reports them twice: as a note and an issue.
-		const result = await lintDocument(reparsed, '.skiff/workflows/ci.yml');
+		const result = await lintDocument(reparsed, '.yoal/workflows/ci.yml');
 		expect(result.ok).toBe(false);
 		expect(result.issues.some((issue) => issue.path.includes('steps[2]'))).toBe(true);
 	});
@@ -514,13 +514,13 @@ describe('skif workflow lint --import', () => {
 	});
 });
 
-describe('skif workflow run --local', () => {
-	test('runs jobs in order with matrix, needs outputs, masking, artifacts and caches under .skiff/local', async () => {
-		const repo = await mkdtemp(join(tmpdir(), 'skiff-local-run-'));
+describe('yoal workflow run --local', () => {
+	test('runs jobs in order with matrix, needs outputs, masking, artifacts and caches under .yoal/local', async () => {
+		const repo = await mkdtemp(join(tmpdir(), 'yoal-local-run-'));
 		try {
 			await Bun.write(join(repo, 'input.txt'), 'hello from the workspace\n');
 			await Bun.write(
-				join(repo, '.skiff/workflows/ci.yml'),
+				join(repo, '.yoal/workflows/ci.yml'),
 				`name: ci
 on:
   workflow_dispatch:
@@ -535,7 +535,7 @@ jobs:
     steps:
       - id: w
         run: |
-          echo "word=\${{ inputs.greeting }}-\${{ matrix.arch }}" >> "$SKIFF_OUTPUT"
+          echo "word=\${{ inputs.greeting }}-\${{ matrix.arch }}" >> "$YOAL_OUTPUT"
           echo "token is $TOKEN"
         env: { TOKEN: '\${{ secrets.TOKEN }}' }
       - run: mkdir -p out && cp input.txt out/\${{ matrix.arch }}.txt
@@ -562,7 +562,7 @@ jobs:
 			);
 			const lines: string[] = [];
 			const result = await runLocalWorkflow({
-				file: '.skiff/workflows/ci.yml',
+				file: '.yoal/workflows/ci.yml',
 				cwd: repo,
 				inputs: { greeting: 'hey' },
 				secrets: { TOKEN: 'local-secret-value' },
@@ -581,12 +581,12 @@ jobs:
 			expect(output).toContain('need=hey-arm64');
 			expect(output).toContain('hello from the workspace');
 			expect(output).toContain('▶ Run actions/upload-artifact@v4');
-			const index = JSON.parse(await Bun.file(join(repo, '.skiff/local/caches/index.json')).text()) as Array<{ key: string }>;
+			const index = JSON.parse(await Bun.file(join(repo, '.yoal/local/caches/index.json')).text()) as Array<{ key: string }>;
 			expect(index.map((entry) => entry.key).sort()).toEqual(['out-arm64', 'out-x64']);
 
 			// -j runs one job; the cache saved above is restored.
 			const again: string[] = [];
-			const single = await runLocalWorkflow({ file: '.skiff/workflows/ci.yml', cwd: repo, job: 'build', matrix: { arch: 'x64' }, print: (line) => again.push(line), logFlushMs: 20 });
+			const single = await runLocalWorkflow({ file: '.yoal/workflows/ci.yml', cwd: repo, job: 'build', matrix: { arch: 'x64' }, print: (line) => again.push(line), logFlushMs: 20 });
 			expect(single.jobs).toHaveLength(1);
 			expect(again.join('\n')).toContain('Cache restored from key: out-x64');
 			expect(again.join('\n')).not.toContain('arm64.txt');

@@ -1,4 +1,4 @@
-import { ConsoleEmailTransport, SmtpEmailTransport, type EmailTransport } from '@skiff/core';
+import { ConsoleEmailTransport, SmtpEmailTransport, type EmailTransport } from '@yoal/core';
 import { smtp } from './config';
 
 let transport: EmailTransport | undefined;
@@ -31,9 +31,9 @@ export async function sendPasswordResetEmail(
 ): Promise<void> {
 	await emailTransport().send({
 		to: email,
-		subject: 'Reset your Skiff password',
+		subject: 'Reset your Yoal password',
 		text:
-			`Someone asked to reset the password for ${email} on Skiff. To choose a new password, open:\n\n${url}\n\n` +
+			`Someone asked to reset the password for ${email} on Yoal. To choose a new password, open:\n\n${url}\n\n` +
 			`The link works once and expires in ${Math.round(ttlSeconds / 60)} minutes. Resetting signs you out everywhere. ` +
 			`If you didn't ask for this, ignore this email: your password stays the same.`
 	});
@@ -42,8 +42,8 @@ export async function sendPasswordResetEmail(
 export async function sendInviteEmail(email: string, orgName: string, url: string): Promise<void> {
 	await emailTransport().send({
 		to: email,
-		subject: `You're invited to ${orgName} on Skiff`,
-		text: `Join ${orgName} on Skiff: ${url}`
+		subject: `You're invited to ${orgName} on Yoal`,
+		text: `Join ${orgName} on Yoal: ${url}`
 	});
 }
 

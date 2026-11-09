@@ -2,7 +2,7 @@
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import UsersIcon from '@lucide/svelte/icons/users';
 	import { authClient } from '#lib/auth-client.js';
-	import AuthShell from '#lib/components/skiff/AuthShell.svelte';
+	import AuthShell from '#lib/components/yoal/AuthShell.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import type { PageProps } from './$types';
@@ -27,12 +27,12 @@
 </script>
 
 <svelte:head>
-	<title>Accept invitation · Skiff</title>
+	<title>Accept invitation · Yoal</title>
 </svelte:head>
 
 <AuthShell
 	eyebrow="Invitation"
-	title="Join this Skiff organisation"
+	title="Join this Yoal organisation"
 	description="Accept the invitation to access its projects, deployments and audit log."
 >
 	<div class="flex items-center gap-3 rounded-xl border bg-card p-3.5 shadow-xs">

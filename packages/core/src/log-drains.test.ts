@@ -2,14 +2,14 @@ import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
+import { createDb } from '@yoal/db';
 import { buildPrincipal } from './orgs.ts';
 import { createCore, type Core } from './index.ts';
 import { LOG_DRAIN_MAX_ATTEMPTS, isPrivateAddress, maskUrl, otlpLogsPayload, type DrainLine } from './log-drains.ts';
 import { LocalObjectStore } from './object-store.ts';
 import { verifyWebhookSignature } from './webhook-signature.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-log-drains-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-log-drains-'));
 const opened = createDb({ path: ':memory:' });
 let clock = Date.parse('2026-11-07T10:00:00Z');
 
@@ -142,8 +142,8 @@ describe('log drains: access', () => {
 			core.logDrains.create(admin, { name: 'creds', kind: 'webhook', url: 'https://user:pw@logs.example.com/in' }),
 		).toThrow(/header/);
 		expect(() =>
-			core.logDrains.create(admin, { name: 'hdr', kind: 'webhook', url: 'https://logs.example.com/in', headers: { 'X-Skiff-Drain': 'x' } }),
-		).toThrow(/set by Skiff/);
+			core.logDrains.create(admin, { name: 'hdr', kind: 'webhook', url: 'https://logs.example.com/in', headers: { 'X-Yoal-Drain': 'x' } }),
+		).toThrow(/set by Yoal/);
 		expect(() => core.logDrains.create(admin, { name: 'admin-drain', kind: 'webhook', url: 'https://logs.example.com/in' })).toThrow(
 			/already exists/,
 		);
@@ -225,10 +225,10 @@ describe('log drains: delivery', () => {
 		expect(call.url).toBe('https://logs.example.com/in');
 		expect(call.headers['content-type']).toBe('application/x-ndjson');
 		expect(call.headers.Authorization).toBe('Bearer hunter2');
-		expect(call.headers['user-agent']).toBe('Skiff-Log-Drain/1.2.3');
-		expect(call.headers['x-skiff-drain']).toBe(drain.id);
-		expect(verifyWebhookSignature(signingSecret!, call.body, call.headers['x-skiff-signature'], { nowMs: clock })).toBe(true);
-		expect(verifyWebhookSignature('whsec_wrong', call.body, call.headers['x-skiff-signature'], { nowMs: clock })).toBe(false);
+		expect(call.headers['user-agent']).toBe('Yoal-Log-Drain/1.2.3');
+		expect(call.headers['x-yoal-drain']).toBe(drain.id);
+		expect(verifyWebhookSignature(signingSecret!, call.body, call.headers['x-yoal-signature'], { nowMs: clock })).toBe(true);
+		expect(verifyWebhookSignature('whsec_wrong', call.body, call.headers['x-yoal-signature'], { nowMs: clock })).toBe(false);
 
 		const lines = ndjson(call.body);
 		expect(lines.map((line) => line.message).sort()).toEqual(['broker line', 'database line', 'hello']);
@@ -382,7 +382,7 @@ describe('log drains: delivery', () => {
 		const [line] = ndjson(calls[0]!.body);
 		expect(line!.id).toMatch(/^test:/);
 		expect(line!.message).toContain('"tested"');
-		expect(verifyWebhookSignature(signingSecret!, calls[0]!.body, calls[0]!.headers['x-skiff-signature'], { nowMs: clock })).toBe(true);
+		expect(verifyWebhookSignature(signingSecret!, calls[0]!.body, calls[0]!.headers['x-yoal-signature'], { nowMs: clock })).toBe(true);
 		expect(drainRow(drain.id)).toEqual(before);
 		expect(core.audit.list({ principal: admin, action: 'log_drain.test' }).find((entry) => entry.resourceId === drain.id)!.result).toBe('ok');
 
@@ -437,7 +437,7 @@ describe('log drains: delivery', () => {
 		const call = calls[0]!;
 		expect(call.url).toBe('https://otel.example.com/v1/logs');
 		expect(call.headers['content-type']).toBe('application/json');
-		expect(call.headers['x-skiff-signature']).toBeUndefined();
+		expect(call.headers['x-yoal-signature']).toBeUndefined();
 		const body = JSON.parse(call.body) as ReturnType<typeof otlpLogsPayload>;
 		expect(body.resourceLogs).toHaveLength(1);
 		const records = body.resourceLogs[0]!.scopeLogs[0]!.logRecords as Array<{ severityText: string; body: { stringValue: string } }>;
@@ -477,16 +477,16 @@ describe('log drain helpers', () => {
 			Object.fromEntries(entry.map((item) => [item.key, item.value.stringValue]));
 		expect(attrs(app!.resource.attributes)).toEqual({
 			'service.name': 'blog',
-			'service.namespace': 'skiff',
-			'skiff.org.id': 'org_1',
-			'skiff.project.id': 'prj_a',
+			'service.namespace': 'yoal',
+			'yoal.org.id': 'org_1',
+			'yoal.project.id': 'prj_a',
 			'deployment.id': 'dep_1',
 		});
 		expect(attrs(service!.resource.attributes)['service.name']).toBe('main');
 		const record = app!.scopeLogs[0]!.logRecords[0] as Record<string, unknown>;
 		expect(record).toMatchObject({ timeUnixNano: '1794045600000000000', severityNumber: 13, severityText: 'WARN' });
 		expect(attrs(record.attributes as never)).toMatchObject({ 'log.record.uid': 'log:1', 'log.iostream': 'stderr', 'host.id': 'node_1' });
-		expect(app!.scopeLogs[0]!.scope).toEqual({ name: 'skiff.log-drain', version: '1.2.3' });
+		expect(app!.scopeLogs[0]!.scope).toEqual({ name: 'yoal.log-drain', version: '1.2.3' });
 	});
 
 	test('isPrivateAddress covers v4, v6 and mapped ranges', () => {

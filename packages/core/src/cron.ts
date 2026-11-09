@@ -3,16 +3,16 @@ import {
 	nextCronTime as contractNextCronTime,
 	parseCronWith,
 	type CronFields,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { ValidationError } from './errors.ts';
 
 /**
- * Cron re-export for the control plane. The parser itself lives in `@skiff/contracts` so the node,
+ * Cron re-export for the control plane. The parser itself lives in `@yoal/contracts` so the node,
  * the API and every surface share one implementation (docs/FUNCTIONS.md §4.10). These wrappers
  * keep raising the platform's `ValidationError` with the parser's original messages, so every
  * existing caller and message stays exactly as it was.
  */
-export type { CronFields } from '@skiff/contracts';
+export type { CronFields } from '@yoal/contracts';
 
 /** Parse a five-field UTC expression, throwing `ValidationError` on bad input. */
 export function parseCron(expression: string): CronFields {

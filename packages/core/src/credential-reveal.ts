@@ -1,4 +1,4 @@
-import { requirePermission, type Permission, type Principal } from '@skiff/contracts';
+import { requirePermission, type Permission, type Principal } from '@yoal/contracts';
 import { CoreError } from './errors.ts';
 
 /**
@@ -15,7 +15,7 @@ export function requireCredentialReveal(principal: Principal, permission: Permis
 	if (principal.credential === 'oauth')
 		throw new CoreError(
 			'forbidden',
-			'Credentials are never returned over MCP. Read them in the dashboard or with the CLI (`skif … credentials`).',
+			'Credentials are never returned over MCP. Read them in the dashboard or with the CLI (`yoal … credentials`).',
 			403,
 		);
 }

@@ -2,8 +2,8 @@
 	import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import TerminalIcon from '@lucide/svelte/icons/terminal';
-	import type { SelfUpdateLog, SelfUpdateLogLevel } from '@skiff/contracts';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
+	import type { SelfUpdateLog, SelfUpdateLogLevel } from '@yoal/contracts';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import Panel from '../../_lib/Panel.svelte';
 	import { formatDateTime } from '../../_lib/format.js';
@@ -158,7 +158,7 @@
 	{#snippet footer()}
 		{#if log.truncated}
 			Showing the newest {lines.length} lines; the full output is in
-			<code>journalctl -u skiff-update-self</code>.{/if}
+			<code>journalctl -u yoal-update-self</code>.{/if}
 		{running ? 'Times are UTC. The update keeps running if you close this page.' : 'Times are UTC.'}
 	{/snippet}
 </Panel>

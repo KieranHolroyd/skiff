@@ -8,7 +8,7 @@ ALTER TABLE nodes ADD COLUMN private_address TEXT;
 ALTER TABLE nodes ADD COLUMN private_cidr TEXT;
 ALTER TABLE nodes ADD COLUMN wg_public_key TEXT;
 ALTER TABLE nodes ADD COLUMN network_mode TEXT NOT NULL DEFAULT 'external'
-  CHECK (network_mode IN ('skiff', 'external', 'edge'));
+  CHECK (network_mode IN ('yoal', 'external', 'edge'));
 ALTER TABLE nodes ADD COLUMN wg_endpoint TEXT;
 ALTER TABLE nodes ADD COLUMN wg_listen_port INTEGER;
 

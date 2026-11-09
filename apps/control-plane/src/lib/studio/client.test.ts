@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { NDJSON_CONTENT_TYPE, encodeEvent, type StudioEvent } from '@skiff/studio/protocol';
+import { NDJSON_CONTENT_TYPE, encodeEvent, type StudioEvent } from '@yoal/studio/protocol';
 import { StudioCallError, studioApiPath, studioCall, studioStream } from './client.ts';
 
 const realFetch = globalThis.fetch;

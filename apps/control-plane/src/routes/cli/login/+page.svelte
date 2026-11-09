@@ -1,7 +1,7 @@
 <script lang="ts">
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import TerminalIcon from '@lucide/svelte/icons/terminal';
-	import AuthShell from '#lib/components/skiff/AuthShell.svelte';
+	import AuthShell from '#lib/components/yoal/AuthShell.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import type { PageProps } from './$types';
@@ -10,12 +10,12 @@
 </script>
 
 <svelte:head>
-	<title>Authorize the CLI · Skiff</title>
+	<title>Authorize the CLI · Yoal</title>
 </svelte:head>
 
 <AuthShell
 	eyebrow="CLI sign-in"
-	title="Authorize the Skiff CLI"
+	title="Authorize the Yoal CLI"
 	description="The CLI will receive an API key for {data.email ?? data.name ?? 'your account'}."
 >
 	<div class="overflow-hidden rounded-xl border bg-card shadow-xs">
@@ -24,7 +24,7 @@
 			<span class="text-xs font-medium text-muted-foreground">Terminal</span>
 		</div>
 		<pre class="px-4 py-3.5 font-mono text-sm"><span class="text-muted-foreground select-none"
-				>$ </span>skif login --web</pre>
+				>$ </span>yoal login --web</pre>
 	</div>
 
 	<Alert.Root variant="warning" class="mt-4"

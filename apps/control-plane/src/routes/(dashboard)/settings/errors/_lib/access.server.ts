@@ -1,5 +1,5 @@
 import { error } from '@sveltejs/kit';
-import { serverErrorStatuses, type Principal, type ServerErrorStatus } from '@skiff/contracts';
+import { serverErrorStatuses, type Principal, type ServerErrorStatus } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 
 /** Settings → Server errors is platform-wide: platform admins (platform:read) only. */

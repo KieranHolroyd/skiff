@@ -58,9 +58,9 @@ jobs:
           --health-cmd "clickhouse-client --password ci -q 'SELECT 1'"
           --health-interval 2s --health-timeout 5s --health-retries 30
     env:
-      SKIFF_TEST_CLICKHOUSE_URL: http://127.0.0.1:18123
-      SKIFF_TEST_CLICKHOUSE_USER: default
-      SKIFF_TEST_CLICKHOUSE_PASSWORD: ci
+      YOAL_TEST_CLICKHOUSE_URL: http://127.0.0.1:18123
+      YOAL_TEST_CLICKHOUSE_USER: default
+      YOAL_TEST_CLICKHOUSE_PASSWORD: ci
     steps:
       - uses: actions/checkout@v4
         with:
@@ -83,7 +83,7 @@ jobs:
       - name: Migration safety
         env:
           # Compare against the target branch (PR) or previous push, not the branch tip.
-          SKIFF_MIGRATION_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD' }}
+          YOAL_MIGRATION_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD' }}
         run: bun scripts/check-migrations.ts
 
       - uses: actions/setup-node@v4
@@ -94,8 +94,8 @@ jobs:
         working-directory: apps/cli
         run: |
           bun run build
-          node dist/skif.js --version
-          node dist/skif.js --help >/dev/null
+          node dist/yoal.js --version
+          node dist/yoal.js --help >/dev/null
           npm pack --dry-run
 
   node-image:
@@ -109,8 +109,8 @@ jobs:
 
       - name: Resolve image name and version
         run: |
-          echo "IMAGE=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/skiff-node" >> "$GITHUB_ENV"
-          echo "SKIFF_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+          echo "IMAGE=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/yoal-node" >> "$GITHUB_ENV"
+          echo "YOAL_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -136,7 +136,7 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
           build-args: |
-            SKIFF_VERSION=${{ env.SKIFF_VERSION }}
+            YOAL_VERSION=${{ env.YOAL_VERSION }}
           cache-from: type=gha,scope=node-ci
           cache-to: type=gha,mode=max,scope=node-ci
 
@@ -169,7 +169,7 @@ jobs:
           podman info
 
       - name: Managed-data container lane
-        run: SKIFF_E2E_ENGINE=podman bun tests/e2e/managed-data.e2e.ts
+        run: YOAL_E2E_ENGINE=podman bun tests/e2e/managed-data.e2e.ts
 
   e2e:
     name: End-to-end (REST + MCP)
@@ -187,14 +187,14 @@ jobs:
       - name: Start control plane
         working-directory: apps/control-plane
         env:
-          SKIFF_DEV_PASSWORD_LOGIN: '1'
-          SKIFF_DATA_DIR: .data-ci
-          SKIFF_PLATFORM_ORIGIN: http://localhost:5173
-          SKIFF_CONTENT_DOMAIN: localhost
+          YOAL_DEV_PASSWORD_LOGIN: '1'
+          YOAL_DATA_DIR: .data-ci
+          YOAL_PLATFORM_ORIGIN: http://localhost:5173
+          YOAL_CONTENT_DOMAIN: localhost
           BETTER_AUTH_SECRET: ci-secret-0123456789abcdef0123456789
         run: |
           bun run dev -- --port 5173 &
-          echo $! > /tmp/skiff-cp.pid
+          echo $! > /tmp/yoal-cp.pid
           for i in $(seq 1 90); do
             curl -sf http://localhost:5173/api/setup/status >/dev/null && exit 0
             sleep 1
@@ -204,15 +204,15 @@ jobs:
 
       - name: REST + agent e2e
         working-directory: apps/control-plane
-        run: SKIFF_BASE=http://localhost:5173 bun tests/rest.e2e.ts
+        run: YOAL_BASE=http://localhost:5173 bun tests/rest.e2e.ts
 
       - name: MCP OAuth e2e
         working-directory: apps/control-plane
-        run: SKIFF_BASE=http://localhost:5173 bun tests/mcp-oauth.e2e.ts
+        run: YOAL_BASE=http://localhost:5173 bun tests/mcp-oauth.e2e.ts
 
       - name: Stop control plane
         if: always()
-        run: kill "$(cat /tmp/skiff-cp.pid)" 2>/dev/null || true
+        run: kill "$(cat /tmp/yoal-cp.pid)" 2>/dev/null || true
 
   shellcheck:
     name: Shell scripts

@@ -30,7 +30,7 @@ import { confirmOrRefuse } from './run-operation.ts';
 
 /** Managed queue brokers (docs/BROKERS.md, D111). Every check lives on the server; this is a thin client. */
 
-const usage = `Usage: skif broker <command> [options]
+const usage = `Usage: yoal broker <command> [options]
 
 Commands:
   list                         List brokers (the default); --all includes the trash
@@ -49,7 +49,7 @@ Commands:
   queues <name>                JetStream streams and consumers with their backlog
   credentials <name>           Print the connection URL (--json for user, password, host, port)
 
-Queue tools (run on the broker's node; <queue> is a function queue, stored as SKIFF_Q_<queue>):
+Queue tools (run on the broker's node; <queue> is a function queue, stored as YOAL_Q_<queue>):
   queue-create <name> <queue>  Create a function queue's stream now instead of on first use
   send <name> <queue> [body]   Publish a test message: body as an argument, --body, --file <path>,
                                or piped on stdin; JSON unless --text (--delay 30s, --count 10)
@@ -62,7 +62,7 @@ Queue tools (run on the broker's node; <queue> is a function queue, stored as SK
   message-rm <name> <queue> <seq>
                                Delete one message by sequence
   peek, queue-purge, queue-rm and message-rm take --stream <stream> instead of <queue> for a
-  stream your app created itself (e.g. skif broker peek jobs --stream EVENTS).
+  stream your app created itself (e.g. yoal broker peek jobs --stream EVENTS).
 
 Create options:
   -p, --project <slug>         Attach to this project right away (placed on its node)
@@ -85,12 +85,12 @@ the broker's node (\`auto\` placement handles that). Credentials need the broker
 permission and every read is audited.
 
 Examples:
-  skif broker create jobs --project api          # api receives NATS_URL
-  skif broker attach jobs --project worker
-  nats --server "$(skif broker credentials jobs)" stream ls   # on the node, or through ssh -L
-  skif broker send jobs emails '{"to":"a@example.com"}' --count 5
-  skif broker peek jobs emails-dlq
-  skif broker redrive jobs emails-dlq --to emails`;
+  yoal broker create jobs --project api          # api receives NATS_URL
+  yoal broker attach jobs --project worker
+  nats --server "$(yoal broker credentials jobs)" stream ls   # on the node, or through ssh -L
+  yoal broker send jobs emails '{"to":"a@example.com"}' --count 5
+  yoal broker peek jobs emails-dlq
+  yoal broker redrive jobs emails-dlq --to emails`;
 
 const baseFlags: FlagSpec = {
 	json: { type: 'boolean' },
@@ -196,14 +196,14 @@ function parseNamed(argv: string[], spec: FlagSpec, command: string) {
 		console.log(usage);
 		return null;
 	}
-	const line = `Usage: skif broker ${command} <name>`;
+	const line = `Usage: yoal broker ${command} <name>`;
 	rejectExtraPositionals(args, 1, line);
 	const name = requirePositional(args, 0, `broker name.\n\n${line}`);
 	return { args, name };
 }
 
 function requireProject(project: string | undefined, command: string, name: string): string {
-	if (!project) throw new UsageError(`Name the project: skif broker ${command} ${name} --project <slug>`);
+	if (!project) throw new UsageError(`Name the project: yoal broker ${command} ${name} --project <slug>`);
 	return project;
 }
 
@@ -227,7 +227,7 @@ async function listBrokers(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif broker list [--all] [--json]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal broker list [--all] [--json]');
 	const client = await authenticatedClient();
 	const { brokers, raw } = await client.listBrokers({ includeDeleted: args.boolean('all') });
 	if (args.boolean('json')) {
@@ -235,7 +235,7 @@ async function listBrokers(argv: string[]): Promise<void> {
 		return;
 	}
 	if (brokers.length === 0) {
-		console.log('No brokers yet. Create one with `skif broker create <name> --project <slug>`.');
+		console.log('No brokers yet. Create one with `yoal broker create <name> --project <slug>`.');
 		return;
 	}
 	console.log(brokerTable(brokers));
@@ -280,9 +280,9 @@ async function createBroker(argv: string[]): Promise<void> {
 			`Attached to ${attached.projectSlug} as ${attached.envPrefix}: it receives ${attached.envNames.join(', ')} at its next activation.`,
 		);
 	const steps = [
-		`Follow it:    skif broker info ${broker.name}`,
-		...(attached ? [] : [`Attach:       skif broker attach ${broker.name} --project <slug>`]),
-		`Connect:      skif broker credentials ${broker.name}`,
+		`Follow it:    yoal broker info ${broker.name}`,
+		...(attached ? [] : [`Attach:       yoal broker attach ${broker.name} --project <slug>`]),
+		`Connect:      yoal broker credentials ${broker.name}`,
 	];
 	console.log(`\nNext steps:\n${indent(steps)}`);
 }
@@ -299,7 +299,7 @@ async function showBroker(argv: string[]): Promise<void> {
 	}
 	console.log(brokerDetails(broker));
 	if (broker.deletedAt)
-		console.log(`\nIn the trash. Restore with \`skif broker restore ${broker.name}\`; delete for good with \`skif broker purge ${broker.name}\`.`);
+		console.log(`\nIn the trash. Restore with \`yoal broker restore ${broker.name}\`; delete for good with \`yoal broker purge ${broker.name}\`.`);
 }
 
 async function updateBroker(argv: string[]): Promise<void> {
@@ -363,7 +363,7 @@ async function restartBroker(argv: string[]): Promise<void> {
 		printJson(raw);
 		return;
 	}
-	console.log(`Restarting "${broker.name}" on node ${broker.nodeName ?? broker.nodeId}. Follow it with \`skif broker info ${broker.name}\`.`);
+	console.log(`Restarting "${broker.name}" on node ${broker.nodeName ?? broker.nodeId}. Follow it with \`yoal broker info ${broker.name}\`.`);
 }
 
 async function deleteBroker(argv: string[]): Promise<void> {
@@ -378,7 +378,7 @@ async function deleteBroker(argv: string[]): Promise<void> {
 			`Broker "${name}" is attached to ${current.attachments.map((item) => item.projectSlug).join(', ')}. Detach it first.`,
 			{
 				code: 'conflict',
-				suggestions: current.attachments.map((item) => `skif broker detach ${name} --project ${item.projectSlug}`),
+				suggestions: current.attachments.map((item) => `yoal broker detach ${name} --project ${item.projectSlug}`),
 			},
 		);
 	const confirmed = await confirmOrRefuse(
@@ -400,7 +400,7 @@ async function deleteBroker(argv: string[]): Promise<void> {
 		return;
 	}
 	console.log(`Deleted "${broker.name}".${broker.purgeAt ? ` It is purged for good after ${formatTime(broker.purgeAt)}.` : ''}`);
-	console.log(`Undo: skif broker restore ${broker.name}`);
+	console.log(`Undo: yoal broker restore ${broker.name}`);
 }
 
 async function restoreBroker(argv: string[]): Promise<void> {
@@ -413,7 +413,7 @@ async function restoreBroker(argv: string[]): Promise<void> {
 		printJson(raw);
 		return;
 	}
-	console.log(`Restored "${broker.name}" on node ${broker.nodeName ?? broker.nodeId} (${broker.status}). Re-attach projects with \`skif broker attach\`.`);
+	console.log(`Restored "${broker.name}" on node ${broker.nodeName ?? broker.nodeId} (${broker.status}). Re-attach projects with \`yoal broker attach\`.`);
 }
 
 async function purgeBroker(argv: string[]): Promise<void> {
@@ -425,7 +425,7 @@ async function purgeBroker(argv: string[]): Promise<void> {
 	if (!broker.deletedAt)
 		throw new CliError(`Broker "${name}" is not in the trash. Delete it first.`, {
 			code: 'conflict',
-			suggestions: [`skif broker delete ${name}`],
+			suggestions: [`yoal broker delete ${name}`],
 		});
 	const confirmed = await confirmOrRefuse(
 		`This permanently deletes broker "${name}" and its streams on node ${broker.nodeName ?? broker.nodeId}. It cannot be undone. Type ${name} to confirm: `,
@@ -445,7 +445,7 @@ async function purgeBroker(argv: string[]): Promise<void> {
 		printJson(raw);
 		return;
 	}
-	console.log(`Purging "${name}": its node deletes the data, then it disappears from \`skif broker list --all\`.`);
+	console.log(`Purging "${name}": its node deletes the data, then it disappears from \`yoal broker list --all\`.`);
 }
 
 async function showCredentials(argv: string[]): Promise<void> {
@@ -458,7 +458,7 @@ async function showCredentials(argv: string[]): Promise<void> {
 		printJson(raw);
 		return;
 	}
-	// The URL alone on stdout, so `nats --server "$(skif broker credentials jobs)"` works.
+	// The URL alone on stdout, so `nats --server "$(yoal broker credentials jobs)"` works.
 	console.log(credentials.url);
 	if (process.stderr.isTTY && credentials.note) process.stderr.write(`${credentials.note}\n`);
 }
@@ -535,7 +535,7 @@ async function showMetrics(argv: string[]): Promise<void> {
 	}
 	if (points.length === 0) {
 		console.log(
-			`No samples for "${name}" in that range. The agent reports once a minute while the broker runs, and the platform keeps them only with the telemetry store installed; \`skif broker queues ${name}\` works without it.`,
+			`No samples for "${name}" in that range. The agent reports once a minute while the broker runs, and the platform keeps them only with the telemetry store installed; \`yoal broker queues ${name}\` works without it.`,
 		);
 		return;
 	}
@@ -575,7 +575,7 @@ function parsePositionals(argv: string[], spec: FlagSpec, line: string, names: s
 		console.log(usage);
 		return null;
 	}
-	const full = `Usage: skif broker ${line}`;
+	const full = `Usage: yoal broker ${line}`;
 	rejectExtraPositionals(args, names.length + optional, full);
 	const values = names.map((name, index) => requirePositional(args, index, `${name}.\n\n${full}`));
 	return { args, values };
@@ -591,7 +591,7 @@ function parseStreamTarget(argv: string[], spec: FlagSpec, command: string, extr
 	const rawStream = args.string('stream');
 	const withStream = rawStream !== undefined;
 	const tail = extra.map((name) => ` <${name}>`).join('');
-	const line = `Usage: skif broker ${command} <name> <queue>${tail}  (or <name>${tail} --stream <stream>)`;
+	const line = `Usage: yoal broker ${command} <name> <queue>${tail}  (or <name>${tail} --stream <stream>)`;
 	const count = 1 + (withStream ? 0 : 1) + extra.length;
 	rejectExtraPositionals(args, count, line);
 	const name = requirePositional(args, 0, `broker name.\n\n${line}`);
@@ -642,7 +642,7 @@ async function messageBody(positional: string | undefined, args: ReturnType<type
 		const piped = trimFinalNewline(await readAllStdin());
 		if (piped !== '') return piped;
 	}
-	throw new UsageError('Give a message body: skif broker send <name> <queue> \'{"hello":"world"}\' (or --body, --file, or pipe it on stdin).');
+	throw new UsageError('Give a message body: yoal broker send <name> <queue> \'{"hello":"world"}\' (or --body, --file, or pipe it on stdin).');
 }
 
 async function sendMessage(argv: string[]): Promise<void> {
@@ -692,7 +692,7 @@ async function peekMessages(argv: string[]): Promise<void> {
 	const queue = queueOfStream(stream);
 	const target = queue && args.string('stream') === undefined ? queue : `--stream ${stream}`;
 	console.log(
-		peekReport(result, (seq) => `skif broker peek ${name} ${target}${limit !== undefined ? ` --limit ${limit}` : ''} --from ${seq}`),
+		peekReport(result, (seq) => `yoal broker peek ${name} ${target}${limit !== undefined ? ` --limit ${limit}` : ''} --from ${seq}`),
 	);
 }
 
@@ -705,7 +705,7 @@ async function redriveQueue(argv: string[]): Promise<void> {
 	const { args } = parsed;
 	const [name, from] = parsed.values as [string, string];
 	const to = args.string('to');
-	if (!to) throw new UsageError(`Name the queue to move the messages to: skif broker redrive ${name} ${from} --to <queue>`);
+	if (!to) throw new UsageError(`Name the queue to move the messages to: yoal broker redrive ${name} ${from} --to <queue>`);
 	assertQueueName(from, 'dead-letter queue');
 	assertQueueName(to);
 	if (from === to) throw new UsageError('--to must be a different queue from the dead-letter queue.');

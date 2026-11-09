@@ -1,4 +1,4 @@
-import type { DocPage, NavSection } from '@skiff/docs';
+import type { DocPage, NavSection } from '@yoal/docs';
 
 /**
  * HTML for the standalone docs site. Plain template strings: every page is static, and the only
@@ -44,7 +44,7 @@ export function pageUrl(ctx: SiteContext, slug: string): string {
 }
 
 /** Applied before first paint so the page never flashes the wrong theme. */
-const THEME_BOOT = `(function(){try{var t=localStorage.getItem('skiff-docs-theme');var d=t?t==='dark':matchMedia('(prefers-color-scheme: dark)').matches;document.documentElement.classList.toggle('dark',d)}catch(e){}})();`;
+const THEME_BOOT = `(function(){try{var t=localStorage.getItem('yoal-docs-theme');var d=t?t==='dark':matchMedia('(prefers-color-scheme: dark)').matches;document.documentElement.classList.toggle('dark',d)}catch(e){}})();`;
 
 function sidebar(ctx: SiteContext, current: string | null): string {
 	return ctx.nav
@@ -75,7 +75,7 @@ function shell(
 	}
 ): string {
 	const canonical = ctx.siteUrl && options.path !== null ? `${ctx.siteUrl}${options.path}` : null;
-	const fullTitle = options.current ? `${options.title} · Skiff Docs` : options.title;
+	const fullTitle = options.current ? `${options.title} · Yoal Docs` : options.title;
 	return `<!doctype html>
 <html lang="en-GB">
 <head>
@@ -97,7 +97,7 @@ ${ctx.assets.fonts.map((font) => `<link rel="preload" href="${font}" as="font" t
 <a class="skip" href="#content">Skip to content</a>
 <header class="topbar">
 	<button class="icon-button nav-toggle" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar" data-nav-toggle>${ICON.menu}</button>
-	<a class="brand" href="${ctx.base}">${LOGO_SVG}<span>Skiff</span><span class="brand-sub">Docs</span></a>
+	<a class="brand" href="${ctx.base}">${LOGO_SVG}<span>Yoal</span><span class="brand-sub">Docs</span></a>
 	<div class="search" data-search>
 		<label class="search-box">
 			${ICON.search}
@@ -107,8 +107,8 @@ ${ctx.assets.fonts.map((font) => `<link rel="preload" href="${font}" as="font" t
 		<div class="search-results" role="listbox" aria-label="Search results" hidden data-search-results></div>
 	</div>
 	<div class="topbar-actions">
-		<span class="version" title="Skiff version these docs describe">v${esc(ctx.version)}</span>
-		<a class="icon-button" href="${esc(ctx.repoUrl)}" aria-label="Skiff on GitHub" target="_blank" rel="noopener noreferrer">${ICON.github}</a>
+		<span class="version" title="Yoal version these docs describe">v${esc(ctx.version)}</span>
+		<a class="icon-button" href="${esc(ctx.repoUrl)}" aria-label="Yoal on GitHub" target="_blank" rel="noopener noreferrer">${ICON.github}</a>
 		<button class="icon-button" type="button" aria-label="Toggle dark mode" data-theme-toggle><span class="when-light">${ICON.moon}</span><span class="when-dark">${ICON.sun}</span></button>
 	</div>
 </header>
@@ -186,11 +186,11 @@ export function renderHome(ctx: SiteContext, homeSlug: string): string {
 	const main = `<div class="home">
 	<header class="home-hero">
 		<div class="home-mark">${LOGO_SVG}</div>
-		<h1>Skiff documentation</h1>
+		<h1>Yoal documentation</h1>
 		<p class="lead">Your own little cloud. Deploy sites, functions, apps and managed data services to your own servers, from a CLI, a dashboard, or your AI agent.</p>
 		<div class="home-actions">
 			<a class="button primary" href="${pageUrl(ctx, 'getting-started/quickstart')}">Quickstart</a>
-			<a class="button" href="${pageUrl(ctx, homeSlug)}">What is Skiff?</a>
+			<a class="button" href="${pageUrl(ctx, homeSlug)}">What is Yoal?</a>
 		</div>
 	</header>
 	<div class="home-grid">
@@ -198,8 +198,8 @@ ${cards}
 	</div>
 </div>`;
 	return shell(ctx, {
-		title: 'Skiff Docs',
-		description: 'Documentation for Skiff, the lightweight self-hosted deploy platform.',
+		title: 'Yoal Docs',
+		description: 'Documentation for Yoal, the lightweight self-hosted deploy platform.',
 		path: '',
 		current: null,
 		main
@@ -213,7 +213,7 @@ export function renderNotFound(ctx: SiteContext): string {
 	<p class="lead">That page doesn't exist, or it has moved. Try searching, or start from the <a href="${ctx.base}">docs home</a>.</p>
 </div>`;
 	return shell(ctx, {
-		title: 'Page not found · Skiff Docs',
+		title: 'Page not found · Yoal Docs',
 		description: 'This docs page does not exist.',
 		path: null,
 		current: null,

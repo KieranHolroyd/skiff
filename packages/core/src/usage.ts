@@ -4,7 +4,7 @@ import {
 	orgQuotas,
 	projects,
 	usageSnapshots,
-} from '@skiff/db';
+} from '@yoal/db';
 import {
 	QUOTA_UNLIMITED,
 	quotaMetricUnitsByKey,
@@ -22,7 +22,7 @@ import {
 	type QuotaUsageView,
 	type QuotaUpdate,
 	type Principal,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { CoreError, NotFoundError } from './errors.ts';
 

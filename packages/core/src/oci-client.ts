@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { parseImageReference, registryApiHost } from '@skiff/contracts';
+import { parseImageReference, registryApiHost } from '@yoal/contracts';
 
 /**
  * A minimal OCI distribution client: resolve an image tag to its manifest digest (R1,
@@ -23,7 +23,7 @@ export interface RegistryLogin {
 export interface ResolveDigestOptions {
 	fetch?: typeof fetch;
 	credentials?: RegistryLogin | null;
-	/** A token already minted for this repository (Skiff's own registry); skips the realm. */
+	/** A token already minted for this repository (Yoal's own registry); skips the realm. */
 	bearerToken?: string;
 	timeoutMs?: number;
 	/** Hosts reached over plain http (a registry on loopback). */

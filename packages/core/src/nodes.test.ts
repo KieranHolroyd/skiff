@@ -2,13 +2,13 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
+import { createDb } from '@yoal/db';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import type { Core } from './index.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-nodes-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-nodes-'));
 const opened = createDb({ path: ':memory:' });
 const clock = Date.now();
 
@@ -111,15 +111,15 @@ describe('node settings', () => {
 	});
 
 	test('storage locations reach desired state, the storage endpoint and the view', async () => {
-		const updated = core.nodes.update(admin, worker.nodeId, { dataDir: '/mnt/data/skiff', buildDir: '/mnt/data/builds' });
-		expect(updated.storage).toMatchObject({ dataDir: '/mnt/data/skiff', buildDir: '/mnt/data/builds', status: null });
+		const updated = core.nodes.update(admin, worker.nodeId, { dataDir: '/mnt/data/yoal', buildDir: '/mnt/data/builds' });
+		expect(updated.storage).toMatchObject({ dataDir: '/mnt/data/yoal', buildDir: '/mnt/data/builds', status: null });
 		expect((await core.nodes.desiredState(worker.token)).storage).toEqual({
-			dataDir: '/mnt/data/skiff',
+			dataDir: '/mnt/data/yoal',
 			buildDir: '/mnt/data/builds',
 		});
-		expect(core.nodes.storageFor(worker.token)).toEqual({ dataDir: '/mnt/data/skiff', buildDir: '/mnt/data/builds' });
+		expect(core.nodes.storageFor(worker.token)).toEqual({ dataDir: '/mnt/data/yoal', buildDir: '/mnt/data/builds' });
 
-		// The node reports what skiff-storage.service did through its heartbeat.
+		// The node reports what yoal-storage.service did through its heartbeat.
 		core.nodes.heartbeat(worker.token, {
 			nodeId: worker.nodeId,
 			agentVersion: '0.1.0',
@@ -129,8 +129,8 @@ describe('node settings', () => {
 			releases: [],
 			workloads: [],
 			storage: {
-				requested: { dataDir: '/mnt/data/skiff', buildDir: '/mnt/data/builds' },
-				dataDir: '/mnt/data/skiff',
+				requested: { dataDir: '/mnt/data/yoal', buildDir: '/mnt/data/builds' },
+				dataDir: '/mnt/data/yoal',
 				buildDir: '/mnt/data/builds',
 				status: 'applied',
 				message: null,
@@ -144,10 +144,10 @@ describe('node settings', () => {
 	});
 
 	test('rejects unsafe or overlapping storage paths', () => {
-		expect(() => core.nodes.update(admin, worker.nodeId, { dataDir: '/etc/skiff' })).toThrow(/inside \/etc/);
+		expect(() => core.nodes.update(admin, worker.nodeId, { dataDir: '/etc/yoal' })).toThrow(/inside \/etc/);
 		expect(() => core.nodes.update(admin, worker.nodeId, { dataDir: 'relative' })).toThrow(/absolute/);
 		expect(() =>
-			core.nodes.update(admin, worker.nodeId, { dataDir: '/mnt/data/skiff', buildDir: '/mnt/data/skiff/builds' }),
+			core.nodes.update(admin, worker.nodeId, { dataDir: '/mnt/data/yoal', buildDir: '/mnt/data/yoal/builds' }),
 		).toThrow(/separate/);
 	});
 
@@ -293,7 +293,7 @@ describe('node updates from the dashboard (D99)', () => {
 			siteCookieSecret: 'site-cookie-secret-123',
 			objectStoreSecret: 'object-secret-123',
 			desiredAgentVersion: '0.8.0',
-			releaseRepo: 'owner/skiff',
+			releaseRepo: 'owner/yoal',
 			now: () => clock,
 		},
 	});
@@ -328,7 +328,7 @@ describe('node updates from the dashboard (D99)', () => {
 		expect((await fleet.nodes.desiredState(worker.token)).nodeUpdate).toEqual({
 			generation: 1,
 			version: '0.8.0',
-			repo: 'owner/skiff',
+			repo: 'owner/yoal',
 		});
 		expect(fleet.audit.list({ principal: admin, limit: 5, action: 'node.update_agent' })[0]).toMatchObject({
 			result: 'ok',
@@ -395,9 +395,9 @@ describe('cluster topology settings', () => {
 		});
 	});
 
-	test('refuses reserved skiff.io labels and bad zones', () => {
+	test('refuses reserved yoal.io labels and bad zones', () => {
 		const fresh = joinNode('cluster-validation');
-		expect(() => core.nodes.update(admin, fresh.nodeId, { labels: { 'skiff.io/arch': 'arm64' } })).toThrow(/reserved/);
+		expect(() => core.nodes.update(admin, fresh.nodeId, { labels: { 'yoal.io/arch': 'arm64' } })).toThrow(/reserved/);
 		expect(() => core.nodes.update(admin, fresh.nodeId, { zone: 'Cloud B' })).toThrow();
 	});
 
@@ -414,7 +414,7 @@ describe('cluster topology settings', () => {
 		expect(core.nodes.update(admin, fresh.nodeId, { roles: ['compute'] }).roles).toEqual(['compute']);
 	});
 
-	test('stores hardware facts and derives skiff.io labels', () => {
+	test('stores hardware facts and derives yoal.io labels', () => {
 		const fresh = joinNode('cluster-hardware');
 		core.nodes.heartbeat(fresh.token, {
 			nodeId: fresh.nodeId,
@@ -436,11 +436,11 @@ describe('cluster topology settings', () => {
 		const view = core.nodes.get(fresh.nodeId);
 		expect(view.hardware).toMatchObject({ arch: 'x64', cores: 16, virtualization: 'kvm' });
 		expect(view.derivedLabels).toMatchObject({
-			'skiff.io/arch': 'x64',
-			'skiff.io/virt': 'kvm',
-			'skiff.io/gpu': 'nvidia',
-			'skiff.io/gpu-count': '1',
-			'skiff.io/memory-gb': '64',
+			'yoal.io/arch': 'x64',
+			'yoal.io/virt': 'kvm',
+			'yoal.io/gpu': 'nvidia',
+			'yoal.io/gpu-count': '1',
+			'yoal.io/memory-gb': '64',
 		});
 		expect(view.hardwareAt).not.toBeNull();
 		expect(view.hardwareError).toBeNull();
@@ -480,24 +480,24 @@ describe('managed overlay join (C1)', () => {
 		const joined = core.nodes.join({
 			token,
 			name: 'managed-1',
-			networkMode: 'skiff',
+			networkMode: 'yoal',
 			wireguardPublicKey: key,
 		});
 		expect(joined.wireguard).toMatchObject({
-			mode: 'skiff',
+			mode: 'yoal',
 			address: '10.88.1.1',
 			cidr: '10.88.0.0/22',
 			listenPort: 51820,
 		});
 		const view = core.nodes.get(joined.nodeId);
 		expect(view).toMatchObject({
-			networkMode: 'skiff',
+			networkMode: 'yoal',
 			privateAddress: '10.88.1.1',
 			wgPublicKey: key,
 		});
 		expect(view.publicAddress).toBe('10.88.1.1:8080');
 		const state = await core.nodes.desiredState(joined.token);
-		expect(state.wireguard).toMatchObject({ address: '10.88.1.1', mode: 'skiff' });
+		expect(state.wireguard).toMatchObject({ address: '10.88.1.1', mode: 'yoal' });
 
 		core.nodes.heartbeat(joined.token, {
 			nodeId: joined.nodeId,
@@ -521,7 +521,7 @@ describe('managed overlay join (C1)', () => {
 		const joined = core.nodes.join({
 			token,
 			name: 'managed-2',
-			networkMode: 'skiff',
+			networkMode: 'yoal',
 			wireguardPublicKey: `${'B'.repeat(43)}=`,
 		});
 		expect(joined.wireguard?.address).toBe('10.88.1.2');
@@ -529,7 +529,7 @@ describe('managed overlay join (C1)', () => {
 
 	test('refuses a managed join without a public key', () => {
 		const token = core.nodes.createJoinToken(admin, 'managed-bad').token;
-		expect(() => core.nodes.join({ token, name: 'managed-bad', networkMode: 'skiff' })).toThrow(/public key/);
+		expect(() => core.nodes.join({ token, name: 'managed-bad', networkMode: 'yoal' })).toThrow(/public key/);
 	});
 });
 

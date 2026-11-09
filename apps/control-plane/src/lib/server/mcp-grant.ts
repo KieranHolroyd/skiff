@@ -7,7 +7,7 @@ import { APIError } from 'better-auth/api';
  * token away and starts authorization again; the user sees the consent screen.
  */
 export function grantRevokedResponse(resource: string): Response {
-	const message = 'This app was disconnected from Skiff. Connect it again to continue.';
+	const message = 'This app was disconnected from Yoal. Connect it again to continue.';
 	const challenge = createResourceServerChallenge(new APIError('UNAUTHORIZED', { message }), resource);
 	const headers = new Headers({ 'content-type': 'application/json' });
 	const authenticate = (challenge?.headers as Record<string, string> | Headers | undefined) ?? undefined;

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { ShareMountView, ShareView } from '@skiff/contracts';
+	import type { ShareMountView, ShareView } from '@yoal/contracts';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
@@ -14,14 +14,14 @@
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
 	import { Textarea } from '#lib/components/ui/textarea/index.js';
 	import EmptyState from '../../_lib/EmptyState.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import SettingsHeader from '../_lib/SettingsHeader.svelte';
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import { runAction } from '#lib/actions.js';
 	import { invalidateAll } from '$app/navigation';
 	import GaugeIcon from '@lucide/svelte/icons/gauge';
-	import VolumeProfileStats from '#lib/components/skiff/VolumeProfileStats.svelte';
+	import VolumeProfileStats from '#lib/components/yoal/VolumeProfileStats.svelte';
 	import type { Tone } from '#lib/status.js';
 	import type { PageProps } from './$types';
 
@@ -142,7 +142,7 @@
 	<EmptyState
 		icon={HardDriveIcon}
 		title="No network shares yet"
-		description="Add an NFS export or SMB share, mount it on a node, and Skiff can keep data on it."
+		description="Add an NFS export or SMB share, mount it on a node, and Yoal can keep data on it."
 	>
 		<Button size="sm" onclick={() => (addOpen = true)}><PlusIcon />Add network share</Button>
 	</EmptyState>
@@ -252,7 +252,7 @@
 				<Field.Field>
 					<Field.Label for="share-name">Name</Field.Label>
 					<Input id="share-name" name="name" required maxlength={40} placeholder="media" class="font-mono text-sm" />
-					<Field.Description>Also the mount directory: /mnt/skiff-shares/&lt;name&gt;.</Field.Description>
+					<Field.Description>Also the mount directory: /mnt/yoal-shares/&lt;name&gt;.</Field.Description>
 				</Field.Field>
 				<Field.Field>
 					<Field.Label for="share-protocol">Protocol</Field.Label>
@@ -312,7 +312,7 @@
 			</div>
 			<p class="text-xs text-muted-foreground">
 				Nodes need {protocol === 'smb' ? 'cifs-utils' : 'nfs-common (or nfs-utils)'} installed. Network disks trade
-				latency and locking guarantees for capacity; Skiff does not back up what lives on a share.
+				latency and locking guarantees for capacity; Yoal does not back up what lives on a share.
 			</p>
 		</Field.Group>
 	</FormDialog>
@@ -322,7 +322,7 @@
 			bind:open={mountOpen}
 			icon={ServerIcon}
 			title="Mount {active.name}"
-			description="The node's helper mounts it at /mnt/skiff-shares/{active.name} and keeps it mounted across restarts."
+			description="The node's helper mounts it at /mnt/yoal-shares/{active.name} and keeps it mounted across restarts."
 			action="?/mount"
 			submitLabel="Mount"
 		>

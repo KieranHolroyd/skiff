@@ -7,7 +7,7 @@ import { dkimVerify } from 'mailauth';
 import nodemailer from 'nodemailer';
 import { SMTPServer } from 'smtp-server';
 import getTLSOptions from 'smtp-server/lib/tls-options';
-import { mailHostnames, type EmailEvent, type MailState } from '@skiff/contracts';
+import { mailHostnames, type EmailEvent, type MailState } from '@yoal/contracts';
 import type { MailResolver } from './dns.ts';
 import { MailServer } from './server.ts';
 
@@ -24,7 +24,7 @@ function hash(password: string): string {
 	return `scrypt$${salt.toString('base64url')}$${scryptSync(password, salt, 32).toString('base64url')}`;
 }
 
-const HOSTS = mailHostnames('skiff.test');
+const HOSTS = mailHostnames('yoal.test');
 
 function state(patch: Partial<MailState> = {}, org: Partial<MailState['orgs'][number]> = {}): MailState {
 	return {
@@ -124,7 +124,7 @@ beforeEach(async () => {
 	mx.received.length = 0;
 	mx.replies.clear();
 	clock = Date.parse('2026-11-07T12:00:00Z');
-	dir = mkdtempSync(join(tmpdir(), 'skiff-mail-'));
+	dir = mkdtempSync(join(tmpdir(), 'yoal-mail-'));
 	server = new MailServer({
 		dataDir: dir,
 		controlSocket: null,
@@ -188,10 +188,10 @@ describe('submission', () => {
 		expect(mx.received).toHaveLength(1);
 		const delivered = mx.received[0]!;
 		expect(delivered.to).toEqual(['friend@example.org']);
-		expect(delivered.from).toMatch(/^b-em_[a-z0-9]+-0@bounces\.skiff\.test$/);
+		expect(delivered.from).toMatch(/^b-em_[a-z0-9]+-0@bounces\.yoal\.test$/);
 		expect(await dkimResult(delivered.raw)).toEqual(['pass']);
 		const headers = delivered.raw.toString('latin1');
-		expect(headers).toMatch(/^X-Skiff-Id: em_/m);
+		expect(headers).toMatch(/^X-Yoal-Id: em_/m);
 		expect(headers).toMatch(/^Message-ID: </m);
 		expect(events().map((event) => event.kind)).toEqual(['accepted', 'delivered']);
 		expect(events()[1]).toMatchObject({ orgId: 'org_a', projectId: 'prj_1', source: 'smtp', recipient: 'friend@example.org', tls: true });
@@ -325,7 +325,7 @@ describe('control API', () => {
 		const platform = { id: 'platform', orgId: '*', name: 'mail.example.net', sending: true, receiving: false, dkim: [{ selector: 'skf202611', algorithm: 'rsa-sha256' as const, privateKey: PRIVATE_PEM }] };
 		server.loadState(state({ generation: 7, domains: [...state().domains, platform] }));
 		try {
-			const platformRaw = Buffer.from('From: Skiff <no-reply@mail.example.net>\r\nTo: new@example.org\r\nSubject: Confirm\r\n\r\nHello\r\n').toString('base64');
+			const platformRaw = Buffer.from('From: Yoal <no-reply@mail.example.net>\r\nTo: new@example.org\r\nSubject: Confirm\r\n\r\nHello\r\n').toString('base64');
 			const sent = { ...inject, messageId: 'em_feedfacefeedfacefeedfacefeedface', orgId: 'org_b', from: 'no-reply@mail.example.net', raw: platformRaw };
 			expect((await control('POST', '/inject', sent)).status).toBe(200);
 			await drain();
@@ -360,7 +360,7 @@ describe('port 25', () => {
 
 	test('refuses to relay', async () => {
 		await expect(inbound('spammer@evil.test', 'victim@example.org', 'Subject: x\r\n\r\nx\r\n')).rejects.toThrow(/550/);
-		await expect(inbound('spammer@evil.test', 'b-nope@bounces.skiff.test', 'Subject: x\r\n\r\nx\r\n')).rejects.toThrow(/550/);
+		await expect(inbound('spammer@evil.test', 'b-nope@bounces.yoal.test', 'Subject: x\r\n\r\nx\r\n')).rejects.toThrow(/550/);
 	});
 
 	test('an asynchronous DSN to the VERP address becomes a hard bounce', async () => {
@@ -396,13 +396,13 @@ describe('port 25', () => {
 		expect(server.policy.isSuppressed('org_a', 'friend@example.org')).toBe(true);
 	});
 
-	test('an ARF complaint is matched by the X-Skiff-Id header', async () => {
+	test('an ARF complaint is matched by the X-Yoal-Id header', async () => {
 		await submit({ to: 'friend@example.org' });
 		await drain();
 		const original = mx.received[0]!.raw.toString('latin1').split('\r\n\r\n')[0];
 		const arf = [
 			'From: feedback@isp.example',
-			'To: fbl@bounces.skiff.test',
+			'To: fbl@bounces.yoal.test',
 			'Subject: complaint',
 			'MIME-Version: 1.0',
 			'Content-Type: multipart/report; report-type=feedback-report; boundary="b2"',
@@ -425,7 +425,7 @@ describe('port 25', () => {
 			'--b2--',
 			'',
 		].join('\r\n');
-		await inbound('feedback@isp.example', 'fbl@bounces.skiff.test', arf);
+		await inbound('feedback@isp.example', 'fbl@bounces.yoal.test', arf);
 		const complaint = events().find((event) => event.kind === 'complained');
 		expect(complaint).toMatchObject({ feedbackType: 'abuse', recipient: 'friend@example.org', orgId: 'org_a' });
 		expect(server.policy.isSuppressed('org_a', 'friend@example.org')).toBe(true);

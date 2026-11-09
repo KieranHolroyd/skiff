@@ -1,6 +1,6 @@
 <script lang="ts">
 	import RocketIcon from '@lucide/svelte/icons/rocket';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import { Textarea } from '#lib/components/ui/textarea/index.js';

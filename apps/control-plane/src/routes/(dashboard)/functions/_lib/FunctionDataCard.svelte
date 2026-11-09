@@ -1,14 +1,14 @@
 <script lang="ts">
 	import * as Card from '#lib/components/ui/card/index.js';
-	import Notice from '#lib/components/skiff/Notice.svelte';
-	import type { DatabaseAttachmentView, StorageAttachmentView } from '@skiff/contracts';
+	import Notice from '#lib/components/yoal/Notice.svelte';
+	import type { DatabaseAttachmentView, StorageAttachmentView } from '@yoal/contracts';
 	import CodeBlock from '../../_lib/CodeBlock.svelte';
 	import { dataBindingSnippet } from '../../_lib/function-view.js';
 
 	/**
 	 * How a function reaches data (docs/FUNCTIONS.md §4.5). Hyperdrive and R2 bind *attached*
 	 * resources: the attachment puts the credentials in the host's activation env, and the binding
-	 * names the resource in wrangler.jsonc's `skiff` section. KV, D1, Durable Objects, queues and the
+	 * names the resource in wrangler.jsonc's `yoal` section. KV, D1, Durable Objects, queues and the
 	 * cache keep their data on the host itself.
 	 */
 	let {

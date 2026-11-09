@@ -1,6 +1,6 @@
 import { and, eq, isNull, or, sql } from 'drizzle-orm';
-import { orgKeys, projects, secrets } from '@skiff/db';
-import type { Principal } from '@skiff/contracts';
+import { orgKeys, projects, secrets } from '@yoal/db';
+import type { Principal } from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { NotFoundError, ValidationError } from './errors.ts';
 import { decrypt, encrypt, newId, randomBytes } from './util.ts';

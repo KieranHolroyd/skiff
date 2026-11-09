@@ -2,7 +2,7 @@
 	import NetworkIcon from '@lucide/svelte/icons/network';
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import { resolve } from '$app/paths';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';

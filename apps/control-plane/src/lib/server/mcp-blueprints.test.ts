@@ -3,13 +3,13 @@ import { principalStub } from './principal-stub.test-support';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_FEATURES } from '@skiff/contracts';
-import { LocalObjectStore, buildPrincipal, createCore, type Core } from '@skiff/core';
-import { createDb } from '@skiff/db';
+import { DEFAULT_FEATURES } from '@yoal/contracts';
+import { LocalObjectStore, buildPrincipal, createCore, type Core } from '@yoal/core';
+import { createDb } from '@yoal/db';
 
 /** Blueprint tools (plan 11): plan_stack, apply_stack and get_task against a real core. */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-mcp-blueprints-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-mcp-blueprints-'));
 const opened = createDb({ path: ':memory:' });
 const features = { ...DEFAULT_FEATURES, BLUEPRINTS: true };
 const realCore: Core = createCore({
@@ -37,7 +37,7 @@ mock.module('./core', () => ({ core: realCore }));
 mock.module('./config', () => ({ platformOrigin: 'https://control.test', authSecret: 'test-secret' }));
 mock.module('./principal', () => principalStub({ principalFromMcp: () => null }));
 
-const { skiffToolDefinitions } = await import('./mcp');
+const { yoalToolDefinitions } = await import('./mcp');
 const { assistantTools } = await import('./assistant/tools');
 
 afterAll(() => {
@@ -48,7 +48,7 @@ afterAll(() => {
 const owner = buildPrincipal({ kind: 'user', userId: 'user_1', orgId: 'org_1', role: 'owner' });
 const viewer = buildPrincipal({ kind: 'user', userId: 'user_2', orgId: 'org_1', role: 'viewer' });
 
-const blueprint = `apiVersion: skiff/v1
+const blueprint = `apiVersion: yoal/v1
 name: docs
 projects:
   docs-site:
@@ -71,7 +71,7 @@ async function call(principal: typeof owner, name: string, args: Record<string, 
 describe('blueprint tools', () => {
 	test('annotations: plan is read-only, apply is destructive (confirmed), get_task reads', () => {
 		const tools = new Map(
-			skiffToolDefinitions(owner).map((entry) => [entry.name, entry.config.annotations])
+			yoalToolDefinitions(owner).map((entry) => [entry.name, entry.config.annotations])
 		);
 		expect(tools.get('plan_stack')).toMatchObject({ readOnlyHint: true, destructiveHint: false });
 		expect(tools.get('apply_stack')).toMatchObject({ readOnlyHint: false, destructiveHint: true });
@@ -88,7 +88,7 @@ describe('blueprint tools', () => {
 	test('the blueprint tools are hidden while the feature is off', () => {
 		features.BLUEPRINTS = false;
 		try {
-			const names = skiffToolDefinitions(owner).map((entry) => entry.name);
+			const names = yoalToolDefinitions(owner).map((entry) => entry.name);
 			expect(names).not.toContain('plan_stack');
 			expect(names).not.toContain('apply_stack');
 			expect(names).toContain('get_task');
@@ -112,7 +112,7 @@ describe('blueprint tools', () => {
 		expect(
 			(
 				await call(owner, 'plan_stack', {
-					blueprint: 'apiVersion: skiff/v1\nname: docs\nextra: 1\n'
+					blueprint: 'apiVersion: yoal/v1\nname: docs\nextra: 1\n'
 				})
 			).text
 		).toContain('Unrecognized key');

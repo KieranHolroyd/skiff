@@ -21,7 +21,7 @@ import {
 	type QueryColumn,
 	type QueryResult,
 	type QueryVariables,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { ClickHouseAbortedError, ClickHouseError, ClickHouseUnavailableError, type ClickHouseCompactResult } from './clickhouse.ts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
@@ -405,7 +405,7 @@ export class ObservabilityService {
 		}
 		try {
 			compileBuilder(query.builder, {
-				database: 'skiff',
+				database: 'yoal',
 				fromMs: this.ctx.now() - 3_600_000,
 				toMs: this.ctx.now(),
 				maxDataPoints: 100,

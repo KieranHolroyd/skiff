@@ -7,7 +7,7 @@ import {
 	type Binding,
 	type Permission,
 	type ResourceRef,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 
 /**
  * The permission matrix (IAM.md I1's exit criterion): every catalog permission is checked against

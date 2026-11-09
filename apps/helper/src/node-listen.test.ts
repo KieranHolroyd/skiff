@@ -15,7 +15,7 @@ afterEach(async () => {
 });
 
 async function temp(): Promise<string> {
-	const dir = await fs.mkdtemp(join(tmpdir(), 'skiff-node-listen-'));
+	const dir = await fs.mkdtemp(join(tmpdir(), 'yoal-node-listen-'));
 	directories.push(dir);
 	return dir;
 }
@@ -29,7 +29,7 @@ function workload(overrides: Record<string, unknown> = {}): WorkloadDesired {
 		runtime: 'process',
 		status: 'running',
 		release: SHA,
-		upstream: 'unix//run/skiff-workloads/prj_node01.sock',
+		upstream: 'unix//run/yoal-workloads/prj_node01.sock',
 		memoryMb: 256,
 		cpus: 1,
 		port: 3000,
@@ -66,15 +66,15 @@ describe('renderProcessUnit with the Node preload', () => {
 		const unit = renderProcessUnit({
 			workload: workload(),
 			releaseDir: '/srv/release',
-			envFile: '/run/skiff/env',
+			envFile: '/run/yoal/env',
 			secrets: [],
 			command: ['node', 'server.js'],
 			envNames: [],
-			nodeListen: { path: '/run/skiff/wld_node01/skiff-node-listen.cjs', userNodeOptions: '--max-old-space-size=200 --title=50%' },
+			nodeListen: { path: '/run/yoal/wld_node01/yoal-node-listen.cjs', userNodeOptions: '--max-old-space-size=200 --title=50%' },
 		});
-		expect(unit).toContain('LoadCredential=skiff-node-listen.cjs:/run/skiff/wld_node01/skiff-node-listen.cjs');
+		expect(unit).toContain('LoadCredential=yoal-node-listen.cjs:/run/yoal/wld_node01/yoal-node-listen.cjs');
 		expect(unit).toContain(
-			'Environment="NODE_OPTIONS=--require=%d/skiff-node-listen.cjs --max-old-space-size=200 --title=50%%"',
+			'Environment="NODE_OPTIONS=--require=%d/yoal-node-listen.cjs --max-old-space-size=200 --title=50%%"',
 		);
 		expect(unit).toContain('ExecStart=/usr/bin/env "node" "server.js"');
 	});
@@ -131,16 +131,16 @@ describe('SystemdDriver for a Node app', () => {
 			env: {},
 			files: {},
 		});
-		const unit = await fs.readFile(join(root, 'units', 'skiff-workload-wld_node01.service'), 'utf8');
+		const unit = await fs.readFile(join(root, 'units', 'yoal-workload-wld_node01.service'), 'utf8');
 		const bin = join(root, 'releases', SHA, 'node_modules', '.bin');
 		expect(unit).toContain(
 			`ExecStart="/bin/sh" "-c" "PATH='${bin}':'/usr/local/bin':\\"$$PATH\\"; export PATH; node server.js"`,
 		);
-		expect(unit).toContain('Environment="NODE_OPTIONS=--require=%d/skiff-node-listen.cjs --enable-source-maps"');
+		expect(unit).toContain('Environment="NODE_OPTIONS=--require=%d/yoal-node-listen.cjs --enable-source-maps"');
 		const env = await fs.readFile(join(root, 'run', 'wld_node01', 'env'), 'utf8');
 		expect(env).not.toContain('NODE_OPTIONS');
 		expect(env).toContain('NODE_ENV');
-		const preload = join(root, 'run', 'wld_node01', 'skiff-node-listen.cjs');
+		const preload = join(root, 'run', 'wld_node01', 'yoal-node-listen.cjs');
 		expect(await fs.readFile(preload, 'utf8')).toBe(NODE_LISTEN_SOURCE);
 		expect((await fs.stat(preload)).mode & 0o777).toBe(0o600);
 	});
@@ -153,8 +153,8 @@ describe('SystemdDriver for a Node app', () => {
 			env: {},
 			files: {},
 		});
-		const unit = await fs.readFile(join(root, 'units', 'skiff-workload-wld_node01.service'), 'utf8');
-		expect(unit).not.toContain('skiff-node-listen.cjs');
+		const unit = await fs.readFile(join(root, 'units', 'yoal-workload-wld_node01.service'), 'utf8');
+		expect(unit).not.toContain('yoal-node-listen.cjs');
 		expect(unit).toContain('Environment=PORT=3000');
 		expect(await fs.readFile(join(root, 'run', 'wld_node01', 'env'), 'utf8')).toContain('NODE_OPTIONS');
 	});
@@ -167,7 +167,7 @@ describe('SystemdDriver for a Node app', () => {
 			env: {},
 			files: {},
 		});
-		const unit = await fs.readFile(join(root, 'units', 'skiff-workload-wld_node01.service'), 'utf8');
+		const unit = await fs.readFile(join(root, 'units', 'yoal-workload-wld_node01.service'), 'utf8');
 		expect(unit).toContain('ExecStart="/usr/local/bin/bun" "run" "start"');
 		expect(unit).not.toContain('NODE_OPTIONS');
 	});
@@ -182,7 +182,7 @@ const nodeBinary = Bun.which('node');
 describe.skipIf(!nodeBinary)('the preload under a real Node.js', () => {
 	async function serve(app: string, script = 'server.js'): Promise<string> {
 		const dir = await temp();
-		await fs.writeFile(join(dir, 'skiff-node-listen.cjs'), NODE_LISTEN_SOURCE);
+		await fs.writeFile(join(dir, 'yoal-node-listen.cjs'), NODE_LISTEN_SOURCE);
 		await fs.writeFile(join(dir, script), app);
 		await fs.writeFile(join(dir, 'package.json'), JSON.stringify({ scripts: { start: `node ${script}` } }));
 		const parent = `
@@ -198,7 +198,7 @@ describe.skipIf(!nodeBinary)('the preload under a real Node.js', () => {
 					stdio: ['ignore', 'pipe', 'inherit', server._handle.fd],
 					// Its own process group, so the server under sh dies with it (systemd kills the cgroup).
 					detached: true,
-					env: { ...process.env, LISTEN_FDS: '1', LISTEN_PID: '1', NODE_OPTIONS: '--require=${join(dir, 'skiff-node-listen.cjs')}' },
+					env: { ...process.env, LISTEN_FDS: '1', LISTEN_PID: '1', NODE_OPTIONS: '--require=${join(dir, 'yoal-node-listen.cjs')}' },
 				});
 				server.close();
 				let out = '';

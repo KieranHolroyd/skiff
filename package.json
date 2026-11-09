@@ -1,5 +1,5 @@
 {
-  "name": "skiff",
+  "name": "yoal",
   "private": true,
   "type": "module",
   "workspaces": ["apps/*", "packages/*", "spikes/*"],

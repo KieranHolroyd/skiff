@@ -25,7 +25,7 @@ import { databaseImage, parseWorkload, type WorkloadDesired } from './validate.t
 
 const PRIMARY = 'db_0123456789abcdef0123456789abcdef';
 const REPLICA = 'db_dbr_0123456789abcdef0123456789abcdef';
-const SLOT = 'skiff_dbr_0123456789abcdef0123456789abcdef';
+const SLOT = 'yoal_dbr_0123456789abcdef0123456789abcdef';
 const PASSWORD = 'Abcdefghijklmnop_qrstu-vwxyz';
 const directories: string[] = [];
 
@@ -79,13 +79,13 @@ describe('validation', () => {
 		expect(assertReplicaWorkloadId(REPLICA)).toBe(REPLICA);
 		expect(() => assertReplicaWorkloadId(PRIMARY)).toThrow(/db_dbr_/);
 		expect(() => assertPrimaryDatabaseId(REPLICA)).toThrow(/not be a replica/);
-		expect(parseSlots(['skiff_b', 'skiff_a'])).toEqual(['skiff_a', 'skiff_b']);
-		expect(() => parseSlots(['skiff_a', 'skiff_a'])).toThrow(/repeat/);
-		expect(() => parseSlots(["skiff_a'; DROP ROLE x; --"])).toThrow(/must match/);
-		expect(() => parseSlots(Array.from({ length: 9 }, (_, index) => `skiff_${index}`))).toThrow(/at most 8/);
+		expect(parseSlots(['yoal_b', 'yoal_a'])).toEqual(['yoal_a', 'yoal_b']);
+		expect(() => parseSlots(['yoal_a', 'yoal_a'])).toThrow(/repeat/);
+		expect(() => parseSlots(["yoal_a'; DROP ROLE x; --"])).toThrow(/must match/);
+		expect(() => parseSlots(Array.from({ length: 9 }, (_, index) => `yoal_${index}`))).toThrow(/at most 8/);
 		expect(parseReplicationPassword(null, [])).toBeNull();
 		expect(() => parseReplicationPassword(PASSWORD, [])).toThrow(/null/);
-		expect(() => parseReplicationPassword("x'; --", ['skiff_a'])).toThrow(/base64url/);
+		expect(() => parseReplicationPassword("x'; --", ['yoal_a'])).toThrow(/base64url/);
 	});
 });
 
@@ -93,17 +93,17 @@ describe('replica unit', () => {
 	test('runs the start script with the slot, mounts the link read-only and adds standby flags', () => {
 		const unit = renderDatabaseUnit({
 			workload: replicaWorkload(),
-			envFile: `/run/skiff-workloads/${REPLICA}/env`,
-			dataDir: `/var/lib/skiff-workloads/${REPLICA}`,
-			replica: { linkDir: `/var/lib/skiff/agent/replication/${REPLICA}`, scriptPath: `/run/skiff-workloads/${REPLICA}/replica-start.sh` },
+			envFile: `/run/yoal-workloads/${REPLICA}/env`,
+			dataDir: `/var/lib/yoal-workloads/${REPLICA}`,
+			replica: { linkDir: `/var/lib/yoal/agent/replication/${REPLICA}`, scriptPath: `/run/yoal-workloads/${REPLICA}/replica-start.sh` },
 		});
-		expect(unit).toContain('Entrypoint=/usr/local/bin/skiff-replica-start');
+		expect(unit).toContain('Entrypoint=/usr/local/bin/yoal-replica-start');
 		expect(unit).toMatch(new RegExp(`^Exec="${SLOT}" "postgres" `, 'm'));
 		expect(unit).toContain('"hot_standby=on"');
 		expect(unit).toContain(`"primary_slot_name=${SLOT}"`);
-		expect(unit).toContain(`"primary_conninfo=host=/run/skiff-upstream port=5432 user=skiff_repl application_name=${SLOT} connect_timeout=10"`);
-		expect(unit).toContain(`Volume=/var/lib/skiff/agent/replication/${REPLICA}:/run/skiff-upstream:ro,z`);
-		expect(unit).toContain(`Volume=/run/skiff-workloads/${REPLICA}/replica-start.sh:/usr/local/bin/skiff-replica-start:ro,Z`);
+		expect(unit).toContain(`"primary_conninfo=host=/run/yoal-upstream port=5432 user=yoal_repl application_name=${SLOT} connect_timeout=10"`);
+		expect(unit).toContain(`Volume=/var/lib/yoal/agent/replication/${REPLICA}:/run/yoal-upstream:ro,z`);
+		expect(unit).toContain(`Volume=/run/yoal-workloads/${REPLICA}/replica-start.sh:/usr/local/bin/yoal-replica-start:ro,Z`);
 		expect(unit).toContain('PublishPort=127.0.0.1:15433:5432');
 		expect(unit).toContain('ReadOnly=true');
 		expect(unit).not.toContain('archive_mode');
@@ -119,7 +119,7 @@ describe('replica unit', () => {
 		const script = renderReplicaStartScript();
 		expect(script.startsWith('#!/bin/sh\n')).toBe(true);
 		expect(script).toContain('if [ ! -s "$data/PG_VERSION" ]; then');
-		expect(script).toContain('--host=/run/skiff-upstream --port=5432 --username=skiff_repl --no-password');
+		expect(script).toContain('--host=/run/yoal-upstream --port=5432 --username=yoal_repl --no-password');
 		expect(script).toContain('--wal-method=stream --checkpoint=fast --max-rate=50M --slot="$slot"');
 		expect(script).toContain('mv "$partial" "$data"');
 		expect(script).toContain('touch "$data/standby.signal"');
@@ -138,21 +138,21 @@ describe('primary configuration', () => {
 		expect(on.startsWith(base.trimEnd())).toBe(true);
 		expect(withReplicationHba(on, true)).toBe(on);
 		expect(withReplicationHba(on, false)).toBe(base);
-		expect(HBA_RULE).toBe('host replication skiff_repl all scram-sha-256');
+		expect(HBA_RULE).toBe('host replication yoal_repl all scram-sha-256');
 	});
 
 	test('configure SQL creates the role, keeps exactly the slots and reloads', () => {
-		const sql = renderReplicationConfigureSql(PASSWORD, ['skiff_a', 'skiff_b']);
-		expect(sql).toContain(`CREATE ROLE skiff_repl WITH LOGIN REPLICATION PASSWORD '${PASSWORD}'`);
+		const sql = renderReplicationConfigureSql(PASSWORD, ['yoal_a', 'yoal_b']);
+		expect(sql).toContain(`CREATE ROLE yoal_repl WITH LOGIN REPLICATION PASSWORD '${PASSWORD}'`);
 		expect(sql).toContain("ALTER SYSTEM SET max_slot_wal_keep_size = '2GB';");
 		expect(sql).toContain("ALTER SYSTEM SET wal_keep_size = '512MB';");
-		expect(sql).toContain("pg_create_physical_replication_slot(s, true) FROM unnest(ARRAY['skiff_a', 'skiff_b']::text[])");
-		expect(sql).toContain("slot_name LIKE 'skiff\\_%' AND NOT (slot_name = ANY(ARRAY['skiff_a', 'skiff_b']::text[]))");
+		expect(sql).toContain("pg_create_physical_replication_slot(s, true) FROM unnest(ARRAY['yoal_a', 'yoal_b']::text[])");
+		expect(sql).toContain("slot_name LIKE 'yoal\\_%' AND NOT (slot_name = ANY(ARRAY['yoal_a', 'yoal_b']::text[]))");
 		expect(sql).toContain('SELECT pg_reload_conf();');
 		expect(() => renderReplicationConfigureSql(PASSWORD, [])).toThrow(/teardown/);
 		const teardown = renderReplicationTeardownSql();
 		expect(teardown).toContain('NOT (slot_name = ANY(ARRAY[]::text[]))');
-		expect(teardown).toContain('DROP ROLE skiff_repl');
+		expect(teardown).toContain('DROP ROLE yoal_repl');
 		expect(teardown).toContain('ALTER SYSTEM RESET max_slot_wal_keep_size;');
 	});
 
@@ -161,19 +161,19 @@ describe('primary configuration', () => {
 		expect(REPLICATION_STATUS_SQL).not.toMatch(/\b(INSERT|UPDATE|DELETE|DROP|ALTER)\b/);
 		const parsed = parseReplicationStatus(
 			JSON.stringify([
-				{ slot: 'skiff_a', active: true, walStatus: 'reserved', state: 'streaming', sentLsn: '0/3000148', replayLsn: '0/3000060', lagBytes: 232, lagSeconds: 0.004, syncState: 'async' },
+				{ slot: 'yoal_a', active: true, walStatus: 'reserved', state: 'streaming', sentLsn: '0/3000148', replayLsn: '0/3000060', lagBytes: 232, lagSeconds: 0.004, syncState: 'async' },
 				{ slot: 'not_ours', active: true },
-				{ slot: 'skiff_b', active: false, walStatus: 'lost', state: null, sentLsn: 'junk', replayLsn: null, lagBytes: -5, lagSeconds: null, syncState: null },
+				{ slot: 'yoal_b', active: false, walStatus: 'lost', state: null, sentLsn: 'junk', replayLsn: null, lagBytes: -5, lagSeconds: null, syncState: null },
 			]),
 		);
 		expect(parsed).toEqual([
-			{ slot: 'skiff_a', active: true, walStatus: 'reserved', state: 'streaming', sentLsn: '0/3000148', replayLsn: '0/3000060', lagBytes: 232, lagSeconds: 0.004, syncState: 'async' },
-			{ slot: 'skiff_b', active: false, walStatus: 'lost', state: null, sentLsn: null, replayLsn: null, lagBytes: null, lagSeconds: null, syncState: null },
+			{ slot: 'yoal_a', active: true, walStatus: 'reserved', state: 'streaming', sentLsn: '0/3000148', replayLsn: '0/3000060', lagBytes: 232, lagSeconds: 0.004, syncState: 'async' },
+			{ slot: 'yoal_b', active: false, walStatus: 'lost', state: null, sentLsn: null, replayLsn: null, lagBytes: null, lagSeconds: null, syncState: null },
 		]);
 		expect(parseReplicationStatus('')).toEqual([]);
 		expect(() => parseReplicationStatus('not json')).toThrow(/JSON/);
 		expect(renderPromoteArgs('/usr/bin/podman', REPLICA)).toEqual([
-			'/usr/bin/podman', 'exec', `skiff-workload-${REPLICA}`, 'pg_ctl', 'promote', '-D', '/data/pgdata', '-w', '-t', '60',
+			'/usr/bin/podman', 'exec', `yoal-workload-${REPLICA}`, 'pg_ctl', 'promote', '-D', '/data/pgdata', '-w', '-t', '60',
 		]);
 	});
 });
@@ -198,7 +198,7 @@ class ReplicationRunner implements CommandRunner {
 }
 
 async function driverFixture() {
-	const root = await fs.mkdtemp(join(tmpdir(), 'skiff-helper-replication-'));
+	const root = await fs.mkdtemp(join(tmpdir(), 'yoal-helper-replication-'));
 	directories.push(root);
 	const runtimeDir = join(root, 'run');
 	const stateDir = join(root, 'state');
@@ -239,8 +239,8 @@ describe('SystemdDriver replication verbs', () => {
 		expect(script).toBe(renderReplicaStartScript());
 		expect((await fs.stat(join(f.runtimeDir, REPLICA, 'replica-start.sh'))).mode & 0o777).toBe(0o755);
 		expect((await fs.stat(join(f.replicationDir, REPLICA))).isDirectory()).toBe(true);
-		const unit = await fs.readFile(join(f.root, 'quadlet', `skiff-workload-${REPLICA}.container`), 'utf8');
-		expect(unit).toContain(`Volume=${join(f.replicationDir, REPLICA)}:/run/skiff-upstream:ro,z`);
+		const unit = await fs.readFile(join(f.root, 'quadlet', `yoal-workload-${REPLICA}.container`), 'utf8');
+		expect(unit).toContain(`Volume=${join(f.replicationDir, REPLICA)}:/run/yoal-upstream:ro,z`);
 		// The replication password is in the 0400 env file only.
 		expect(await fs.readFile(join(f.runtimeDir, REPLICA, 'env'), 'utf8')).toContain(`PGPASSWORD=${PASSWORD}`);
 		expect(f.runner.calls.some((call) => call.argv.join(' ').includes(PASSWORD))).toBe(false);
@@ -279,7 +279,7 @@ describe('SystemdDriver replication verbs', () => {
 		await fs.writeFile(join(f.stateDir, REPLICA, 'pgdata', 'PG_VERSION'), '17\n');
 		expect(await f.driver.replicaPromote(REPLICA, { databaseId: PRIMARY })).toEqual({ databaseId: PRIMARY, lsn: '0/5000060' });
 		expect(f.runner.calls.some((call) => call.argv.includes('pg_ctl'))).toBe(true);
-		expect(f.runner.calls.some((call) => call.argv.includes('stop') && call.argv.includes(`skiff-workload-${REPLICA}.service`))).toBe(true);
+		expect(f.runner.calls.some((call) => call.argv.includes('stop') && call.argv.includes(`yoal-workload-${REPLICA}.service`))).toBe(true);
 		expect(await fs.readFile(join(f.stateDir, PRIMARY, 'pgdata', 'PG_VERSION'), 'utf8')).toBe('17\n');
 		await expect(fs.stat(join(f.stateDir, PRIMARY, 'pgdata', 'standby.signal'))).rejects.toThrow();
 		await expect(fs.stat(join(f.stateDir, REPLICA))).rejects.toThrow();

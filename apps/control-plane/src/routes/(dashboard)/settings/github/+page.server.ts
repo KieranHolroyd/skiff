@@ -1,10 +1,10 @@
 import { error, fail } from '@sveltejs/kit';
-import { hasPermission } from '@skiff/contracts';
+import { hasPermission } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import type { Actions, PageServerLoad } from './$types';
 
 /**
- * Settings → GitHub (docs/GITHUB.md): Skiff's GitHub App (platform admins register it) and the
+ * Settings → GitHub (docs/GITHUB.md): Yoal's GitHub App (platform admins register it) and the
  * installations linked to this organisation, which git builds, pipelines, runners and registry
  * trusts then use instead of hand-made webhooks and tokens.
  */
@@ -15,7 +15,7 @@ export const load: PageServerLoad = ({ locals, url }) => {
 	const app = core.githubApp.view(principal);
 	const installations = core.githubApp.installations(principal);
 	return {
-		/** D172: pushes add repositories with `.skiff/workflows` to Pipelines. */
+		/** D172: pushes add repositories with `.yoal/workflows` to Pipelines. */
 		pipelineSetup: core.pipelines.autoSetup(principal),
 		app,
 		installations: installations.filter((entry) => entry.orgId === principal.orgId),
@@ -26,7 +26,7 @@ export const load: PageServerLoad = ({ locals, url }) => {
 		installUrl: app.configured ? core.githubApp.installUrl(principal) : null,
 		isAdmin,
 		canLink: core.githubApp.canLink(principal),
-		defaultName: `Skiff ${new URL(core.ctx.config.platformOrigin).hostname}`.slice(0, 34),
+		defaultName: `Yoal ${new URL(core.ctx.config.platformOrigin).hostname}`.slice(0, 34),
 		/** Set by the callback pages after a redirect. */
 		notice: url.searchParams.get('created')
 			? 'GitHub App created. Install it on an account to connect repositories.'
@@ -110,7 +110,7 @@ export const actions: Actions = {
 			core.pipelines.setAutoSetup(locals.principal!, { enabled });
 			return {
 				success: enabled
-					? 'Repositories with .skiff/workflows now join Pipelines on their next push.'
+					? 'Repositories with .yoal/workflows now join Pipelines on their next push.'
 					: 'Pushes no longer add repositories to Pipelines. Add them by hand under Pipelines.'
 			};
 		} catch (cause) {
@@ -131,7 +131,7 @@ export const actions: Actions = {
 	remove: async ({ locals }) => {
 		try {
 			core.githubApp.remove(locals.principal!);
-			return { success: 'GitHub App removed from Skiff. Delete it on GitHub too if you no longer need it.' };
+			return { success: 'GitHub App removed from Yoal. Delete it on GitHub too if you no longer need it.' };
 		} catch (cause) {
 			return fail(400, { message: message(cause) });
 		}

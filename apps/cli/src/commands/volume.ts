@@ -18,7 +18,7 @@ import { confirmOrRefuse } from './run-operation.ts';
  * paths inside the workload sandbox, never host paths.
  */
 
-const usage = `Usage: skif volume <command> [options]
+const usage = `Usage: yoal volume <command> [options]
 
 Commands:
   list                         List a project's volumes (the default)
@@ -65,12 +65,12 @@ Options:
   -h, --help                   Show this help
 
 Examples:
-  skif volume create app-data --project api --size 2G
-  skif volume attach app-data --project api --mount /var/lib/app
-  skif volume list --project api
-  skif volume snapshot app-data --project api --label "before v2 migration"
-  skif volume restore app-data avs_123 --project api --to app-data-copy
-  skif volume delete app-data --project api --yes`;
+  yoal volume create app-data --project api --size 2G
+  yoal volume attach app-data --project api --mount /var/lib/app
+  yoal volume list --project api
+  yoal volume snapshot app-data --project api --label "before v2 migration"
+  yoal volume restore app-data avs_123 --project api --to app-data-copy
+  yoal volume delete app-data --project api --yes`;
 
 const baseFlags: FlagSpec = {
 	json: { type: 'boolean' },
@@ -156,7 +156,7 @@ function parseNamed(argv: string[], spec: FlagSpec, command: string) {
 		console.log(usage);
 		return null;
 	}
-	const line = `Usage: skif volume ${command} <name> --project <slug>`;
+	const line = `Usage: yoal volume ${command} <name> --project <slug>`;
 	rejectExtraPositionals(args, 1, line);
 	const name = requirePositional(args, 0, `volume name.\n\n${line}`);
 	return { args, name };
@@ -168,7 +168,7 @@ async function listVolumes(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif volume list --project <slug> [--json]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal volume list --project <slug> [--json]');
 	const project = projectOf(args);
 	const client = await authenticatedClient();
 	const { volumes, raw } = await client.listVolumes(project);
@@ -177,7 +177,7 @@ async function listVolumes(argv: string[]): Promise<void> {
 		return;
 	}
 	if (volumes.length === 0) {
-		console.log(`No volumes in ${project}. Create one with \`skif volume create <name> --project ${project}\`.`);
+		console.log(`No volumes in ${project}. Create one with \`yoal volume create <name> --project ${project}\`.`);
 		return;
 	}
 	console.log(volumeTable(volumes));
@@ -194,10 +194,10 @@ function parseSnapshotTarget(argv: string[], spec: FlagSpec, command: string) {
 		console.log(usage);
 		return null;
 	}
-	const line = `Usage: skif volume ${command} <name> <snapshot-id> --project <slug>`;
+	const line = `Usage: yoal volume ${command} <name> <snapshot-id> --project <slug>`;
 	rejectExtraPositionals(args, 2, line);
 	const name = requirePositional(args, 0, `volume name.\n\n${line}`);
-	const snapshotId = requirePositional(args, 1, `snapshot id (see \`skif volume snapshots ${name}\`).\n\n${line}`);
+	const snapshotId = requirePositional(args, 1, `snapshot id (see \`yoal volume snapshots ${name}\`).\n\n${line}`);
 	return { args, name, snapshotId };
 }
 
@@ -237,8 +237,8 @@ async function snapshotVolume(argv: string[]): Promise<void> {
 	if (warning) console.error(`Warning: ${warning}`);
 	console.log(
 		`\nNext steps:\n${indent([
-			`Follow:  skif volume snapshots ${name} --project ${project}`,
-			`Restore: skif volume restore ${name} ${snapshot.id} --project ${project} --to ${name}-restored`,
+			`Follow:  yoal volume snapshots ${name} --project ${project}`,
+			`Restore: yoal volume restore ${name} ${snapshot.id} --project ${project} --to ${name}-restored`,
 		])}`,
 	);
 }
@@ -255,7 +255,7 @@ async function listSnapshots(argv: string[]): Promise<void> {
 		return;
 	}
 	if (snapshots.length === 0) {
-		console.log(`No snapshots of ${name}. Take one with \`skif volume snapshot ${name} --project ${project}\`.`);
+		console.log(`No snapshots of ${name}. Take one with \`yoal volume snapshot ${name} --project ${project}\`.`);
 		return;
 	}
 	console.log(snapshotTable(snapshots));
@@ -285,8 +285,8 @@ async function restoreVolume(argv: string[]): Promise<void> {
 	);
 	console.log(
 		`\nNext steps:\n${indent([
-			`Follow: skif volume show ${volume.name} --project ${project}`,
-			`Attach: skif volume attach ${volume.name} --project ${project} --mount /var/lib/app`,
+			`Follow: yoal volume show ${volume.name} --project ${project}`,
+			`Attach: yoal volume attach ${volume.name} --project ${project} --mount /var/lib/app`,
 		])}`,
 	);
 }
@@ -343,8 +343,8 @@ async function createVolume(argv: string[]): Promise<void> {
 	console.log(`Created volume "${volume.name}" in ${project} (${volume.sizeMb} MB, ${volume.backing}).`);
 	console.log(
 		`\nNext steps:\n${indent([
-			`Attach:  skif volume attach ${volume.name} --project ${project} --mount /var/lib/app`,
-			`Inspect: skif volume list --project ${project}`,
+			`Attach:  yoal volume attach ${volume.name} --project ${project} --mount /var/lib/app`,
+			`Inspect: yoal volume list --project ${project}`,
 		])}`,
 	);
 }
@@ -408,7 +408,7 @@ async function deleteVolume(argv: string[]): Promise<void> {
 			{
 				code: 'conflict',
 				suggestions: current.attachments.map(
-					(item) => `skif volume detach ${name} --project ${project} --env ${item.environment}`,
+					(item) => `yoal volume detach ${name} --project ${project} --env ${item.environment}`,
 				),
 			},
 		);

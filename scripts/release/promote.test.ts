@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { choosePromotion, type ListedRelease } from './promote.ts';
 
-const SIGNED = ['manifest.json', 'manifest.json.sig', 'skiff-x-linux-amd64.tar.gz'];
+const SIGNED = ['manifest.json', 'manifest.json.sig', 'yoal-x-linux-amd64.tar.gz'];
 const release = (tag: string, prerelease: boolean, assets = SIGNED): ListedRelease => ({
 	tag,
 	draft: false,
@@ -13,7 +13,7 @@ const release = (tag: string, prerelease: boolean, assets = SIGNED): ListedRelea
 const releases = [
 	release('v0.8.2', true),
 	release('v0.8.1', true),
-	release('v0.8.0', true, ['skiff-x-linux-amd64.tar.gz']),
+	release('v0.8.0', true, ['yoal-x-linux-amd64.tar.gz']),
 	release('v0.7.9', false),
 	release('cli-v9.9.9', false),
 	{ ...release('v0.9.0', true), draft: true },

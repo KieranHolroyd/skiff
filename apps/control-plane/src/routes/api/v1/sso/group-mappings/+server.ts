@@ -4,7 +4,7 @@ import { requirePrincipal } from '#lib/server/principal.js';
 import { sso } from '#lib/server/sso.js';
 import { groupMappingSchema } from '../_schema.js';
 
-/** IdP group claim → Skiff group (IAM.md I19, §8.3). */
+/** IdP group claim → Yoal group (IAM.md I19, §8.3). */
 export const GET: RequestHandler = (event) =>
 	route(() => {
 		const principal = requirePrincipal(event);

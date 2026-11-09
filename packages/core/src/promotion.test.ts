@@ -2,8 +2,8 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { heartbeatSchema, type MetricBucket } from '@skiff/contracts';
-import { createDb, migrate } from '@skiff/db';
+import { heartbeatSchema, type MetricBucket } from '@yoal/contracts';
+import { createDb, migrate } from '@yoal/db';
 import { Database } from 'bun:sqlite';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
@@ -15,7 +15,7 @@ import type { Core } from './index.ts';
 
 const MINUTE = 60_000;
 const DAY = 86_400_000;
-const dir = mkdtempSync(join(tmpdir(), 'skiff-promotion-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-promotion-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 // Minute-aligned so telemetry buckets and promote minutes line up predictably.
@@ -131,10 +131,10 @@ describe('migration backfill', () => {
 	test('promoted_at is backfilled from the audit log and the current production pointer', () => {
 		const db = new Database(':memory:');
 		const before = migrations.filter((migration) => migration.id < '0004');
-		db.run('CREATE TABLE skiff_migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)');
+		db.run('CREATE TABLE yoal_migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)');
 		for (const migration of before) {
 			db.run(migration.sql);
-			db.run('INSERT INTO skiff_migrations (id, applied_at) VALUES (?, ?)', [migration.id, 0]);
+			db.run('INSERT INTO yoal_migrations (id, applied_at) VALUES (?, ?)', [migration.id, 0]);
 		}
 		const insertDeployment = (id: string, createdAt: number) =>
 			db.run(

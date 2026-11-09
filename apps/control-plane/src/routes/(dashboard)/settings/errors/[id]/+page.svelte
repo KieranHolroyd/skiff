@@ -12,8 +12,8 @@
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import ZapIcon from '@lucide/svelte/icons/zap';
 	import { toast } from 'svelte-sonner';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Table from '#lib/components/ui/table/index.js';
@@ -101,7 +101,7 @@
 	}
 </script>
 
-<svelte:head><title>{issue.name} · Server errors · Skiff</title></svelte:head>
+<svelte:head><title>{issue.name} · Server errors · Yoal</title></svelte:head>
 
 <div class="space-y-6">
 	<div class="space-y-4 border-b pb-5">
@@ -200,7 +200,7 @@
 	{#if event}
 		<Panel
 			title={event.id === data.events[0]?.id ? 'Latest event' : 'Event'}
-			description={`${formatDateTime(event.at)}${event.version ? ` · Skiff ${event.version}` : ''}`}
+			description={`${formatDateTime(event.at)}${event.version ? ` · Yoal ${event.version}` : ''}`}
 			icon={ScrollTextIcon}
 		>
 			<div class="space-y-4">

@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { DesiredState, WorkloadDesired } from '@skiff/contracts';
+import type { DesiredState, WorkloadDesired } from '@yoal/contracts';
 import {
 	NatsConnection,
 	QUEUE_HEADERS,
@@ -70,11 +70,11 @@ function functionWorkload(queues: unknown[], overrides: Partial<WorkloadDesired>
 		runtime: 'function',
 		status: 'running',
 		release: 'a'.repeat(64),
-		upstream: 'unix//run/skiff-workloads/wl_q1.sock',
+		upstream: 'unix//run/yoal-workloads/wl_q1.sock',
 		memoryMb: 128,
 		cpus: 1,
 		port: 3000,
-		healthPath: '/__skiff/health',
+		healthPath: '/__yoal/health',
 		socketActivation: true,
 		activationVersion: 'b'.repeat(64),
 		env: {},
@@ -116,7 +116,7 @@ describe('reconcile', () => {
 });
 
 /** Needs a NATS server with JetStream; see packages/function-bindings/src/queue.test.ts. */
-const target = process.env.SKIFF_TEST_NATS ?? '';
+const target = process.env.YOAL_TEST_NATS ?? '';
 const [host, port] = target.split(':');
 const USER = 'tester';
 const PASS = 'tester-password-123';
@@ -140,7 +140,7 @@ describe.skipIf(!target)('consuming from a real broker', () => {
 		const suffix = Math.random().toString(36).slice(2, 8);
 		const queue = `agent-${suffix}`;
 		const dlq = `agent-dlq-${suffix}`;
-		const dir = await mkdtemp(join(tmpdir(), 'skiff-queue-shim-'));
+		const dir = await mkdtemp(join(tmpdir(), 'yoal-queue-shim-'));
 		cleanup.push(() => rm(dir, { recursive: true, force: true }));
 
 		const batches: Array<{ queue: string | null; messages: Array<{ id: string; attempts: number; body: unknown }> }> = [];
@@ -148,7 +148,7 @@ describe.skipIf(!target)('consuming from a real broker', () => {
 			unix: join(dir, 'wl_q1.sock'),
 			async fetch(request) {
 				const messages = (await request.json()) as Array<{ id: string; attempts: number; body: unknown }>;
-				batches.push({ queue: request.headers.get('x-skiff-queue'), messages });
+				batches.push({ queue: request.headers.get('x-yoal-queue'), messages });
 				return Response.json({
 					results: messages.map((message) =>
 						message.body === 'poison' ? { id: message.id, outcome: 'retry' } : { id: message.id, outcome: 'ack' },

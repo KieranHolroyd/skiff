@@ -1,7 +1,7 @@
 <script lang="ts">
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
-	import type { ProjectView } from '@skiff/core';
-	import { contentUrl, type DomainView } from '@skiff/contracts';
+	import DetailList from '#lib/components/yoal/DetailList.svelte';
+	import type { ProjectView } from '@yoal/core';
+	import { contentUrl, type DomainView } from '@yoal/contracts';
 	import AlertCircleIcon from '@lucide/svelte/icons/circle-alert';
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
 	import CheckIcon from '@lucide/svelte/icons/check';
@@ -11,9 +11,9 @@
 	import TrashIcon from '@lucide/svelte/icons/trash';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
@@ -100,7 +100,7 @@
 				<p class="text-sm font-medium">Custom domains</p>
 				<p class="text-xs text-muted-foreground">
 					{activeCount}/{domains.length} serving over HTTPS · a certificate is issued as soon as a domain
-					verifies, and Skiff re-checks pending domains every 10 minutes.
+					verifies, and Yoal re-checks pending domains every 10 minutes.
 				</p>
 				<p class="text-xs text-muted-foreground">
 					Domains serve the production deployment; environment hosts are separate.
@@ -292,7 +292,7 @@
 		bind:open={addOpen}
 		icon={GlobeIcon}
 		title="Add a custom domain"
-		description="The hostname must not already be attached to another project. Skiff verifies control with a TXT record before issuing a certificate."
+		description="The hostname must not already be attached to another project. Yoal verifies control with a TXT record before issuing a certificate."
 		action="?/addDomain"
 		submitLabel="Attach domain"
 	>

@@ -6,11 +6,11 @@
 	import PlugZapIcon from '@lucide/svelte/icons/plug-zap';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import TrashIcon from '@lucide/svelte/icons/trash';
-	import type { BackupTargetView } from '@skiff/contracts';
+	import type { BackupTargetView } from '@yoal/contracts';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
@@ -62,7 +62,7 @@
 			description:
 				(target === effective
 					? 'New backups fall back to the next target in line (the platform default, then the built-in object store). '
-					: 'Skiff stops using it. ') +
+					: 'Yoal stops using it. ') +
 				'A target that still holds backups cannot be removed: restores and retention read each backup from the target it was written to. Delete those backups first, or let them expire.',
 			confirmLabel: 'Remove target',
 			tone: 'danger',
@@ -72,7 +72,7 @@
 	}
 </script>
 
-<svelte:head><title>Backup targets · Settings · Skiff</title></svelte:head>
+<svelte:head><title>Backup targets · Settings · Yoal</title></svelte:head>
 
 <SettingsHeader id="backup-targets" />
 
@@ -208,7 +208,7 @@
 		bind:open={addOpen}
 		icon={DatabaseBackupIcon}
 		title="Add a backup target"
-		description="Test it after adding: Skiff checks it can reach the location, then write, list and delete a probe object."
+		description="Test it after adding: Yoal checks it can reach the location, then write, list and delete a probe object."
 		action="?/add"
 		submitLabel="Add target"
 		size="lg"
@@ -256,12 +256,12 @@
 						id="target-path"
 						name="path"
 						required
-						placeholder="/var/lib/skiff/backups"
+						placeholder="/var/lib/yoal/backups"
 						spellcheck="false"
 						class="font-mono text-sm"
 					/>
 					<Field.Description>
-						An absolute path on the control-plane host that the <code class="font-mono">skiff</code>
+						An absolute path on the control-plane host that the <code class="font-mono">yoal</code>
 						user can write to. Prefer a separate disk or mount.
 					</Field.Description>
 				</Field.Field>
@@ -310,7 +310,7 @@
 						<Input
 							id="target-prefix"
 							name="pathPrefix"
-							placeholder="skiff/backups"
+							placeholder="yoal/backups"
 							spellcheck="false"
 							class="font-mono text-sm"
 						/>
@@ -359,7 +359,7 @@
 							<Field.Content>
 								<Field.Label for="target-object-lock">Bucket uses object lock</Field.Label>
 								<Field.Description
-									>The bucket enforces S3 object lock on what Skiff writes.</Field.Description
+									>The bucket enforces S3 object lock on what Yoal writes.</Field.Description
 								>
 							</Field.Content>
 						</Field.Field>

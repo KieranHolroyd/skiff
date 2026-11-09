@@ -2,15 +2,15 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_FEATURES, nodeCapabilities, nodeTaskLimits, type InlineFile } from '@skiff/contracts';
-import { createDb } from '@skiff/db';
+import { DEFAULT_FEATURES, nodeCapabilities, nodeTaskLimits, type InlineFile } from '@yoal/contracts';
+import { createDb } from '@yoal/db';
 import { buildPrincipal } from './orgs.ts';
 import { createCore, type Core } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import { sha256Hex } from './util.ts';
 
 /** Queue and function tools run by the target node (D124). */
-const dir = mkdtempSync(join(tmpdir(), 'skiff-node-tasks-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-node-tasks-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 let clock = Date.parse('2026-11-07T10:00:00Z');
@@ -39,7 +39,7 @@ const SOURCE = 'export default { async fetch() { return new Response("ok"); }, a
 const file = (path: string, content: string): InlineFile => ({ path, content, encoding: 'utf8' });
 const bundle = (overrides: Record<string, unknown>): InlineFile[] => [
 	file(
-		'skiff-function.json',
+		'yoal-function.json',
 		JSON.stringify({
 			version: 1,
 			main: 'index.js',
@@ -85,22 +85,22 @@ describe('node tasks', () => {
 	});
 
 	test('a broker that is not running refuses tasks', () => {
-		expect(() => core.nodeTasks.brokerTask(owner, 'jobs', 'broker.stream.peek', { stream: 'SKIFF_Q_jobs' })).toThrow(/pending/);
+		expect(() => core.nodeTasks.brokerTask(owner, 'jobs', 'broker.stream.peek', { stream: 'YOAL_Q_jobs' })).toThrow(/pending/);
 	});
 
 	test('an agent without the capability is refused up front, not left waiting', () => {
 		core.brokers.applyHeartbeat(nodeId, [{ id: brokerId, status: 'running', restarts: 0 }]);
-		expect(() => core.nodeTasks.brokerTask(owner, 'jobs', 'broker.stream.peek', { stream: 'SKIFF_Q_jobs' })).toThrow(/predates queue and function tools/);
+		expect(() => core.nodeTasks.brokerTask(owner, 'jobs', 'broker.stream.peek', { stream: 'YOAL_Q_jobs' })).toThrow(/predates queue and function tools/);
 		heartbeat(nodeToken, nodeId, [...nodeCapabilities]);
 	});
 
 	test('permissions, names and bodies are checked before anything is queued', () => {
-		expect(() => core.nodeTasks.brokerTask(viewer, 'jobs', 'broker.stream.peek', { stream: 'SKIFF_Q_jobs' })).toThrow(/broker:update/);
+		expect(() => core.nodeTasks.brokerTask(viewer, 'jobs', 'broker.stream.peek', { stream: 'YOAL_Q_jobs' })).toThrow(/broker:update/);
 		expect(() => core.nodeTasks.brokerTask(owner, 'jobs', 'broker.stream.peek', { stream: 'bad.name' })).toThrow();
 		expect(() => core.nodeTasks.brokerTask(owner, 'jobs', 'broker.queue.send', { queue: 'jobs', body: '{nope' })).toThrow(/not valid JSON/);
 		expect(() => core.nodeTasks.brokerTask(owner, 'jobs', 'broker.queue.send', { queue: 'jobs', body: 'x'.repeat(nodeTaskLimits.messageBytes + 1), contentType: 'text' })).toThrow();
 		expect(() => core.nodeTasks.brokerTask(owner, 'jobs', 'broker.queue.redrive', { from: 'jobs', to: 'jobs' })).toThrow(/different queue/);
-		expect(() => core.nodeTasks.brokerTask(otherOrg, 'jobs', 'broker.stream.peek', { stream: 'SKIFF_Q_jobs' })).toThrow(/not found/i);
+		expect(() => core.nodeTasks.brokerTask(otherOrg, 'jobs', 'broker.stream.peek', { stream: 'YOAL_Q_jobs' })).toThrow(/not found/i);
 		expect(core.nodeTasks.lease(nodeId).tasks).toEqual([]);
 	});
 
@@ -120,35 +120,35 @@ describe('node tasks', () => {
 		core.nodeTasks.complete('node_other', { results: [{ id: task.id, ok: true, result: {} }] });
 		expect(core.nodeTasks.get(owner, task.id).status).toBe('running');
 
-		const state = { stream: 'SKIFF_Q_jobs', messages: 3, bytes: 99, firstAt: '2026-11-07T10:00:00Z', lastAt: '2026-11-07T10:00:00Z' };
-		core.nodeTasks.complete(nodeId, { results: [{ id: task.id, ok: true, result: { stream: 'SKIFF_Q_jobs', sent: 3, seqs: [1, 2, 3], durationMs: 4, state } }] });
+		const state = { stream: 'YOAL_Q_jobs', messages: 3, bytes: 99, firstAt: '2026-11-07T10:00:00Z', lastAt: '2026-11-07T10:00:00Z' };
+		core.nodeTasks.complete(nodeId, { results: [{ id: task.id, ok: true, result: { stream: 'YOAL_Q_jobs', sent: 3, seqs: [1, 2, 3], durationMs: 4, state } }] });
 		const done = await core.nodeTasks.wait(owner, task, 10);
 		expect(done.status).toBe('succeeded');
 		expect(done.result).toMatchObject({ sent: 3, seqs: [1, 2, 3] });
 		expect(core.brokers.queues(owner, 'jobs').streams).toEqual([
-			expect.objectContaining({ stream: 'SKIFF_Q_jobs', queue: 'jobs', messages: 3, bytes: 99, retention: 'workqueue' }),
+			expect.objectContaining({ stream: 'YOAL_Q_jobs', queue: 'jobs', messages: 3, bytes: 99, retention: 'workqueue' }),
 		]);
 	});
 
 	test('a failure keeps the node’s message; a result of the wrong shape fails', async () => {
-		const peek = core.nodeTasks.brokerTask(owner, 'jobs', 'broker.stream.peek', { stream: 'SKIFF_Q_jobs' });
-		const purge = core.nodeTasks.brokerTask(owner, 'jobs', 'broker.stream.purge', { stream: 'SKIFF_Q_jobs' });
+		const peek = core.nodeTasks.brokerTask(owner, 'jobs', 'broker.stream.peek', { stream: 'YOAL_Q_jobs' });
+		const purge = core.nodeTasks.brokerTask(owner, 'jobs', 'broker.stream.purge', { stream: 'YOAL_Q_jobs' });
 		expect(core.nodeTasks.lease(nodeId).tasks.map((item) => item.id)).toEqual([peek.id, purge.id]);
 		core.nodeTasks.complete(nodeId, {
 			results: [
-				{ id: peek.id, ok: false, error: 'Stream SKIFF_Q_jobs does not exist on this broker.' },
+				{ id: peek.id, ok: false, error: 'Stream YOAL_Q_jobs does not exist on this broker.' },
 				{ id: purge.id, ok: true, result: { nonsense: true } },
 			],
 		});
-		expect(core.nodeTasks.get(owner, peek.id)).toMatchObject({ status: 'failed', error: 'Stream SKIFF_Q_jobs does not exist on this broker.' });
+		expect(core.nodeTasks.get(owner, peek.id)).toMatchObject({ status: 'failed', error: 'Stream YOAL_Q_jobs does not exist on this broker.' });
 		expect(core.nodeTasks.get(owner, purge.id).error).toMatch(/does not understand/);
 		await expect(core.nodeTasks.run(owner, core.nodeTasks.get(owner, peek.id))).rejects.toThrow(/does not exist/);
 	});
 
 	test('deleting a stream drops it from the listing', () => {
-		const task = core.nodeTasks.brokerTask(owner, 'jobs', 'broker.stream.delete', { stream: 'SKIFF_Q_jobs' });
+		const task = core.nodeTasks.brokerTask(owner, 'jobs', 'broker.stream.delete', { stream: 'YOAL_Q_jobs' });
 		core.nodeTasks.lease(nodeId);
-		core.nodeTasks.complete(nodeId, { results: [{ id: task.id, ok: true, result: { stream: 'SKIFF_Q_jobs', deleted: true } }] });
+		core.nodeTasks.complete(nodeId, { results: [{ id: task.id, ok: true, result: { stream: 'YOAL_Q_jobs', deleted: true } }] });
 		expect(core.brokers.queues(owner, 'jobs').streams).toEqual([]);
 	});
 
@@ -180,7 +180,7 @@ describe('node tasks', () => {
 		expect(() => core.nodeTasks.functionTask(owner, project, 'function.invoke', {})).toThrow(/no active function deployment/);
 		await core.uploads.deployInline(owner, project, bundle({ triggers: { crons: ['*/5 * * * *'], queues: [] } }), { promote: true });
 
-		expect(() => core.nodeTasks.functionTask(owner, project, 'function.invoke', { path: '/__skiff/scheduled' })).toThrow(/internal/);
+		expect(() => core.nodeTasks.functionTask(owner, project, 'function.invoke', { path: '/__yoal/scheduled' })).toThrow(/internal/);
 		expect(() => core.nodeTasks.functionTask(owner, project, 'function.invoke', { method: 'GET', body: 'x' })).toThrow(/no body/);
 		expect(() => core.nodeTasks.functionTask(owner, project, 'function.scheduled', { cron: '0 * * * *' })).toThrow(/Its crons: \*\/5/);
 		expect(() => core.nodeTasks.functionTask(viewer, project, 'function.invoke', {})).toThrow(/deployment:create/);
@@ -188,7 +188,7 @@ describe('node tasks', () => {
 		const invoke = core.nodeTasks.functionTask(owner, project, 'function.invoke', {
 			method: 'POST',
 			path: '/hook?x=1',
-			headers: { 'content-type': 'application/json', 'X-Skiff-Internal': '1' },
+			headers: { 'content-type': 'application/json', 'X-Yoal-Internal': '1' },
 			body: '{}',
 		});
 		expect(invoke.input).toEqual({ method: 'POST', path: '/hook?x=1', headers: { 'content-type': 'application/json' }, body: '{}' });

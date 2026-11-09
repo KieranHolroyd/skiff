@@ -1,21 +1,21 @@
 /**
  * Host commands in /usr/local that run code from the active release (falling back to
- * `previous`): the `skif`/`skiff` CLI (D33) and the operator scripts. Shared by the installer and
+ * `previous`): the `yoal` CLI (D33) and the operator scripts. Shared by the installer and
  * the release's `converge` hook, so a release that adds a command also installs it on hosts that
- * only ever run `skiff-update-self`.
+ * only ever run `yoal-update-self`.
  */
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
-export const CLI_COMMANDS = ['/usr/local/bin/skif', '/usr/local/bin/skiff'];
+export const CLI_COMMANDS = ['/usr/local/bin/yoal', '/usr/local/bin/yoal'];
 
 export const RELEASE_COMMANDS: Array<{ path: string; script: string; runner: 'sh' | 'bun' }> = [
-	{ path: '/usr/local/sbin/skiff-restore', script: 'repo/scripts/restore.sh', runner: 'sh' },
-	{ path: '/usr/local/sbin/skiff-restore-drill', script: 'repo/scripts/skiff-restore-drill.sh', runner: 'sh' },
-	{ path: '/usr/local/sbin/skiff-alert', script: 'repo/scripts/skiff-alert.ts', runner: 'bun' },
-	{ path: '/usr/local/sbin/skiff-recovery-kit', script: 'repo/scripts/recovery-kit.ts', runner: 'bun' },
-	{ path: '/usr/local/sbin/skiff-rotate-master-key', script: 'repo/scripts/rotate-master-key.ts', runner: 'bun' },
-	{ path: '/usr/local/sbin/skiff-uninstall', script: 'repo/scripts/uninstall.sh', runner: 'sh' },
+	{ path: '/usr/local/sbin/yoal-restore', script: 'repo/scripts/restore.sh', runner: 'sh' },
+	{ path: '/usr/local/sbin/yoal-restore-drill', script: 'repo/scripts/yoal-restore-drill.sh', runner: 'sh' },
+	{ path: '/usr/local/sbin/yoal-alert', script: 'repo/scripts/yoal-alert.ts', runner: 'bun' },
+	{ path: '/usr/local/sbin/yoal-recovery-kit', script: 'repo/scripts/recovery-kit.ts', runner: 'bun' },
+	{ path: '/usr/local/sbin/yoal-rotate-master-key', script: 'repo/scripts/rotate-master-key.ts', runner: 'bun' },
+	{ path: '/usr/local/sbin/yoal-uninstall', script: 'repo/scripts/uninstall.sh', runner: 'sh' },
 ];
 
 export interface CommandPaths {
@@ -25,13 +25,13 @@ export interface CommandPaths {
 
 export function cliCommandScript(paths: CommandPaths): string {
 	return `#!/bin/sh
-# Installed by the Skiff installer: the skif CLI from the active Skiff release.
+# Installed by the Yoal installer: the yoal CLI from the active Yoal release.
 for release in ${paths.optDir}/current ${paths.optDir}/previous; do
-	if [ -f "$release/cli/skif.js" ]; then
-		exec ${paths.bunBin} "$release/cli/skif.js" "$@"
+	if [ -f "$release/cli/yoal.js" ]; then
+		exec ${paths.bunBin} "$release/cli/yoal.js" "$@"
 	fi
 done
-echo "skif: no release under ${paths.optDir} ships the CLI; re-run the installer" >&2
+echo "yoal: no release under ${paths.optDir} ships the CLI; re-run the installer" >&2
 exit 1
 `;
 }
@@ -39,7 +39,7 @@ exit 1
 export function releaseCommandScript(command: (typeof RELEASE_COMMANDS)[number], paths: CommandPaths): string {
 	const exec = command.runner === 'sh' ? `/bin/sh "$release/${command.script}"` : `${paths.bunBin} "$release/${command.script}"`;
 	return `#!/bin/sh
-# Installed by the Skiff installer: runs ${command.script} from the active Skiff release.
+# Installed by the Yoal installer: runs ${command.script} from the active Yoal release.
 for release in ${paths.optDir}/current ${paths.optDir}/previous; do
 	if [ -f "$release/${command.script}" ]; then
 		exec ${exec} "$@"

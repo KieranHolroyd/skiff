@@ -14,7 +14,7 @@ import { deflateRawSync } from 'node:zlib';
 import { CliError } from './errors.ts';
 import { formatBytes } from './output.ts';
 
-/** Mirrors `limits` in @skiff/contracts (DESIGN §4). Keep in sync. */
+/** Mirrors `limits` in @yoal/contracts (DESIGN §4). Keep in sync. */
 export const CLI_LIMITS = {
 	artifactBytes: 500 * 1024 * 1024,
 	fileBytes: 25 * 1024 * 1024,
@@ -148,25 +148,25 @@ export async function readEntries(files: CollectedFile[]): Promise<ZipEntry[]> {
 	return entries;
 }
 
-/** Merge `spa: true` into `skiff.json` without touching the source tree. */
+/** Merge `spa: true` into `yoal.json` without touching the source tree. */
 export function applySpaConfig(entries: ZipEntry[]): ZipEntry[] {
-	const existing = entries.find((entry) => entry.path === 'skiff.json');
+	const existing = entries.find((entry) => entry.path === 'yoal.json');
 	let config: Record<string, unknown> = {};
 	if (existing) {
 		let parsed: unknown;
 		try {
 			parsed = JSON.parse(new TextDecoder().decode(existing.data));
 		} catch {
-			throw new CliError('skiff.json is not valid JSON; fix it before deploying with --spa.');
+			throw new CliError('yoal.json is not valid JSON; fix it before deploying with --spa.');
 		}
 		if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
-			throw new CliError('skiff.json must contain a JSON object.');
+			throw new CliError('yoal.json must contain a JSON object.');
 		config = parsed as Record<string, unknown>;
 	}
 	config.spa = true;
-	const next = entries.filter((entry) => entry.path !== 'skiff.json');
+	const next = entries.filter((entry) => entry.path !== 'yoal.json');
 	next.push({
-		path: 'skiff.json',
+		path: 'yoal.json',
 		data: new TextEncoder().encode(`${JSON.stringify(config, null, 2)}\n`),
 		mtimeMs: existing?.mtimeMs,
 	});

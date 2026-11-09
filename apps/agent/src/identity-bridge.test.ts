@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { identityDesiredSchema, identitySecretsSchema } from '@skiff/contracts';
+import { identityDesiredSchema, identitySecretsSchema } from '@yoal/contracts';
 import { IdentityBridge, type HelperIdentityApi } from '../src/identity-bridge.ts';
 
 type Call = { url: string; init: RequestInit & { unix?: string } };
@@ -79,7 +79,7 @@ function fakeBridge(options: {
 		return new Response('{}', { status: 404 });
 	};
 	const bridge = new IdentityBridge({
-		socketPath: '/run/skiff/identity.sock',
+		socketPath: '/run/yoal/identity.sock',
 		controlUrl: 'https://cloud.example.com',
 		nodeToken: 'node-token',
 		version: '1.2.3',
@@ -110,7 +110,7 @@ describe('identity agent bridge', () => {
 		expect(JSON.parse(String(state.init.body)).generation).toBe(7);
 
 		const pushedSecrets = calls.find(
-			(call) => call.url.startsWith('http://skiff-identity') && call.url.endsWith('/secrets'),
+			(call) => call.url.startsWith('http://yoal-identity') && call.url.endsWith('/secrets'),
 		)!;
 		expect(pushedSecrets).toBeDefined();
 		expect(String(pushedSecrets.init.body)).toContain('super-secret-client-value');
@@ -168,7 +168,7 @@ describe('identity agent bridge', () => {
 	test('public clients work when the secret fetch is unavailable', async () => {
 		const calls: Call[] = [];
 		const bridge = new IdentityBridge({
-			socketPath: '/run/skiff/identity.sock',
+			socketPath: '/run/yoal/identity.sock',
 			helper: { identityStart: async () => undefined, identityStop: async () => undefined },
 			controlUrl: 'https://cloud.example.com',
 			nodeToken: 'node-token',
@@ -187,7 +187,7 @@ describe('identity agent bridge', () => {
 		expect(bridge.isHealthy).toBe(true);
 		expect(
 			calls.some(
-				(call) => call.url.startsWith('http://skiff-identity') && call.url.endsWith('/secrets'),
+				(call) => call.url.startsWith('http://yoal-identity') && call.url.endsWith('/secrets'),
 			),
 		).toBe(false);
 	});

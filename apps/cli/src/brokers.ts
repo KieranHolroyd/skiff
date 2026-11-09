@@ -1,6 +1,6 @@
 /**
  * Managed queue brokers (docs/BROKERS.md, D111): the wire types the CLI reads, and pure formatting
- * for `skif broker`. Types mirror `packages/contracts/src/broker.ts`; the CLI bundle stays free of
+ * for `yoal broker`. Types mirror `packages/contracts/src/broker.ts`; the CLI bundle stays free of
  * runtime dependencies (D40), so keep them in sync.
  */
 import { UsageError } from './errors.ts';
@@ -14,7 +14,7 @@ import {
 } from './node-tasks.ts';
 import { formatBytes, formatNumber, formatTime, plural, renderTable, truncate } from './output.ts';
 
-/** Mirrors `brokerEngines` in @skiff/contracts. Keep in sync; the server validates. */
+/** Mirrors `brokerEngines` in @yoal/contracts. Keep in sync; the server validates. */
 export const BROKER_ENGINES = ['nats'] as const;
 
 export type BrokerStatus = 'pending' | 'starting' | 'running' | 'failed' | 'stopped';
@@ -173,7 +173,7 @@ export function brokerTable(brokers: BrokerView[]): string {
 	return renderTable(['NAME', 'STATUS', 'ENGINE', 'NODE', 'MEMORY / STORE', 'PROJECTS', 'CREATED'], rows);
 }
 
-/** The `skif broker info` report. */
+/** The `yoal broker info` report. */
 export function brokerDetails(view: BrokerView): string {
 	const lines: string[] = [];
 	const field = (label: string, value: string) => lines.push(`${label.padEnd(10)}  ${value}`);
@@ -217,7 +217,7 @@ export function formatAge(seconds: number): string {
 
 const whole = (value: number) => formatNumber(Math.round(value));
 
-/** `skif broker metrics`: the newest sample, then totals over the range. */
+/** `yoal broker metrics`: the newest sample, then totals over the range. */
 export function brokerMetricsSummary(points: BrokerMetricPoint[], storageMb: number): string {
 	const sorted = [...points].sort((a, b) => a.bucket.localeCompare(b.bucket));
 	const latest = sorted.at(-1);
@@ -251,7 +251,7 @@ export function brokerMetricsSummary(points: BrokerMetricPoint[], storageMb: num
 	return lines.join('\n');
 }
 
-/** `skif broker metrics` sample rows. */
+/** `yoal broker metrics` sample rows. */
 export function brokerMetricsTable(points: BrokerMetricPoint[]): string {
 	const sorted = [...points].sort((a, b) => a.bucket.localeCompare(b.bucket));
 	return renderTable(
@@ -271,7 +271,7 @@ export function brokerMetricsTable(points: BrokerMetricPoint[]): string {
 	);
 }
 
-/** `skif broker queues`: one row per stream, consumers indented below it. */
+/** `yoal broker queues`: one row per stream, consumers indented below it. */
 export function brokerQueuesTable(view: BrokerQueuesView): string {
 	const listed = view.at ? Date.parse(view.at) : Number.NaN;
 	const rows: string[][] = [];
@@ -308,7 +308,7 @@ export function brokerQueuesTable(view: BrokerQueuesView): string {
 
 // --- queue tools (D124) -----------------------------------------------------
 
-/** Mirrors `functionQueueNameSchema` in @skiff/contracts. */
+/** Mirrors `functionQueueNameSchema` in @yoal/contracts. */
 const QUEUE_NAME = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
 export function assertQueueName(value: string, what = 'queue'): void {
@@ -329,7 +329,7 @@ export function queueOfStream(stream: string): string | null {
 }
 
 /**
- * The stream a queue command acts on: a function queue name maps to `SKIFF_Q_<queue>`, and
+ * The stream a queue command acts on: a function queue name maps to `YOAL_Q_<queue>`, and
  * `--stream` names a raw JetStream stream. Exactly one of the two.
  */
 export function resolveStream(queue: string | undefined, stream: string | undefined): { stream: string; label: string } {
@@ -392,7 +392,7 @@ export function formatSeqs(seqs: number[]): string {
 	return parts.join(', ');
 }
 
-/** `skif broker send`: what was stored where. */
+/** `yoal broker send`: what was stored where. */
 export function sendSummary(result: BrokerQueueSendResult, delaySeconds?: number): string {
 	const queue = queueOfStream(result.stream);
 	const where = queue ? `queue ${queue}` : `stream ${result.stream}`;
@@ -426,7 +426,7 @@ export function formatPeekedBody(message: PeekedMessage): string {
 	return body;
 }
 
-/** The Skiff queue headers as one short line, then any other headers. */
+/** The Yoal queue headers as one short line, then any other headers. */
 export function peekedHeaderLines(message: PeekedMessage): string[] {
 	const headers = message.headers;
 	const facts: string[] = [];
@@ -445,7 +445,7 @@ export function peekedHeaderLines(message: PeekedMessage): string[] {
 	return [...(facts.length > 0 ? [facts.join(' · ')] : []), ...others];
 }
 
-/** `skif broker peek`: a header line, then each message with its body indented. */
+/** `yoal broker peek`: a header line, then each message with its body indented. */
 export function peekReport(result: BrokerStreamPeekResult, nextCommand?: (seq: number) => string): string {
 	const queue = queueOfStream(result.stream);
 	const name = queue ? `${queue} (${result.stream})` : result.stream;

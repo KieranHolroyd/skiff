@@ -7,7 +7,7 @@ import {
 	identityHealth,
 	importIdentityKeyBundle,
 } from '../src/state.ts';
-import { identityDesiredSchema, identitySecretsSchema, identityKeyBundleSchema } from '@skiff/contracts';
+import { identityDesiredSchema, identitySecretsSchema, identityKeyBundleSchema } from '@yoal/contracts';
 
 /** The subset of the migrated identity schema these helpers touch. */
 function identityDb(): Database {

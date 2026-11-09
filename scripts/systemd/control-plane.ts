@@ -3,9 +3,9 @@
  *
  * Zero-downtime updates use two units and one stable socket path:
  *
- *   skiff-control-plane.service          primary: runs /opt/skiff/current, socket control-primary.sock
- *   skiff-control-plane-standby.service  standby: runs /opt/skiff/standby, socket control-standby.sock
- *   /run/skiff/control.sock              symlink to whichever socket serves now
+ *   yoal-control-plane.service          primary: runs /opt/yoal/current, socket control-primary.sock
+ *   yoal-control-plane-standby.service  standby: runs /opt/yoal/standby, socket control-standby.sock
+ *   /run/yoal/control.sock              symlink to whichever socket serves now
  *
  * Caddy, the agent, the CLI and every script keep talking to control.sock. The updater boots the
  * incoming release as the standby, proves it healthy, and renames control.sock to point at it
@@ -13,10 +13,10 @@
  * bake it restarts the primary on the new release and points control.sock back. The standby is
  * never enabled, so a reboot always comes up on the primary and `current`.
  *
- * Both want (never require) skiff-clickhouse.service, the hot telemetry store: they start after it
+ * Both want (never require) yoal-clickhouse.service, the hot telemetry store: they start after it
  * when it is installed and boot fine without it (telemetry then reports unavailable).
  *
- * The standby runs with SKIFF_STANDBY=1: no maintenance loop, no operation resume. Exactly one
+ * The standby runs with YOAL_STANDBY=1: no maintenance loop, no operation resume. Exactly one
  * process (the primary) owns background work at any time.
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -24,9 +24,9 @@ import { join } from 'node:path';
 import { CLICKHOUSE_UNIT } from './clickhouse.ts';
 import { credentialDirective, sealedPathFor } from '../install/master-key.ts';
 
-export const PRIMARY_UNIT = 'skiff-control-plane.service';
-export const STANDBY_UNIT = 'skiff-control-plane-standby.service';
-export const GUARD_UNIT = 'skiff-update-guard.service';
+export const PRIMARY_UNIT = 'yoal-control-plane.service';
+export const STANDBY_UNIT = 'yoal-control-plane-standby.service';
+export const GUARD_UNIT = 'yoal-update-guard.service';
 
 export interface ControlPlanePaths {
 	optDir: string;
@@ -34,7 +34,7 @@ export interface ControlPlanePaths {
 	varDir: string;
 	envFile: string;
 	/**
-	 * The plaintext path (`/etc/skiff/master.key`). The unit body always names it; when the key
+	 * The plaintext path (`/etc/yoal/master.key`). The unit body always names it; when the key
 	 * is sealed (`master.key.cred` beside it) a drop-in switches the unit to
 	 * `LoadCredentialEncrypted=` (see `ensureMasterKeyDropIns`).
 	 */
@@ -44,12 +44,12 @@ export interface ControlPlanePaths {
 }
 
 export const DEFAULT_CONTROL_PLANE_PATHS: ControlPlanePaths = {
-	optDir: '/opt/skiff',
-	runDir: '/run/skiff',
-	varDir: '/var/lib/skiff',
-	envFile: '/etc/skiff/skiff.env',
-	masterKeyFile: '/etc/skiff/master.key',
-	updateCommand: '/usr/local/sbin/skiff-update-self',
+	optDir: '/opt/yoal',
+	runDir: '/run/yoal',
+	varDir: '/var/lib/yoal',
+	envFile: '/etc/yoal/yoal.env',
+	masterKeyFile: '/etc/yoal/master.key',
+	updateCommand: '/usr/local/sbin/yoal-update-self',
 };
 
 export function socketPaths(runDir = DEFAULT_CONTROL_PLANE_PATHS.runDir) {
@@ -80,8 +80,8 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-User=skiff
-Group=skiff
+User=yoal
+Group=yoal
 SupplementaryGroups=caddy
 UMask=0007
 WorkingDirectory=${root}/repo/apps/control-plane
@@ -91,7 +91,7 @@ Environment=SOCKET_PATH=${paths.runDir}/${input.socketName}
 Environment=PROTOCOL_HEADER=x-forwarded-proto
 Environment=HOST_HEADER=x-forwarded-host
 Environment=BODY_SIZE_LIMIT=520M
-Environment=SKIFF_MASTER_KEY_FILE=%d/master-key
+Environment=YOAL_MASTER_KEY_FILE=%d/master-key
 ${(input.extraEnv ?? []).map((line) => `Environment=${line}\n`).join('')}LoadCredential=master-key:${paths.masterKeyFile}
 ${input.preStart ? `ExecStartPre=${input.preStart}\n` : ''}ExecStart=${root}/runtime/bun ${root}/repo/apps/control-plane/build/index.js
 Restart=on-failure
@@ -142,7 +142,7 @@ function primaryPreStart(runDir: string): string {
 export function controlPlaneUnits(paths: ControlPlanePaths = DEFAULT_CONTROL_PLANE_PATHS): Record<string, string> {
 	return {
 		[PRIMARY_UNIT]: serviceBody({
-			description: 'Skiff control plane (dashboard, REST, MCP)',
+			description: 'Yoal control plane (dashboard, REST, MCP)',
 			slot: 'current',
 			socketName: 'control-primary.sock',
 			paths,
@@ -150,19 +150,19 @@ export function controlPlaneUnits(paths: ControlPlanePaths = DEFAULT_CONTROL_PLA
 			install: true,
 		}),
 		[STANDBY_UNIT]: serviceBody({
-			description: 'Skiff control plane standby (serves during zero-downtime updates)',
+			description: 'Yoal control plane standby (serves during zero-downtime updates)',
 			slot: 'standby',
 			socketName: 'control-standby.sock',
 			paths,
-			extraEnv: ['SKIFF_STANDBY=1'],
+			extraEnv: ['YOAL_STANDBY=1'],
 			install: false,
 		}),
 		[GUARD_UNIT]: `[Unit]
-Description=Skiff update guard (reverts an update interrupted by a crash or reboot)
-Documentation=https://github.com/KieranHolroyd/skiff/blob/main/docs/OPS.md
+Description=Yoal update guard (reverts an update interrupted by a crash or reboot)
+Documentation=https://github.com/KieranHolroyd/yoal/blob/main/docs/OPS.md
 DefaultDependencies=no
 After=local-fs.target
-Before=${PRIMARY_UNIT} ${STANDBY_UNIT} skiff-litestream.service
+Before=${PRIMARY_UNIT} ${STANDBY_UNIT} yoal-litestream.service
 ConditionPathExists=${paths.optDir}/update-state.json
 
 [Service]
@@ -187,7 +187,7 @@ export interface EnsureControlPlaneUnitsInput {
 }
 
 /** Drop-in file name, under `<unit>.d/`, for both control-plane slots. */
-export const MASTER_KEY_DROP_IN = 'skiff-master-key.conf';
+export const MASTER_KEY_DROP_IN = 'yoal-master-key.conf';
 
 /**
  * Drop-in that swaps the plaintext credential for the sealed one. A drop-in rather than the unit
@@ -195,7 +195,7 @@ export const MASTER_KEY_DROP_IN = 'skiff-master-key.conf';
  * the drop-in survives that. The empty `LoadCredential=` clears the body's plaintext entry.
  */
 export function masterKeyDropIn(sealedPath: string): string {
-	return `# Installed by Skiff: the master key is sealed with systemd-creds (docs/OPS.md §1, §10).
+	return `# Installed by Yoal: the master key is sealed with systemd-creds (docs/OPS.md §1, §10).
 [Service]
 LoadCredential=
 ${credentialDirective({ kind: 'sealed', path: sealedPath })}

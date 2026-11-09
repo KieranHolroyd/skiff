@@ -1,6 +1,6 @@
 import { fail } from '@sveltejs/kit';
-import { metricsSections, type MetricsExportSettingsUpdate } from '@skiff/contracts';
-import { ValidationError } from '@skiff/core';
+import { metricsSections, type MetricsExportSettingsUpdate } from '@yoal/contracts';
+import { ValidationError } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import { formBoolean, formString } from '../../_lib/errors.js';
 import { requireOwnerPage } from '../_platform.server.js';

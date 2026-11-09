@@ -117,13 +117,13 @@ describe('resolveSsoPreset', () => {
 	});
 
 	test('authentik builds the per-application issuer with its trailing slash', () => {
-		const config = resolveSsoPreset('authentik', { serverUrl: 'https://auth.example.com', slug: 'skiff' });
-		expect(config.issuer).toBe('https://auth.example.com/application/o/skiff/');
+		const config = resolveSsoPreset('authentik', { serverUrl: 'https://auth.example.com', slug: 'yoal' });
+		expect(config.issuer).toBe('https://auth.example.com/application/o/yoal/');
 		expect(config.discoveryUrl).toBe(
-			'https://auth.example.com/application/o/skiff/.well-known/openid-configuration'
+			'https://auth.example.com/application/o/yoal/.well-known/openid-configuration'
 		);
 		expect(
-			resolveSsoPreset('authentik', { serverUrl: 'https://auth.example.com/application/o/skiff/' }).issuer
+			resolveSsoPreset('authentik', { serverUrl: 'https://auth.example.com/application/o/yoal/' }).issuer
 		).toBe(config.issuer);
 		expect(
 			fieldError(() => resolveSsoPreset('authentik', { serverUrl: 'https://auth.example.com', slug: 'Bad Slug' }))
@@ -147,7 +147,7 @@ describe('detectSsoPreset', () => {
 		jumpcloud: {},
 		pingone: { region: 'com.au', environmentId: ENV },
 		keycloak: { serverUrl: 'https://sso.example.com', realm: 'acme corp' },
-		authentik: { serverUrl: 'https://auth.example.com/sub', slug: 'skiff' },
+		authentik: { serverUrl: 'https://auth.example.com/sub', slug: 'yoal' },
 		gitlab: { serverUrl: 'https://gitlab.com' },
 		forgejo: { serverUrl: 'https://codeberg.org' },
 		gitea: { serverUrl: 'https://gitea.example.com' }

@@ -2,7 +2,7 @@ import {
 	endpointPortRange,
 	type ServiceEndpoint,
 	type ServiceKind,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 
 /**
  * Service endpoint planning (docs/CLUSTERING.md §4.3, phase C2).

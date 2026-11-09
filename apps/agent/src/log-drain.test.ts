@@ -3,7 +3,7 @@ import {
 	desiredStateSchema,
 	type DesiredState,
 	type RuntimeLogBatch,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type {
 	HelperApi,
 	HelperLogResult,

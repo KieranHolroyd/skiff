@@ -3,7 +3,7 @@ import type {
 	PipelineRunSummary,
 	PipelineRunView,
 	PipelineTriggerView
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { fetchJson } from '#lib/query.js';
 
 /** Client reads over `/api/v1/repositories` (docs/PIPELINES.md §8); writes go through form actions. */

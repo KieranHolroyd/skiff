@@ -4,12 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { renderConfig, WireguardManager, type CommandResult, type CommandRunner } from './wireguard.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-wireguard-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-wireguard-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 const publicKey = `${'A'.repeat(43)}=`;
 const state = {
-	mode: 'skiff' as const,
+	mode: 'yoal' as const,
 	address: '10.88.1.5',
 	cidr: '10.88.0.0/22',
 	mtu: 1420,
@@ -84,7 +84,7 @@ describe('WireguardManager', () => {
 
 	test('rejects an invalid state', async () => {
 		const manager = new WireguardManager({ paths: { dir: join(dir, 'bad') }, runner: fakeRunner([]) });
-		await expect(manager.apply({ mode: 'skiff', address: 'nope', mtu: 9000, listenPort: 0, peers: [] })).rejects.toThrow();
+		await expect(manager.apply({ mode: 'yoal', address: 'nope', mtu: 9000, listenPort: 0, peers: [] })).rejects.toThrow();
 	});
 });
 

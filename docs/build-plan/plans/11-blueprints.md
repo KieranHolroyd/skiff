@@ -1,13 +1,13 @@
-# 11 — Stack blueprints: `skiff.yaml` with plan/apply
+# 11 — Stack blueprints: `yoal.yaml` with plan/apply
 
 **Priority:** P1 · **Effort:** M · **Lane:** D · **Wave:** 2–3
-**Status:** v1 implemented 2026-11-07 behind `SKIFF_FEATURE_BLUEPRINTS` (design: docs/OPERATIONS.md §12).
-Built: file `skiff.blueprint.yaml|yml|json` naming a *stack* (`name:`) with `projects`
+**Status:** v1 implemented 2026-11-07 behind `YOAL_FEATURE_BLUEPRINTS` (design: docs/OPERATIONS.md §12).
+Built: file `yoal.blueprint.yaml|yml|json` naming a *stack* (`name:`) with `projects`
 (environments, domains, workload settings), `databases`, `storage` (+ buckets), `brokers` and
 `attachments`; strict validation with paths; plan as a `blueprint.apply` operation with a stable
 `planHash`; idempotent apply that stops at the first failure (no compensation; re-plan lists what
 is left); opt-in prune with typed confirmation; `blueprints` stack table (0071); REST
-`/api/v1/blueprints/{validate,plan,apply}`; CLI `skif blueprint validate|plan|apply`; MCP
+`/api/v1/blueprints/{validate,plan,apply}`; CLI `yoal blueprint validate|plan|apply`; MCP
 `plan_stack`/`apply_stack`/`get_task`; dashboard `/new/blueprint`. Differs from the design below:
 one stack spans several projects (not `project:` + `services:`), REST is under `/blueprints`, not
 `/projects/:slug/blueprint`. Not built: jobs, volumes, previews, static `path` uploads, env per
@@ -20,8 +20,8 @@ environment, drift badge, `export`, JSON Schema, `--lenient`, compensation.
 
 ## Goal
 
-Make a whole stack declarative: one `skiff.yaml` describes the site, database, bucket, jobs,
-volumes, env, domains, access, and preview policy. `skiff plan` shows the diff; `skiff apply`
+Make a whole stack declarative: one `yoal.yaml` describes the site, database, bucket, jobs,
+volumes, env, domains, access, and preview policy. `yoal plan` shows the diff; `yoal apply`
 creates or updates it through the existing service layer; a re-apply is a no-op.
 
 ## Non-goals
@@ -37,7 +37,7 @@ creates or updates it through the existing service layer; a re-apply is a no-op.
   `workloads`, `databases`, `storage`, `volumes`, `domains`, `jobs`.
 - The `Operation` primitive (`packages/core/src/operations/`) already supports plan → apply,
   resumability, and progress for bulk delete/restore/prune.
-- `skiff.json` is a *site* config (`spa`, `cleanUrls`, `trailingSlash`, `notFound`), not a stack.
+- `yoal.json` is a *site* config (`spa`, `cleanUrls`, `trailingSlash`, `notFound`), not a stack.
 - No declarative project spec, diff, drift detection, or import/export.
 
 ## Design
@@ -45,7 +45,7 @@ creates or updates it through the existing service layer; a re-apply is a no-op.
 ### Schema (v1)
 
 ```yaml
-apiVersion: skiff/v1
+apiVersion: yoal/v1
 project: my-app
 environments:
   production:
@@ -117,7 +117,7 @@ previews:
   maxConcurrent: 5
 ```
 
-- Secrets are **references**, never values. `skiff apply` resolves them from the project's secret
+- Secrets are **references**, never values. `yoal apply` resolves them from the project's secret
   store; a missing secret is a plan error.
 - `apiVersion` is required; unknown fields are errors (strict schema), with a `--lenient` escape
   hatch.
@@ -136,12 +136,12 @@ previews:
   - Execute in dependency order; compensate on failure (delete created resources, keep existing).
   - Record `appliedHash` and `appliedAt` on the project; a re-apply with the same hash is a no-op.
   - `--prune` deletes resources absent from the file, with a typed confirmation and a plan diff.
-- `skiff plan` prints a human table and `--json`; `skiff apply` requires `--yes` in CI or a
+- `yoal plan` prints a human table and `--json`; `yoal apply` requires `--yes` in CI or a
   confirmation in a TTY.
 
 ### Drift
 
-- `skiff plan` re-reads live state and compares to the file; a changed field shows `update`.
+- `yoal plan` re-reads live state and compares to the file; a changed field shows `update`.
 - Drift detection is advisory; never auto-reconcile in v1.
 - Store the last applied doc (or hash + normalized JSON) for comparison and export.
 
@@ -150,9 +150,9 @@ previews:
 - REST: `POST /api/v1/projects/:slug/blueprint/plan`, `POST …/apply`, `GET …/blueprint`,
   `GET /api/v1/blueprints/schema` (JSON Schema for editors).
 - MCP: `plan_stack`, `apply_stack`, `get_stack`, `export_stack` (no secrets).
-- CLI: `skif plan`, `skif apply`, `skif export`, `skif blueprint validate`.
+- CLI: `yoal plan`, `yoal apply`, `yoal export`, `yoal blueprint validate`.
 - Dashboard: "Import YAML", plan diff, apply progress, last applied, drift badge.
-- Editor support: publish `skiff.schema.json` and a VS Code snippet in `docs/`.
+- Editor support: publish `yoal.schema.json` and a VS Code snippet in `docs/`.
 
 ## Implementation order
 
@@ -167,7 +167,7 @@ previews:
 
 ## Acceptance criteria
 
-- [ ] A `skiff.yaml` with a static site, Postgres, bucket, attachment, and domain applies in one
+- [ ] A `yoal.yaml` with a static site, Postgres, bucket, attachment, and domain applies in one
       command; a second apply is a no-op.
 - [ ] `plan` shows create/update/delete/noop with a stable hash; `--json` is machine-readable.
 - [ ] A missing secret fails the plan, not the apply.
@@ -195,7 +195,7 @@ previews:
 
 ## Rollout
 
-`SKIFF_FEATURE_BLUEPRINTS` off by default. Start with read-only `plan` for existing projects; enable
+`YOAL_FEATURE_BLUEPRINTS` off by default. Start with read-only `plan` for existing projects; enable
 apply for new projects; enable `--prune` last.
 
 ## Open questions
@@ -203,7 +203,7 @@ apply for new projects; enable `--prune` last.
 - Do we store the doc in the repo only, or also in the DB? Store the normalized doc + hash in the
   DB for drift/export; the repo is the source of truth.
 - Should `apply` deploy the app or only provision? Provision + attach; deploy is a separate
-  `skif deploy` unless `services.web.path` is present (then deploy).
+  `yoal deploy` unless `services.web.path` is present (then deploy).
 - How do we handle a rename? Stable keys; a rename is delete+create, warned in the plan.
 
 ## File ownership

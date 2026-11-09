@@ -21,7 +21,7 @@ long tail, instead of a 750-template catalogue.
 
 ## Current state
 
-- `skiff.yaml` blueprints (11) are the packaging mechanism; this plan consumes them.
+- `yoal.yaml` blueprints (11) are the packaging mechanism; this plan consumes them.
 - Resources exist; no stack registry, install record, upgrade path, or compose importer.
 - Coolify/Easypanel template staleness is a known failure: `:latest`, wrong images, stale releases,
   upgrades that break data.
@@ -33,7 +33,7 @@ long tail, instead of a 750-template catalogue.
 A stack is a blueprint with parameters and metadata:
 
 ```yaml
-apiVersion: skiff/stack/v1
+apiVersion: yoal/stack/v1
 name: n8n
 version: 1.4.0
 description: Workflow automation with Postgres
@@ -88,14 +88,14 @@ backups:
 
 ### Compose import
 
-- `skif stack import compose.yml` translates a subset:
+- `yoal stack import compose.yml` translates a subset:
   - `services.<name>.image` (digest or tag), `command`, `ports`, `environment`, `volumes` (named
     only), `depends_on`, `healthcheck`.
   - Reject `privileged`, `network_mode: host`, `cap_add`, `devices`, bind mounts, `build` (or map
     build to a git build later), and unknown top-level keys.
   - Map named volumes to app volumes (07); map a Postgres/Redis service to a managed database only
     if the image is recognized and the user opts in; otherwise run it as a container with a volume.
-  - Emit a `skiff.yaml` plan for review; never apply directly.
+  - Emit a `yoal.yaml` plan for review; never apply directly.
 - This is a convenience, not a compatibility promise; print a warning for each unsupported key.
 
 ### Stack catalogue (first 15)
@@ -121,7 +121,7 @@ MinIO/RustFS console.
 
 ## Acceptance criteria
 
-- [ ] `skif stack install n8n --param domain=n8n.example.com` creates the app, Postgres, env,
+- [ ] `yoal stack install n8n --param domain=n8n.example.com` creates the app, Postgres, env,
       domain, and backup schedule; the app is healthy.
 - [ ] A stack manifest with a floating tag is rejected in CI and at install.
 - [ ] Uninstall soft-deletes data for 7 days and requires typed confirmation.

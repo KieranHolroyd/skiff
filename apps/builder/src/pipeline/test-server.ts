@@ -5,7 +5,7 @@ import type {
 	PipelineLogBatch,
 	PipelineStepReport,
 	PipelineStepSpec,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 
 /**
  * An in-process fake of the job API (`/api/pipeline/*`) for step runner and executor tests:
@@ -177,7 +177,7 @@ export function jobClaim(input: {
 		token: input.token ?? 'job-token-123',
 		repository: { id: 'repo_1', name: 'acme/app', cloneUrl: input.cloneUrl ?? 'https://github.com/acme/app.git' },
 		checkout: { ref: 'refs/heads/main', sha: input.sha ?? 'a'.repeat(40) },
-		workflow: { name: 'ci', path: '.skiff/workflows/ci.yml' },
+		workflow: { name: 'ci', path: '.yoal/workflows/ci.yml' },
 		job: {
 			key: 'test',
 			name: 'test',
@@ -200,7 +200,7 @@ export function jobClaim(input: {
 		workflowEnv: input.workflowEnv ?? {},
 		workflowDefaults: { shell: null, workingDirectory: null },
 		context: {
-			skiff: { event_name: 'push', actor: 'kieran', server_url: 'https://control.test', repository: 'acme/app' },
+			yoal: { event_name: 'push', actor: 'kieran', server_url: 'https://control.test', repository: 'acme/app' },
 			matrix: { node: '24' },
 		},
 		secretNames: [],

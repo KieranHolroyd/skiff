@@ -3,7 +3,7 @@ import {
 	type DesiredState,
 	type ShareMountDesired,
 	type ShareMountReport,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 
 /**
  * Keeps `shareMounts` mounted and `shareUnmounts` unmounted (docs/STORAGE.md §3, D143).

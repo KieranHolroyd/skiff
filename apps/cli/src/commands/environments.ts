@@ -11,7 +11,7 @@ import { confirmOrRefuse } from './run-operation.ts';
  * switches the running release.
  */
 
-const usage = `Usage: skif environments <command> [options]
+const usage = `Usage: yoal environments <command> [options]
 
 Commands:
   list <project>                       List environments (the default)
@@ -26,18 +26,18 @@ Options:
       --slug <slug>                    Explicit slug (create; default: from the name)
       --access <mode>                  public, password, platform or access
       --password <value>               Password for password mode
-      --policy <id>                    Skiff Access policy for access mode (none clears it)
+      --policy <id>                    Yoal Access policy for access mode (none clears it)
   -y, --yes                            Don't ask before removing
       --json                           JSON output
   -h, --help                           Show this help
 
 Examples:
-  skif environments list shop
-  skif environments create shop staging
-  skif environments create shop preview --access password --password 'correct horse'
-  skif environments update shop staging --access platform
-  skif environments promote shop staging dpl_abc123
-  skif environments remove shop staging --yes`;
+  yoal environments list shop
+  yoal environments create shop staging
+  yoal environments create shop preview --access password --password 'correct horse'
+  yoal environments update shop staging --access platform
+  yoal environments promote shop staging dpl_abc123
+  yoal environments remove shop staging --yes`;
 
 const baseFlags: FlagSpec = {
 	project: { type: 'string', short: 'p' },
@@ -84,7 +84,7 @@ function projectOf(args: ReturnType<typeof parseArgs>, index = 0): string {
 	const flag = args.string('project');
 	const positional = args.positionals[index];
 	const project = flag ?? positional;
-	if (!project) throw new UsageError('Name the project: skif environments list <project>.');
+	if (!project) throw new UsageError('Name the project: yoal environments list <project>.');
 	return project;
 }
 
@@ -104,7 +104,7 @@ async function listEnvironments(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif environments list <project> [--json]');
+	rejectExtraPositionals(args, 1, 'Usage: yoal environments list <project> [--json]');
 	const project = projectOf(args);
 	const client = await authenticatedClient();
 	const { environments, raw } = await client.listEnvironments(project);
@@ -125,7 +125,7 @@ async function createEnvironment(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 2, 'Usage: skif environments create <project> <name>');
+	rejectExtraPositionals(args, 2, 'Usage: yoal environments create <project> <name>');
 	const project = projectOf(args);
 	const name = requirePositional(args, 1, 'environment name');
 	const client = await authenticatedClient();
@@ -152,7 +152,7 @@ async function updateEnvironment(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 2, 'Usage: skif environments update <project> <env> [options]');
+	rejectExtraPositionals(args, 2, 'Usage: yoal environments update <project> <env> [options]');
 	const project = projectOf(args);
 	const env = requirePositional(args, 1, 'environment slug');
 	const input: { name?: string; access?: string; password?: string; policyId?: string | null } = {};
@@ -183,7 +183,7 @@ async function removeEnvironment(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 2, 'Usage: skif environments remove <project> <env> [--yes]');
+	rejectExtraPositionals(args, 2, 'Usage: yoal environments remove <project> <env> [--yes]');
 	const project = projectOf(args);
 	const env = requirePositional(args, 1, 'environment slug');
 	await confirmOrRefuse(
@@ -205,7 +205,7 @@ async function promoteEnvironment(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 3, 'Usage: skif environments promote <project> <env> <deployment-id>');
+	rejectExtraPositionals(args, 3, 'Usage: yoal environments promote <project> <env> <deployment-id>');
 	const project = projectOf(args);
 	const env = requirePositional(args, 1, 'environment slug');
 	const deploymentId = requirePositional(args, 2, 'deployment id');

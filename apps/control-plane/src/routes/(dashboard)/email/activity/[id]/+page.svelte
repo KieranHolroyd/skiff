@@ -1,13 +1,13 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import FolderKanbanIcon from '@lucide/svelte/icons/folder-kanban';
 	import MailIcon from '@lucide/svelte/icons/mail';
 	import TagIcon from '@lucide/svelte/icons/tag';
 	import UsersIcon from '@lucide/svelte/icons/users';
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import DetailList from '#lib/components/yoal/DetailList.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import * as Table from '#lib/components/ui/table/index.js';
 	import Panel from '../../../_lib/Panel.svelte';
@@ -28,7 +28,7 @@
 </script>
 
 <svelte:head>
-	<title>{message.subject || message.id} · Email · Skiff</title>
+	<title>{message.subject || message.id} · Email · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">

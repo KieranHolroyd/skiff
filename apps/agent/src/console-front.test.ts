@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { CONTAINER_CONSOLE_TOKEN_HEADER, type ContainerConsoleActivation } from '@skiff/contracts';
+import { CONTAINER_CONSOLE_TOKEN_HEADER, type ContainerConsoleActivation } from '@yoal/contracts';
 import { ConsoleFront, ConsoleRefusal, controlPlaneConsoleActivationFetcher } from './console-front.ts';
 
 const EXEC_ID = 'cx_abcdefghijklmnopqrstuvwx';
@@ -34,7 +34,7 @@ function setup(tokens: Record<string, ContainerConsoleActivation>) {
 				if (path.includes('/stream'))
 					return new Response('event: data\ndata: aGk=\n\n', { headers: { 'content-type': 'text/event-stream' } });
 				if (path.includes('/files/download'))
-					return new Response('file-bytes', { headers: { 'content-type': 'application/octet-stream', 'content-length': '10', 'x-skiff-file-name': 'a.txt' } });
+					return new Response('file-bytes', { headers: { 'content-type': 'application/octet-stream', 'content-length': '10', 'x-yoal-file-name': 'a.txt' } });
 				return Response.json({ ok: true });
 			},
 		},
@@ -71,7 +71,7 @@ describe('ConsoleFront', () => {
 		const { call } = setup({ good: activation() });
 		const download = await call('good', '/v1/files/download?path=/a.txt');
 		expect(download.headers.get('content-length')).toBe('10');
-		expect(download.headers.get('x-skiff-file-name')).toBe('a.txt');
+		expect(download.headers.get('x-yoal-file-name')).toBe('a.txt');
 		expect(await download.text()).toBe('file-bytes');
 	});
 

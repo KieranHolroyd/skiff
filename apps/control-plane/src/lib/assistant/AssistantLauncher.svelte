@@ -3,7 +3,7 @@
 	import { assistant } from '#lib/assistant/assistant.svelte.js';
 	import AssistantPanel from '#lib/assistant/AssistantPanel.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
-	import type { AssistantStatus } from '@skiff/contracts';
+	import type { AssistantStatus } from '@yoal/contracts';
 
 	let { status, userId }: { status: AssistantStatus; userId: string } = $props();
 
@@ -26,18 +26,18 @@
 
 <svelte:window onkeydown={keydown} />
 
-<div id="skiff-assistant">
+<div id="yoal-assistant">
 	{#if !assistant.open}
 		<div class="fixed right-4 bottom-4 z-40 md:right-6 md:bottom-6">
 			<Button
 				size="lg"
 				class="relative h-11 gap-2 rounded-full px-4 shadow-lg shadow-brand/20"
 				onclick={() => assistant.show()}
-				aria-label={assistant.unread ? 'Open Skiff assistant (new reply)' : 'Open Skiff assistant'}
-				title="Skiff assistant (⌘I)"
+				aria-label={assistant.unread ? 'Open Yoal assistant (new reply)' : 'Open Yoal assistant'}
+				title="Yoal assistant (⌘I)"
 			>
 				<SparklesIcon class="size-4 {assistant.sending ? 'animate-pulse' : ''}" />
-				<span class="hidden sm:inline">{assistant.sending ? 'Working…' : 'Ask Skiff'}</span>
+				<span class="hidden sm:inline">{assistant.sending ? 'Working…' : 'Ask Yoal'}</span>
 				{#if assistant.unread}
 					<span class="absolute -top-0.5 -right-0.5 flex size-3">
 						<span class="absolute size-full animate-ping rounded-full bg-brand opacity-60"></span>

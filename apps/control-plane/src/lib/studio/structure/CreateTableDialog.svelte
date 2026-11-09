@@ -1,7 +1,7 @@
 <script lang="ts">
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import XIcon from '@lucide/svelte/icons/x';
-	import type { SchemaChangeInput, StudioInfo } from '@skiff/studio/protocol';
+	import type { SchemaChangeInput, StudioInfo } from '@yoal/studio/protocol';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
 	import * as Dialog from '#lib/components/ui/dialog/index.js';

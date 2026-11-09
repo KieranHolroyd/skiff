@@ -7,7 +7,7 @@ let dir = '';
 let server: ReturnType<typeof Bun.serve> | undefined;
 
 beforeEach(async () => {
-	dir = await mkdtemp(join(tmpdir(), 'skiff-cli-operations-'));
+	dir = await mkdtemp(join(tmpdir(), 'yoal-cli-operations-'));
 });
 
 afterEach(async () => {
@@ -41,11 +41,11 @@ function spawnCli(url: string, ...args: string[]) {
 		cwd: join(import.meta.dir, '../..'),
 		env: {
 			...process.env,
-			SKIFF_CONFIG_DIR: dir,
-			SKIFF_URL: url,
-			SKIFF_TOKEN: 'skif_test',
-			SKIFF_CONTENT_DOMAIN: '',
-			SKIFF_PROFILE: '',
+			YOAL_CONFIG_DIR: dir,
+			YOAL_URL: url,
+			YOAL_TOKEN: 'yoal_test',
+			YOAL_CONTENT_DOMAIN: '',
+			YOAL_PROFILE: '',
 		},
 		stdin: 'ignore',
 		stdout: 'pipe',
@@ -53,7 +53,7 @@ function spawnCli(url: string, ...args: string[]) {
 	});
 }
 
-describe('skif operations watch', () => {
+describe('yoal operations watch', () => {
 	test('Ctrl-C detaches without cancelling and prints how to resume', async () => {
 		let cancelled = false;
 		let streamOpened: () => void = () => {};
@@ -84,7 +84,7 @@ describe('skif operations watch', () => {
 		const code = await child.exited;
 		const stderr = await new Response(child.stderr).text();
 		expect(code).toBe(130);
-		expect(stderr).toContain('Still running: skif operations watch op_1');
+		expect(stderr).toContain('Still running: yoal operations watch op_1');
 		expect(cancelled).toBe(false);
 	});
 

@@ -73,7 +73,7 @@ const failover = z.object({
 });
 
 const shares = z.object({
-	mountRoot: z.string().trim().regex(/^\/(?:[A-Za-z0-9._-]+\/?)*$/).default('/run/skiff-shares'),
+	mountRoot: z.string().trim().regex(/^\/(?:[A-Za-z0-9._-]+\/?)*$/).default('/run/yoal-shares'),
 });
 
 export const clusterConfigSchema = z.object({

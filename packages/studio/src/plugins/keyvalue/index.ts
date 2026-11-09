@@ -130,7 +130,7 @@ function hostPart(host: string): string {
 	return host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
 }
 
-/** The logical database index; Skiff always uses `0`, anything else must be a small integer. */
+/** The logical database index; Yoal always uses `0`, anything else must be a small integer. */
 function databaseIndex(target: StudioTarget): string {
 	return /^\d{1,5}$/.test(target.database) ? String(Number(target.database)) : '0';
 }
@@ -164,7 +164,7 @@ async function openClient(target: StudioTarget): Promise<RedisClient> {
 		);
 	}
 	// Best effort: the read-only principal (`+@read` only) may not run CLIENT SETNAME.
-	await client.send('CLIENT', ['SETNAME', 'skiff-studio']).catch(() => undefined);
+	await client.send('CLIENT', ['SETNAME', 'yoal-studio']).catch(() => undefined);
 	return client;
 }
 
@@ -763,7 +763,7 @@ class KeyValueSession implements StudioSession {
 	private async scanMembers(key: string, type: string, cursor: string, native: string[]): Promise<[string, string[]]> {
 		const count = ['COUNT', String(SCAN_COUNT)];
 		if (type === 'hash') {
-			// NOVALUES needs Valkey 8 / Redis 7.4; Skiff ships Valkey 8.1+ and Redis 8.x.
+			// NOVALUES needs Valkey 8 / Redis 7.4; Yoal ships Valkey 8.1+ and Redis 8.x.
 			const [next, fields] = (await this.p('HSCAN', [key, cursor, ...native, ...count, 'NOVALUES'])) as [string, unknown[]];
 			return [String(next), fields.map(String)];
 		}
@@ -1097,7 +1097,7 @@ class KeyValueSession implements StudioSession {
 					return this.readRow(key, type, id ?? null);
 				}),
 			);
-			const sentinel = `skiff-studio:deleted:${crypto.randomUUID()}`;
+			const sentinel = `yoal-studio:deleted:${crypto.randomUUID()}`;
 			const lsets: Command[] = [];
 			let listDeletes = 0;
 			const tail: Command[] = [];

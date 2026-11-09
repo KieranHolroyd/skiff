@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import BracesIcon from '@lucide/svelte/icons/braces';
-	import type { Cell, ObjectRef } from '@skiff/studio/protocol';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import type { Cell, ObjectRef } from '@yoal/studio/protocol';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Spinner } from '#lib/components/ui/spinner/index.js';
 	import { Textarea } from '#lib/components/ui/textarea/index.js';

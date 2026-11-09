@@ -2,7 +2,7 @@
 	import type { Snippet } from 'svelte';
 	import { enhance } from '$app/forms';
 	import { toast } from 'svelte-sonner';
-	import type { PlatformPolicies, PlatformPolicyKey } from '@skiff/contracts';
+	import type { PlatformPolicies, PlatformPolicyKey } from '@yoal/contracts';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';

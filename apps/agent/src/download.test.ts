@@ -23,7 +23,7 @@ const server = Bun.serve({
 		return new Response(body, { headers: { 'content-length': String(size), 'content-type': 'application/zip' } });
 	},
 });
-const dir = await mkdtemp(join(tmpdir(), 'skiff-download-'));
+const dir = await mkdtemp(join(tmpdir(), 'yoal-download-'));
 
 afterAll(async () => {
 	server.stop(true);

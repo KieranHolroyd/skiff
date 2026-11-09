@@ -1,16 +1,16 @@
 /**
- * `skiff-helper.service`: the privileged runtime helper. It renders systemd units and Quadlet
- * files from validated desired state and is the only Skiff process that runs as root (D26).
+ * `yoal-helper.service`: the privileged runtime helper. It renders systemd units and Quadlet
+ * files from validated desired state and is the only Yoal process that runs as root (D26).
  *
- * Shared by the installer and `skiff-update-self`. Each release carries its own helper binary;
- * activation copies it to the stable `<optDir>/helper/skiff-helper` path the unit runs, so a
+ * Shared by the installer and `yoal-update-self`. Each release carries its own helper binary;
+ * activation copies it to the stable `<optDir>/helper/yoal-helper` path the unit runs, so a
  * rollback to a release that predates the helper keeps the working binary.
  */
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-export const HELPER_UNIT = 'skiff-helper.service';
-export const HELPER_ENV_FILE = '/etc/skiff/helper.env';
+export const HELPER_UNIT = 'yoal-helper.service';
+export const HELPER_ENV_FILE = '/etc/yoal/helper.env';
 
 export interface HelperPaths {
 	optDir?: string;
@@ -20,10 +20,10 @@ export interface HelperPaths {
 }
 
 export function helperUnit(paths: HelperPaths = {}): string {
-	const optDir = paths.optDir ?? '/opt/skiff';
-	const etcDir = paths.etcDir ?? '/etc/skiff';
+	const optDir = paths.optDir ?? '/opt/yoal';
+	const etcDir = paths.etcDir ?? '/etc/yoal';
 	return `[Unit]
-Description=Skiff privileged workload helper
+Description=Yoal privileged workload helper
 Documentation=https://github.com/kieranholroyd/private-cloud-deploys/blob/main/docs/DESIGN.md
 After=network-online.target
 Wants=network-online.target
@@ -35,9 +35,9 @@ StartLimitBurst=10
 [Service]
 Type=simple
 User=root
-ExecStartPre=+/usr/bin/install -d -o root -g skiff -m 0750 /run/skiff-helper
+ExecStartPre=+/usr/bin/install -d -o root -g yoal -m 0750 /run/yoal-helper
 ExecStartPre=+/usr/bin/install -d -o root -g root -m 0755 /etc/containers/systemd
-ExecStart=${optDir}/helper/skiff-helper
+ExecStart=${optDir}/helper/yoal-helper
 EnvironmentFile=${etcDir}/helper.env
 Restart=on-failure
 RestartSec=2
@@ -51,25 +51,25 @@ WantedBy=multi-user.target
 
 /** Default environment for a fresh install. Existing files are never overwritten. */
 export function helperEnv(paths: HelperPaths = {}): string {
-	const optDir = paths.optDir ?? '/opt/skiff';
-	const varDir = paths.varDir ?? '/var/lib/skiff';
+	const optDir = paths.optDir ?? '/opt/yoal';
+	const varDir = paths.varDir ?? '/var/lib/yoal';
 	const bunBin = paths.bunBin ?? join(optDir, 'runtime', 'bin', 'bun');
 	return [
-		`SKIFF_HELPER_BUN_PATH=${bunBin}`,
-		`SKIFF_HELPER_RELEASE_DIRS=${varDir}/agent/releases,${optDir}/releases`,
-		'SKIFF_HELPER_CONTROL_SOCKET_GROUP=skiff',
-		'SKIFF_HELPER_WORKLOAD_SOCKET_GROUP=caddy',
-		'SKIFF_HELPER_WORKLOAD_SOCKET_MODE=0660',
-		'SKIFF_HELPER_QUADLET_DIR=/etc/containers/systemd',
+		`YOAL_HELPER_BUN_PATH=${bunBin}`,
+		`YOAL_HELPER_RELEASE_DIRS=${varDir}/agent/releases,${optDir}/releases`,
+		'YOAL_HELPER_CONTROL_SOCKET_GROUP=yoal',
+		'YOAL_HELPER_WORKLOAD_SOCKET_GROUP=caddy',
+		'YOAL_HELPER_WORKLOAD_SOCKET_MODE=0660',
+		'YOAL_HELPER_QUADLET_DIR=/etc/containers/systemd',
 		// `auto` disables AppArmor only on kernels that stack unprivileged profile changes.
-		'SKIFF_HELPER_APPARMOR_PROFILE=auto',
+		'YOAL_HELPER_APPARMOR_PROFILE=auto',
 		'',
 	].join('\n');
 }
 
 export interface EnsureHelperOptions extends HelperPaths {
 	systemdDir?: string;
-	/** Active release whose `helper/skiff-helper` is installed at the stable path. */
+	/** Active release whose `helper/yoal-helper` is installed at the stable path. */
 	release?: string;
 	run: (cmd: string[]) => void;
 	log?: (message: string) => void;
@@ -85,12 +85,12 @@ export function installHelperBinary(
 	options: Pick<EnsureHelperOptions, 'optDir' | 'release' | 'log'>,
 ): boolean {
 	if (!options.release) return false;
-	const source = join(options.release, 'helper', 'skiff-helper');
+	const source = join(options.release, 'helper', 'yoal-helper');
 	if (!existsSync(source)) return false;
-	const optDir = options.optDir ?? '/opt/skiff';
+	const optDir = options.optDir ?? '/opt/yoal';
 	const dir = join(optDir, 'helper');
 	mkdirSync(dir, { recursive: true, mode: 0o755 });
-	const target = join(dir, 'skiff-helper');
+	const target = join(dir, 'yoal-helper');
 	try {
 		if (readFileSync(target).equals(readFileSync(source))) return false;
 	} catch {
@@ -108,13 +108,13 @@ export function installHelperBinary(
 /** Install the helper binary, unit and env file. Idempotent; returns whether anything changed. */
 export function ensureHelper(options: EnsureHelperOptions): boolean {
 	const systemdDir = options.systemdDir ?? '/etc/systemd/system';
-	const etcDir = options.etcDir ?? '/etc/skiff';
+	const etcDir = options.etcDir ?? '/etc/yoal';
 	const envFile = join(etcDir, 'helper.env');
 	let changed = installHelperBinary(options);
 	mkdirSync(etcDir, { recursive: true, mode: 0o750 });
 	if (!existsSync(envFile)) {
 		writeFileSync(envFile, helperEnv(options), { mode: 0o640 });
-		options.run(['chown', 'root:skiff', envFile]);
+		options.run(['chown', 'root:yoal', envFile]);
 		options.log?.(`wrote ${envFile}`);
 		changed = true;
 	}

@@ -1,6 +1,6 @@
 import type { RequestHandler } from './$types';
-import { CoreError } from '@skiff/core';
-import { bucketNameSchema } from '@skiff/contracts';
+import { CoreError } from '@yoal/core';
+import { bucketNameSchema } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { inlineMediaType } from '#lib/storage-preview.js';
 import { json, route } from '#lib/server/api.js';

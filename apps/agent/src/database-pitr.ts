@@ -3,12 +3,12 @@ import {
 	type DatabasePitrResult,
 	type DatabasePitrTask,
 	type DesiredState,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { HelperApi } from './helper-client.ts';
 
 /**
  * Executes `databasePitrTasks` from desired state (docs/PITR.md). Additive to the logical backup
- * runner: the same node runs both, but PITR work only appears when `SKIFF_FEATURE_PITR` is on in
+ * runner: the same node runs both, but PITR work only appears when `YOAL_FEATURE_PITR` is on in
  * the control plane. Repository credentials are fetched from the node-authenticated activation
  * endpoint just before each task and are never written to the agent's desired-state cache.
  *

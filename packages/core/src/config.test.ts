@@ -1,26 +1,26 @@
 import { describe, expect, test } from 'bun:test';
-import { STUDIO_DEFAULT_PORT } from '@skiff/contracts';
+import { STUDIO_DEFAULT_PORT } from '@yoal/contracts';
 import { coreConfigFromEnv } from './config.ts';
 import type { ObjectStore } from './object-store.ts';
 
 const base = {
-	dataDir: '/tmp/skiff-config-test',
+	dataDir: '/tmp/yoal-config-test',
 	objectStore: {} as ObjectStore,
 	masterKey: new Uint8Array(32),
 };
 
 describe('coreConfigFromEnv', () => {
-	test('reads the documented SKIFF_* variables (docs/OPS.md §2.1, §2.5.1)', () => {
+	test('reads the documented YOAL_* variables (docs/OPS.md §2.1, §2.5.1)', () => {
 		const config = coreConfigFromEnv(base, {
-			SKIFF_DATABASE_GATEWAY_PORT: '9182',
-			SKIFF_STUDIO_PORT: '9183',
-			SKIFF_STORAGE_OBJECT_MAX_BYTES: '2048',
-			SKIFF_STORAGE_GATEWAY_PORT: '9181',
-			SKIFF_PITR_REPO_BUCKET: 'pitr',
-			SKIFF_PITR_ACCESS_KEY_ID: 'AKIA',
-			SKIFF_PITR_SECRET_ACCESS_KEY: 'secret',
-			SKIFF_PITR_REPO_ENDPOINT: 'https://s3.example.com',
-			SKIFF_PITR_REPO_FORCE_PATH_STYLE: 'off',
+			YOAL_DATABASE_GATEWAY_PORT: '9182',
+			YOAL_STUDIO_PORT: '9183',
+			YOAL_STORAGE_OBJECT_MAX_BYTES: '2048',
+			YOAL_STORAGE_GATEWAY_PORT: '9181',
+			YOAL_PITR_REPO_BUCKET: 'pitr',
+			YOAL_PITR_ACCESS_KEY_ID: 'AKIA',
+			YOAL_PITR_SECRET_ACCESS_KEY: 'secret',
+			YOAL_PITR_REPO_ENDPOINT: 'https://s3.example.com',
+			YOAL_PITR_REPO_FORCE_PATH_STYLE: 'off',
 		});
 		expect(config.databaseGatewayPort).toBe(9182);
 		expect(config.studioPort).toBe(9183);
@@ -31,7 +31,7 @@ describe('coreConfigFromEnv', () => {
 			endpoint: 'https://s3.example.com',
 			bucket: 'pitr',
 			region: 'us-east-1',
-			pathPrefix: 'skiff/pitr',
+			pathPrefix: 'yoal/pitr',
 			forcePathStyle: false,
 			accessKeyId: 'AKIA',
 			secretAccessKey: 'secret',
@@ -40,10 +40,10 @@ describe('coreConfigFromEnv', () => {
 
 	test('falls back to defaults for unset or malformed values', () => {
 		const config = coreConfigFromEnv(base, {
-			SKIFF_DATABASE_GATEWAY_PORT: 'eighty',
-			SKIFF_STORAGE_OBJECT_MAX_BYTES: '-1',
-			SKIFF_EDGE_NODE_ID: '',
-			SKIFF_PITR_REPO_BUCKET: 'pitr',
+			YOAL_DATABASE_GATEWAY_PORT: 'eighty',
+			YOAL_STORAGE_OBJECT_MAX_BYTES: '-1',
+			YOAL_EDGE_NODE_ID: '',
+			YOAL_PITR_REPO_BUCKET: 'pitr',
 		});
 		expect(config.databaseGatewayPort).toBe(8082);
 		expect(config.studioPort).toBe(STUDIO_DEFAULT_PORT);
@@ -58,7 +58,7 @@ describe('coreConfigFromEnv', () => {
 	test('explicit values win over the environment', () => {
 		const config = coreConfigFromEnv(
 			{ ...base, studioPort: 7000, edgeNodeId: 'nod_edge', desiredAgentVersion: '2.0.0' },
-			{ SKIFF_STUDIO_PORT: '9183', SKIFF_EDGE_NODE_ID: 'nod_other', SKIFF_AGENT_VERSION: '1.0.0' },
+			{ YOAL_STUDIO_PORT: '9183', YOAL_EDGE_NODE_ID: 'nod_other', YOAL_AGENT_VERSION: '1.0.0' },
 		);
 		expect(config.studioPort).toBe(7000);
 		expect(config.edgeNodeId).toBe('nod_edge');

@@ -1,16 +1,16 @@
 # syntax=docker/dockerfile:1
 
-# skiff-runner: the default job image for Skiff Pipelines (docs/PIPELINES.md §4.2, W5) and the image
-# Skiff's own release workflow runs in (.skiff/workflows/publish.yml). Debian bookworm-slim plus
+# yoal-runner: the default job image for Yoal Pipelines (docs/PIPELINES.md §4.2, W5) and the image
+# Yoal's own release workflow runs in (.yoal/workflows/publish.yml). Debian bookworm-slim plus
 # what a typical job expects: git, curl, tar/gzip/unzip, jq, Node LTS, a pinned Bun and gh.
 #
 # Not in here on purpose:
-# - skiff-step: the runner bind-mounts it read-only into every job container.
-# - buildctl: the per-job BuildKit sidecar (W6) mounts it at /skiff/bin with BUILDKIT_HOST set.
+# - yoal-step: the runner bind-mounts it read-only into every job container.
+# - buildctl: the per-job BuildKit sidecar (W6) mounts it at /yoal/bin with BUILDKIT_HOST set.
 # - buildah: the W6 fallback; install it in a job (apt-get install buildah) only where needed.
 #
-# Built and pushed per architecture by .skiff/workflows/runner-image.yml, then joined into one
-# multi-arch tag with skiff/image-index.
+# Built and pushed per architecture by .yoal/workflows/runner-image.yml, then joined into one
+# multi-arch tag with yoal/image-index.
 ARG DEBIAN=debian:bookworm-slim
 FROM ${DEBIAN}
 
@@ -58,5 +58,5 @@ RUN set -eux; \
 # Jobs run as an unprivileged user (the job container maps it into its own user namespace).
 RUN useradd --create-home --uid 1001 --shell /bin/bash runner
 WORKDIR /workspace
-LABEL org.opencontainers.image.title="skiff-runner" \
-	org.opencontainers.image.description="Default job image for Skiff Pipelines"
+LABEL org.opencontainers.image.title="yoal-runner" \
+	org.opencontainers.image.description="Default job image for Yoal Pipelines"

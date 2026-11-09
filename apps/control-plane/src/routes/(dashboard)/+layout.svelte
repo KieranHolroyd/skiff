@@ -32,9 +32,9 @@
 	import AssistantLauncher from '#lib/assistant/AssistantLauncher.svelte';
 	import AssistantTour from '#lib/assistant/AssistantTour.svelte';
 	import { authClient } from '#lib/auth-client.js';
-	import Logo from '#lib/components/skiff/Logo.svelte';
-	import OrgSwitcher from '#lib/components/skiff/OrgSwitcher.svelte';
-	import ThemeToggle from '#lib/components/skiff/ThemeToggle.svelte';
+	import Logo from '#lib/components/yoal/Logo.svelte';
+	import OrgSwitcher from '#lib/components/yoal/OrgSwitcher.svelte';
+	import ThemeToggle from '#lib/components/yoal/ThemeToggle.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import * as Avatar from '#lib/components/ui/avatar/index.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
@@ -335,10 +335,10 @@
 </script>
 
 <svelte:head>
-	<title>Skiff · Operations</title>
+	<title>Yoal · Operations</title>
 	<meta
 		name="description"
-		content="Skiff operations dashboard: projects, deployments, nodes and audit."
+		content="Yoal operations dashboard: projects, deployments, nodes and audit."
 	/>
 </svelte:head>
 
@@ -352,7 +352,7 @@
 							<a href={resolve('/(dashboard)/overview')} {...props}>
 								<Logo wordmark={false} class="shrink-0" />
 								<span class="grid flex-1 text-left text-sm leading-tight">
-									<span class="truncate font-semibold">Skiff</span>
+									<span class="truncate font-semibold">Yoal</span>
 									<span class="truncate text-xs text-muted-foreground">{data.org.name}</span>
 								</span>
 								<Badge variant="outline" class="capitalize">{data.role}</Badge>
@@ -399,7 +399,7 @@
 													<a
 														href={resolve(item.href)}
 														aria-current={active ? 'page' : undefined}
-														data-skiff-target={`nav.${item.path.slice(1)}`}
+														data-yoal-target={`nav.${item.path.slice(1)}`}
 														{...props}
 													>
 														<item.icon />
@@ -418,7 +418,7 @@
 											{#if item.path === '/settings'}
 												{#await data.updateAvailable then update}
 													{#if update}
-														<Sidebar.MenuBadge title={`Skiff ${update.latest} is available`}>
+														<Sidebar.MenuBadge title={`Yoal ${update.latest} is available`}>
 															<span class="size-2 rounded-full bg-brand"></span>
 															<span class="sr-only">Update available</span>
 														</Sidebar.MenuBadge>
@@ -593,7 +593,7 @@
 
 		<footer class="px-4 py-5 text-xs text-muted-foreground md:px-8">
 			<div class="mx-auto flex max-w-[1320px] flex-wrap items-center justify-between gap-2">
-				<span>Skiff control plane</span>
+				<span>Yoal control plane</span>
 				<span class="font-mono">{data.platform.origin}</span>
 			</div>
 		</footer>

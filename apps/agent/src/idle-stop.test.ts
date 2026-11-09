@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { workloadDesiredSchema, type WorkloadDesired } from '@skiff/contracts';
+import { workloadDesiredSchema, type WorkloadDesired } from '@yoal/contracts';
 import { isIdleStoppable } from './runtime.ts';
 
 /** A stopped unit that scales to zero is steady state, not an outage to retry (FN4, D121). */
@@ -13,7 +13,7 @@ describe('isIdleStoppable', () => {
 			runtime: 'process',
 			status: 'running',
 			release: 'a'.repeat(64),
-			upstream: 'unix//run/skiff-workloads/prj_p.sock',
+			upstream: 'unix//run/yoal-workloads/prj_p.sock',
 			memoryMb: 128,
 			cpus: 1,
 			port: 3000,

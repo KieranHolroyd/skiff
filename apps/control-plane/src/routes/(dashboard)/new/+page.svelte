@@ -6,7 +6,7 @@
 	import LayoutTemplateIcon from '@lucide/svelte/icons/layout-template';
 	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
 	import SearchIcon from '@lucide/svelte/icons/search';
-	import ForgeMark from '#lib/components/skiff/ForgeMark.svelte';
+	import ForgeMark from '#lib/components/yoal/ForgeMark.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import * as InputGroup from '#lib/components/ui/input-group/index.js';
 	import EmptyState from '../_lib/EmptyState.svelte';
@@ -55,7 +55,7 @@
 </script>
 
 <svelte:head>
-	<title>New project · Skiff</title>
+	<title>New project · Yoal</title>
 </svelte:head>
 
 <div class="space-y-10">
@@ -63,7 +63,7 @@
 		target="page.new"
 		eyebrow="Projects"
 		title="Start something new"
-		description="Pick a template and Skiff creates the project, stores its credentials and deploys it in one step. Or start from a blank runtime."
+		description="Pick a template and Yoal creates the project, stores its credentials and deploys it in one step. Or start from a blank runtime."
 	/>
 
 	{#if data.can.createProject}
@@ -82,7 +82,7 @@
 						>Deploy from Git</span
 					>
 					<span class="block text-sm text-pretty text-muted-foreground"
-						>Import a repository from GitHub, GitLab, Gitea or Forgejo: Skiff detects the framework,
+						>Import a repository from GitHub, GitLab, Gitea or Forgejo: Yoal detects the framework,
 						builds it on every push and reports back. No webhook to set up.</span
 					>
 				</span>

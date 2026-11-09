@@ -1,4 +1,4 @@
-# Skiff — Design
+# Yoal — Design
 
 > A lightweight, self-hosted private cloud for spinning up simple projects on your own domain,
 > with an operations dashboard and first-class AI agent (MCP) integration.
@@ -43,11 +43,11 @@ decision log with rationale, and [ROADMAP.md](./ROADMAP.md) for v1/v2 scope.
 | **Project** | A named site/app with a globally unique **slug** → `<slug>.<contentDomain>`. |
 | **Upload session** | A pending upload, filled inline (`deploy_files`) or via a presigned URL (`create_upload`). |
 | **Release** | An immutable, content-addressed (sha256) build artifact. |
-| **Config snapshot** | An immutable set of env vars, secret *version references* and parsed site config (`_redirects`, `_headers`, `skiff.json`). |
+| **Config snapshot** | An immutable set of env vars, secret *version references* and parsed site config (`_redirects`, `_headers`, `yoal.json`). |
 | **Deployment** | Release + config snapshot. It has a permanent preview URL `<slug>--<shortid>.<contentDomain>`. |
 | **Production pointer** | The project's reference to the deployment served at `<slug>.<contentDomain>`. Promote and rollback move it. |
 | **Placement** | Where a project runs: `edge`, a named node (e.g. `homelab`), or `auto`. Applies to every runtime tier: the edge can run apps too (D41). |
-| **Workload slice** | The systemd slice (`skiff-workloads.slice`) every app on a node runs in. Its memory/CPU budget keeps the platform services on that node responsive. |
+| **Workload slice** | The systemd slice (`yoal-workloads.slice`) every app on a node runs in. Its memory/CPU budget keeps the platform services on that node responsive. |
 | **Access mode** | `public`, `password`, or `platform`, set separately for production and previews. |
 | **Share link** | A magic link granting time- and usage-limited access to a protected deployment. |
 | **Platform domain** | The domain for dashboard, API, MCP and auth. |
@@ -69,7 +69,7 @@ decision log with rationale, and [ROADMAP.md](./ROADMAP.md) for v1/v2 scope.
 │   *.contentDomain  ─► local sites/apps     or ─► homelab over WireGuard                │
 │   platformDomain (UI · /api · /mcp · /api/auth) ─► control plane                       │
 │ Control plane (SvelteKit on Bun): UI · REST · MCP · Better Auth · SQLite · ClickHouse  │
-│ Node agent (bun --compile) · [v2: edge-placed tier-2/3 apps in skiff-workloads.slice]  │
+│ Node agent (bun --compile) · [v2: edge-placed tier-2/3 apps in yoal-workloads.slice]  │
 │ WireGuard (wg0) ◄─────────────────────────────┐                                        │
 └───────────────────────────────────────────────┼────────────────────────────────────────┘
                                                 │ homelab dials out (no inbound ports)
@@ -91,8 +91,8 @@ high availability are planned in [CLUSTERING.md](./CLUSTERING.md).
 
 | Component | Tech | Runs as | Approx. RSS |
 |---|---|---|---|
-| Control plane | SvelteKit 3 (`@sveltejs/adapter-bun`, listening on a unix socket behind Caddy with `PROTOCOL_HEADER`/`HOST_HEADER`), shadcn-svelte (nova preset), Better Auth, Drizzle + SQLite, ClickHouse (HTTP) | `skiff-cp` (unprivileged) | 80–150 MB target (spike: 92 idle / ~160 MB under load on macOS) |
-| Node agent | Bun, `bun build --compile` single binary | `skiff-agent` (unprivileged) | 30–50 MB |
+| Control plane | SvelteKit 3 (`@sveltejs/adapter-bun`, listening on a unix socket behind Caddy with `PROTOCOL_HEADER`/`HOST_HEADER`), shadcn-svelte (nova preset), Better Auth, Drizzle + SQLite, ClickHouse (HTTP) | `yoal-cp` (unprivileged) | 80–150 MB target (spike: 92 idle / ~160 MB under load on macOS) |
+| Node agent | Bun, `bun build --compile` single binary | `yoal-agent` (unprivileged) | 30–50 MB |
 | Proxy | Caddy (prebuilt with `caddy-dns/cloudflare`), driven only via admin API on a unix socket | `caddy` | 30–50 MB |
 | Privileged helper (v2) | Bun binary; fixed verbs over a root-only unix socket; renders unit files from validated specs. Installed on every node that runs apps, edge included | root | small |
 
@@ -100,10 +100,10 @@ high availability are planned in [CLUSTERING.md](./CLUSTERING.md).
 ```
 apps/control-plane     SvelteKit app (UI + REST + MCP + OTLP receiver)
 apps/agent             node agent
-apps/cli               CLI, npm package `skif` (bundled, runs on Node 20+ or Bun); installs both `skif` and `skiff` commands
+apps/cli               CLI, npm package `@yoal/cli` (bundled, runs on Node 20+ or Bun); installs the `yoal` command
 packages/contracts     shared Zod/Valibot schemas: API, agent protocol, MCP tool I/O
 packages/core          service layer (all business logic + RBAC checks)
-packages/site-config   _redirects / _headers / skiff.json parser → Caddy route compiler
+packages/site-config   _redirects / _headers / yoal.json parser → Caddy route compiler
 packages/db            Drizzle schema + migrations
 ```
 
@@ -126,7 +126,7 @@ identical permission checks. No surface can do something another can't.
 
 | Tier | v1? | systemd driver | docker driver (v2) |
 |---|---|---|---|
-| 1 Static | ✅ | Caddy `file_server` on `/srv/skiff/releases/<sha>` | Caddy container + volume |
+| 1 Static | ✅ | Caddy `file_server` on `/srv/yoal/releases/<sha>` | Caddy container + volume |
 | 2 Process (Bun/Node SSR; Functions are the managed variant) | v2 | Sandboxed unit: `DynamicUser`, `ProtectSystem=strict`, `MemoryMax`, `CPUQuota`, optional socket activation | Sibling container, read-only artifact mount, cap-drop all |
 | 3 Container | v2 | Podman Quadlet (rootful, per-container user namespace, no daemon) | Native |
 | 4 Compose | v2 | One Quadlet per service from a `docker-compose.yml`, on the workload network; see [COMPOSE.md](./COMPOSE.md) | Native |
@@ -155,10 +155,10 @@ static sites.
     budget, preferring workers. Falls back to the edge when no worker can admit it.
 - **Serving:** an edge-placed app listens on a unix socket (or a loopback port) and the edge Caddy
   reverse-proxies to it locally. Worker-placed apps are proxied over WireGuard as before.
-- **Protecting the edge:** on every node, apps run under `skiff-workloads.slice`, never beside the
+- **Protecting the edge:** on every node, apps run under `yoal-workloads.slice`, never beside the
   platform services.
   - The slice has a node-level `MemoryMax` (edge default **1 GiB** on the 4 GB VPS, set per node) and a
-    lower `CPUWeight` than `skiff-cp`, `skiff-agent` and `caddy`. A runaway app hits its own limit or the
+    lower `CPUWeight` than `yoal-cp`, `yoal-agent` and `caddy`. A runaway app hits its own limit or the
     slice limit, and the control plane, Caddy and ingress for every other site stay up.
   - **Admission:** each app declares `MemoryMax` (default 256 MB). The control plane refuses a deploy
     whose reservation would exceed the target node's slice budget, with an error naming the free
@@ -186,7 +186,7 @@ create_upload → presigned PUT ─┼─► Upload session ─► finalize ─�
 - **Presigned uploads go directly to R2.** Large uploads never touch the VPS disk or bandwidth.
 - **Finalize:**
   1. Validate limits (500 MB/artifact, 20k files, 25 MB/file).
-  2. Parse and validate `_redirects`, `_headers` and `skiff.json` (fail with a precise error).
+  2. Parse and validate `_redirects`, `_headers` and `yoal.json` (fail with a precise error).
   3. Compute the sha256 for content addressing.
   4. Precompress (brotli + gzip) as a low-priority background job.
 - **Activate:** nodes pull the release into a local cache, the symlink is swapped atomically, and the
@@ -203,7 +203,7 @@ create_upload → presigned PUT ─┼─► Upload session ─► finalize ─�
 
 - Netlify/Cloudflare-Pages-compatible `_redirects` and `_headers` (supported subset: status codes,
   splats, placeholders, per-path headers).
-- Optional `skiff.json`: `{ "spa": bool, "cleanUrls": bool, "trailingSlash": "always"|"never"|"ignore", "notFound": "404.html" }`.
+- Optional `yoal.json`: `{ "spa": bool, "cleanUrls": bool, "trailingSlash": "always"|"never"|"ignore", "notFound": "404.html" }`.
 - SPA is **suggested, never auto-enabled** (the deploy response hints at it when it's detected).
 - Caching: hashed assets → `public, max-age=31536000, immutable`; HTML → `no-cache` + ETag.
 - Default headers: HSTS, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`. No default CSP.
@@ -282,11 +282,11 @@ create_upload → presigned PUT ─┼─► Upload session ─► finalize ─�
   owner org, enforced for others.
 
 ### 6.3 MCP
-- Remote MCP over **Streamable HTTP** at `/mcp` on the platform origin (`SKIFF_PLATFORM_ORIGIN`, e.g.
+- Remote MCP over **Streamable HTTP** at `/mcp` on the platform origin (`YOAL_PLATFORM_ORIGIN`, e.g.
   `https://control.example.com/mcp`), served by the control plane. There is no separate MCP host.
 - **OAuth 2.1** for interactive clients (Claude Code, Claude.ai). The consent screen lets you pick permissions.
   - Client identity: **CIMD** (Client ID Metadata Documents, the MCP 2026-07-28 mechanism), with legacy
-    **DCR** also enabled for older clients (`SKIFF_MCP_ALLOW_DCR`).
+    **DCR** also enabled for older clients (`YOAL_MCP_ALLOW_DCR`).
   - Scope step-up: tools declare the permission they need, and a token without it gets `403 insufficient_scope`,
     which makes the client re-authorize so the user can grant it explicitly.
   - Root `/.well-known/oauth-protected-resource[/mcp]` and `/.well-known/oauth-authorization-server[/api/auth]`
@@ -301,9 +301,9 @@ create_upload → presigned PUT ─┼─► Upload session ─► finalize ─�
   scope denials and declined confirmations. File contents are recorded as count, size and paths only.
 - Delete confirmations carry a signed, 10-minute state token bound to the user, client, tool and target, so a
   client can't pre-fill the answer to skip the prompt.
-- MCP resources (six guides): `skiff://guides/deploying`, `skiff://guides/limits`,
-  `skiff://guides/site-config`, `skiff://guides/databases`, `skiff://guides/storage` and
-  `skiff://guides/email` (only while the `EMAIL` feature is on).
+- MCP resources (six guides): `yoal://guides/deploying`, `yoal://guides/limits`,
+  `yoal://guides/site-config`, `yoal://guides/databases`, `yoal://guides/storage` and
+  `yoal://guides/email` (only while the `EMAIL` feature is on).
 
 **Tools by area.** The full catalogue (every tool with the permission it checks and whether it confirms)
 is the user doc `packages/docs/content/clients/mcp.md`; README "For agents" lists the tool names by
@@ -337,15 +337,15 @@ SvelteKit's built-in CSRF check is disabled because it would block the OAuth tok
 - Every non-GET/HEAD request must have `Origin` equal to the platform origin, or `Sec-Fetch-Site: same-origin`.
 - Exceptions are an exact allowlist of cookieless endpoints: `oauth2/token`, `register`, `revoke`, `introspect`, `/mcp`,
   `/api/v1/cli/token` (PKCE-bound code), `/api/domains/ask` (Caddy's on-demand TLS check) and
-  `/_skiff/site-login`, plus the bearer/signature/token-only prefixes `/api/agent/`, `/api/objects/`,
+  `/_yoal/site-login`, plus the bearer/signature/token-only prefixes `/api/agent/`, `/api/objects/`,
   `/api/backup-targets/`, `/api/webhooks/` and `/share/storage/` (unguessable share token). Prefixes end in
   `/` so they never match a sibling REST path.
 - The control plane sends `X-Frame-Options: DENY` and `frame-ancestors 'none'` so consent and CLI-approval pages
   can't be framed.
 
 ### 6.3.2 CLI configuration
-`skif` keeps persistent settings in `~/.config/skiff/config.json` (`$SKIFF_CONFIG_DIR`, else
-`$XDG_CONFIG_HOME/skiff`, else `~/.config/skiff`), mode 0600. Settings are grouped into named
+`yoal` keeps persistent settings in `~/.config/yoal/config.json` (`$YOAL_CONFIG_DIR`, else
+`$XDG_CONFIG_HOME/yoal`, else `~/.config/yoal`), mode 0600. Settings are grouped into named
 **profiles**, one per deployment, so a single machine can talk to production, staging and a
 local dev server without environment-variable juggling:
 - `profiles.<name>.url` — control-plane origin, e.g. `https://control.example.com`.
@@ -354,22 +354,22 @@ local dev server without environment-variable juggling:
 - `profiles.<name>.token` — API key.
 - `activeProfile` — the profile used when none is selected explicitly.
 
-A profile is selected by, in order: `--profile <name>`, `$SKIFF_PROFILE`, the active profile, or
+A profile is selected by, in order: `--profile <name>`, `$YOAL_PROFILE`, the active profile, or
 the only profile when exactly one exists. When several profiles exist and none is active, commands
 refuse to guess and list the choices. A profile named `default` is what a legacy single-profile
 file becomes on read; the file is rewritten in the version 2 shape on the next write.
-`skif profile list|add|use|remove|show|current` manages the profiles, and
-`skif config list|get|set|unset|path` manages the selected profile's settings and shows whether
+`yoal profile list|add|use|remove|show|current` manages the profiles, and
+`yoal config list|get|set|unset|path` manages the selected profile's settings and shows whether
 each effective value comes from the file or the environment.
 
-`skif login` is browser-first: it opens the dashboard approval page, which redirects a one-time
+`yoal login` is browser-first: it opens the dashboard approval page, which redirects a one-time
 PKCE-bound code to the CLI's loopback listener; the CLI exchanges that code for a new API key
 (`--no-browser` prints the URL, `--token` stores a key created in the dashboard). The code is
 stored hashed in `cli_login_codes`, expires after five minutes, and can be redeemed once. Login
 records the canonical platform and content domain the server reports in the selected profile.
-`skif logout` removes only the selected profile's token, so the next login remembers the URL and
-domains; `skif logout --all` removes the file and every profile. `SKIFF_URL`, `SKIFF_TOKEN` and
-`SKIFF_CONTENT_DOMAIN` override the profile for CI and agent use.
+`yoal logout` removes only the selected profile's token, so the next login remembers the URL and
+domains; `yoal logout --all` removes the file and every profile. `YOAL_URL`, `YOAL_TOKEN` and
+`YOAL_CONTENT_DOMAIN` override the profile for CI and agent use.
 
 ### 6.4 Protected sites
 - Access modes per project, set separately for production and previews: `public | password | platform`.
@@ -382,7 +382,7 @@ domains; `skif logout --all` removes the file and every profile. `SKIFF_URL`, `S
   previews starts with a copy of the preview hash.
 - Flow: Caddy `forward_auth` goes to the **local node agent**, which verifies an **HMAC-signed, host-only
   cookie** statelessly (sub-ms, no DB). With no cookie, the visitor is redirected to the platform domain
-  to log in or enter the password, then back to `/_skiff/callback?token=<one-time, 60s>`, where the agent sets a site-scoped cookie.
+  to log in or enter the password, then back to `/_yoal/callback?token=<one-time, 60s>`, where the agent sets a site-scoped cookie.
   The token carries a one-time id (the agent remembers used ids until they expire) and a separate session expiry that
   the cookie inherits.
   Platform session cookies never touch the content domain.
@@ -420,7 +420,7 @@ domains; `skif logout --all` removes the file and every profile. `SKIFF_URL`, `S
 
 ## 8. Observability
 
-- **Stores:** SQLite holds platform state. A small local **ClickHouse** server (`skiff-clickhouse.service`,
+- **Stores:** SQLite holds platform state. A small local **ClickHouse** server (`yoal-clickhouse.service`,
   HTTP on 127.0.0.1:18123, ~768 MiB cap, D101) holds telemetry. It is **optional and off by default** to
   keep the base install light; an owner adds it from Settings → Telemetry or at the installer's prompt. The control plane reaches it with `fetch`,
   so no native addon can fail to load, and the zero-downtime standby shares it with the primary.
@@ -429,14 +429,14 @@ domains; `skif logout --all` removes the file and every profile. `SKIFF_URL`, `S
   The OTel Collector binary is not run.
 - **The agent sends pre-aggregated 1-minute buckets only.** Raw requests never reach the telemetry store; it stays
   small and its memory bounded.
-- **Tables** (database `skiff`): `traffic_1m/1h`, `db_metrics_1m/1h`, `storage_metrics_1m/1h` (ReplacingMergeTree,
+- **Tables** (database `yoal`): `traffic_1m/1h`, `db_metrics_1m/1h`, `storage_metrics_1m/1h` (ReplacingMergeTree,
   keyed by series + bucket, newest ingest wins, read with `final = 1`), plus `*_hourly` views that join rolled-up hours
   with not-yet-rolled minutes.
 - **Dashboards (D101).** Users build Grafana-style dashboards (`/dashboards`): a 24-column panel grid, time range and
   refresh pickers, variables, and time series, stat, gauge, bar gauge, table, pie and text panels. A panel query is a
   **builder** spec (dataset + measures + group-by + filters), compiled by the control plane with the caller's project,
   database and storage scope ANDed in, or **SQL** with Grafana-style macros (`$__timeFilter(bucket)`, `$__timeInterval(bucket)`,
-  `$var`). SQL runs as the read-only `skiff_reader` with time, memory and row limits, and only for platform admins,
+  `$var`). SQL runs as the read-only `yoal_reader` with time, memory and row limits, and only for platform admins,
   because it reads every org's rows. REST: `/api/v1/observability/*` (API.md).
 - **Collection (agent, about every 10 s):**
   - Node: CPU/mem/disk/net from `/proc`.
@@ -449,18 +449,18 @@ domains; `skif logout --all` removes the file and every profile. `SKIFF_URL`, `S
     stores build, runtime and system lines in `log_events` (managed services in `service_log_events` and
     `broker_log_events`) and tails them over SSE by `seq`.
   - **Log drains** forward those stored lines to an HTTPS webhook (NDJSON or a JSON array, signed with
-    `X-Skiff-Signature` like the alert webhook, [ALERTS.md](./ALERTS.md) §3) or an OTLP/HTTP logs receiver (JSON
+    `X-Yoal-Signature` like the alert webhook, [ALERTS.md](./ALERTS.md) §3) or an OTLP/HTTP logs receiver (JSON
     encoding). A drain is org-wide or one project, filtered by source and minimum level, and is three cursors over
     the tables' `seq`: the primary ships batches (up to 500 lines per table, about 1 MB) every 5 s, moves the cursors after a 2xx, backs
     off 5 s → 5 min on failure and drops (and counts) a batch after 8 attempts or a 400/413/415/422. Delivery is at
     least once; each line has a stable `id`. Header values and signing secrets are sealed with the org key. Drains
     reach public addresses only, unless a platform admin allows private networks for one. Org owners and admins
-    manage them (Settings → Log drains, `/api/v1/log-drains`, `skif log-drain`, MCP `*_log_drain`); at most 10 per
+    manage them (Settings → Log drains, `/api/v1/log-drains`, `yoal log-drain`, MCP `*_log_drain`); at most 10 per
     org (`packages/core/src/log-drains.ts`, migration 0063).
   - Raw Caddy logs are kept 7 days, compressed.
 - **Audit log:** every mutating surface writes `audit_log` (DESIGN §6.3). Reads take a date range (`from`/`to`: a
   date, ISO time or epoch ms) and page newest first with an opaque `(created_at, id)` cursor, at most 200 entries a
-  page, the same on REST (`nextCursor`), MCP `get_audit_log`, `skif audit` and the dashboard.
+  page, the same on REST (`nextCursor`), MCP `get_audit_log`, `yoal audit` and the dashboard.
 - **Export:** Prometheus `/metrics` on the control plane and agents, plus an optional outbound OTLP exporter.
   (Import from external Prometheus is a designed interface, not built.)
 - Tier-2 apps (v2) get `OTEL_EXPORTER_OTLP_ENDPOINT` injected, pointing at their local agent.
@@ -480,7 +480,7 @@ domains; `skif logout --all` removes the file and every profile. `SKIFF_URL`, `S
 | Failure | Effect | Behaviour |
 |---|---|---|
 | Homelab offline | Homelab-placed projects unreachable | Edge Caddy health-checks and serves a branded 503 + `Retry-After`. Alert after 2 min. Optional static mirror to edge (per project, opt-in). Edge-placed sites and apps keep serving. |
-| Edge app exhausts memory | That app is OOM-killed and restarted | Contained by its own `MemoryMax` and `skiff-workloads.slice`. The control plane, Caddy and other sites are unaffected. Alert on restart loops. |
+| Edge app exhausts memory | That app is OOM-killed and restarted | Contained by its own `MemoryMax` and `yoal-workloads.slice`. The control plane, Caddy and other sites are unaffected. Alert on restart loops. |
 | Control plane crash | Dashboard/API/MCP down | All sites keep serving (agents use cached desired state). systemd restarts it. |
 | VPS lost | Everything on it down | Today: restore to a fresh VPS in under 15 min (OPS.md §5.3). With a second ingress node and a control-plane standby (CLUSTERING.md), ingress and the control plane fail over and only L0 resources on the VPS are down. |
 | R2 unreachable | New deploys fail | Existing sites unaffected (node-local cache). |
@@ -497,9 +497,9 @@ domains; `skif logout --all` removes the file and every profile. `SKIFF_URL`, `S
 | Master key | **Recovery kit**: `age`-encrypted with a passphrase, shown once at install |
 | Certs | Re-issued on restore |
 
-- On the host, after the installer: `skiff-restore --recovery-kit <file> [--from <replica>]` installs the master key
+- On the host, after the installer: `yoal-restore --recovery-kit <file> [--from <replica>]` installs the master key
   (and env) from the kit, then rebuilds SQLite from R2; WireGuard is re-keyed (the homelab reconnects) and nodes
-  reconcile. The recovery kit is produced by `skiff-recovery-kit export` (offered at install).
+  reconcile. The recovery kit is produced by `yoal-recovery-kit export` (offered at install).
 - **Monthly automated restore drill** into a scratch directory, with an alert on failure.
 - `ObjectStore` interface: R2 only in v1. Local fs, Garage/MinIO and multi-target replication in v2.
 
@@ -510,7 +510,7 @@ domains; `skif logout --all` removes the file and every profile. `SKIFF_URL`, `S
 - **Debian 13 minimal** on both nodes. The homelab node is a **VM on Unraid** (not Docker), which keeps a
   hypervisor boundary between workloads and the NAS array.
 - Platform services run under systemd sandboxing (`ProtectSystem=strict`, `NoNewPrivileges`, …).
-- **Caddy admin API on a unix socket only**, readable only by `skiff-agent` (never `localhost:2019`).
+- **Caddy admin API on a unix socket only**, readable only by `yoal-agent` (never `localhost:2019`).
 - VPS nftables: allow 80, 443 and the WireGuard UDP port only. SSH over WireGuard (or key-only break-glass).
 - Homelab: no inbound ports. It dials out over WireGuard.
 - Unattended security upgrades.
@@ -536,7 +536,7 @@ domains; `skif logout --all` removes the file and every profile. `SKIFF_URL`, `S
      can't work here (plain HTTP, an IP address).
   4. Offers an authenticator backup and links to email, backups, members and API keys.
   No sign-up path works before an owner exists.
-- **Join a node:** `skiff-agent join <platform origin, e.g. https://control.example.com> --token <single-use, 1h> --name <name>`.
+- **Join a node:** `yoal-agent join <platform origin, e.g. https://control.example.com> --token <single-use, 1h> --name <name>`.
 - **Self-update:**
   1. Verify the signature.
   2. Snapshot SQLite.
@@ -545,7 +545,7 @@ domains; `skif logout --all` removes the file and every profile. `SKIFF_URL`, `S
   5. Health check, with automatic rollback on failure.
 - Update policy: nothing updates on its own, patch releases included. Settings → Updates shows platform
   admins when a newer signed release exists, and an update runs only when someone starts it there or with
-  `skiff-update-self` on the host.
+  `yoal-update-self` on the host.
 
 ---
 

@@ -1,5 +1,5 @@
 import { redirect } from '@sveltejs/kit';
-import type { EmailMessageView } from '@skiff/contracts';
+import type { EmailMessageView } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { messageIdQuery, readActivityFilters } from '../_lib/email-ui.js';
 import type { PageServerLoad } from './$types';

@@ -17,7 +17,7 @@ import {
 	workflowTriggerMatches,
 } from './pipeline-workflow.ts';
 
-const PATH = '.skiff/workflows/ci.yml';
+const PATH = '.yoal/workflows/ci.yml';
 
 function yaml(text: string): unknown {
 	return Bun.YAML.parse(text);
@@ -55,14 +55,14 @@ on:
   workflow_dispatch:
     inputs: { promote: { type: boolean, default: false } }
 
-concurrency: { group: "ci-\${{ skiff.ref }}", cancel-in-progress: true }
+concurrency: { group: "ci-\${{ yoal.ref }}", cancel-in-progress: true }
 
 jobs:
   test:
     runs-on: [linux]
     steps:
       - uses: actions/checkout@v4          # built-in alias, no github.com API needed
-      - uses: actions/cache@v4             # aliased to skiff/cache
+      - uses: actions/cache@v4             # aliased to yoal/cache
         with: { path: ~/.bun/install/cache, key: "bun-\${{ hashFiles('bun.lock') }}" }
       - run: bun install --frozen-lockfile && bun test
     services:
@@ -76,31 +76,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: b
-        uses: skiff/build-image@v1
-        with: { tags: "registry/acme/api:\${{ skiff.sha }}-\${{ matrix.arch }}" }
+        uses: yoal/build-image@v1
+        with: { tags: "registry/acme/api:\${{ yoal.sha }}-\${{ matrix.arch }}" }
 
   deploy:
     needs: image
-    if: skiff.ref == 'refs/heads/main'
+    if: yoal.ref == 'refs/heads/main'
     environment: production
     runs-on: [linux]
     steps:
       - id: idx
-        uses: skiff/image-index@v1
+        uses: yoal/image-index@v1
         with:   # matrix job outputs collide (as in GHA), so join by the per-arch tags
-          tag: "registry/acme/api:\${{ skiff.sha }}"
-          sources: "registry/acme/api:\${{ skiff.sha }}-x64 registry/acme/api:\${{ skiff.sha }}-arm64"
-      - uses: skiff/deploy@v1
+          tag: "registry/acme/api:\${{ yoal.sha }}"
+          sources: "registry/acme/api:\${{ yoal.sha }}-x64 registry/acme/api:\${{ yoal.sha }}-arm64"
+      - uses: yoal/deploy@v1
         with: { project: api, image: "\${{ steps.idx.outputs.image }}", promote: true }
 `;
 
 describe('parseWorkflow', () => {
 	test('the docs §5.1 example parses', () => {
 		const doc = yaml(DOCS_EXAMPLE);
-		// `skiff/image-index` is used by the example but is not (yet) in pipelineBuiltinActions.
-		if (resolvePipelineAction('skiff/image-index@v1') === null) {
+		// `yoal/image-index` is used by the example but is not (yet) in pipelineBuiltinActions.
+		if (resolvePipelineAction('yoal/image-index@v1') === null) {
 			expect(issuesOf(doc)).toEqual([
-				{ path: 'jobs.deploy.steps[0].uses', message: expect.stringContaining("'skiff/image-index@v1' is not supported") },
+				{ path: 'jobs.deploy.steps[0].uses', message: expect.stringContaining("'yoal/image-index@v1' is not supported") },
 			]);
 			return;
 		}
@@ -110,11 +110,11 @@ describe('parseWorkflow', () => {
 	});
 
 	test('the docs example without the unknown action normalizes fully', () => {
-		const text = DOCS_EXAMPLE.replace('uses: skiff/image-index@v1', 'uses: skiff/build-image@v1');
+		const text = DOCS_EXAMPLE.replace('uses: yoal/image-index@v1', 'uses: yoal/build-image@v1');
 		const workflow = parseWorkflow(yaml(text), PATH);
 		expect(workflow.name).toBe('ci');
 		expect(workflow.path).toBe(PATH);
-		expect(workflow.concurrency).toEqual({ group: 'ci-${{ skiff.ref }}', cancelInProgress: true });
+		expect(workflow.concurrency).toEqual({ group: 'ci-${{ yoal.ref }}', cancelInProgress: true });
 		expect(workflow.on.push).toEqual({ branches: ['main'], branchesIgnore: null, tags: null, tagsIgnore: null, paths: null, pathsIgnore: null });
 		expect(workflow.on.pullRequest?.types).toEqual(['opened', 'synchronize', 'reopened']);
 		expect(workflow.on.workflowDispatch).toEqual({
@@ -138,7 +138,7 @@ describe('parseWorkflow', () => {
 		expect(image.steps[1]!.id).toBe('b');
 
 		const deploy = workflow.jobs.deploy!;
-		expect(deploy.if).toBe("skiff.ref == 'refs/heads/main'");
+		expect(deploy.if).toBe("yoal.ref == 'refs/heads/main'");
 		expect(deploy.environment).toEqual({ name: 'production', url: null });
 		expect(deploy.steps[1]!.with).toEqual({ project: 'api', image: '${{ steps.idx.outputs.image }}', promote: 'true' });
 		expect(topologicalJobOrder(workflow)).toEqual(['test', 'image', 'deploy']);
@@ -235,7 +235,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: dist, retention-days: 5, compress: false }
       - id: pub
-        uses: skiff/deploy@v1
+        uses: yoal/deploy@v1
         with: { project: web, archive: true }
 `),
 			PATH,
@@ -345,20 +345,20 @@ describe('parseWorkflow issues', () => {
 		['no jobs', { on: 'push', jobs: {} }, 'jobs', /at least one job/],
 		['bad job key', { on: 'push', jobs: { '1build': minimal().jobs } }, 'jobs.1build', /Job ids start with/],
 		['unknown job key', minimal({ 'runs_on': 'linux' }), 'jobs.build.runs_on', /Unknown key 'runs_on'/],
-		['reusable workflow outside .skiff', minimal({ uses: './.github/workflows/x.yml' }), 'jobs.build.uses', /Expected a reusable workflow path like \.\/\.skiff\/workflows/],
-		['caller with steps', minimal({ uses: './.skiff/workflows/x.yml' }), 'jobs.build.steps', /cannot have steps:/],
-		['caller with runs-on', minimal({ uses: './.skiff/workflows/x.yml' }), 'jobs.build.runs-on', /cannot have runs-on:/],
-		['caller with env', { on: 'push', jobs: { c: { uses: './.skiff/workflows/x.yml', env: { A: 'b' } } } }, 'jobs.c.env', /cannot have env:/],
-		['caller with environment', { on: 'push', jobs: { c: { uses: './.skiff/workflows/x.yml', environment: 'prod' } } }, 'jobs.c.environment', /cannot have environment:/],
-		['caller with container', { on: 'push', jobs: { c: { uses: './.skiff/workflows/x.yml', container: 'node:24' } } }, 'jobs.c.container', /cannot have container:/],
-		['caller with services', { on: 'push', jobs: { c: { uses: './.skiff/workflows/x.yml', services: {} } } }, 'jobs.c.services', /cannot have services:/],
-		['caller with unknown key', { on: 'push', jobs: { c: { uses: './.skiff/workflows/x.yml', input: {} } } }, 'jobs.c.input', /Unknown key 'input' \(allowed with uses/],
+		['reusable workflow outside .yoal', minimal({ uses: './.github/workflows/x.yml' }), 'jobs.build.uses', /Expected a reusable workflow path like \.\/\.yoal\/workflows/],
+		['caller with steps', minimal({ uses: './.yoal/workflows/x.yml' }), 'jobs.build.steps', /cannot have steps:/],
+		['caller with runs-on', minimal({ uses: './.yoal/workflows/x.yml' }), 'jobs.build.runs-on', /cannot have runs-on:/],
+		['caller with env', { on: 'push', jobs: { c: { uses: './.yoal/workflows/x.yml', env: { A: 'b' } } } }, 'jobs.c.env', /cannot have env:/],
+		['caller with environment', { on: 'push', jobs: { c: { uses: './.yoal/workflows/x.yml', environment: 'prod' } } }, 'jobs.c.environment', /cannot have environment:/],
+		['caller with container', { on: 'push', jobs: { c: { uses: './.yoal/workflows/x.yml', container: 'node:24' } } }, 'jobs.c.container', /cannot have container:/],
+		['caller with services', { on: 'push', jobs: { c: { uses: './.yoal/workflows/x.yml', services: {} } } }, 'jobs.c.services', /cannot have services:/],
+		['caller with unknown key', { on: 'push', jobs: { c: { uses: './.yoal/workflows/x.yml', input: {} } } }, 'jobs.c.input', /Unknown key 'input' \(allowed with uses/],
 		['remote reusable workflow', { on: 'push', jobs: { c: { uses: 'acme/shared/.github/workflows/build.yml@v1' } } }, 'jobs.c.uses', /Remote reusable workflows are not supported yet/],
-		['local reusable workflow with a ref', { on: 'push', jobs: { c: { uses: './.skiff/workflows/x.yml@main' } } }, 'jobs.c.uses', /takes no @ref/],
-		['reusable workflow calling itself', { on: 'push', jobs: { c: { uses: './.skiff/workflows/ci.yml' } } }, 'jobs.c.uses', /cannot call itself/],
-		['caller secrets not inherit', { on: 'push', jobs: { c: { uses: './.skiff/workflows/x.yml', secrets: 'all' } } }, 'jobs.c.secrets', /'inherit' or a mapping/],
-		['caller with uses secrets context', { on: 'push', jobs: { c: { uses: './.skiff/workflows/x.yml', with: { t: '${{ secrets.T }}' } } } }, 'jobs.c.with.t', /Context 'secrets' is not available/],
-		['caller with uses steps context', { on: 'push', jobs: { c: { uses: './.skiff/workflows/x.yml', secrets: { T: '${{ steps.a.outputs.b }}' } } } }, 'jobs.c.secrets.T', /Context 'steps' is not available/],
+		['local reusable workflow with a ref', { on: 'push', jobs: { c: { uses: './.yoal/workflows/x.yml@main' } } }, 'jobs.c.uses', /takes no @ref/],
+		['reusable workflow calling itself', { on: 'push', jobs: { c: { uses: './.yoal/workflows/ci.yml' } } }, 'jobs.c.uses', /cannot call itself/],
+		['caller secrets not inherit', { on: 'push', jobs: { c: { uses: './.yoal/workflows/x.yml', secrets: 'all' } } }, 'jobs.c.secrets', /'inherit' or a mapping/],
+		['caller with uses secrets context', { on: 'push', jobs: { c: { uses: './.yoal/workflows/x.yml', with: { t: '${{ secrets.T }}' } } } }, 'jobs.c.with.t', /Context 'secrets' is not available/],
+		['caller with uses steps context', { on: 'push', jobs: { c: { uses: './.yoal/workflows/x.yml', secrets: { T: '${{ steps.a.outputs.b }}' } } } }, 'jobs.c.secrets.T', /Context 'steps' is not available/],
 		['with on a steps job', minimal({ with: { a: 1 } }), 'jobs.build.with', /reusable workflow/],
 		['secrets on a steps job', minimal({ secrets: 'inherit' }), 'jobs.build.secrets', /reusable workflow/],
 		['workflow_call choice input', minimal({}, { on: { workflow_call: { inputs: { a: { type: 'choice', options: ['x'] } } } } }), 'on.workflow_call.inputs.a.type', /Unknown input type 'choice' \(string, boolean, number\)/],
@@ -368,9 +368,9 @@ describe('parseWorkflow issues', () => {
 		['workflow_call output uses steps', minimal({}, { on: { workflow_call: { outputs: { d: { value: '${{ steps.a.outputs.b }}' } } } } }), 'on.workflow_call.outputs.d.value', /Context 'steps' is not available/],
 		['workflow_call bad secret name', minimal({}, { on: { workflow_call: { secrets: { 'my-token': { required: true } } } } }), 'on.workflow_call.secrets.my-token', /letters, digits and underscores/],
 		['workflow_call unknown key', minimal({}, { on: { workflow_call: { input: {} } } }), 'on.workflow_call.input', /Unknown key/],
-		['skiff_event bad type', minimal({}, { on: { skiff_event: { types: ['deploymentfailed'] } } }), 'on.skiff_event.types', /<source>\.<event>/],
-		['skiff_event unknown key', minimal({}, { on: { skiff_event: { events: ['deployments.failed'] } } }), 'on.skiff_event.events', /Unknown key/],
-		['skiff_event as a list', minimal({}, { on: { skiff_event: ['deployments.failed'] } }), 'on.skiff_event', /Expected \{ types/],
+		['yoal_event bad type', minimal({}, { on: { yoal_event: { types: ['deploymentfailed'] } } }), 'on.yoal_event.types', /<source>\.<event>/],
+		['yoal_event unknown key', minimal({}, { on: { yoal_event: { events: ['deployments.failed'] } } }), 'on.yoal_event.events', /Unknown key/],
+		['yoal_event as a list', minimal({}, { on: { yoal_event: ['deployments.failed'] } }), 'on.yoal_event', /Expected \{ types/],
 		['missing runs-on', { on: 'push', jobs: { build: { steps: [{ run: 'x' }] } } }, 'jobs.build.runs-on', /runs-on is required/],
 		['empty runs-on', minimal({ 'runs-on': [] }), 'jobs.build.runs-on', /at least one label/],
 		['runs-on group only', minimal({ 'runs-on': { group: 'big' } }), 'jobs.build.runs-on', /at least one label/],
@@ -385,7 +385,7 @@ describe('parseWorkflow issues', () => {
 		['not an action', minimal({ steps: [{ uses: 'setup-node' }] }), 'jobs.build.steps[0].uses', /is not an action; use owner\/repo@ref.*GitHub runner pool \(docs\/RUNNERS\.md\)/],
 		['local action escaping the workspace', minimal({ steps: [{ uses: './a/../../outside' }] }), 'jobs.build.steps[0].uses', /must stay inside the workspace/],
 		['local action with a ref', minimal({ steps: [{ uses: './my-action@v1' }] }), 'jobs.build.steps[0].uses', /takes no @ref/],
-		['unknown skiff built-in', minimal({ steps: [{ uses: 'skiff/teleport@v1' }] }), 'jobs.build.steps[0].uses', /Unknown built-in action/],
+		['unknown yoal built-in', minimal({ steps: [{ uses: 'yoal/teleport@v1' }] }), 'jobs.build.steps[0].uses', /Unknown built-in action/],
 		['reusable workflow as a step', minimal({ steps: [{ uses: 'acme/shared/.github/workflows/build.yml@v1' }] }), 'jobs.build.steps[0].uses', /called with jobs.<id>.uses/],
 		['docker action', minimal({ steps: [{ uses: 'docker://alpine:3' }] }), 'jobs.build.steps[0].uses', /Docker-container actions/],
 		['template in uses', minimal({ steps: [{ uses: 'actions/checkout@${{ inputs.v }}' }] }), 'jobs.build.steps[0].uses', /cannot contain expressions/],
@@ -418,9 +418,9 @@ describe('parseWorkflow issues', () => {
 		['max-parallel', minimal({ strategy: { 'max-parallel': 0 } }), 'jobs.build.strategy.max-parallel', /positive whole number/],
 		['fail-fast', minimal({ strategy: { 'fail-fast': 'no' } }), 'jobs.build.strategy.fail-fast', /true or false/],
 		['permissions shape', minimal({}, { permissions: { contents: 'admin' } }), 'permissions.contents', /read, write or none/],
-		['syntax error in expression', minimal({ steps: [{ run: 'echo ${{ skiff.sha == }}' }] }), 'jobs.build.steps[0].run', /Unexpected end of expression/],
+		['syntax error in expression', minimal({ steps: [{ run: 'echo ${{ yoal.sha == }}' }] }), 'jobs.build.steps[0].run', /Unexpected end of expression/],
 		['unknown context', minimal({ steps: [{ run: 'echo ${{ foo.bar }}' }] }), 'jobs.build.steps[0].run', /Unrecognized named-value 'foo'/],
-		['unterminated template', minimal({ env: { A: '${{ skiff.sha' } }), 'jobs.build.env.A', /Unterminated/],
+		['unterminated template', minimal({ env: { A: '${{ yoal.sha' } }), 'jobs.build.env.A', /Unterminated/],
 		['matrix in job if', minimal({ if: "matrix.os == 'linux'" }), 'jobs.build.if', /Context 'matrix' is not available here/],
 		['steps in job env', minimal({ env: { A: '${{ steps.x.outputs.y }}' } }), 'jobs.build.env.A', /Context 'steps' is not available/],
 		['secrets in workflow concurrency', minimal({}, { concurrency: 'g-${{ secrets.X }}' }), 'concurrency', /Context 'secrets' is not available/],
@@ -429,7 +429,7 @@ describe('parseWorkflow issues', () => {
 		['secrets in step if', minimal({ steps: [{ run: 'x', if: "secrets.X != ''" }] }), 'jobs.build.steps[0].if', /Context 'secrets' is not available/],
 		['hashFiles in job env', minimal({ env: { A: "${{ hashFiles('x') }}" } }), 'jobs.build.env.A', /hashFiles\(\) is only available in steps/],
 		['status function outside if', minimal({ steps: [{ run: 'echo ${{ success() }}' }] }), 'jobs.build.steps[0].run', /success\(\) is only available in if/],
-		['mixed text and template in if', minimal({ if: "${{ skiff.ref }} == 'x'" }), 'jobs.build.if', /Wrap the whole condition/],
+		['mixed text and template in if', minimal({ if: "${{ yoal.ref }} == 'x'" }), 'jobs.build.if', /Wrap the whole condition/],
 		['inputs in strategy ok but steps not', minimal({ strategy: { matrix: { a: ['${{ steps.x.outputs.y }}'] } } }), 'jobs.build.strategy.matrix.a[0]', /Context 'steps' is not available/],
 	];
 
@@ -602,7 +602,7 @@ describe('workflowTriggerMatches', () => {
 	test('workflow_dispatch matches the picked workflow only', () => {
 		const workflow = wf('workflow_dispatch');
 		expect(workflowTriggerMatches(workflow, { event: 'workflow_dispatch', ref: 'refs/heads/main', workflowPath: PATH })).toBe(true);
-		expect(workflowTriggerMatches(workflow, { event: 'workflow_dispatch', ref: 'refs/heads/main', workflowPath: '.skiff/workflows/other.yml' })).toBe(false);
+		expect(workflowTriggerMatches(workflow, { event: 'workflow_dispatch', ref: 'refs/heads/main', workflowPath: '.yoal/workflows/other.yml' })).toBe(false);
 		expect(workflowTriggerMatches(wf('push'), { event: 'workflow_dispatch', ref: 'refs/heads/main', workflowPath: PATH })).toBe(false);
 	});
 
@@ -737,7 +737,7 @@ describe('matrixJobName', () => {
 		['build', { os: 'linux', experimental: true, n: null }, 'build (linux, true, )'],
 		['build', { node: { version: 20 } }, 'build ({"version":20})'],
 		['Build ${{ matrix.os }}', { os: 'linux' }, 'Build ${{ matrix.os }}'],
-		['Build ${{ skiff.sha }}', { os: 'linux' }, 'Build ${{ skiff.sha }} (linux)'],
+		['Build ${{ yoal.sha }}', { os: 'linux' }, 'Build ${{ yoal.sha }} (linux)'],
 	])('%p with %j → %p', (name, combo, expected) => {
 		expect(matrixJobName(name, combo)).toBe(expected);
 	});
@@ -849,7 +849,7 @@ jobs:
     outputs: { digest: "\${{ steps.b.outputs.digest }}" }
     steps:
       - id: b
-        run: echo "digest=sha256:1" >> "$SKIFF_OUTPUT"
+        run: echo "digest=sha256:1" >> "$YOAL_OUTPUT"
         env: { TOKEN: "\${{ secrets.REGISTRY_TOKEN }}", TARGET: "\${{ inputs.target }}" }
 `);
 	const CALLER = yaml(`
@@ -861,20 +861,20 @@ jobs:
   build:
     name: Build \${{ matrix.arch }}
     needs: test
-    if: skiff.ref == 'refs/heads/main'
-    uses: ./.skiff/workflows/build.yml
+    if: yoal.ref == 'refs/heads/main'
+    uses: ./.yoal/workflows/build.yml
     strategy: { matrix: { arch: [x64, arm64] } }
     concurrency: { group: build, cancel-in-progress: true }
     permissions: { contents: read }
     with: { target: "\${{ matrix.arch }}", debug: true }
     secrets: { REGISTRY_TOKEN: "\${{ secrets.ZOT }}" }
   inherit:
-    uses: ./.skiff/workflows/build.yml
+    uses: ./.yoal/workflows/build.yml
     secrets: inherit
 `);
 
 	test('on.workflow_call next to other triggers', () => {
-		const callee = parseWorkflow(CALLEE, '.skiff/workflows/build.yml');
+		const callee = parseWorkflow(CALLEE, '.yoal/workflows/build.yml');
 		expect(callee.on.push).not.toBeNull();
 		expect(callee.on.workflowCall).toEqual({
 			inputs: {
@@ -899,7 +899,7 @@ jobs:
 			key: 'build',
 			name: 'Build ${{ matrix.arch }}',
 			needs: ['test'],
-			if: "skiff.ref == 'refs/heads/main'",
+			if: "yoal.ref == 'refs/heads/main'",
 			runsOn: [],
 			strategy: { matrix: { arch: ['x64', 'arm64'] }, failFast: true, maxParallel: null },
 			outputs: {},
@@ -912,21 +912,21 @@ jobs:
 			container: null,
 			services: {},
 			steps: [],
-			uses: './.skiff/workflows/build.yml',
+			uses: './.yoal/workflows/build.yml',
 			with: { target: '${{ matrix.arch }}', debug: 'true' },
 			secrets: { REGISTRY_TOKEN: '${{ secrets.ZOT }}' },
 		});
-		expect(workflow.jobs.inherit).toMatchObject({ uses: './.skiff/workflows/build.yml', with: {}, secrets: 'inherit', needs: [] });
+		expect(workflow.jobs.inherit).toMatchObject({ uses: './.yoal/workflows/build.yml', with: {}, secrets: 'inherit', needs: [] });
 		expect(workflow.jobs.test!.uses).toBeUndefined();
 		expect(findWorkflowCalls(workflow)).toEqual([
-			{ jobKey: 'build', path: '.skiff/workflows/build.yml' },
-			{ jobKey: 'inherit', path: '.skiff/workflows/build.yml' },
+			{ jobKey: 'build', path: '.yoal/workflows/build.yml' },
+			{ jobKey: 'inherit', path: '.yoal/workflows/build.yml' },
 		]);
 		expect(topologicalJobOrder(workflow)).toEqual(['test', 'build', 'inherit']);
 	});
 
 	test('validateWorkflowCallInputs applies defaults, types and required inputs', () => {
-		const callee = parseWorkflow(CALLEE, '.skiff/workflows/build.yml');
+		const callee = parseWorkflow(CALLEE, '.yoal/workflows/build.yml');
 		expect(validateWorkflowCallInputs(callee, { target: 'x64', debug: 'true', shards: '3' })).toEqual({ target: 'x64', debug: true, shards: 3, label: '' });
 		expect(validateWorkflowCallInputs(callee, { target: 'x64' })).toEqual({ target: 'x64', debug: false, shards: 0, label: '' });
 		expect(validateWorkflowCallInputs(callee, { target: 5, debug: '' })).toEqual({ target: '5', debug: false, shards: 0, label: '' });
@@ -941,7 +941,7 @@ jobs:
 	});
 
 	test('checkWorkflowCallSecrets', () => {
-		const callee = parseWorkflow(CALLEE, '.skiff/workflows/build.yml');
+		const callee = parseWorkflow(CALLEE, '.yoal/workflows/build.yml');
 		expect(() => checkWorkflowCallSecrets(callee, { REGISTRY_TOKEN: '${{ secrets.ZOT }}' })).not.toThrow();
 		expect(() => checkWorkflowCallSecrets(callee, 'inherit')).not.toThrow();
 		expect(() => checkWorkflowCallSecrets(callee, 'inherit', ['REGISTRY_TOKEN', 'OTHER'])).not.toThrow();
@@ -951,25 +951,25 @@ jobs:
 	});
 
 	test('workflowCallOutputs reads jobs.<id> from the callee jobs', () => {
-		const callee = parseWorkflow(CALLEE, '.skiff/workflows/build.yml');
-		const outputs = workflowCallOutputs(callee, { image: { result: 'success', outputs: { digest: 'sha256:abc' } } }, { skiff: {}, inputs: { target: 'arm64' } });
+		const callee = parseWorkflow(CALLEE, '.yoal/workflows/build.yml');
+		const outputs = workflowCallOutputs(callee, { image: { result: 'success', outputs: { digest: 'sha256:abc' } } }, { yoal: {}, inputs: { target: 'arm64' } });
 		expect(outputs).toEqual({ digest: 'sha256:abc', both: 'sha256:abc@arm64' });
 	});
 });
 
-describe('on.skiff_event', () => {
+describe('on.yoal_event', () => {
 	test('types are kept; absent or null means any event', () => {
-		const typed = parseWorkflow(minimal({}, { on: { skiff_event: { types: ['deployments.failed', 'database-backups.completed', 'deployments.failed'] } } }), PATH);
-		expect(typed.on.skiffEvent).toEqual({ types: ['deployments.failed', 'database-backups.completed'] });
-		expect(parseWorkflow(minimal({}, { on: { skiff_event: null } }), PATH).on.skiffEvent).toEqual({ types: [] });
-		expect(parseWorkflow(minimal({}, { on: ['push', 'skiff_event'] }), PATH).on.skiffEvent).toEqual({ types: [] });
-		expect(parseWorkflow(minimal(), PATH).on.skiffEvent).toBeNull();
+		const typed = parseWorkflow(minimal({}, { on: { yoal_event: { types: ['deployments.failed', 'database-backups.completed', 'deployments.failed'] } } }), PATH);
+		expect(typed.on.yoalEvent).toEqual({ types: ['deployments.failed', 'database-backups.completed'] });
+		expect(parseWorkflow(minimal({}, { on: { yoal_event: null } }), PATH).on.yoalEvent).toEqual({ types: [] });
+		expect(parseWorkflow(minimal({}, { on: ['push', 'yoal_event'] }), PATH).on.yoalEvent).toEqual({ types: [] });
+		expect(parseWorkflow(minimal(), PATH).on.yoalEvent).toBeNull();
 	});
 
 	test('matching', () => {
-		const typed = parseWorkflow(minimal({}, { on: { skiff_event: { types: ['deployments.failed'] } } }), PATH);
-		const any = parseWorkflow(minimal({}, { on: { skiff_event: {} } }), PATH);
-		const event = (eventType: string): PipelineTriggerEvent => ({ event: 'skiff_event', ref: 'refs/heads/main', eventType });
+		const typed = parseWorkflow(minimal({}, { on: { yoal_event: { types: ['deployments.failed'] } } }), PATH);
+		const any = parseWorkflow(minimal({}, { on: { yoal_event: {} } }), PATH);
+		const event = (eventType: string): PipelineTriggerEvent => ({ event: 'yoal_event', ref: 'refs/heads/main', eventType });
 		expect(workflowTriggerMatches(typed, event('deployments.failed'))).toBe(true);
 		expect(workflowTriggerMatches(typed, event('deployments.created'))).toBe(false);
 		expect(workflowTriggerMatches(any, event('storage.object-create'))).toBe(true);
@@ -979,8 +979,8 @@ describe('on.skiff_event', () => {
 
 describe('step actions', () => {
 	test('parsePipelineActionRef', () => {
-		expect(parsePipelineActionRef('actions/checkout@v4')).toEqual({ kind: 'builtin', action: 'skiff/checkout' });
-		expect(parsePipelineActionRef('skiff/image-index@v1')).toEqual({ kind: 'builtin', action: 'skiff/image-index' });
+		expect(parsePipelineActionRef('actions/checkout@v4')).toEqual({ kind: 'builtin', action: 'yoal/checkout' });
+		expect(parsePipelineActionRef('yoal/image-index@v1')).toEqual({ kind: 'builtin', action: 'yoal/image-index' });
 		expect(parsePipelineActionRef('actions/setup-node@v4')).toEqual({ kind: 'remote', owner: 'actions', repo: 'setup-node', path: '', ref: 'v4' });
 		expect(parsePipelineActionRef('github/codeql-action/init@' + 'a'.repeat(40))).toEqual({ kind: 'remote', owner: 'github', repo: 'codeql-action', path: 'init', ref: 'a'.repeat(40) });
 		expect(parsePipelineActionRef('acme/tools/a/b@releases/v1')).toEqual({ kind: 'remote', owner: 'acme', repo: 'tools', path: 'a/b', ref: 'releases/v1' });

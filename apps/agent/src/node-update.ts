@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { compareSemver, parseSemver, type DesiredState, type NodeUpdateTask } from '@skiff/contracts';
+import { compareSemver, parseSemver, type DesiredState, type NodeUpdateTask } from '@yoal/contracts';
 import { atomicWriteFile } from './state.ts';
 
 /**
@@ -104,7 +104,7 @@ export class NodeUpdateRunner {
 		const error =
 			attempt.error ??
 			(attempt.installedAt !== undefined
-				? `${task.version} was installed, but the agent still runs ${this.options.currentVersion} after a restart. Check that skiff-agent.service runs the binary the helper replaced.`
+				? `${task.version} was installed, but the agent still runs ${this.options.currentVersion} after a restart. Check that yoal-agent.service runs the binary the helper replaced.`
 				: `The update to ${task.version} was interrupted (the agent restarted before the helper answered). Retry it from the node list.`);
 		this.pending = { generation: task.generation, error };
 	}

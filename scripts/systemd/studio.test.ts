@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { STUDIO_UNIT, ensureStudioUnit, studioUnit } from './studio.ts';
 
-const root = mkdtempSync(join(tmpdir(), 'skiff-studio-unit-'));
+const root = mkdtempSync(join(tmpdir(), 'yoal-studio-unit-'));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 /** `Key=value` lines of one section, comments and blanks dropped. */
@@ -27,7 +27,7 @@ function directives(unit: string, section: string): Map<string, string[]> {
 	return out;
 }
 
-describe('skiff-studio unit', () => {
+describe('yoal-studio unit', () => {
 	const unit = studioUnit();
 	const service = directives(unit, 'Service');
 
@@ -40,13 +40,13 @@ describe('skiff-studio unit', () => {
 		expect(unit).not.toMatch(/^WantedBy=/m);
 	});
 
-	test('runs the agent binary studio entrypoint as skiff on the runtime socket', () => {
-		expect(service.get('ExecStart')).toEqual(['/opt/skiff/current/agent/skiff-agent studio']);
-		expect(service.get('User')).toEqual(['skiff']);
-		expect(service.get('Group')).toEqual(['skiff']);
+	test('runs the agent binary studio entrypoint as yoal on the runtime socket', () => {
+		expect(service.get('ExecStart')).toEqual(['/opt/yoal/current/agent/yoal-agent studio']);
+		expect(service.get('User')).toEqual(['yoal']);
+		expect(service.get('Group')).toEqual(['yoal']);
 		expect(service.get('UMask')).toEqual(['0007']);
-		expect(service.get('Environment')).toEqual(['SKIFF_STUDIO_SOCKET=/run/skiff/studio.sock']);
-		// The runtime dir is `d /run/skiff 2770 root caddy`; creating the socket needs that group.
+		expect(service.get('Environment')).toEqual(['YOAL_STUDIO_SOCKET=/run/yoal/studio.sock']);
+		// The runtime dir is `d /run/yoal 2770 root caddy`; creating the socket needs that group.
 		expect(service.get('SupplementaryGroups')).toEqual(['caddy']);
 	});
 
@@ -65,8 +65,8 @@ describe('skiff-studio unit', () => {
 		expect(service.get('LimitNOFILE')).toEqual(['4096']);
 	});
 
-	test('mirrors the agent sandbox without netlink and with only /run/skiff writable', () => {
-		const agent = directives(readFileSync(join(import.meta.dir, 'skiff-agent.service'), 'utf8'), 'Service');
+	test('mirrors the agent sandbox without netlink and with only /run/yoal writable', () => {
+		const agent = directives(readFileSync(join(import.meta.dir, 'yoal-agent.service'), 'utf8'), 'Service');
 		const hardening = [
 			'NoNewPrivileges',
 			'PrivateTmp',
@@ -91,15 +91,15 @@ describe('skiff-studio unit', () => {
 		];
 		for (const key of hardening) expect([key, service.get(key)]).toEqual([key, agent.get(key)]);
 		expect(service.get('RestrictAddressFamilies')).toEqual(['AF_UNIX AF_INET AF_INET6']);
-		expect(service.get('ReadWritePaths')).toEqual(['/run/skiff']);
+		expect(service.get('ReadWritePaths')).toEqual(['/run/yoal']);
 	});
 
 	test('honours custom paths', () => {
-		const custom = studioUnit({ optDir: '/srv/opt', runDir: '/run/x', socketGroup: 'skiff-caddy' });
-		expect(custom).toContain('ExecStart=/srv/opt/current/agent/skiff-agent studio');
-		expect(custom).toContain('Environment=SKIFF_STUDIO_SOCKET=/run/x/studio.sock');
+		const custom = studioUnit({ optDir: '/srv/opt', runDir: '/run/x', socketGroup: 'yoal-caddy' });
+		expect(custom).toContain('ExecStart=/srv/opt/current/agent/yoal-agent studio');
+		expect(custom).toContain('Environment=YOAL_STUDIO_SOCKET=/run/x/studio.sock');
 		expect(custom).toContain('ReadWritePaths=/run/x\n');
-		expect(custom).toContain('SupplementaryGroups=skiff-caddy');
+		expect(custom).toContain('SupplementaryGroups=yoal-caddy');
 	});
 
 	test('ensureStudioUnit writes once and reloads, and never enables or starts it', () => {

@@ -29,15 +29,15 @@ export type RegistryEngine = keyof typeof REGISTRY_ENGINES;
 /** Registry workloads carry this id prefix; `purge` accepts it too. */
 export const REGISTRY_ID_PREFIX = 'reg_';
 /** Activation env names the helper turns into files, never container env. */
-export const REGISTRY_CERT_ENV = 'SKIFF_REGISTRY_TOKEN_CERT';
-export const REGISTRY_EVENTS_ENV = 'SKIFF_REGISTRY_EVENTS_URL';
-/** G5: `skiff-admin:<bcrypt>`, the only zot user allowed to upload signing keys. */
-export const REGISTRY_ADMIN_HTPASSWD_ENV = 'SKIFF_REGISTRY_ADMIN_HTPASSWD';
+export const REGISTRY_CERT_ENV = 'YOAL_REGISTRY_TOKEN_CERT';
+export const REGISTRY_EVENTS_ENV = 'YOAL_REGISTRY_EVENTS_URL';
+/** G5: `yoal-admin:<bcrypt>`, the only zot user allowed to upload signing keys. */
+export const REGISTRY_ADMIN_HTPASSWD_ENV = 'YOAL_REGISTRY_ADMIN_HTPASSWD';
 /** G6: S3 credentials and the Redis/Valkey cache URL. */
-export const REGISTRY_S3_ACCESS_KEY_ENV = 'SKIFF_REGISTRY_S3_ACCESS_KEY';
-export const REGISTRY_S3_SECRET_KEY_ENV = 'SKIFF_REGISTRY_S3_SECRET_KEY';
-export const REGISTRY_CACHE_URL_ENV = 'SKIFF_REGISTRY_CACHE_URL';
-export const REGISTRY_ADMIN_USER = 'skiff-admin';
+export const REGISTRY_S3_ACCESS_KEY_ENV = 'YOAL_REGISTRY_S3_ACCESS_KEY';
+export const REGISTRY_S3_SECRET_KEY_ENV = 'YOAL_REGISTRY_S3_SECRET_KEY';
+export const REGISTRY_CACHE_URL_ENV = 'YOAL_REGISTRY_CACHE_URL';
+export const REGISTRY_ADMIN_USER = 'yoal-admin';
 export const REGISTRY_MIRROR_UPSTREAMS = ['docker.io', 'ghcr.io', 'quay.io'] as const;
 export type RegistryMirrorUpstream = (typeof REGISTRY_MIRROR_UPSTREAMS)[number];
 /** The upstream URL zot syncs each mirror from. */
@@ -56,7 +56,7 @@ export interface WorkloadRegistry {
 	service: string;
 	/** The control plane's token endpoint (https, or http on a dev install). */
 	realm: string;
-	/** Retention: tags kept per repository by push time; `skiff-d-*` deployment pins are always kept. */
+	/** Retention: tags kept per repository by push time; `yoal-d-*` deployment pins are always kept. */
 	keepTags: number;
 	/** G4: upstreams mirrored on demand under `<upstream>/…`. */
 	mirrors: RegistryMirrorUpstream[];
@@ -154,7 +154,7 @@ export function assertCertificatePem(value: string | undefined): string {
 	return `${pem}\n`;
 }
 
-/** `skiff-admin:<bcrypt>`: one htpasswd line for the admin user, nothing else. */
+/** `yoal-admin:<bcrypt>`: one htpasswd line for the admin user, nothing else. */
 export function assertAdminHtpasswd(value: string | undefined): string | null {
 	if (!value) return null;
 	if (!new RegExp(`^${REGISTRY_ADMIN_USER}:\\$2[aby]\\$\\d{2}\\$[./A-Za-z0-9]{53}$`).test(value))
@@ -179,7 +179,7 @@ export function assertEventsUrl(value: string | undefined): string | null {
 /**
  * zot's `config.json`. Docker-format manifests are accepted (`docker2s2`; `docker push` of an
  * image pulled from Docker Hub sends them). GC runs online with a one-hour grace; retention keeps
- * every `skiff-d-*` pin (deployments, R11) and the newest `keepTags` tags, and deletes untagged
+ * every `yoal-d-*` pin (deployments, R11) and the newest `keepTags` tags, and deletes untagged
  * manifests after a day.
  */
 export function renderZotConfig(registry: WorkloadRegistry, secretsOrEventsUrl: RegistrySecrets | string | null): string {
@@ -224,7 +224,7 @@ export function renderZotConfig(registry: WorkloadRegistry, secretsOrEventsUrl: 
 						repositories: ['**'],
 						deleteReferrers: false,
 						deleteUntagged: true,
-						keepTags: [{ patterns: ['^skiff-d-.*'] }, { mostRecentlyPushedCount: registry.keepTags }],
+						keepTags: [{ patterns: ['^yoal-d-.*'] }, { mostRecentlyPushedCount: registry.keepTags }],
 					},
 				],
 			},
@@ -232,11 +232,11 @@ export function renderZotConfig(registry: WorkloadRegistry, secretsOrEventsUrl: 
 		http: {
 			address: '0.0.0.0',
 			port: String(REGISTRY_ENGINES[registry.engine].containerPort),
-			realm: 'skiff',
+			realm: 'yoal',
 			compat: ['docker2s2'],
 			auth: {
 				bearer: { realm: registry.realm, service: registry.service, cert: `${REGISTRY_CONFIG_MOUNT}/cert.pem` },
-				// G5: Skiff's admin login (Basic) for the signing-key upload routes, which bearer
+				// G5: Yoal's admin login (Basic) for the signing-key upload routes, which bearer
 				// tokens can never reach. Everyone else keeps using tokens.
 				...(registry.trust ? { htpasswd: { path: `${REGISTRY_CONFIG_MOUNT}/htpasswd` } } : {}),
 			},

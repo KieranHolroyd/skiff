@@ -7,7 +7,7 @@ This page covers how you sign into your cloud, how the first owner is created, h
 
 ## Sign-in methods
 
-Skiff is invite-only. Nobody can create an account by signing up on their own, so every method below is for an account that already exists.
+Yoal is invite-only. Nobody can create an account by signing up on their own, so every method below is for an account that already exists.
 
 | Method | Available when | Notes |
 | --- | --- | --- |
@@ -34,7 +34,7 @@ Reset links need email. When the operator has not configured SMTP, **Forgot pass
 
 ### Configure GitHub sign-in
 
-If a platform admin has created Skiff's [GitHub App](/deploying/github), GitHub sign-in uses the App's OAuth client after the next control-plane restart, and you can skip this section. Environment variables, when set, take precedence over the App.
+If a platform admin has created Yoal's [GitHub App](/deploying/github), GitHub sign-in uses the App's OAuth client after the next control-plane restart, and you can skip this section. Environment variables, when set, take precedence over the App.
 
 Otherwise, GitHub sign-in needs an OAuth app on GitHub and two environment variables on the control plane:
 
@@ -51,18 +51,18 @@ Sign-in links and invitations are sent through SMTP. Set these on the control pl
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `SKIFF_SMTP_HOST` | none | SMTP server. Setting it turns on email delivery. |
-| `SKIFF_SMTP_PORT` | `587` | SMTP port. |
-| `SKIFF_SMTP_USER` | empty | SMTP username. |
-| `SKIFF_SMTP_PASSWORD` | empty | SMTP password. |
-| `SKIFF_SMTP_FROM` | `noreply` at the content domain | Sender address, as `Skiff <noreply@…>`. |
-| `SKIFF_SMTP_SECURE` | off | Set to `1` for implicit TLS. |
+| `YOAL_SMTP_HOST` | none | SMTP server. Setting it turns on email delivery. |
+| `YOAL_SMTP_PORT` | `587` | SMTP port. |
+| `YOAL_SMTP_USER` | empty | SMTP username. |
+| `YOAL_SMTP_PASSWORD` | empty | SMTP password. |
+| `YOAL_SMTP_FROM` | `noreply` at the content domain | Sender address, as `Yoal <noreply@…>`. |
+| `YOAL_SMTP_SECURE` | off | Set to `1` for implicit TLS. |
 
 See [configuration](/self-hosting/configuration) for where these are set on a self-hosted install.
 
 ## Setting up the first owner
 
-A new install has no users, so the sign-in page sends you to the setup wizard at `/setup`. The installer prints a link containing the setup token. The token is stored on the server, in `/etc/skiff/setup-token` by default, and the control plane falls back to a file in its data directory if that one is missing or unreadable.
+A new install has no users, so the sign-in page sends you to the setup wizard at `/setup`. The installer prints a link containing the setup token. The token is stored on the server, in `/etc/yoal/setup-token` by default, and the control plane falls back to a file in its data directory if that one is missing or unreadable.
 
 The wizard works through four steps:
 
@@ -86,7 +86,7 @@ Until the factor is proved, the dashboard pages and most account actions are ref
 
 API keys and MCP tokens are not affected by the session check. They are created from a proved session in the first place.
 
-The check is on by default. The operator can turn it off with `SKIFF_OWNER_2FA=0`; see [recovering access](#recovering-access).
+The check is on by default. The operator can turn it off with `YOAL_OWNER_2FA=0`; see [recovering access](#recovering-access).
 
 ## Authenticator app and backup codes
 
@@ -109,17 +109,17 @@ Accounts that already have a password must enter it to add or remove an authenti
 
 ## Signing in to the CLI
 
-The `skif` CLI can sign in through your browser:
+The `yoal` CLI can sign in through your browser:
 
 ```sh
-skif login --url https://control.example.com
+yoal login --url https://control.example.com
 ```
 
-The CLI opens `/cli/login` in your browser and waits on a local port. The page asks you to confirm that you ran the command on this machine, and shows **Cancel** and **Authorize**. Authorizing sends a one-time code back to the CLI, which exchanges it for a new API key and saves it to `~/.config/skiff/config.json` with mode `0600`. The code expires after five minutes, and the CLI gives up waiting after five minutes too.
+The CLI opens `/cli/login` in your browser and waits on a local port. The page asks you to confirm that you ran the command on this machine, and shows **Cancel** and **Authorize**. Authorizing sends a one-time code back to the CLI, which exchanges it for a new API key and saves it to `~/.config/yoal/config.json` with mode `0600`. The code expires after five minutes, and the CLI gives up waiting after five minutes too.
 
 Only **owners** and **admins** can authorize the CLI, because only those roles can create API keys. Owners must also have verified their second factor in the current session.
 
-Use `--no-browser` to print the URL instead of opening a browser, for example on a remote machine. To skip the browser entirely, pass an API key with `--token` or set `SKIFF_TOKEN`. Keys are covered in [API keys and tokens](/accounts/api-keys-and-tokens), and the full command reference is in the [CLI page](/clients/cli).
+Use `--no-browser` to print the URL instead of opening a browser, for example on a remote machine. To skip the browser entirely, pass an API key with `--token` or set `YOAL_TOKEN`. Keys are covered in [API keys and tokens](/accounts/api-keys-and-tokens), and the full command reference is in the [CLI page](/clients/cli).
 
 ## Recovering access
 
@@ -135,19 +135,19 @@ Use one of these routes, in order:
 Someone with shell access to the control plane can set a user's password directly. Use this when the server has no SMTP, or when the user cannot receive email. On an install made by the installer, run:
 
 ```sh
-cd /opt/skiff/current/repo/apps/control-plane
-sudo -u skiff env SKIFF_DATA_DIR=/var/lib/skiff/data /opt/skiff/runtime/bin/bun scripts/reset-password.ts you@example.com
+cd /opt/yoal/current/repo/apps/control-plane
+sudo -u yoal env YOAL_DATA_DIR=/var/lib/yoal/data /opt/yoal/runtime/bin/bun scripts/reset-password.ts you@example.com
 ```
 
 The script asks for the new password twice without showing it, or reads the first line of standard input. It has the same effect as a reset by email: every session of that user is signed out, their outstanding reset links stop working, and the reset is recorded in the audit log. Passkeys and the authenticator app are not changed, so an owner still verifies a second factor after signing in. An account that had no password gets one.
 
 If an owner has lost every way to verify a second factor and cannot reach any of the sign-in methods above, an operator with access to the control plane can temporarily turn the owner second factor off:
 
-1. Set `SKIFF_OWNER_2FA=0` in the control plane's environment, and restart it.
+1. Set `YOAL_OWNER_2FA=0` in the control plane's environment, and restart it.
 2. Sign in, then add a new passkey or authenticator app in **Settings → Account**.
-3. Remove `SKIFF_OWNER_2FA=0`, or set it to `1`, and restart the control plane again.
+3. Remove `YOAL_OWNER_2FA=0`, or set it to `1`, and restart the control plane again.
 
 > [!WARNING]
-> While `SKIFF_OWNER_2FA=0` is set, anyone who can sign in as an owner, including through a compromised GitHub account or mailbox, can use the platform without a second factor. Keep the window short and turn the check back on as soon as you have re-enrolled.
+> While `YOAL_OWNER_2FA=0` is set, anyone who can sign in as an owner, including through a compromised GitHub account or mailbox, can use the platform without a second factor. Keep the window short and turn the check back on as soon as you have re-enrolled.
 
 If the install itself was never completed, the setup link from the installer still works until the first owner exists.

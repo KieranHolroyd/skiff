@@ -8,7 +8,7 @@ import {
 	serviceEndpoints,
 	storageKeys,
 	workloads,
-} from '@skiff/db';
+} from '@yoal/db';
 import {
 	STORAGE_ID_PREFIX,
 	STORAGE_PORT_MAX,
@@ -74,7 +74,7 @@ import {
 	type WorkloadStatus,
 	type WorkloadStorageSts,
 	STORAGE_NOTIFY_TARGET,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
 import { requireCredentialReveal } from './credential-reveal.ts';
@@ -110,7 +110,7 @@ const RUSTFS_ENV: Record<string, string> = {
 };
 
 /**
- * RustFS's `skiff` webhook target (D122), set only while a rule watches a bucket on the instance.
+ * RustFS's `yoal` webhook target (D122), set only while a rule watches a bucket on the instance.
  * The endpoint is the control plane's public URL: RustFS refuses private webhook addresses (spiked
  * on 1.0.4). The queue dir keeps undelivered events on the data disk across restarts and outages.
  */
@@ -119,12 +119,12 @@ function rustfsNotifyEnv(endpoint: string): Record<string, string> {
 		RUSTFS_NOTIFY_ENABLE: 'true',
 		[`RUSTFS_NOTIFY_WEBHOOK_ENABLE_${STORAGE_NOTIFY_TARGET.toUpperCase()}`]: 'on',
 		[`RUSTFS_NOTIFY_WEBHOOK_ENDPOINT_${STORAGE_NOTIFY_TARGET.toUpperCase()}`]: endpoint,
-		[`RUSTFS_NOTIFY_WEBHOOK_QUEUE_DIR_${STORAGE_NOTIFY_TARGET.toUpperCase()}`]: '/data/.skiff-notify',
+		[`RUSTFS_NOTIFY_WEBHOOK_QUEUE_DIR_${STORAGE_NOTIFY_TARGET.toUpperCase()}`]: '/data/.yoal-notify',
 	};
 }
 
 /**
- * OIDC/STS settings RustFS needs to accept Skiff's workload tokens. The token names its scoped
+ * OIDC/STS settings RustFS needs to accept Yoal's workload tokens. The token names its scoped
  * policy in the `groups` claim, so no fixed role policy is configured; `issuer` is the platform
  * origin and `client_id` is the token audience. A build without these settings ignores them, and
  * the control plane falls back to the sealed attachment key.
@@ -1310,7 +1310,7 @@ export class StorageService {
 			.all()
 			.map((row) => {
 				const buckets = this.ctx.db.select().from(storageBuckets).where(eq(storageBuckets.storageId, row.id)).all();
-				// Event notifications (D122): the instance gets the `skiff` webhook target only while a
+				// Event notifications (D122): the instance gets the `yoal` webhook target only while a
 				// rule watches one of its buckets, so instances without rules never restart for it.
 				const watched = this.ctx.events.watchedBuckets(row.id);
 				const notifyEnv = watched.size > 0 ? rustfsNotifyEnv(this.ctx.events.storageNotifyEndpoint(row.id)) : {};
@@ -1774,7 +1774,7 @@ export class StorageService {
 			token,
 			...(policy ? { policy } : {}),
 			durationSeconds: STORAGE_STS_TTL_SECONDS,
-			roleSessionName: `skiff-${principal.userId}`.slice(0, 64),
+			roleSessionName: `yoal-${principal.userId}`.slice(0, 64),
 		});
 		const credentials: StorageStsCredentials = {
 			storageId: storage.id,
@@ -1945,7 +1945,7 @@ export class StorageService {
 		if (hasConfig)
 			throw new CoreError(
 				'feature_disabled',
-				'Bucket configuration needs the OBJECT_BROWSER feature. Enable SKIFF_FEATURE_OBJECT_BROWSER first.',
+				'Bucket configuration needs the OBJECT_BROWSER feature. Enable YOAL_FEATURE_OBJECT_BROWSER first.',
 				403,
 			);
 	}

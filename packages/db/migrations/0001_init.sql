@@ -1,4 +1,4 @@
--- Skiff platform schema, migration 0001.
+-- Yoal platform schema, migration 0001.
 -- Better Auth owns user/session/organization/member/apikey; ids are unconstrained text so the
 -- two migration streams stay independent (referential integrity is enforced in packages/core).
 

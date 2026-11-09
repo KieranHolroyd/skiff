@@ -11,7 +11,7 @@
  * - A read-only session runs every statement read-only, as a second layer under the
  *   read-only credential.
  */
-import type { DatabaseEngine, DatabaseStudioActivation, StudioLimits } from '@skiff/contracts';
+import type { DatabaseEngine, DatabaseStudioActivation, StudioLimits } from '@yoal/contracts';
 import type {
 	AlterResult,
 	ApplyResult,

@@ -2,25 +2,25 @@ import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import type { Principal } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import type { Principal } from '@yoal/contracts';
 import { buildPrincipal } from '../orgs.ts';
 import { createCore, type Core } from '../index.ts';
 import { LocalObjectStore } from '../object-store.ts';
 import {
-	principalFromSkiffToken,
+	principalFromYoalToken,
 	restrictionFromClaims,
-	serviceAccountPrincipalFromSkiffToken,
-	skiffTokenIdentity,
+	serviceAccountPrincipalFromYoalToken,
+	yoalTokenIdentity,
 	tokenRestrictionAllows,
-	verifySkiffToken,
+	verifyYoalToken,
 } from './token-consumers.ts';
 
 /**
  * Token consumers (docs/IAM.md §7.3–§7.4). The ring is real: tokens are signed with the `workload`
  * and `sts` purposes, then read back through the same helper the REST/MCP/registry surfaces use.
  */
-const dir = mkdtempSync(join(tmpdir(), 'skiff-token-consumers-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-token-consumers-'));
 const opened = createDb({ path: ':memory:' });
 let now = Date.parse('2026-11-08T12:00:00Z');
 let core: Core;
@@ -81,7 +81,7 @@ function sign(
 ): Promise<string> {
 	return core.ctx.signingKeys.sign(
 		purpose,
-		{ sub: 'sa_workload', aud: 'skiff', org_id: 'org_1', ...claims },
+		{ sub: 'sa_workload', aud: 'yoal', org_id: 'org_1', ...claims },
 		ttl,
 		options,
 	);
@@ -94,7 +94,7 @@ describe('verification', () => {
 			environment: 'production',
 			act: { sub: 'wl:app/production' },
 		});
-		const identity = await verifySkiffToken(core.ctx, token);
+		const identity = await verifyYoalToken(core.ctx, token);
 		expect(identity).toMatchObject({
 			kind: 'workload',
 			serviceAccountId: 'sa_workload',
@@ -111,7 +111,7 @@ describe('verification', () => {
 			scope: 'image:pull project:read',
 			resources: ['repository:acme/shop'],
 		});
-		const identity = await verifySkiffToken(core.ctx, token);
+		const identity = await verifyYoalToken(core.ctx, token);
 		expect(identity?.kind).toBe('sts');
 		expect(identity?.restriction).toEqual({
 			permissions: ['image:pull', 'project:read'],
@@ -121,56 +121,56 @@ describe('verification', () => {
 
 	test('an STS token with the exchange default audience (the platform origin) is accepted', async () => {
 		const token = await sign('sts', { sub: 'sa_sts', aud: 'https://control.test' });
-		expect((await verifySkiffToken(core.ctx, token))?.kind).toBe('sts');
+		expect((await verifyYoalToken(core.ctx, token))?.kind).toBe('sts');
 	});
 
 	test('a token for another purpose, issuer or audience is refused', async () => {
 		const wrongAudience = await sign('workload', { aud: 'sts.amazonaws.com' });
-		expect(await verifySkiffToken(core.ctx, wrongAudience)).toBeNull();
+		expect(await verifyYoalToken(core.ctx, wrongAudience)).toBeNull();
 		// The caller may opt into a cloud audience explicitly.
 		expect(
-			await verifySkiffToken(core.ctx, wrongAudience, {
+			await verifyYoalToken(core.ctx, wrongAudience, {
 				workloadAudiences: ['sts.amazonaws.com'],
 			}),
 		).not.toBeNull();
 
 		const wrongIssuer = await sign('workload', {}, 3600, { issuer: 'https://evil.test' });
-		expect(await verifySkiffToken(core.ctx, wrongIssuer)).toBeNull();
+		expect(await verifyYoalToken(core.ctx, wrongIssuer)).toBeNull();
 
 		const registryToken = await core.ctx.signingKeys.sign(
 			'registry',
-			{ sub: 'sa_workload', aud: 'skiff', org_id: 'org_1' },
+			{ sub: 'sa_workload', aud: 'yoal', org_id: 'org_1' },
 			300,
 		);
-		expect(await verifySkiffToken(core.ctx, registryToken)).toBeNull();
+		expect(await verifyYoalToken(core.ctx, registryToken)).toBeNull();
 	});
 
 	test('an expired token is refused, with the ring clock', async () => {
 		const token = await sign('workload', {}, 60);
 		now += 5 * 60_000;
-		expect(await verifySkiffToken(core.ctx, token)).toBeNull();
+		expect(await verifyYoalToken(core.ctx, token)).toBeNull();
 	});
 
 	test('a token whose service account is gone, disabled or in another org is refused', async () => {
 		const missing = await sign('workload', { sub: 'sa_missing' });
-		expect(await verifySkiffToken(core.ctx, missing)).toBeNull();
+		expect(await verifyYoalToken(core.ctx, missing)).toBeNull();
 
 		const disabled = await sign('workload', { sub: 'sa_sts' });
 		opened.sqlite.run('UPDATE service_accounts SET disabled_at = ? WHERE id = ?', [now, 'sa_sts']);
-		expect(await verifySkiffToken(core.ctx, disabled)).toBeNull();
+		expect(await verifyYoalToken(core.ctx, disabled)).toBeNull();
 
 		// A valid signature over an org the account does not belong to is still refused.
 		const wrongOrg = await sign('workload', { sub: 'sa_workload', org_id: 'org_2' });
-		expect(await verifySkiffToken(core.ctx, wrongOrg)).toBeNull();
+		expect(await verifyYoalToken(core.ctx, wrongOrg)).toBeNull();
 	});
 });
 
 describe('principals and restrictions', () => {
 	test('the pure principal is a service account on the token credential', () => {
-		const identity = skiffTokenIdentity('sts', {
+		const identity = yoalTokenIdentity('sts', {
 			iss: 'https://control.test',
 			sub: 'sa_sts',
-			aud: 'skiff',
+			aud: 'yoal',
 			iat: 1,
 			exp: 2,
 			org_id: 'org_1',
@@ -179,7 +179,7 @@ describe('principals and restrictions', () => {
 			trust_id: 'ft_1',
 		});
 		expect(identity).not.toBeNull();
-		const principal = principalFromSkiffToken(identity!);
+		const principal = principalFromYoalToken(identity!);
 		expect(principal).toMatchObject({
 			kind: 'serviceAccount',
 			userId: 'sa_sts',
@@ -197,10 +197,10 @@ describe('principals and restrictions', () => {
 			roleId: 'deployer',
 			scope: { type: 'org' },
 		});
-		const identity = skiffTokenIdentity('sts', {
+		const identity = yoalTokenIdentity('sts', {
 			iss: 'https://control.test',
 			sub: 'sa_sts',
-			aud: 'skiff',
+			aud: 'yoal',
 			iat: 1,
 			exp: 2,
 			org_id: 'org_1',
@@ -208,7 +208,7 @@ describe('principals and restrictions', () => {
 			resources: ['project:prj_1'],
 			trust_id: 'ft_1',
 		})!;
-		const principal = serviceAccountPrincipalFromSkiffToken(core.ctx, identity);
+		const principal = serviceAccountPrincipalFromYoalToken(core.ctx, identity);
 		expect(principal.permissions).toEqual(new Set(['project:read']));
 		expect(principal.restriction).toEqual({
 			permissions: ['project:read'],

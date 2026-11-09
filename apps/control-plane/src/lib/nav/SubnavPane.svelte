@@ -39,7 +39,7 @@
 		<Sidebar.MenuItem>
 			<Sidebar.MenuButton tooltipContent={nav.back.label} class="text-muted-foreground">
 				{#snippet child({ props })}
-					<a href={backHref} data-skiff-target="subnav.back" {...props}>
+					<a href={backHref} data-yoal-target="subnav.back" {...props}>
 						<ArrowLeftIcon />
 						<span>{nav.back.label}</span>
 					</a>
@@ -91,7 +91,7 @@
 							<a
 								href={item.href}
 								aria-current={current ? 'page' : undefined}
-								data-skiff-target={item.target ??
+								data-yoal-target={item.target ??
 									(nav.target ? `${nav.target}.${item.id}` : undefined)}
 								{...mergeProps(props, {
 									// Merged, not overridden: the tooltip trigger has its own click handler.

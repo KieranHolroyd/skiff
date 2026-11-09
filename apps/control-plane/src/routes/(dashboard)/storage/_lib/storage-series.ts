@@ -1,4 +1,4 @@
-import type { StorageMetricPoint } from '@skiff/contracts';
+import type { StorageMetricPoint } from '@yoal/contracts';
 import { MAX_CHART_POINTS, spanLabel, type BaseInterval } from '../../_lib/traffic-series.js';
 import { chooseSpan } from '../../databases/_lib/database-series.js';
 

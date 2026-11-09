@@ -26,10 +26,10 @@ describe('MCP data tool schemas', () => {
 	test('plan_stack takes the document text and nothing else', () => {
 		expect(planStackInputSchema.safeParse({}).success).toBe(false);
 		expect(planStackInputSchema.safeParse({ blueprint: '' }).success).toBe(false);
-		expect(planStackInputSchema.safeParse({ blueprint: 'apiVersion: skiff/v1' }).success).toBe(true);
+		expect(planStackInputSchema.safeParse({ blueprint: 'apiVersion: yoal/v1' }).success).toBe(true);
 		// No server-local paths and no pruning from an agent.
-		expect(planStackInputSchema.safeParse({ path: 'skiff.blueprint.yaml' }).success).toBe(false);
-		expect(planStackInputSchema.safeParse({ blueprint: 'apiVersion: skiff/v1', prune: true }).success).toBe(false);
+		expect(planStackInputSchema.safeParse({ path: 'yoal.blueprint.yaml' }).success).toBe(false);
+		expect(planStackInputSchema.safeParse({ blueprint: 'apiVersion: yoal/v1', prune: true }).success).toBe(false);
 	});
 
 	test('apply_stack takes a plan hash; confirmation is the elicitation, not an argument', () => {
@@ -108,7 +108,7 @@ describe('MCP data tool schemas', () => {
 			format: 'pg_dump-custom',
 			sizeBytes: 1024,
 			sha256: 'd'.repeat(64),
-			objectKey: 'skiff/backups/db_1.dump',
+			objectKey: 'yoal/backups/db_1.dump',
 			pinned: false,
 			createdAt: '2026-11-05T00:00:00.000Z',
 			verifiedAt: null,

@@ -1,4 +1,4 @@
-import type { IngressDriver, Principal } from '@skiff/contracts';
+import type { IngressDriver, Principal } from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { CoreError } from './errors.ts';
 

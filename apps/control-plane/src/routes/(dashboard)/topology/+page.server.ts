@@ -1,4 +1,4 @@
-import type { BlastRadiusView } from '@skiff/contracts';
+import type { BlastRadiusView } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import type { PageServerLoad } from './$types';
 

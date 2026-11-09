@@ -14,12 +14,12 @@
 		EMAIL_ACTIVE_DEFAULT_LIMITS,
 		EMAIL_SANDBOX_LIMITS,
 		emailOrgStates
-	} from '@skiff/contracts';
+	} from '@yoal/contracts';
 	import { notify, runAction } from '#lib/actions.js';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
+	import DetailList from '#lib/components/yoal/DetailList.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import * as InputGroup from '#lib/components/ui/input-group/index.js';
@@ -76,7 +76,7 @@
 	);
 </script>
 
-<svelte:head><title>Mail server · Email · Skiff</title></svelte:head>
+<svelte:head><title>Mail server · Email · Yoal</title></svelte:head>
 
 <div class="space-y-6">
 	<PageHeader
@@ -100,7 +100,7 @@
 
 	{#if !enabled}
 		<Notice tone="warning" title="Email is switched off">
-			Set <code class="font-mono">SKIFF_FEATURE_EMAIL=1</code> and restart the control plane to configure
+			Set <code class="font-mono">YOAL_FEATURE_EMAIL=1</code> and restart the control plane to configure
 			a mail node.
 		</Notice>
 	{/if}
@@ -108,7 +108,7 @@
 	<Panel
 		title="Mail node"
 		icon={ServerIcon}
-		description="One node runs skiff-mail and sends every organisation's mail from its public IPv4. Pick one whose IP has a clean reputation and can reach port 25."
+		description="One node runs yoal-mail and sends every organisation's mail from its public IPv4. Pick one whose IP has a clean reputation and can reach port 25."
 	>
 		<MailNodeForm nodes={data.nodes} nodeId={settings.nodeId} ip={settings.ip} {enabled} turnOff />
 		{#snippet footer()}
@@ -174,7 +174,7 @@
 			{#if settings.mailDomainSource === 'content'}
 				Using the content domain: mail goes out as <code class="font-mono">{hostnames.helo}</code>.
 			{:else if settings.mailDomainSource === 'env'}
-				Set by <code class="font-mono">SKIFF_MAIL_DOMAIN</code> to
+				Set by <code class="font-mono">YOAL_MAIL_DOMAIN</code> to
 				<code class="font-mono">{settings.mailDomain}</code>. A custom domain saved here takes over
 				from it.
 			{:else}
@@ -225,7 +225,7 @@
 					/>.
 				</p>
 				<p class="mt-2 text-xs text-muted-foreground">
-					Skiff can't set PTR records; only the owner of the IP range can. The A record for {hostnames.helo}
+					Yoal can't set PTR records; only the owner of the IP range can. The A record for {hostnames.helo}
 					is in the list below.
 				</p>
 				{#if data.reverseIp}
@@ -244,7 +244,7 @@
 		title="Platform DNS records"
 		icon={ListChecksIcon}
 		count={data.platformRecords.length}
-		description="Records the mail node needs under {settings.mailDomain}. With the platform's Cloudflare zone connected, Skiff publishes them when you pick the node."
+		description="Records the mail node needs under {settings.mailDomain}. With the platform's Cloudflare zone connected, Yoal publishes them when you pick the node."
 		flush
 	>
 		<PlatformRecords records={data.platformRecords} />
@@ -277,7 +277,7 @@
 	<Panel
 		title="Platform mail"
 		icon={MailIcon}
-		description="Mail Skiff sends for itself, apart from what organisations send. It is kept on its own path so sign-in links and alerts still arrive when the mail node is down or its IP is listed (D22)."
+		description="Mail Yoal sends for itself, apart from what organisations send. It is kept on its own path so sign-in links and alerts still arrive when the mail node is down or its IP is listed (D22)."
 	>
 		{#snippet actions()}
 			<StatusBadge

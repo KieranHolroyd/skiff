@@ -1,21 +1,21 @@
 /**
- * `skiff-clickhouse.service`: the control plane's hot telemetry store (traffic, database and
+ * `yoal-clickhouse.service`: the control plane's hot telemetry store (traffic, database and
  * storage usage). A small ClickHouse server, HTTP on loopback only, sized for a ~4 GB VPS that
  * also runs Caddy, the agent and workloads.
  *
- *   binary  /opt/skiff/clickhouse/<version>/clickhouse  (official static build, sha512-pinned)
- *   config  /etc/skiff/clickhouse/{config,users}.xml   (generated; overwritten on every run)
- *   data    /var/lib/skiff/clickhouse                   (skiff-clickhouse:skiff-clickhouse 0750)
+ *   binary  /opt/yoal/clickhouse/<version>/clickhouse  (official static build, sha512-pinned)
+ *   config  /etc/yoal/clickhouse/{config,users}.xml   (generated; overwritten on every run)
+ *   data    /var/lib/yoal/clickhouse                   (yoal-clickhouse:yoal-clickhouse 0750)
  *   HTTP    127.0.0.1:18123                             (no native TCP: 9000 is object storage's)
  *
  * Telemetry is optional: the control plane reports it unavailable when ClickHouse is down. So
  * `ensureClickHouse` never throws. A failed download, a missing tool or a server that does not
  * come up is returned as a warning, and an install or update carries on without it.
  *
- * /etc/skiff is 0750 root:skiff and the server runs as its own user, so systemd (root) hands it
- * the two config files as credentials (`LoadCredential=`); the process never reads /etc/skiff.
+ * /etc/yoal is 0750 root:yoal and the server runs as its own user, so systemd (root) hands it
+ * the two config files as credentials (`LoadCredential=`); the process never reads /etc/yoal.
  *
- * Shared by the installer, `skiff-update-self` and the local dev runner (scripts/dev/clickhouse.ts).
+ * Shared by the installer, `yoal-update-self` and the local dev runner (scripts/dev/clickhouse.ts).
  */
 import { createHash, randomBytes } from 'node:crypto';
 import {
@@ -40,35 +40,35 @@ export const CLICKHOUSE_SHA512: Record<ClickHouseArch, string> = {
 	arm64: '0c44b5da1aa6f4ab2fc634ce34c91198db7d975696cbb072b543a7a5b81253140404f2adaeaaff3746c05ffa23e45d67d6ed3b8790a4a4bf4ff567cbf56c8447',
 };
 
-export const CLICKHOUSE_UNIT = 'skiff-clickhouse.service';
-export const CLICKHOUSE_SYSTEM_USER = 'skiff-clickhouse';
+export const CLICKHOUSE_UNIT = 'yoal-clickhouse.service';
+export const CLICKHOUSE_SYSTEM_USER = 'yoal-clickhouse';
 export const CLICKHOUSE_HTTP_PORT = 18123;
-export const CLICKHOUSE_DATABASE = 'skiff';
-export const CLICKHOUSE_WRITER = 'skiff';
-export const CLICKHOUSE_READER = 'skiff_reader';
+export const CLICKHOUSE_DATABASE = 'yoal';
+export const CLICKHOUSE_WRITER = 'yoal';
+export const CLICKHOUSE_READER = 'yoal_reader';
 
 export const CLICKHOUSE_PATHS = {
-	installRoot: '/opt/skiff/clickhouse',
-	configDir: '/etc/skiff/clickhouse',
-	dataDir: '/var/lib/skiff/clickhouse',
-	envFile: '/etc/skiff/skiff.env',
+	installRoot: '/opt/yoal/clickhouse',
+	configDir: '/etc/yoal/clickhouse',
+	dataDir: '/var/lib/yoal/clickhouse',
+	envFile: '/etc/yoal/yoal.env',
 	systemdDir: '/etc/systemd/system',
 };
 
-/** What the control plane reads from skiff.env. Passwords are generated when missing. */
+/** What the control plane reads from yoal.env. Passwords are generated when missing. */
 export const CLICKHOUSE_ENV = {
-	url: 'SKIFF_CLICKHOUSE_URL',
-	database: 'SKIFF_CLICKHOUSE_DATABASE',
-	user: 'SKIFF_CLICKHOUSE_USER',
-	password: 'SKIFF_CLICKHOUSE_PASSWORD',
-	readerUser: 'SKIFF_CLICKHOUSE_READER_USER',
-	readerPassword: 'SKIFF_CLICKHOUSE_READER_PASSWORD',
+	url: 'YOAL_CLICKHOUSE_URL',
+	database: 'YOAL_CLICKHOUSE_DATABASE',
+	user: 'YOAL_CLICKHOUSE_USER',
+	password: 'YOAL_CLICKHOUSE_PASSWORD',
+	readerUser: 'YOAL_CLICKHOUSE_READER_USER',
+	readerPassword: 'YOAL_CLICKHOUSE_READER_PASSWORD',
 } as const;
 
 /**
- * Optional skiff.env key: the server's memory ceiling in MiB (`max_server_memory_usage`). Never
+ * Optional yoal.env key: the server's memory ceiling in MiB (`max_server_memory_usage`). Never
  * written by the installer; set it by hand when the default is too tight (or too generous) for
- * the host, then re-run the installer or `skiff-update-self` to apply it.
+ * the host, then re-run the installer or `yoal-update-self` to apply it.
  */
 export const CLICKHOUSE_MEMORY_ENV = TELEMETRY_MEMORY_ENV;
 export const CLICKHOUSE_DEFAULT_MEMORY_MB = TELEMETRY_MEMORY_MB.default;
@@ -103,7 +103,7 @@ export function clickhouseMemory(mb: number = CLICKHOUSE_DEFAULT_MEMORY_MB): Cli
 export const CLICKHOUSE_MEMORY = clickhouseMemory();
 
 /**
- * Read `SKIFF_CLICKHOUSE_MEMORY_MB`. Unset means the default; a value outside TELEMETRY_MEMORY_MB
+ * Read `YOAL_CLICKHOUSE_MEMORY_MB`. Unset means the default; a value outside TELEMETRY_MEMORY_MB
  * falls back to the default with a warning (telemetry never blocks an install or update).
  */
 export function parseClickHouseMemoryMb(raw: string | undefined | null): { mb: number; warning?: string } {
@@ -215,7 +215,7 @@ export function clickhouseConfigXml(options: ClickHouseConfigOptions = {}): stri
 	const memory = options.memory ?? CLICKHOUSE_MEMORY;
 	const logs = CLICKHOUSE_SYSTEM_LOGS.map((name) => `\t<${name} remove="1"/>`).join('\n');
 	return `<?xml version="1.0"?>
-<!-- Generated by Skiff (scripts/systemd/clickhouse.ts). Overwritten on every install and update. -->
+<!-- Generated by Yoal (scripts/systemd/clickhouse.ts). Overwritten on every install and update. -->
 <clickhouse>
 	<logger>
 		<!-- stderr only: journald keeps it. No log files under the data dir. -->
@@ -247,7 +247,7 @@ export function clickhouseConfigXml(options: ClickHouseConfigOptions = {}): stri
 	<default_profile>default</default_profile>
 	<default_database>default</default_database>
 	<timezone>UTC</timezone>
-	<display_name>skiff</display_name>
+	<display_name>yoal</display_name>
 
 	<!-- Memory: a hard server-wide ceiling under the unit's MemoryMax=${systemdSize(memory.unitMaxMiB)}, and small caches. -->
 	<max_server_memory_usage>${memory.server}</max_server_memory_usage>
@@ -319,7 +319,7 @@ export interface ClickHouseUsersOptions {
 	readerUser?: string;
 	readerPassword: string;
 	/**
-	 * Extra database patterns the writer owns, e.g. `skiff_test*` (wildcard grant). Dev only: the
+	 * Extra database patterns the writer owns, e.g. `yoal_test*` (wildcard grant). Dev only: the
 	 * telemetry tests give every store its own throwaway database. Never set on a host.
 	 */
 	extraWriterDatabases?: string[];
@@ -358,7 +358,7 @@ export function clickhouseUsersXml(options: ClickHouseUsersOptions): string {
 \t\t\t\t<ip>::1</ip>
 \t\t\t</networks>`;
 	return `<?xml version="1.0"?>
-<!-- Generated by Skiff (scripts/systemd/clickhouse.ts) from /etc/skiff/skiff.env. Overwritten on every run. -->
+<!-- Generated by Yoal (scripts/systemd/clickhouse.ts) from /etc/yoal/yoal.env. Overwritten on every run. -->
 <clickhouse>
 	<profiles>
 		<!-- Server-internal work and the writer. -->
@@ -445,7 +445,7 @@ export interface ClickHouseUnitOptions {
 	configDir?: string;
 	dataDir?: string;
 	user?: string;
-	/** Add `OnFailure=skiff-alert@%n.service` (only when that template is installed). */
+	/** Add `OnFailure=yoal-alert@%n.service` (only when that template is installed). */
 	alert?: boolean;
 	/** Memory budget; defaults to `clickhouseMemory()` (768 MiB). */
 	memory?: ClickHouseMemory;
@@ -462,18 +462,18 @@ export function clickhouseUnit(options: ClickHouseUnitOptions = {}): string {
 	const user = options.user ?? CLICKHOUSE_SYSTEM_USER;
 	const memory = options.memory ?? CLICKHOUSE_MEMORY;
 	return `[Unit]
-Description=Skiff telemetry store (ClickHouse, HTTP on 127.0.0.1:${CLICKHOUSE_HTTP_PORT})
-Documentation=https://github.com/KieranHolroyd/skiff/blob/main/docs/OPS.md
+Description=Yoal telemetry store (ClickHouse, HTTP on 127.0.0.1:${CLICKHOUSE_HTTP_PORT})
+Documentation=https://github.com/KieranHolroyd/yoal/blob/main/docs/OPS.md
 After=network.target
 StartLimitIntervalSec=120
 StartLimitBurst=5
-${options.alert ? '# Once restarts are exhausted the unit fails; alert (telemetry is optional, the platform keeps serving).\nOnFailure=skiff-alert@%n.service\n' : ''}
+${options.alert ? '# Once restarts are exhausted the unit fails; alert (telemetry is optional, the platform keeps serving).\nOnFailure=yoal-alert@%n.service\n' : ''}
 [Service]
 Type=simple
 User=${user}
 Group=${user}
 UMask=0027
-# /etc/skiff is root:skiff 0750, so systemd hands the server its config as credentials.
+# /etc/yoal is root:yoal 0750, so systemd hands the server its config as credentials.
 LoadCredential=config.xml:${configDir}/config.xml
 LoadCredential=users.xml:${configDir}/users.xml
 # systemd supervises the server directly; no forked watchdog process.
@@ -536,7 +536,7 @@ export function clickhousePassword(): string {
 }
 
 /**
- * Append whichever SKIFF_CLICKHOUSE_* keys are missing (never overwriting a value, never
+ * Append whichever YOAL_CLICKHOUSE_* keys are missing (never overwriting a value, never
  * rewriting the rest of the file) and return the effective values plus the keys it added.
  */
 export function ensureClickHouseEnv(
@@ -822,7 +822,7 @@ export async function ensureClickHouse(options: EnsureClickHouseOptions): Promis
 
 		const unitPath = join(systemdDir, CLICKHOUSE_UNIT);
 		const previousUnit = existsSync(unitPath) ? readFileSync(unitPath, 'utf8') : null;
-		const unit = clickhouseUnit({ binary, configDir, dataDir, user, memory, alert: existsSync(join(systemdDir, 'skiff-alert@.service')) });
+		const unit = clickhouseUnit({ binary, configDir, dataDir, user, memory, alert: existsSync(join(systemdDir, 'yoal-alert@.service')) });
 		const unitChanged = writeIfChanged(unitPath, unit, 0o644);
 		if (unitChanged) options.run(['systemctl', 'daemon-reload']);
 		options.run(['systemctl', 'enable', CLICKHOUSE_UNIT]);
@@ -911,8 +911,8 @@ export interface UninstallClickHouseOptions {
 }
 
 /**
- * Stop and remove ClickHouse: the unit, the binaries, its config and the SKIFF_CLICKHOUSE_*
- * lines in skiff.env (other lines and comments are kept byte for byte). The data directory is
+ * Stop and remove ClickHouse: the unit, the binaries, its config and the YOAL_CLICKHOUSE_*
+ * lines in yoal.env (other lines and comments are kept byte for byte). The data directory is
  * deleted only with `purgeData`. Returns the env keys it removed.
  */
 export function uninstallClickHouse(options: UninstallClickHouseOptions): string[] {
@@ -944,6 +944,6 @@ export function uninstallClickHouse(options: UninstallClickHouseOptions): string
 		});
 		if (removed.length > 0) writeFileSync(envFile, kept.join('\n'), { mode: 0o640 });
 	}
-	log(`removed ${CLICKHOUSE_UNIT}${removed.length ? ` and ${removed.length} SKIFF_CLICKHOUSE_* settings` : ''}`);
+	log(`removed ${CLICKHOUSE_UNIT}${removed.length ? ` and ${removed.length} YOAL_CLICKHOUSE_* settings` : ''}`);
 	return removed;
 }

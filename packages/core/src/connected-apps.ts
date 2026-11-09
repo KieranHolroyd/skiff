@@ -1,5 +1,5 @@
-import type { Principal } from '@skiff/contracts';
-import { requirePermission } from '@skiff/contracts';
+import type { Principal } from '@yoal/contracts';
+import { requirePermission } from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { CoreError, NotFoundError } from './errors.ts';
 

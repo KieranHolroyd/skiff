@@ -6,7 +6,7 @@ import { authenticatedClient } from './common.ts';
 
 /** The org audit log (DESIGN §6.3): who did what, from which surface, newest first. */
 
-const usage = `Usage: skif audit [options]
+const usage = `Usage: yoal audit [options]
 
 Options:
       --from <when>            Oldest entry to show: 2026-11-01, an ISO timestamp or epoch ms
@@ -20,8 +20,8 @@ Options:
   -h, --help                   Show this help
 
 Examples:
-  skif audit --from 2026-11-01 --to 2026-11-07
-  skif audit --resource log_drain --all --json`;
+  yoal audit --from 2026-11-01 --to 2026-11-07
+  yoal audit --resource log_drain --all --json`;
 
 const flags: FlagSpec = {
 	from: { type: 'string' },
@@ -43,7 +43,7 @@ export async function auditCommand(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif audit [--from <when>] [--to <when>] [--action <a>] [--resource <r>] [--all]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal audit [--from <when>] [--to <when>] [--action <a>] [--resource <r>] [--all]');
 	const rawLimit = args.string('limit');
 	const limit = rawLimit === undefined ? undefined : Number(rawLimit);
 	if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 200)) throw new UsageError('--limit must be a whole number from 1 to 200.');
@@ -73,7 +73,7 @@ export async function auditCommand(argv: string[]): Promise<void> {
 		return;
 	}
 	console.log(auditTable(entries));
-	if (nextCursor) console.log(`\nOlder entries: skif audit${flagsFor(filter)} --cursor ${nextCursor}`);
+	if (nextCursor) console.log(`\nOlder entries: yoal audit${flagsFor(filter)} --cursor ${nextCursor}`);
 }
 
 function flagsFor(filter: Record<string, string | undefined>): string {

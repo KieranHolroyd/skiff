@@ -31,7 +31,7 @@ describe('parseImageReference', () => {
 			tag: 'v2',
 			digest: DIGEST,
 		});
-		expect(parseImageReference('localhost/cairn-skiff:2026-11-07')?.registry).toBe('localhost');
+		expect(parseImageReference('localhost/cairn-yoal:2026-11-07')?.registry).toBe('localhost');
 		expect(parseImageReference('localhost:5000/app')?.registry).toBe('localhost:5000');
 	});
 

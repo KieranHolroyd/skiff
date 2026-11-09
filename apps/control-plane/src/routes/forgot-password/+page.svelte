@@ -4,7 +4,7 @@
 	import InfoIcon from '@lucide/svelte/icons/info';
 	import MailIcon from '@lucide/svelte/icons/mail';
 	import { authClient } from '#lib/auth-client.js';
-	import AuthShell from '#lib/components/skiff/AuthShell.svelte';
+	import AuthShell from '#lib/components/yoal/AuthShell.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
@@ -40,21 +40,21 @@
 </script>
 
 <svelte:head>
-	<title>Forgot password · Skiff</title>
+	<title>Forgot password · Yoal</title>
 </svelte:head>
 
 <AuthShell
 	eyebrow="Password reset"
 	title={sentTo ? 'Check your email' : 'Forgot your password?'}
 	description={sentTo
-		? `If ${sentTo} belongs to a Skiff account, a reset link is on its way. It works once and expires in ${data.ttlMinutes} minutes.`
+		? `If ${sentTo} belongs to a Yoal account, a reset link is on its way. It works once and expires in ${data.ttlMinutes} minutes.`
 		: data.emailConfigured
 			? 'Enter the email address you sign in with and we’ll send you a link to choose a new password.'
 			: 'This server can’t send email, so it can’t send you a reset link.'}
 >
 	{#if sentTo}
 		<p class="text-sm text-muted-foreground">
-			Nothing after a few minutes? Check your spam folder, or ask the person who runs this Skiff
+			Nothing after a few minutes? Check your spam folder, or ask the person who runs this Yoal
 			server to reset it for you. Resetting signs you out on every device.
 		</p>
 		<Button size="lg" variant="outline" class="mt-6 h-10 w-full" href="/login"
@@ -86,7 +86,7 @@
 		<Alert.Root>
 			<InfoIcon />
 			<Alert.Description>
-				Ask the person who runs this Skiff server to reset your password. They run the
+				Ask the person who runs this Yoal server to reset your password. They run the
 				<code class="font-mono text-xs">reset-password</code> script on the control plane, which sets
 				a new password and signs you out everywhere.
 			</Alert.Description>

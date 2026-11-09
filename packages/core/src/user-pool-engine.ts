@@ -23,8 +23,8 @@
  * to the `pools` event source (D122). The secret stays in the sealed client row; only the
  * activation payload opens it.
  * Verification, magic-link sign-in, password reset and invitations leave through the same mail
- * path as platform mail: the transactional sender (`SKIFF_SMTP_*`, D22) when configured, else the
- * platform sender on the org's skiff-mail node, else a development-only link log. Links carry a
+ * path as platform mail: the transactional sender (`YOAL_SMTP_*`, D22) when configured, else the
+ * platform sender on the org's yoal-mail node, else a development-only link log. Links carry a
  * single-use token whose SHA-256 hash is all that is stored; no request reveals whether an address
  * is known, and each request is rate limited per address and per client IP.
  *
@@ -53,7 +53,7 @@
  *
  * Pool export/import (IAM.md I29) lives in `user-pools.ts`: users with their password hashes,
  * groups, clients with every secret omitted, and provider configuration with no secrets. Auth0,
- * Cognito, Firebase and Skiff's own exports are accepted; an unusable hash forces a reset.
+ * Cognito, Firebase and Yoal's own exports are accepted; an unusable hash forces a reset.
  *
  * TODO(I27): the identity process and B2B remain for a later slice.
  */
@@ -89,7 +89,7 @@ import {
 	type UserPoolSocialProviderView,
 	type UserPoolTotpEnrolment,
 	type UserPoolTotpStatus
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import {
 	ConflictError,
@@ -825,7 +825,7 @@ function normalizeRecoveryCode(code: string): string {
 }
 
 function recoveryCodeHash(code: string): string {
-	return sha256Hex(`skiff-pool-recovery:${normalizeRecoveryCode(code)}`);
+	return sha256Hex(`yoal-pool-recovery:${normalizeRecoveryCode(code)}`);
 }
 
 function parseRecoveryCodes(json: string): RecoveryCodeEntry[] {
@@ -865,12 +865,12 @@ function groupMemberView(row: UserPoolGroupMemberRow): UserPoolGroupMemberView {
 
 /** The pool-hosted session cookie name. Per pool, so two pools on one origin cannot mix sessions. */
 export function userPoolSessionCookieName(poolId: string): string {
-	return `skiff_pool_session_${poolId}`;
+	return `yoal_pool_session_${poolId}`;
 }
 
 /** The double-submit CSRF cookie used by the hosted pages. */
 export function userPoolCsrfCookieName(poolId: string): string {
-	return `skiff_pool_csrf_${poolId}`;
+	return `yoal_pool_csrf_${poolId}`;
 }
 
 function normalizeEmail(raw: string): string {
@@ -881,7 +881,7 @@ function normalizeEmail(raw: string): string {
 }
 
 function otpHash(code: string): string {
-	return sha256Hex(`skiff-pool-otp:${code}`);
+	return sha256Hex(`yoal-pool-otp:${code}`);
 }
 
 /** The settings key for one pool+email lockout; the address is hashed, never stored in the key. */
@@ -2669,7 +2669,7 @@ export class UserPoolEngineService {
 		return result.changes > 0;
 	}
 
-	/** Group names for one user, used by `groups` claims and Skiff Access. Metadata is not consulted. */
+	/** Group names for one user, used by `groups` claims and Yoal Access. Metadata is not consulted. */
 	groupsForUser(poolId: string, userId: string): string[] {
 		this.requireUser(poolId, userId);
 		return this.ctx.sqlite
@@ -3139,7 +3139,7 @@ export class UserPoolEngineService {
 				headers: {
 					'content-type': 'application/x-www-form-urlencoded',
 					accept: 'application/json',
-					'user-agent': 'skiff-identity'
+					'user-agent': 'yoal-identity'
 				},
 				body: new URLSearchParams({
 					grant_type: 'authorization_code',
@@ -3203,7 +3203,7 @@ export class UserPoolEngineService {
 				headers: {
 					authorization: `Bearer ${tokens.accessToken}`,
 					accept: 'application/json',
-					'user-agent': 'skiff-identity'
+					'user-agent': 'yoal-identity'
 				}
 			});
 		} catch {
@@ -3245,7 +3245,7 @@ export class UserPoolEngineService {
 		const headers = {
 			authorization: `Bearer ${accessToken}`,
 			accept: 'application/json',
-			'user-agent': 'skiff-identity'
+			'user-agent': 'yoal-identity'
 		};
 		let userResponse: Response;
 		let emailsResponse: Response;
@@ -3318,7 +3318,7 @@ export class UserPoolEngineService {
 		let keys: unknown;
 		try {
 			const response = await oauthFetch()(definition.jwksUrl, {
-				headers: { accept: 'application/json', 'user-agent': 'skiff-identity' }
+				headers: { accept: 'application/json', 'user-agent': 'yoal-identity' }
 			});
 			if (!response.ok) throw refusal;
 			keys = (await response.json()) as unknown;
@@ -3656,7 +3656,7 @@ export class UserPoolEngineService {
 			response = await breachFetch()(`https://api.pwnedpasswords.com/range/${prefix}`, {
 				headers: {
 					'add-padding': 'true',
-					'user-agent': 'skiff-identity'
+					'user-agent': 'yoal-identity'
 				},
 				signal: AbortSignal.timeout(USER_POOL_BREACH_CHECK_TIMEOUT_MS)
 			});
@@ -4150,11 +4150,11 @@ export class UserPoolEngineService {
 /**
  * The production mail path (see `docs/EMAIL.md`): the platform's transactional SMTP sender (D22)
  * first, so sign-in links still work when the mail node is down, then the platform sender on a mail
- * node (skiff-mail outbox). With neither, only a development process logs the link; a production
+ * node (yoal-mail outbox). With neither, only a development process logs the link; a production
  * process refuses without putting the token anywhere. A future public `sendPlatformMail` on
  * `EmailService` replaces the structural call to its current private queue method.
  */
-interface SkiffMailPlatformSender {
+interface YoalMailPlatformSender {
 	settings(): { nodeId: string | null };
 	queuePlatformMail?(
 		orgId: string,
@@ -4175,12 +4175,12 @@ export function createUserPoolMailer(ctx: CoreContext): UserPoolMailer {
 					// Fall through to the mail node; the caller only sees a generic failure.
 				}
 			}
-			const email = ctx.email as unknown as SkiffMailPlatformSender | undefined;
+			const email = ctx.email as unknown as YoalMailPlatformSender | undefined;
 			if (email?.settings().nodeId && typeof email.queuePlatformMail === 'function') {
 				await email.queuePlatformMail(
 					message.orgId,
 					{ to: message.to, subject: message.subject, text: message.text },
-					{ skiff: `user-pool-${message.purpose}` }
+					{ yoal: `user-pool-${message.purpose}` }
 				);
 				return;
 			}
@@ -4193,7 +4193,7 @@ export function createUserPoolMailer(ctx: CoreContext): UserPoolMailer {
 			}
 			throw new CoreError(
 				'platform_mail_unavailable',
-				'Skiff has no mail path for pool email: configure SKIFF_SMTP_* or a mail node.',
+				'Yoal has no mail path for pool email: configure YOAL_SMTP_* or a mail node.',
 				409
 			);
 		}

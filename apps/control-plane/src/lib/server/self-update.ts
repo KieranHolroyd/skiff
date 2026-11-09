@@ -36,7 +36,7 @@ import {
 	type SelfUpdateLogLine,
 	type SelfUpdateMethod,
 	type SelfUpdateStatus
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { platformVersion } from './version';
 
 /**
@@ -46,20 +46,20 @@ import { platformVersion } from './version';
  */
 
 const env = process.env;
-const requestFile = env.SKIFF_UPDATE_REQUEST_FILE ?? SELF_UPDATE_DEFAULTS.requestFile;
+const requestFile = env.YOAL_UPDATE_REQUEST_FILE ?? SELF_UPDATE_DEFAULTS.requestFile;
 const paths = {
 	requestFile,
 	modeFile: selfUpdateModeFile(requestFile),
 	channelSidecar: selfUpdateChannelFile(requestFile),
 	approvalSidecar: selfUpdateApprovalFile(requestFile),
-	channelFile: env.SKIFF_UPDATE_CHANNEL_FILE ?? SELF_UPDATE_DEFAULTS.channelFile,
-	statusFile: env.SKIFF_UPDATE_STATUS_FILE ?? SELF_UPDATE_DEFAULTS.statusFile,
-	logFile: env.SKIFF_UPDATE_LOG_FILE ?? SELF_UPDATE_DEFAULTS.logFile,
-	pathUnit: env.SKIFF_UPDATE_PATH_UNIT ?? SELF_UPDATE_DEFAULTS.pathUnit,
-	releaseMeta: env.SKIFF_RELEASE_META ?? SELF_UPDATE_DEFAULTS.releaseMeta
+	channelFile: env.YOAL_UPDATE_CHANNEL_FILE ?? SELF_UPDATE_DEFAULTS.channelFile,
+	statusFile: env.YOAL_UPDATE_STATUS_FILE ?? SELF_UPDATE_DEFAULTS.statusFile,
+	logFile: env.YOAL_UPDATE_LOG_FILE ?? SELF_UPDATE_DEFAULTS.logFile,
+	pathUnit: env.YOAL_UPDATE_PATH_UNIT ?? SELF_UPDATE_DEFAULTS.pathUnit,
+	releaseMeta: env.YOAL_RELEASE_META ?? SELF_UPDATE_DEFAULTS.releaseMeta
 };
 
-const DEFAULT_REPO = 'KieranHolroyd/skiff';
+const DEFAULT_REPO = 'KieranHolroyd/yoal';
 const DEFAULT_REF = 'main';
 const CACHE_MS = 5 * 60 * 1000;
 
@@ -118,7 +118,7 @@ export function updateSource(): UpdateSource {
 
 /**
  * The release channel this host follows (docs/OPS.md §4.1, *Release channels*): the one the
- * updater last recorded, else `SKIFF_UPDATE_CHANNEL`, else canary. Only the root updater writes
+ * updater last recorded, else `YOAL_UPDATE_CHANNEL`, else canary. Only the root updater writes
  * the file; the dashboard changes it by sending a channel with an update request.
  */
 export function currentChannel(): SelfUpdateChannel {
@@ -128,8 +128,8 @@ export function currentChannel(): SelfUpdateChannel {
 	} catch {
 		// Never chosen on this host, or an updater that predates channels.
 	}
-	return isSelfUpdateChannel(env.SKIFF_UPDATE_CHANNEL)
-		? env.SKIFF_UPDATE_CHANNEL
+	return isSelfUpdateChannel(env.YOAL_UPDATE_CHANNEL)
+		? env.YOAL_UPDATE_CHANNEL
 		: DEFAULT_SELF_UPDATE_CHANNEL;
 }
 
@@ -160,7 +160,7 @@ interface ListedRelease {
 async function listReleases(repo: string): Promise<ListedRelease[] | null> {
 	try {
 		const response = await fetch(`https://api.github.com/repos/${repo}/releases?per_page=100`, {
-			headers: { 'User-Agent': 'skiff-control-plane', Accept: 'application/vnd.github+json' },
+			headers: { 'User-Agent': 'yoal-control-plane', Accept: 'application/vnd.github+json' },
 			signal: AbortSignal.timeout(8_000)
 		});
 		if (!response.ok) return null;
@@ -248,7 +248,7 @@ async function resolveLatest(
 		const response = await fetch(
 			`https://raw.githubusercontent.com/${source.repo}/${ref}/VERSION`,
 			{
-				headers: { 'User-Agent': 'skiff-control-plane' },
+				headers: { 'User-Agent': 'yoal-control-plane' },
 				signal: AbortSignal.timeout(8_000)
 			}
 		);
@@ -439,9 +439,9 @@ export function requestUpdate(
 	renameSync(tmp, paths.requestFile);
 }
 
-/** The dashboard's default choice; `SKIFF_UPDATE_METHOD` lets operators pin it per host. */
+/** The dashboard's default choice; `YOAL_UPDATE_METHOD` lets operators pin it per host. */
 export function defaultUpdateMethod(): SelfUpdateMethod {
-	const value = env.SKIFF_UPDATE_METHOD;
+	const value = env.YOAL_UPDATE_METHOD;
 	return isSelfUpdateMethod(value) ? value : 'auto';
 }
 

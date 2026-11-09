@@ -17,7 +17,7 @@ import {
 let root: string;
 
 function temp(): string {
-	root = mkdtempSync(join(tmpdir(), 'skiff-caddy-'));
+	root = mkdtempSync(join(tmpdir(), 'yoal-caddy-'));
 	return root;
 }
 
@@ -100,7 +100,7 @@ describe('installCaddyBinary', () => {
 
 		expect(installCaddyBinary(first, target)).toBe(true);
 		expect(readFileSync(target, 'utf8')).toBe('new');
-		expect(readFileSync(`${target}.skiff-previous`, 'utf8')).toBe('old');
+		expect(readFileSync(`${target}.yoal-previous`, 'utf8')).toBe('old');
 		expect(installCaddyBinary(second, target)).toBe(false);
 
 		expect(restoreCaddyBinary(target)).toBe(true);
@@ -152,7 +152,7 @@ describe('ensureCaddy', () => {
 		const target = join(dir, 'usr', 'bin', 'caddy');
 		mkdirSync(join(dir, 'usr', 'bin'), { recursive: true });
 		writeFileSync(target, 'new');
-		writeFileSync(`${target}.skiff-previous`, 'old');
+		writeFileSync(`${target}.yoal-previous`, 'old');
 		writeFileSync(join(optDir, 'caddy.sha256'), 'stale');
 		const { run } = fakeRun({
 			units: { [STOCK_CADDY_UNIT]: 'loaded' },

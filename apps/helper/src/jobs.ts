@@ -17,7 +17,7 @@ import {
  * once in a transient systemd unit with the app's sandbox, env, secrets and volumes.
  *
  * The agent sends the run (id, argv, timeout) with the app's desired workload and activation;
- * nothing else reaches a unit. `systemd-run` starts `skiff-job-<run id>.service` without a
+ * nothing else reaches a unit. `systemd-run` starts `yoal-job-<run id>.service` without a
  * daemon-reload:
  *
  * - **Process apps** get the app unit's sandbox (same directives as `renderProcessUnit`), its
@@ -34,7 +34,7 @@ import {
  */
 
 export const JOB_RUN_ID_PATTERN = /^jr_[a-f0-9]{32}$/;
-export const JOB_UNIT_PREFIX = 'skiff-job-';
+export const JOB_UNIT_PREFIX = 'yoal-job-';
 export const JOB_MIN_TIMEOUT_SECONDS = 10;
 export const JOB_MAX_TIMEOUT_SECONDS = 86_400;
 /** Job directories (and so units) a node holds at once; the agent runs at most 8. */
@@ -44,7 +44,7 @@ export const JOB_STOP_TIMEOUT_SECONDS = 30;
 const MAX_COMMAND_ARGS = 64;
 const MAX_COMMAND_ARG = 1024;
 const DEFAULT_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
-const SECRETS_MOUNT = '/run/skiff-secrets';
+const SECRETS_MOUNT = '/run/yoal-secrets';
 
 /**
  * The process app sandbox, one-for-one with `renderProcessUnit` (units.ts). A test keeps the two
@@ -220,7 +220,7 @@ function commonArgs(options: JobUnitOptions): string[] {
 		`--unit=${jobUnitName(run.runId)}`,
 		'--no-block',
 		'--quiet',
-		`--description=Skiff job ${run.runId} for ${workload.projectSlug}`,
+		`--description=Yoal job ${run.runId} for ${workload.projectSlug}`,
 		...(options.expandFlag ? ['--expand-environment=no'] : []),
 		'--property=Type=exec',
 		'--property=RemainAfterExit=yes',
@@ -245,8 +245,8 @@ export function renderProcessJobArgs(options: ProcessJobOptions): string[] {
 	// The app's own dynamic user (systemd names it after the unit) and state directory: a run
 	// sees exactly the files the app wrote, and nothing is re-chowned.
 	args.push('--property=DynamicUser=yes');
-	args.push(`--property=User=skiff-workload-${workload.id}`);
-	args.push(`--property=StateDirectory=skiff-workloads/${workload.id}`);
+	args.push(`--property=User=yoal-workload-${workload.id}`);
+	args.push(`--property=StateDirectory=yoal-workloads/${workload.id}`);
 	args.push('--property=StateDirectoryMode=0700');
 	args.push(`--working-directory=${options.releaseDir}`);
 	args.push(`--property=EnvironmentFile=-${join(options.jobDir, 'env')}`);
@@ -275,7 +275,7 @@ export function jobContainerName(runId: string): string {
 }
 
 export function appContainerName(workloadId: string): string {
-	return `skiff-workload-${workloadId}`;
+	return `yoal-workload-${workloadId}`;
 }
 
 /** `systemd-run` argv for a container app's run: `podman run --rm` in the app's user namespace. */
@@ -292,7 +292,7 @@ export function renderContainerJobArgs(options: ContainerJobOptions): string[] {
 		'run',
 		'--rm',
 		`--name=${jobContainerName(run.runId)}`,
-		`--label=skiff.job=${run.runId}`,
+		`--label=yoal.job=${run.runId}`,
 		'--cgroups=split',
 		'--log-driver=passthrough',
 		'--pull=missing',
@@ -385,7 +385,7 @@ export function jobStatusFrom(runId: string, props: Record<string, string>, time
 
 export interface JobDriverOptions {
 	runner: CommandRunner;
-	/** `/run/skiff-workloads`: job dirs live under `<runtimeDir>/jobs`. */
+	/** `/run/yoal-workloads`: job dirs live under `<runtimeDir>/jobs`. */
 	runtimeDir: string;
 	releaseDirs: string[];
 	bunPath: string;

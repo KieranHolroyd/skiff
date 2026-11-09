@@ -32,7 +32,7 @@ describe('app volume schemas', () => {
 	test('mount paths reject system trees, the legacy /data and traversal', () => {
 		expect(appVolumeMountPathProblem('/var/lib/app')).toBeNull();
 		expect(appVolumeMountPathProblem('/mnt/data/app')).toBeNull();
-		for (const path of ['/data', '/proc/x', '/etc/skiff', '/var/lib/skiff/x', 'data', '/mnt/data/', '/mnt/../etc'])
+		for (const path of ['/data', '/proc/x', '/etc/yoal', '/var/lib/yoal/x', 'data', '/mnt/data/', '/mnt/../etc'])
 			expect(appVolumeMountPathProblem(path)).not.toBeNull();
 	});
 
@@ -66,7 +66,7 @@ describe('app volume schemas', () => {
 			id: 'avs_1',
 			volumeId: 'av_1',
 			target: { id: 'bt_1', name: 'offsite' },
-			objectKey: 'skiff/backups/volumes/av_1.tar.zst',
+			objectKey: 'yoal/backups/volumes/av_1.tar.zst',
 			sizeBytes: 1024,
 			checksum: 'a'.repeat(64),
 			pinned: false,

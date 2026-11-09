@@ -1,4 +1,4 @@
-import type { StepUpClass } from '@skiff/contracts';
+import type { StepUpClass } from '@yoal/contracts';
 
 /**
  * Step-up method selection and freshness (STEP-UP.md §2–§3).

@@ -28,8 +28,8 @@ export const POST: RequestHandler = ({ request }) =>
 					error: 'invalid_grant',
 					message:
 						redeemed.reason === 'expired'
-							? 'This login link has expired. Run `skif login --web` again.'
-							: 'This login link is invalid or has already been used. Run `skif login --web` again.',
+							? 'This login link has expired. Run `yoal login --web` again.'
+							: 'This login link is invalid or has already been used. Run `yoal login --web` again.',
 				},
 				400,
 				{ 'cache-control': 'no-store' },
@@ -53,7 +53,7 @@ export const POST: RequestHandler = ({ request }) =>
 		const created = await auth.api.createApiKey({
 			body: {
 				userId: redeemed.userId,
-				name: 'Skiff CLI (browser login)',
+				name: 'Yoal CLI (browser login)',
 				// IAM.md I14: still a Better Auth `apikey`; it moves to `access_keys` (org-bound,
 				// expiring) with the service-account work, once spike S1 settles the hash format.
 				metadata: orgId ? { orgId } : undefined,

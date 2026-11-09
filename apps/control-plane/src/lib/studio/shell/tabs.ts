@@ -1,4 +1,4 @@
-import { treeNodeSchema, type TreeNode } from '@skiff/studio/protocol';
+import { treeNodeSchema, type TreeNode } from '@yoal/studio/protocol';
 import { pathKey } from './tree.js';
 
 /** The studio's tab strip state (plan 22): object and query tabs, kept per database. Pure. */
@@ -73,7 +73,7 @@ export function focusTab(state: TabsState, id: string): TabsState {
 
 type TabStorage = Pick<Storage, 'getItem' | 'setItem'>;
 
-export const tabsStorageKey = (database: string): string => `skiff:studio:tabs:${database}`;
+export const tabsStorageKey = (database: string): string => `yoal:studio:tabs:${database}`;
 
 /** Restore a database's tabs; anything unreadable or malformed starts empty. */
 export function loadTabs(storage: TabStorage | undefined, database: string): TabsState {

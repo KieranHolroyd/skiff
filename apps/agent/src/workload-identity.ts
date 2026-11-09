@@ -6,15 +6,15 @@ import {
 	type WorkloadDesired,
 	type WorkloadIdentityActivation,
 	type WorkloadIdentityResponse,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 
 /**
  * The agent's workload-identity broker (docs/IAM.md I18, §7.4).
  *
  * It holds the token the control plane put in an activation, hands it to the helper (the only
- * process that writes `/run/skiff/identity/<workload>/token`), refreshes it at 50% of its
+ * process that writes `/run/yoal/identity/<workload>/token`), refreshes it at 50% of its
  * lifetime, and serves `GET /identity/token?audience=…` on loopback. The metadata endpoint is how
- * a workload asks for an audience other than Skiff (`sts.amazonaws.com`, …) and how a process app
+ * a workload asks for an audience other than Yoal (`sts.amazonaws.com`, …) and how a process app
  * refreshes a token after its startup credential has expired.
  *
  * A workload proves itself with the activation token it already has. That token is matched against

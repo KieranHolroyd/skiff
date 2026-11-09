@@ -2,15 +2,15 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { limits, operationLimits, type OperationEvent, type OperationView } from '@skiff/contracts';
-import { createDb } from '@skiff/db';
+import { limits, operationLimits, type OperationEvent, type OperationView } from '@yoal/contracts';
+import { createDb } from '@yoal/db';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore, parseListObjects } from './object-store.ts';
 import type { Core } from './index.ts';
 
 const DAY = 86_400_000;
-const dir = mkdtempSync(join(tmpdir(), 'skiff-ops-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-ops-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 let clock = Date.now();
@@ -466,13 +466,13 @@ describe('prune', () => {
 		sql.run(
 			`INSERT INTO github_runner_registrations
 			 (id, org_id, project_id, workload_id, replica, runner_id, runner_name, target, created_at)
-			 VALUES ('ghr_stale', 'org_ops', 'prj_gone', 'wl_gone', 0, 42, 'skiff-old-0-abc', 'acme/api', ?)`,
+			 VALUES ('ghr_stale', 'org_ops', 'prj_gone', 'wl_gone', 0, 42, 'yoal-old-0-abc', 'acme/api', ?)`,
 			[clock - 8 * DAY],
 		);
 		sql.run(
 			`INSERT INTO github_runner_registrations
 			 (id, org_id, project_id, workload_id, replica, runner_id, runner_name, target, created_at)
-			 VALUES ('ghr_fresh', 'org_ops', 'prj_gone', 'wl_gone', 1, 43, 'skiff-old-1-def', 'acme/api', ?)`,
+			 VALUES ('ghr_fresh', 'org_ops', 'prj_gone', 'wl_gone', 1, 43, 'yoal-old-1-def', 'acme/api', ?)`,
 			[clock - DAY],
 		);
 

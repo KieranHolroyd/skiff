@@ -4,7 +4,7 @@
 **Depends on:** 11 blueprints (stable resource semantics)
 **Blocks:** external IaC, generated clients, agent integrations
 **Primary files:** `packages/contracts/src/openapi.ts`, `apps/control-plane/src/routes/api/openapi.json/+server.ts`,
-`packages/sdk/**`, `terraform-provider-skiff/**`, `docs/API.md`
+`packages/sdk/**`, `terraform-provider-yoal/**`, `docs/API.md`
 
 ## Goal
 
@@ -24,7 +24,7 @@ codes, idempotency keys, cursor pagination, and a Terraform provider generated f
 - `docs/API.md` is a markdown table; there is no OpenAPI document or SDK.
 - REST routes are SvelteKit handlers; some return ad-hoc error shapes.
 - No `Idempotency-Key`, request id, or cursor pagination standard.
-- Railway/Render/Vercel/Appwrite have providers or generated clients; Skiff does not.
+- Railway/Render/Vercel/Appwrite have providers or generated clients; Yoal does not.
 
 ## Design
 
@@ -55,8 +55,8 @@ codes, idempotency keys, cursor pagination, and a Terraform provider generated f
 
 ### SDK
 
-- Generate `@skiff/sdk` (TypeScript) from the spec with `openapi-typescript` + a small fetch wrapper:
-  - Typed methods, `SkiffError` with `code`/`requestId`, retries for 429/5xx with backoff.
+- Generate `@yoal/sdk` (TypeScript) from the spec with `openapi-typescript` + a small fetch wrapper:
+  - Typed methods, `YoalError` with `code`/`requestId`, retries for 429/5xx with backoff.
   - `Idempotency-Key` helper; cursor iterator.
   - No secrets in logs.
 - Publish only after the spec is stable; keep it internal until then.
@@ -75,7 +75,7 @@ codes, idempotency keys, cursor pagination, and a Terraform provider generated f
 1. Route registry + OpenAPI generation + `/api/openapi.json` + CI diff.
 2. Error envelope + request id + idempotency middleware.
 3. Cursor pagination for list endpoints.
-4. `@skiff/sdk` generation + tests.
+4. `@yoal/sdk` generation + tests.
 5. Terraform provider skeleton + project/database/storage resources.
 6. Acceptance tests + docs.
 
@@ -121,7 +121,7 @@ release. Keep `/api/docs` behind platform auth or public read-only as appropriat
 ## File ownership
 
 Own: `packages/contracts/src/openapi.ts`, `apps/control-plane/src/routes/api/openapi.json/+server.ts`,
-`packages/sdk/**`, `terraform-provider-skiff/**`, `docs/API.md`.
+`packages/sdk/**`, `terraform-provider-yoal/**`, `docs/API.md`.
 
 Integration-owned: route registry entries in each domain, error middleware, idempotency table,
 CI spec check, docs nav.

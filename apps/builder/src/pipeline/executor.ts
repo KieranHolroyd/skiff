@@ -2,8 +2,8 @@ import { existsSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { PipelineJobClaim, PipelineJobComplete } from '@skiff/contracts';
-import { interpolate } from '@skiff/contracts';
+import type { PipelineJobClaim, PipelineJobComplete } from '@yoal/contracts';
+import { interpolate } from '@yoal/contracts';
 import { BuildValidationError, redactSecret, systemdRunArgs } from '../command.ts';
 import type { BuilderConfig, PipelineIsolation } from '../config.ts';
 import { ConfigError } from '../config.ts';
@@ -33,12 +33,12 @@ import {
  * cancel as SIGTERM, kills at the timeout, completes the job itself if the step runner could not,
  * and always tears down.
  *
- * `container` isolation goes through skiff-helper's fixed verbs (W5, `helper-client.ts`): the
+ * `container` isolation goes through yoal-helper's fixed verbs (W5, `helper-client.ts`): the
  * helper derives every mount from the job id, starts services and the BuildKit sidecar (W6), and
  * runs the job container; the Builder polls its status every second and tails
  * `<job dir>/runner.log` (the step runner's stdout/stderr, Podman `k8s-file` format) into its own
  * journal. Job logs proper go from the step runner to the control plane, as in every mode.
- * `SKIFF_PIPELINE_CONTAINER_DRIVER=podman` keeps the old direct-Podman path for development
+ * `YOAL_PIPELINE_CONTAINER_DRIVER=podman` keeps the old direct-Podman path for development
  * (macOS with a Podman machine); it has no BuildKit sidecar.
  */
 
@@ -69,7 +69,7 @@ export function resolveStepCommand(input: {
 	if (input.explicit) return [input.explicit];
 	if (input.main.endsWith('.ts')) {
 		if (input.isolation === 'container')
-			throw new ConfigError('Container isolation needs a compiled step runner: set SKIFF_PIPELINE_STEP_BINARY');
+			throw new ConfigError('Container isolation needs a compiled step runner: set YOAL_PIPELINE_STEP_BINARY');
 		return [input.execPath, input.agentMain ?? fileURLToPath(new URL('../../../agent/src/main.ts', import.meta.url))];
 	}
 	return [input.execPath];
@@ -108,22 +108,22 @@ export class PipelineExecutor {
 		this.helper = options.helper ?? new PipelineHelperClient(config.helperSocket);
 	}
 
-	/** Containers start through skiff-helper (the default), not by running Podman here. */
+	/** Containers start through yoal-helper (the default), not by running Podman here. */
 	private get viaHelper(): boolean {
 		return this.config.pipelineIsolation === 'container' && this.config.pipelineContainerDriver === 'helper';
 	}
 
-	/** Remove `skiff-job-*` containers, networks and job directories left by a previous daemon. */
+	/** Remove `yoal-job-*` containers, networks and job directories left by a previous daemon. */
 	async reapOrphans(): Promise<void> {
 		if (this.viaHelper) {
 			const ids = await this.helper.list();
 			for (const id of ids) await this.helper.cleanup(id).catch((error: unknown) => this.log(`could not clean up job ${id}: ${errorText(error)}`));
-			if (ids.length) this.log(`reaped ${ids.length} orphaned job(s) through skiff-helper`);
+			if (ids.length) this.log(`reaped ${ids.length} orphaned job(s) through yoal-helper`);
 		} else if (this.config.pipelineIsolation === 'container') {
-			const containers = await capture(['podman', 'ps', '-a', '--filter', 'name=^skiff-job-', '--format', '{{.Names}}']);
+			const containers = await capture(['podman', 'ps', '-a', '--filter', 'name=^yoal-job-', '--format', '{{.Names}}']);
 			const names = containers.stdout.split('\n').map((line) => line.trim()).filter(Boolean);
 			if (names.length) await capture(['podman', 'rm', '-f', '-t', '5', ...names]);
-			const networks = await capture(['podman', 'network', 'ls', '--filter', 'name=^skiff-job-', '--format', '{{.Name}}']);
+			const networks = await capture(['podman', 'network', 'ls', '--filter', 'name=^yoal-job-', '--format', '{{.Name}}']);
 			const nets = networks.stdout.split('\n').map((line) => line.trim()).filter(Boolean);
 			if (nets.length) await capture(['podman', 'network', 'rm', '-f', ...nets]);
 			if (names.length || nets.length) this.log(`reaped ${names.length} orphaned containers and ${nets.length} networks`);
@@ -191,7 +191,7 @@ export class PipelineExecutor {
 			if (isolation === 'sandbox' && (claim.job.container || Object.keys(claim.job.services).length))
 				throw new BuildValidationError(
 					'This job uses container: or services:, which need container isolation (Podman). This node runs jobs in the sandbox; ' +
-						'add a node with SKIFF_PIPELINE_ISOLATION=container or remove them.',
+						'add a node with YOAL_PIPELINE_ISOLATION=container or remove them.',
 				);
 			// Through the helper, the step runner is the node's own agent binary, chosen by the helper.
 			const stepCommand = this.viaHelper
@@ -226,9 +226,9 @@ export class PipelineExecutor {
 			}
 
 			const env = {
-				SKIFF_JOB_TOKEN: claim.token,
-				SKIFF_CONTROL_URL: config.pipelineControlUrl,
-				SKIFF_RUNNER_NAME: config.pipelineRunnerName,
+				YOAL_JOB_TOKEN: claim.token,
+				YOAL_CONTROL_URL: config.pipelineControlUrl,
+				YOAL_RUNNER_NAME: config.pipelineRunnerName,
 			};
 			if (this.viaHelper) {
 				step = await this.startViaHelper(claim, dirs, image!, env, api, masker, logs);
@@ -367,12 +367,12 @@ export class PipelineExecutor {
 			ociBuild: claim.job.runsOn.includes('oci-build'),
 			fuse: existsSync('/dev/fuse'),
 			env: {
-				SKIFF_CONTROL_URL: env.SKIFF_CONTROL_URL!,
-				SKIFF_RUNNER_NAME: env.SKIFF_RUNNER_NAME!,
-				SKIFF_PIPELINE_WORKSPACE: CONTAINER_PATHS.workspace,
-				SKIFF_PIPELINE_TEMP: CONTAINER_PATHS.tmp,
+				YOAL_CONTROL_URL: env.YOAL_CONTROL_URL!,
+				YOAL_RUNNER_NAME: env.YOAL_RUNNER_NAME!,
+				YOAL_PIPELINE_WORKSPACE: CONTAINER_PATHS.workspace,
+				YOAL_PIPELINE_TEMP: CONTAINER_PATHS.tmp,
 			},
-			inheritEnv: ['SKIFF_JOB_TOKEN'],
+			inheritEnv: ['YOAL_JOB_TOKEN'],
 		});
 		const proc = Bun.spawn(argv, { env: { ...process.env, ...env }, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' });
 		this.pipeDiagnostics(claim.jobId, proc);
@@ -395,14 +395,14 @@ export class PipelineExecutor {
 		const config = this.config;
 		const stepEnv: Record<string, string> = {
 			HOME: dirs.home,
-			SKIFF_CONTROL_URL: env.SKIFF_CONTROL_URL!,
-			SKIFF_RUNNER_NAME: env.SKIFF_RUNNER_NAME!,
-			SKIFF_PIPELINE_WORKSPACE: dirs.workspace,
-			SKIFF_PIPELINE_TEMP: dirs.tmp,
+			YOAL_CONTROL_URL: env.YOAL_CONTROL_URL!,
+			YOAL_RUNNER_NAME: env.YOAL_RUNNER_NAME!,
+			YOAL_PIPELINE_WORKSPACE: dirs.workspace,
+			YOAL_PIPELINE_TEMP: dirs.tmp,
 		};
 		const argv = [...stepCommand, 'pipeline-step', jobFile];
 		if (config.systemd) {
-			const unit = `skiff-job-${validateJobId(claim.jobId)}`;
+			const unit = `yoal-job-${validateJobId(claim.jobId)}`;
 			const command = systemdRunArgs({
 				workDir: dirs.workspace,
 				writableDir: dirs.root,
@@ -413,10 +413,10 @@ export class PipelineExecutor {
 				timeoutSeconds: Math.ceil(hardLimitMs / 1000),
 				user: config.buildUser,
 				env: { ...stepEnv, PATH: config.buildPath },
-				inheritEnv: ['SKIFF_JOB_TOKEN'],
+				inheritEnv: ['YOAL_JOB_TOKEN'],
 			});
 			const proc = Bun.spawn(command, {
-				env: { ...process.env, SKIFF_JOB_TOKEN: env.SKIFF_JOB_TOKEN },
+				env: { ...process.env, YOAL_JOB_TOKEN: env.YOAL_JOB_TOKEN },
 				stdin: 'ignore',
 				stdout: 'pipe',
 				stderr: 'pipe',
@@ -433,7 +433,7 @@ export class PipelineExecutor {
 		// Direct execution (development, macOS): the developer's own account and PATH.
 		const proc = Bun.spawn(argv, {
 			cwd: dirs.workspace,
-			env: { PATH: process.env.PATH ?? '/usr/bin:/bin', LANG: process.env.LANG ?? 'C.UTF-8', ...stepEnv, SKIFF_JOB_TOKEN: env.SKIFF_JOB_TOKEN! },
+			env: { PATH: process.env.PATH ?? '/usr/bin:/bin', LANG: process.env.LANG ?? 'C.UTF-8', ...stepEnv, YOAL_JOB_TOKEN: env.YOAL_JOB_TOKEN! },
 			stdin: 'ignore',
 			stdout: 'pipe',
 			stderr: 'pipe',
@@ -447,7 +447,7 @@ export class PipelineExecutor {
 	}
 
 	/**
-	 * Start the job through skiff-helper and follow it: progress events become system log lines,
+	 * Start the job through yoal-helper and follow it: progress events become system log lines,
 	 * the step runner's own output goes to this daemon's journal, and `exited` resolves with its
 	 * exit code (or rejects with the helper's reason when the job never started).
 	 */
@@ -541,7 +541,7 @@ export class PipelineExecutor {
 
 	private async teardown(jobId: string, services: string[], network: string | null, dirs: JobDirs): Promise<void> {
 		if (this.viaHelper) {
-			await this.helper.cleanup(jobId).catch((error: unknown) => this.log(`${jobId} cleanup through skiff-helper failed: ${errorText(error)}`));
+			await this.helper.cleanup(jobId).catch((error: unknown) => this.log(`${jobId} cleanup through yoal-helper failed: ${errorText(error)}`));
 		} else if (this.config.pipelineIsolation === 'container') {
 			const names = [jobContainerName(jobId), ...services];
 			await capture(['podman', 'rm', '-f', '-t', '5', ...names]).catch(() => undefined);

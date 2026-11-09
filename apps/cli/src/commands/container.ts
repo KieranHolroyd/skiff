@@ -21,11 +21,11 @@ import { confirmOrRefuse } from './run-operation.ts';
 
 /** Container console (D127): inspect, files, a shell and restart for a container project. */
 
-const usage = `Usage: skif container <command> <project> [options]
+const usage = `Usage: yoal container <command> <project> [options]
 
 Commands:
   inspect <project>                 State, image, resources, mounts and processes (the default)
-  shell <project>                   Interactive shell inside the container (also \`skif shell\`)
+  shell <project>                   Interactive shell inside the container (also \`yoal shell\`)
   ls <project> [path]               List a directory (default /)
   cat <project> <path>              Print a file to stdout (bytes as they are)
   cp <project>:<path> [dest]        Download a file (dest defaults to its name here)
@@ -40,7 +40,7 @@ Options:
 
 Files are read-only and secret files and tmpfs mounts (/tmp) are not shown. Opening a shell and
 reading a file are recorded in the audit log; keystrokes and file contents are not. Needs an API
-key holding container:inspect, container:files or container:exec (\`skif login\` mints one for
+key holding container:inspect, container:files or container:exec (\`yoal login\` mints one for
 your role).`;
 
 const flags: FlagSpec = {
@@ -142,11 +142,11 @@ export async function containerCommand(argv: string[]): Promise<void> {
 	}
 }
 
-/** `skif shell <project>`: the same as `skif container shell <project>`. */
+/** `yoal shell <project>`: the same as `yoal container shell <project>`. */
 export async function shellCommand(argv: string[]): Promise<void> {
 	if (argv.includes('-h') || argv.includes('--help')) {
 		console.log(
-			'Usage: skif shell <project> [--shell auto|/bin/bash|/bin/sh|/bin/ash] [--root] [--replica <n>]\n\nOpen an interactive shell inside a container project. Exit the shell (Ctrl-D or `exit`) to leave.',
+			'Usage: yoal shell <project> [--shell auto|/bin/bash|/bin/sh|/bin/ash] [--root] [--replica <n>]\n\nOpen an interactive shell inside a container project. Exit the shell (Ctrl-D or `exit`) to leave.',
 		);
 		return;
 	}
@@ -182,7 +182,7 @@ async function interactiveShell(
 			stdout.on('resize', listener);
 			return () => stdout.off('resize', listener);
 		},
-		notice: (message) => process.stderr.write(`\r\n[skif: ${message}]\r\n`),
+		notice: (message) => process.stderr.write(`\r\n[yoal: ${message}]\r\n`),
 	};
 	// Raw mode turns Ctrl-C into a keystroke for the remote shell; a terminating signal still
 	// restores the terminal and hangs the shell up.
@@ -193,7 +193,7 @@ async function interactiveShell(
 	signals.once('SIGHUP', restore);
 	try {
 		const code = await runShell(consoleClient, io, { shell, user });
-		if (code > 0) process.stderr.write(`[skif: shell exited with code ${code}${code === 126 || code === 127 ? ' — the image may have no such shell (distroless images have none)' : ''}]\n`);
+		if (code > 0) process.stderr.write(`[yoal: shell exited with code ${code}${code === 126 || code === 127 ? ' — the image may have no such shell (distroless images have none)' : ''}]\n`);
 		return code;
 	} finally {
 		restore();

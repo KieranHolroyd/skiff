@@ -12,10 +12,10 @@
 	import SendIcon from '@lucide/svelte/icons/send';
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
-	import { EMAIL_REPUTATION } from '@skiff/contracts';
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import { EMAIL_REPUTATION } from '@yoal/contracts';
+	import DetailList from '#lib/components/yoal/DetailList.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Progress } from '#lib/components/ui/progress/index.js';
 	import EmptyState from '../_lib/EmptyState.svelte';
@@ -71,7 +71,7 @@
 </script>
 
 <svelte:head>
-	<title>Email · Skiff</title>
+	<title>Email · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">
@@ -79,7 +79,7 @@
 		target="page.email"
 		eyebrow="Workloads"
 		title="Email"
-		description="Send mail from your own verified domains through Skiff's MTA, over the REST API, SMTP or a function binding."
+		description="Send mail from your own verified domains through Yoal's MTA, over the REST API, SMTP or a function binding."
 	>
 		{#if area.configured && area.can.send && area.enabled}
 			<Button variant="outline" href={resolve('/(dashboard)/email/send')}
@@ -93,7 +93,7 @@
 
 	{#if !area.enabled}
 		<Notice tone="warning" title="Email is switched off">
-			Set <code class="font-mono">SKIFF_FEATURE_EMAIL=1</code> to add domains and send. Existing settings
+			Set <code class="font-mono">YOAL_FEATURE_EMAIL=1</code> to add domains and send. Existing settings
 			are kept.
 		</Notice>
 	{/if}

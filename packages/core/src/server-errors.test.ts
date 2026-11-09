@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
+import { createDb } from '@yoal/db';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
@@ -16,7 +16,7 @@ import {
 } from './server-errors.ts';
 import type { Core } from './index.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-server-errors-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-server-errors-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 let clock = Date.parse('2026-11-08T10:00:00Z');
@@ -54,7 +54,7 @@ function boom(message: string): Error {
 describe('scrubbing', () => {
 	test('removes credentials from text', () => {
 		const text = scrubText(
-			'connect postgres://app:hunter2@db:5432/x failed; Authorization: Bearer abcdefghijklmnop; key skif_live_1234567890abcdef password=letmein',
+			'connect postgres://app:hunter2@db:5432/x failed; Authorization: Bearer abcdefghijklmnop; key yoal_live_1234567890abcdef password=letmein',
 		);
 		expect(text).not.toContain('hunter2');
 		expect(text).not.toContain('abcdefghijklmnop');
@@ -79,8 +79,8 @@ describe('fingerprinting', () => {
 	});
 
 	test('ignores line numbers and build hashes in frames', () => {
-		const a = 'TypeError: x\n    at load (/opt/skiff/build/server/chunks/page-B3kd9fQ2.js:10:5)\n    at node_modules/kit/x.js:1:1';
-		const b = 'TypeError: x\n    at load (/opt/skiff/build/server/chunks/page-Zx81kLm0.js:99:2)';
+		const a = 'TypeError: x\n    at load (/opt/yoal/build/server/chunks/page-B3kd9fQ2.js:10:5)\n    at node_modules/kit/x.js:1:1';
+		const b = 'TypeError: x\n    at load (/opt/yoal/build/server/chunks/page-Zx81kLm0.js:99:2)';
 		expect(appFrames(a)).toEqual([{ fn: 'load', file: 'build/server/chunks/page.js' }]);
 		expect(appFrames(a)).toEqual(appFrames(b));
 	});

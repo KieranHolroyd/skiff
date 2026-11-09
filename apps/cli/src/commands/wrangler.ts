@@ -1,9 +1,9 @@
 /**
- * `skif wrangler <args…>`: a passthrough to wrangler.
+ * `yoal wrangler <args…>`: a passthrough to wrangler.
  *
- * It ensures wrangler is installed in the current directory (the same helper `skif deploy`
+ * It ensures wrangler is installed in the current directory (the same helper `yoal deploy`
  * uses), then runs the command with inherited stdio and exits with its code. Arguments are
- * passed through untouched — this is the local dev loop (`skif wrangler dev`), tail, types and
+ * passed through untouched — this is the local dev loop (`yoal wrangler dev`), tail, types and
  * everything else (docs/FUNCTIONS.md §4.11).
  */
 import { printProgress } from './common.ts';

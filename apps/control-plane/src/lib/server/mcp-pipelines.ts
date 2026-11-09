@@ -10,7 +10,7 @@ import {
 	type PipelineRunView,
 	type PipelineTriggerView,
 	type Principal,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from './core';
 
 /**
@@ -19,7 +19,7 @@ import { core } from './core';
  * with its usual auditing and scope challenges.
  *
  * Deliberately missing: setting secrets or variables, approving environment deployments, and
- * repository settings. Those are human decisions (dashboard or `skif`). Nothing here returns a
+ * repository settings. Those are human decisions (dashboard or `yoal`). Nothing here returns a
  * secret value, a job token, a webhook secret or an artifact download URL; job outputs are left
  * out too, since a workflow can put anything in them.
  */
@@ -217,7 +217,7 @@ export function pipelineTools(principal: Principal): PipelineToolSpec[] {
 			config: {
 				title: 'List GitHub repositories',
 				description:
-					'Repositories the org can use through Skiff\'s GitHub App (docs/GITHUB.md): full name, clone URL, default branch, private. ' +
+					'Repositories the org can use through Yoal\'s GitHub App (docs/GITHUB.md): full name, clone URL, default branch, private. ' +
 					'Use a clone URL from here for a git build source or a pipeline repository: events, private clones and commit statuses then ' +
 					'need no webhook or token. `connected: false` means no installation is linked; an org owner installs the App in Settings → GitHub.',
 				inputSchema: z.object({
@@ -241,9 +241,9 @@ export function pipelineTools(principal: Principal): PipelineToolSpec[] {
 			config: {
 				title: 'Deploy a GitHub repository',
 				description:
-					'Create a project from a repository Skiff\'s GitHub App can reach (see list_github_repositories), like Vercel\'s "Import Git Repository": ' +
-					'Skiff reads the repository, picks a framework preset (build command, output directory, static or process app), connects it as the git source, ' +
-					'queues the first build (promoted when it succeeds) and, when the repository has .skiff/workflows, adds it to Pipelines. Every later push to the ' +
+					'Create a project from a repository Yoal\'s GitHub App can reach (see list_github_repositories), like Vercel\'s "Import Git Repository": ' +
+					'Yoal reads the repository, picks a framework preset (build command, output directory, static or process app), connects it as the git source, ' +
+					'queues the first build (promoted when it succeeds) and, when the repository has .yoal/workflows, adds it to Pipelines. Every later push to the ' +
 					'branch builds and deploys through the App; nothing has to be set up on GitHub. Pass buildCommand/outputDir/runtime only to override the detected preset. ' +
 					'Returns the project slug and the build id; follow the build with the project tools.',
 				inputSchema: z.object({
@@ -255,7 +255,7 @@ export function pipelineTools(principal: Principal): PipelineToolSpec[] {
 					runtime: z.enum(['static', 'process']).optional().describe('Override the detected runtime'),
 					buildCommand: z.string().min(1).max(2048).optional().describe('Override the detected build command'),
 					outputDir: z.string().min(1).max(512).optional().describe('Override the detected output directory (relative to rootDir)'),
-					pipelines: z.boolean().optional().describe('Add the repository to Pipelines when it has .skiff/workflows (default true)'),
+					pipelines: z.boolean().optional().describe('Add the repository to Pipelines when it has .yoal/workflows (default true)'),
 				}),
 				annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
 			},
@@ -269,7 +269,7 @@ export function pipelineTools(principal: Principal): PipelineToolSpec[] {
 				description:
 					'Repositories from every git provider the org connects (docs/FORGES.md): the GitHub App and each GitLab, Gitea or Forgejo connection. ' +
 					'Each row has provider, connectionId (null for GitHub), full name (GitLab names may be nested: group/sub/repo), clone URL, default branch and private. ' +
-					'Use a clone URL for a git build source or pipeline repository: Skiff creates the webhook, clones privately and posts commit statuses. ' +
+					'Use a clone URL for a git build source or pipeline repository: Yoal creates the webhook, clones privately and posts commit statuses. ' +
 					'`errors` lists providers that could not be asked; owners connect forges in Settings → Git providers.',
 				inputSchema: z.object({
 					query: z.string().min(1).max(100).optional().describe('Only repositories whose full name contains this'),
@@ -301,8 +301,8 @@ export function pipelineTools(principal: Principal): PipelineToolSpec[] {
 				title: 'Deploy a repository from any git provider',
 				description:
 					'deploy_from_github for every provider: create a project from a repository listed by list_git_repositories (GitHub App, GitLab, Gitea or Forgejo). ' +
-					'Pass connectionId for GitLab/Gitea/Forgejo (omit it for GitHub). Skiff detects a framework preset, connects the git source (creating the forge webhook), ' +
-					'queues the first build (promoted on success) and adds the repository to Pipelines when it has .skiff/workflows. ' +
+					'Pass connectionId for GitLab/Gitea/Forgejo (omit it for GitHub). Yoal detects a framework preset, connects the git source (creating the forge webhook), ' +
+					'queues the first build (promoted on success) and adds the repository to Pipelines when it has .yoal/workflows. ' +
 					'Pass buildCommand/outputDir/runtime only to override the detected preset.',
 				inputSchema: z.object({
 					repository: z.string().min(3).max(512).describe('Full name as list_git_repositories returns it'),
@@ -314,7 +314,7 @@ export function pipelineTools(principal: Principal): PipelineToolSpec[] {
 					runtime: z.enum(['static', 'process']).optional().describe('Override the detected runtime'),
 					buildCommand: z.string().min(1).max(2048).optional().describe('Override the detected build command'),
 					outputDir: z.string().min(1).max(512).optional().describe('Override the detected output directory (relative to rootDir)'),
-					pipelines: z.boolean().optional().describe('Add the repository to Pipelines when it has .skiff/workflows (default true)'),
+					pipelines: z.boolean().optional().describe('Add the repository to Pipelines when it has .yoal/workflows (default true)'),
 				}),
 				annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
 			},
@@ -332,7 +332,7 @@ export function pipelineTools(principal: Principal): PipelineToolSpec[] {
 				inputSchema: z.object({
 					repo: repo.optional(),
 					status: z.enum(statusValues).optional().describe('A run status, or a conclusion such as failure'),
-					workflow: z.string().min(1).max(512).optional().describe('Workflow file (ci.yml or .skiff/workflows/ci.yml); needs repo'),
+					workflow: z.string().min(1).max(512).optional().describe('Workflow file (ci.yml or .yoal/workflows/ci.yml); needs repo'),
 					limit: z.number().int().min(1).max(100).default(20),
 				}),
 				annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
@@ -378,16 +378,16 @@ export function pipelineTools(principal: Principal): PipelineToolSpec[] {
 			config: {
 				title: 'Dispatch workflow',
 				description:
-					'Start a workflow run (workflow_dispatch) on a repository\'s build nodes. Give `workflow`, a file in .skiff/workflows of the repository ' +
+					'Start a workflow run (workflow_dispatch) on a repository\'s build nodes. Give `workflow`, a file in .yoal/workflows of the repository ' +
 					'(ci.yml), or `workflow_text`, inline workflow YAML (GitHub Actions syntax) run against `ref` without committing it. `ref` defaults to ' +
 					'the default branch. `inputs` are the workflow_dispatch inputs, which are visible in the run: never put credentials in them; secrets ' +
-					'are set by a person (dashboard or `skif secret set`) and read by the workflow as ${{ secrets.NAME }}. A committed workflow runs for ' +
+					'are set by a person (dashboard or `yoal secret set`) and read by the workflow as ${{ secrets.NAME }}. A committed workflow runs for ' +
 					'real with the repository\'s secrets and may deploy; a `workflow_text` run is always untrusted (no secrets, environments or deploys), ' +
 					'so use it to try a workflow, not to ship. Waits up to wait_seconds for a build node to read the workflow and returns the trigger ' +
 					'and the runs it started; follow them with get_pipeline_run.',
 				inputSchema: z.object({
 					repo,
-					workflow: z.string().min(1).max(512).optional().describe('Workflow file: ci.yml or .skiff/workflows/ci.yml'),
+					workflow: z.string().min(1).max(512).optional().describe('Workflow file: ci.yml or .yoal/workflows/ci.yml'),
 					workflow_text: z.string().min(1).max(512_000).optional().describe('Inline workflow YAML, instead of workflow'),
 					ref: z.string().min(1).max(255).optional().describe('Branch, tag or sha (default: the default branch)'),
 					inputs: z

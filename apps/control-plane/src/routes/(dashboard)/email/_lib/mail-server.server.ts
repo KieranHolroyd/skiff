@@ -4,7 +4,7 @@ import {
 	type EmailOrgState,
 	type EmailOrgView,
 	type Principal
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import {
 	failStatus,
@@ -34,7 +34,7 @@ export function requirePlatformAdmin(locals: App.Locals): Principal {
 
 export type MailNodeOption = ReturnType<typeof mailNodes>[number];
 
-/** Every node, and whether its agent can run skiff-mail. Platform admin only. */
+/** Every node, and whether its agent can run yoal-mail. Platform admin only. */
 export function mailNodes(principal: Principal) {
 	return core.nodes.list(principal).map((node) => ({
 		id: node.id,
@@ -88,7 +88,7 @@ const node: Action = async ({ request, locals }) => {
 		});
 		return {
 			success: settings.nodeId
-				? 'Mail node saved. Its agent starts skiff-mail on the next reconcile; point reverse DNS at it next.'
+				? 'Mail node saved. Its agent starts yoal-mail on the next reconcile; point reverse DNS at it next.'
 				: 'Email is switched off: no node sends or receives mail.'
 		};
 	} catch (caught) {

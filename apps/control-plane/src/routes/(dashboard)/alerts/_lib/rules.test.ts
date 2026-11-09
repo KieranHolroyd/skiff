@@ -4,7 +4,7 @@ import {
 	alertRuleTemplates,
 	type AlertInstanceView,
 	type DatasetInfo
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import {
 	DEFAULT_RULE,
 	activeFor,

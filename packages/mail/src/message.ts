@@ -1,9 +1,9 @@
 import { dkimSign } from 'mailauth';
-import { parseAddress } from '@skiff/contracts';
+import { parseAddress } from '@yoal/contracts';
 import type { MailDomain } from './policy.ts';
 
 /**
- * Message preparation before spooling: read the header block, make sure the headers Skiff relies
+ * Message preparation before spooling: read the header block, make sure the headers Yoal relies
  * on exist, and DKIM-sign with the From: domain's keys (EMAIL.md §3.2, D116).
  */
 
@@ -50,8 +50,8 @@ function domainOf(address: string): string {
 }
 
 /**
- * Add `Message-ID` and `Date` when missing and the `X-Skiff-Id` trace header (complaint reports
- * carry it back, §6.4). Any caller-supplied `X-Skiff-*` header is dropped first.
+ * Add `Message-ID` and `Date` when missing and the `X-Yoal-Id` trace header (complaint reports
+ * carry it back, §6.4). Any caller-supplied `X-Yoal-*` header is dropped first.
  */
 export function prepareHeaders(raw: Buffer, messageId: string, fromAddress: string, now: Date): Buffer {
 	const { head, body, values } = splitHeaders(raw);
@@ -62,12 +62,12 @@ export function prepareHeaders(raw: Buffer, messageId: string, fromAddress: stri
 		if (/^[ \t]/.test(line) && fields.length > 0) fields.at(-1)!.push(line);
 		else fields.push([line]);
 	}
-	const kept = fields.filter((field) => !/^x-skiff-/i.test(field[0]!)).map((field) => field.join('\r\n'));
+	const kept = fields.filter((field) => !/^x-yoal-/i.test(field[0]!)).map((field) => field.join('\r\n'));
 	const added: string[] = [];
 	if (!values.has('message-id')) added.push(`Message-ID: <${messageId}@${domainOf(fromAddress)}>`);
 	if (!values.has('date')) added.push(`Date: ${now.toUTCString().replace('GMT', '+0000')}`);
 	if (!values.has('mime-version')) added.push('MIME-Version: 1.0');
-	added.push(`X-Skiff-Id: ${messageId}`);
+	added.push(`X-Yoal-Id: ${messageId}`);
 	return Buffer.concat([Buffer.from(`${[...kept, ...added].join('\r\n')}\r\n\r\n`, 'latin1'), body]);
 }
 

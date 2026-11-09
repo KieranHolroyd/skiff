@@ -1,8 +1,8 @@
 #!/bin/sh
-# skiff-recover: out-of-band repair for when the updater itself cannot help.
+# yoal-recover: out-of-band repair for when the updater itself cannot help.
 #
 # Published with every release, so it works even when nothing on the host can update:
-#   curl -fsSL https://github.com/KieranHolroyd/skiff/releases/latest/download/skiff-recover.sh | sudo sh -s -- status
+#   curl -fsSL https://github.com/KieranHolroyd/yoal/releases/latest/download/yoal-recover.sh | sudo sh -s -- status
 #
 #   status                     releases, pointers, any interrupted update, the stage-0 updater
 #   use <release|previous>     point `current` at a release on disk and restart the control plane
@@ -11,17 +11,17 @@
 #                              verified against the signed manifest with the active release's keys
 #   source-updater ARGS...     run the TypeScript updater from the current release (bypass stage-0)
 #
-# It never touches the database. Restoring data is `/opt/skiff/current/repo/scripts/restore.sh`.
+# It never touches the database. Restoring data is `/opt/yoal/current/repo/scripts/restore.sh`.
 set -eu
 
-OPT=${SKIFF_OPT_DIR:-/opt/skiff}
-REPO=${SKIFF_REPO:-KieranHolroyd/skiff}
-UPDATER_DIR=${SKIFF_UPDATER_DIR:-/usr/local/lib/skiff-updater}
-BUN=${SKIFF_BUN_BIN:-$OPT/runtime/bin/bun}
+OPT=${YOAL_OPT_DIR:-/opt/yoal}
+REPO=${YOAL_REPO:-KieranHolroyd/yoal}
+UPDATER_DIR=${YOAL_UPDATER_DIR:-/usr/local/lib/yoal-updater}
+BUN=${YOAL_BUN_BIN:-$OPT/runtime/bin/bun}
 STATE=$OPT/update-state.json
 
-say() { printf 'skiff-recover: %s\n' "$*"; }
-die() { printf 'skiff-recover: %s\n' "$*" >&2; exit 1; }
+say() { printf 'yoal-recover: %s\n' "$*"; }
+die() { printf 'yoal-recover: %s\n' "$*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || die "run as root (sudo)"
 
 arch() {
@@ -40,14 +40,14 @@ status)
 	say "current  -> $(readlink -f "$OPT/current" 2>/dev/null || echo none)"
 	say "previous -> $(readlink -f "$OPT/previous" 2>/dev/null || echo none)"
 	say "standby  -> $(readlink -f "$OPT/standby" 2>/dev/null || echo none)"
-	say "control.sock -> $(readlink /run/skiff/control.sock 2>/dev/null || echo 'not a symlink')"
+	say "control.sock -> $(readlink /run/yoal/control.sock 2>/dev/null || echo 'not a symlink')"
 	say "stage-0  -> $(readlink -f "$UPDATER_DIR/current" 2>/dev/null || echo 'not installed (source updater)')"
 	say "releases on disk:"
 	for dir in "$OPT"/releases/*/; do [ -d "$dir" ] && printf '  %s\n' "$(basename "$dir")"; done
 	if [ -f "$STATE" ] && grep -q '"inProgress"' "$STATE"; then
-		say "an update was interrupted; 'skiff-update-self recover' (or a reboot) resolves it"
+		say "an update was interrupted; 'yoal-update-self recover' (or a reboot) resolves it"
 	fi
-	for unit in skiff-control-plane skiff-control-plane-standby skiff-update-guard; do
+	for unit in yoal-control-plane yoal-control-plane-standby yoal-update-guard; do
 		say "$unit: $(systemctl is-active "$unit" 2>/dev/null || true)"
 	done
 	;;
@@ -62,7 +62,7 @@ use)
 	fi
 	[ -f "$release/repo/apps/control-plane/build/index.js" ] || die "$release is not a complete release"
 	old=$(readlink -f "$OPT/current" 2>/dev/null || true)
-	systemctl stop skiff-control-plane-standby.service 2>/dev/null || true
+	systemctl stop yoal-control-plane-standby.service 2>/dev/null || true
 	if [ -n "$old" ] && [ "$old" != "$release" ]; then
 		ln -sfn "$old" "$OPT/previous.tmp" && mv -Tf "$OPT/previous.tmp" "$OPT/previous"
 	fi
@@ -72,8 +72,8 @@ use)
 	if [ -f "$STATE" ] && [ -x "$BUN" ]; then
 		"$BUN" -e 'const f=process.argv[1];const s=JSON.parse(require("fs").readFileSync(f,"utf8"));delete s.inProgress;require("fs").writeFileSync(f,JSON.stringify(s,null,2)+"\n")' "$STATE"
 	fi
-	systemctl restart skiff-control-plane.service
-	say "current -> $release; control plane restarted (check: systemctl status skiff-control-plane)"
+	systemctl restart yoal-control-plane.service
+	say "current -> $release; control plane restarted (check: systemctl status yoal-control-plane)"
 	;;
 
 clear-verdicts)
@@ -111,18 +111,18 @@ install-updater)
 	say "downloading $name ($tag; manifest signature verified)"
 	curl -fsSL -o "$work/$name" "$base/$name"
 	echo "$sha  $work/$name" | sha256sum -c - >/dev/null || die "$name does not match its signed checksum"
-	tar -xzf "$work/$name" -C "$work" updater/skiff-updated
-	identity=$("$work/updater/skiff-updated" --version) || die "the updater in $tag does not run on this host"
-	"$work/updater/skiff-updated" self-test || die "the updater in $tag failed its self-test"
+	tar -xzf "$work/$name" -C "$work" updater/yoal-updated
+	identity=$("$work/updater/yoal-updated" --version) || die "the updater in $tag does not run on this host"
+	"$work/updater/yoal-updated" self-test || die "the updater in $tag failed its self-test"
 	dir=$UPDATER_DIR/$(printf '%s' "$identity" | tr -c 'A-Za-z0-9.+_-' '_')
 	mkdir -p "$dir"
-	install -m 0755 "$work/updater/skiff-updated" "$dir/skiff-updated"
+	install -m 0755 "$work/updater/yoal-updated" "$dir/yoal-updated"
 	ln -sfn "$dir" "$UPDATER_DIR/current.tmp" && mv -Tf "$UPDATER_DIR/current.tmp" "$UPDATER_DIR/current"
 	say "stage-0 updater $identity installed from $tag"
 	;;
 
 source-updater)
-	SKIFF_UPDATER=source exec /usr/local/sbin/skiff-update-self "$@"
+	YOAL_UPDATER=source exec /usr/local/sbin/yoal-update-self "$@"
 	;;
 
 *)

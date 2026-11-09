@@ -15,7 +15,7 @@ import {
 } from './pipeline-expr.ts';
 
 const ctx: PipelineExpressionContext = {
-	skiff: {
+	yoal: {
 		event_name: 'push',
 		ref: 'refs/heads/main',
 		sha: 'abc123',
@@ -94,8 +94,8 @@ describe('loose equality and coercion (GitHub docs)', () => {
 		["'abc' != 'ABD'", true],
 		['NaN == NaN', false],
 		['NaN != NaN', true],
-		['skiff.event == skiff.event', true],
-		['skiff.event == skiff.event.issue', false],
+		['yoal.event == yoal.event', true],
+		['yoal.event == yoal.event.issue', false],
 		["fromJSON('[]') == fromJSON('[]')", false],
 		["fromJSON('[]') == 0", false],
 		["fromJSON('{}') == ''", false],
@@ -126,8 +126,8 @@ describe('logical operators', () => {
 		expect(ev("'' || 'b'")).toBe('b');
 		expect(ev("'a' || 'b'")).toBe('a');
 		expect(ev('0 || null')).toBe(null);
-		expect(ev("skiff.event_name == 'push' && 'deploy' || 'skip'")).toBe('deploy');
-		expect(ev("skiff.event_name == 'pr' && 'deploy' || 'skip'")).toBe('skip');
+		expect(ev("yoal.event_name == 'push' && 'deploy' || 'skip'")).toBe('deploy');
+		expect(ev("yoal.event_name == 'pr' && 'deploy' || 'skip'")).toBe('skip');
 	});
 
 	test('! coerces with truthiness', () => {
@@ -156,36 +156,36 @@ describe('logical operators', () => {
 
 describe('property access', () => {
 	test('dot, index and case-insensitive lookup', () => {
-		expect(ev('skiff.sha')).toBe('abc123');
-		expect(ev("skiff['sha']")).toBe('abc123');
-		expect(ev('SKIFF.SHA')).toBe('abc123');
+		expect(ev('yoal.sha')).toBe('abc123');
+		expect(ev("yoal['sha']")).toBe('abc123');
+		expect(ev('YOAL.SHA')).toBe('abc123');
 		expect(ev('vars.region')).toBe('eu');
 		expect(ev("steps.my-step.outputs.path")).toBe('/tmp/x');
 		expect(ev("steps['my-step'].outputs['path']")).toBe('/tmp/x');
 		expect(ev('needs.build.outputs.digest')).toBe('sha256:1');
-		expect(ev('skiff.event.commits[1].message')).toBe('two');
-		expect(ev("skiff.event.commits['0'].message")).toBe('one');
+		expect(ev('yoal.event.commits[1].message')).toBe('two');
+		expect(ev("yoal.event.commits['0'].message")).toBe('one');
 	});
 
-	test('github is an alias of skiff', () => {
+	test('github is an alias of yoal', () => {
 		expect(ev('github.sha')).toBe('abc123');
 		expect(ev("github.ref == 'refs/heads/main'")).toBe(true);
 	});
 
 	test('missing properties are null, never errors', () => {
-		expect(ev('skiff.nope')).toBe(null);
-		expect(ev('skiff.nope.deeper.still')).toBe(null);
-		expect(ev('skiff.event.commits[9]')).toBe(null);
-		expect(ev('skiff.event.commits[-1]')).toBe(null);
-		expect(ev('skiff.sha.length')).toBe(null);
+		expect(ev('yoal.nope')).toBe(null);
+		expect(ev('yoal.nope.deeper.still')).toBe(null);
+		expect(ev('yoal.event.commits[9]')).toBe(null);
+		expect(ev('yoal.event.commits[-1]')).toBe(null);
+		expect(ev('yoal.sha.length')).toBe(null);
 		expect(ev('runner.os')).toBe(null);
-		expect(evaluateExpression('matrix.os', { skiff: {} })).toBe(null);
+		expect(evaluateExpression('matrix.os', { yoal: {} })).toBe(null);
 	});
 
 	test('does not reach prototype properties', () => {
-		expect(ev('skiff.constructor')).toBe(null);
-		expect(ev("skiff['__proto__']")).toBe(null);
-		expect(ev('skiff.toString')).toBe(null);
+		expect(ev('yoal.constructor')).toBe(null);
+		expect(ev("yoal['__proto__']")).toBe(null);
+		expect(ev('yoal.toString')).toBe(null);
 	});
 
 	test('object filters (GitHub docs)', () => {
@@ -199,7 +199,7 @@ describe('property access', () => {
 		expect(ev('job.vegetables.*.ediblePortions.*')).toEqual(['roots', 'stems', 'roots', 'stems', 'hearts', 'stems', 'leaves']);
 		expect(ev("contains(job.vegetables.*.ediblePortions.*, 'leaves')")).toBe(true);
 		expect(ev('job.fruits.*.missing')).toEqual([]);
-		expect(ev('skiff.sha.*')).toEqual([]);
+		expect(ev('yoal.sha.*')).toEqual([]);
 		expect(ev('needs.*.result')).toEqual(['success', 'failure']);
 		expect(ev("contains(needs.*.result, 'failure')")).toBe(true);
 	});
@@ -210,11 +210,11 @@ describe('functions', () => {
 		["contains('Hello world', 'llo')", true],
 		["contains('Hello world', 'LLO')", true],
 		["contains('Hello world', 'xyz')", false],
-		["contains(skiff.event.issue.labels.*.name, 'bug')", true],
-		["contains(skiff.event.issue.labels.*.name, 'BUG')", true],
-		["contains(fromJSON('[\"push\", \"pull_request\"]'), skiff.event_name)", true],
+		["contains(yoal.event.issue.labels.*.name, 'bug')", true],
+		["contains(yoal.event.issue.labels.*.name, 'BUG')", true],
+		["contains(fromJSON('[\"push\", \"pull_request\"]'), yoal.event_name)", true],
 		["contains(fromJSON('[1, 2]'), '2')", true],
-		["contains(skiff.event, 'issue')", false],
+		["contains(yoal.event, 'issue')", false],
 		["contains(123, 2)", true],
 		["startsWith('Hello world', 'he')", true],
 		["startsWith('Hello world', 'world')", false],
@@ -224,10 +224,10 @@ describe('functions', () => {
 		["format('{{Hello {0} {1} {2}!}}', 'Mona', 'the', 'Octocat')", '{Hello Mona the Octocat!}'],
 		["format('{0}{0}-{1}', 1, true)", '11-true'],
 		["format('{0}', null)", ''],
-		["join(skiff.event.issue.labels.*.name, ', ')", 'bug, help wanted'],
+		["join(yoal.event.issue.labels.*.name, ', ')", 'bug, help wanted'],
 		["join(fromJSON('[1, true, null, \"x\"]'))", '1,true,,x'],
 		["join('abc', '-')", 'abc'],
-		['join(skiff.event)', ''],
+		['join(yoal.event)', ''],
 		["fromJSON('{\"a\": [1, 2]}').a[1]", 2],
 		["fromJSON('true')", true],
 		["fromJSON('5') == 5", true],
@@ -297,9 +297,9 @@ describe('parse errors', () => {
 		'1 +',
 		'a.b',
 		'unknown',
-		'skiff.',
-		'skiff[',
-		"skiff['a'",
+		'yoal.',
+		'yoal[',
+		"yoal['a'",
 		"'unterminated",
 		'1 = 1',
 		'1 & 1',
@@ -316,7 +316,7 @@ describe('parse errors', () => {
 		'-x',
 		'1..2',
 		'0o9',
-		'skiff.1',
+		'yoal.1',
 		'True',
 		'('.repeat(60) + '1' + ')'.repeat(60),
 		'!'.repeat(60) + '1',
@@ -337,7 +337,7 @@ describe('interpolate', () => {
 	});
 
 	test('replaces every template and stringifies like GitHub', () => {
-		expect(interpolate('ref=${{ skiff.ref }} sha=${{ github.sha }}', ctx)).toBe('ref=refs/heads/main sha=abc123');
+		expect(interpolate('ref=${{ yoal.ref }} sha=${{ github.sha }}', ctx)).toBe('ref=refs/heads/main sha=abc123');
 		expect(interpolate('[${{ null }}]', ctx)).toBe('[]');
 		expect(interpolate('${{ true }}/${{ 1 == 2 }}', ctx)).toBe('true/false');
 		expect(interpolate('${{ 3 }} ${{ 1.5 }} ${{ 0.1 }} ${{ 1e20 }} ${{ -0 }} ${{ 0.00001 }}', ctx)).toBe('3 1.5 0.1 1E+20 0 1E-05');
@@ -353,7 +353,7 @@ describe('interpolate', () => {
 	});
 
 	test('unterminated templates throw', () => {
-		expect(() => interpolate('${{ skiff.sha', ctx)).toThrow(PipelineExpressionError);
+		expect(() => interpolate('${{ yoal.sha', ctx)).toThrow(PipelineExpressionError);
 		expect(() => interpolate("${{ '}} ", ctx)).toThrow(PipelineExpressionError);
 	});
 
@@ -388,17 +388,17 @@ describe('evaluateCondition (if:)', () => {
 		[null, failed, false],
 		['true', ok, true],
 		['true', failed, false], // implicit success() &&
-		["skiff.ref == 'refs/heads/main'", ok, true],
-		["${{ skiff.ref == 'refs/heads/main' }}", ok, true],
-		["${{ skiff.ref == 'refs/heads/dev' }}", ok, false],
-		["skiff.ref == 'refs/heads/main'", failed, false],
+		["yoal.ref == 'refs/heads/main'", ok, true],
+		["${{ yoal.ref == 'refs/heads/main' }}", ok, true],
+		["${{ yoal.ref == 'refs/heads/dev' }}", ok, false],
+		["yoal.ref == 'refs/heads/main'", failed, false],
 		['failure()', failed, true],
 		['failure()', ok, false],
 		['always()', failed, true],
 		['always()', cancelled, true],
 		['cancelled()', cancelled, true],
 		['success()', cancelled, false],
-		["failure() && skiff.ref == 'refs/heads/main'", failed, true],
+		["failure() && yoal.ref == 'refs/heads/main'", failed, true],
 		['!cancelled()', failed, true],
 		['${{ always() }}', failed, true],
 		["'false'", ok, true], // a non-empty string is truthy
@@ -407,8 +407,8 @@ describe('evaluateCondition (if:)', () => {
 		["env.EMPTY", ok, false],
 		["inputs.promote", ok, true],
 		["contains(needs.*.result, 'failure')", ok, true],
-		["${{ skiff.ref }} == 'nope'", ok, true], // GitHub's mixed-text trap: a non-empty string
-		["${{ skiff.ref }} == 'nope'", failed, false],
+		["${{ yoal.ref }} == 'nope'", ok, true], // GitHub's mixed-text trap: a non-empty string
+		["${{ yoal.ref }} == 'nope'", failed, false],
 	] as const)('%p (%p) → %p', (condition, options, expected) => {
 		expect(evaluateCondition(condition, ctx, options)).toBe(expected);
 	});
@@ -422,15 +422,15 @@ describe('evaluateCondition (if:)', () => {
 describe('static analysis', () => {
 	test('containsStatusFunction', () => {
 		expect(containsStatusFunction('always()')).toBe(true);
-		expect(containsStatusFunction("ALWAYS() && skiff.ref == 'x'")).toBe(true);
+		expect(containsStatusFunction("ALWAYS() && yoal.ref == 'x'")).toBe(true);
 		expect(containsStatusFunction('${{ !cancelled() }}')).toBe(true);
-		expect(containsStatusFunction("skiff.ref == 'success()'")).toBe(false);
+		expect(containsStatusFunction("yoal.ref == 'success()'")).toBe(false);
 		expect(containsStatusFunction('contains(needs.*.result, 1)')).toBe(false);
 		expect(() => containsStatusFunction('(')).toThrow(PipelineExpressionError);
 	});
 
 	test('expressionReferences', () => {
-		expect(expressionReferences("github.ref == 'x' && SKIFF.sha && matrix.os || secrets.TOKEN")).toEqual(['skiff', 'matrix', 'secrets']);
+		expect(expressionReferences("github.ref == 'x' && YOAL.sha && matrix.os || secrets.TOKEN")).toEqual(['yoal', 'matrix', 'secrets']);
 		expect(expressionReferences("format('{0}', Steps.a.outputs.b, needs.x.result)")).toEqual(['steps', 'needs']);
 		expect(expressionReferences("'matrix.os'")).toEqual([]);
 		expect(expressionReferences('env[vars.name]')).toEqual(['env', 'vars']);
@@ -454,7 +454,7 @@ describe('fuzz', () => {
 	}
 
 	const pieces = [
-		'skiff', 'github', 'env', 'matrix', 'needs', 'steps', 'job', '.', '.*', '[', ']', '[*]', '(', ')', ',', '!', '==', '!=',
+		'yoal', 'github', 'env', 'matrix', 'needs', 'steps', 'job', '.', '.*', '[', ']', '[*]', '(', ')', ',', '!', '==', '!=',
 		'<', '<=', '>', '>=', '&&', '||', "'a'", "'it''s'", "''", '1', '-2.5', '0x1f', '1e3', 'NaN', 'null', 'true', 'false',
 		'contains(', 'format(', "format('{0}'", 'join(', 'toJSON(', 'fromJSON(', "fromJSON('[1,{\"a\":2}]')", 'success()',
 		'always()', 'startsWith(', 'endsWith(', 'hashFiles(', 'fruits', 'name', 'event', ' ', '}}', '${{', '{', '#', "'",
@@ -501,6 +501,6 @@ describe('fuzz', () => {
 
 	test('deep but legal chains evaluate', () => {
 		expect(ev(Array.from({ length: 2000 }, () => '1').join(' == '))).toBe(true);
-		expect(ev(`skiff${'.a'.repeat(3000)}`)).toBe(null);
+		expect(ev(`yoal${'.a'.repeat(3000)}`)).toBe(null);
 	});
 });

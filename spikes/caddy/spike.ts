@@ -46,18 +46,18 @@ const agent = Bun.serve({
   unix: AGENT,
   fetch(req) {
     const host = req.headers.get("x-forwarded-host") ?? "";
-    const m = /(?:^|;\s*)__skiff_s=(\d+)\.([\w-]+)/.exec(req.headers.get("cookie") ?? "");
+    const m = /(?:^|;\s*)__yoal_s=(\d+)\.([\w-]+)/.exec(req.headers.get("cookie") ?? "");
     if (m) {
       const exp = Number(m[1]);
       const good = Buffer.from(sign(host, exp));
       const got = Buffer.from(m[2]!);
       if (exp > Date.now() / 1000 && good.length === got.length && timingSafeEqual(good, got))
-        return new Response(null, { status: 200, headers: { "X-Skiff-Visitor": "kieran" } });
+        return new Response(null, { status: 200, headers: { "X-Yoal-Visitor": "kieran" } });
     }
     const back = encodeURIComponent(`https://${host}${req.headers.get("x-forwarded-uri") ?? "/"}`);
     return new Response(null, {
       status: 302,
-      headers: { Location: `https://cloud.platform.test/_skiff/site-login?return=${back}` },
+      headers: { Location: `https://cloud.platform.test/_yoal/site-login?return=${back}` },
     });
   },
 });
@@ -134,7 +134,7 @@ const staticSite = (id: string, host: string, project: string, protectedSite = f
               handle: [{
                 handler: "reverse_proxy",
                 upstreams: [{ dial: `unix/${AGENT}` }],
-                rewrite: { method: "GET", uri: "/_skiff/verify" },
+                rewrite: { method: "GET", uri: "/_yoal/verify" },
                 headers: { request: { set: { "X-Forwarded-Uri": ["{http.request.uri}"] } } },
                 handle_response: [{ match: { status_code: [2] }, routes: [{ handle: [{ handler: "vars" }] }] }],
               }],
@@ -170,57 +170,57 @@ try {
 
   // 2. Insert site route at index 0 (ahead of catch-all) and measure apply latency
   let t0 = performance.now();
-  await admin("PUT", `${ROUTES}/0`, staticSite("site:blog", "blog.skiff.test", "blog"));
+  await admin("PUT", `${ROUTES}/0`, staticSite("site:blog", "blog.yoal.test", "blog"));
   check("route insert latency < 100ms", performance.now() - t0 < 100, `${Math.round(performance.now() - t0)}ms`);
-  let r = await curl("blog.skiff.test");
+  let r = await curl("blog.yoal.test");
   check("serves release v1", r.status === 200 && r.body.includes("blog v1"));
-  check("unknown host hits catch-all 404", (await curl("nope.skiff.test")).status === 404);
+  check("unknown host hits catch-all 404", (await curl("nope.yoal.test")).status === 404);
 
   // 3. Precompressed + headers
-  r = await curl("blog.skiff.test", "/", ["-H", "Accept-Encoding: br, gzip"]);
+  r = await curl("blog.yoal.test", "/", ["-H", "Accept-Encoding: br, gzip"]);
   check("precompressed brotli served", r.head.includes("content-encoding: br"));
-  r = await curl("blog.skiff.test", "/", ["-H", "Accept-Encoding: gzip"]);
+  r = await curl("blog.yoal.test", "/", ["-H", "Accept-Encoding: gzip"]);
   check("precompressed gzip served", r.head.includes("content-encoding: gzip"));
   check("security headers", r.head.includes("strict-transport-security") && r.head.includes("x-content-type-options: nosniff"));
   check("html no-cache", r.head.includes("cache-control: no-cache"));
-  r = await curl("blog.skiff.test", "/_app/immutable/app.abc123.js");
+  r = await curl("blog.yoal.test", "/_app/immutable/app.abc123.js");
   check("hashed asset immutable", r.head.includes("immutable"));
 
   // 4. Atomic symlink swap — no Caddy call at all
   activate("blog", "bbb");
-  r = await curl("blog.skiff.test");
+  r = await curl("blog.yoal.test");
   check("symlink swap serves v2 without config change", r.body.includes("blog v2"));
   activate("blog", "aaa");
-  check("rollback via symlink", (await curl("blog.skiff.test")).body.includes("blog v1"));
+  check("rollback via symlink", (await curl("blog.yoal.test")).body.includes("blog v1"));
 
   // 5. forward_auth protected site
-  await admin("PUT", `${ROUTES}/0`, staticSite("site:secret", "secret.skiff.test", "secret", true));
-  r = await curl("secret.skiff.test", "/page?x=1");
-  check("protected: no cookie -> 302 to platform login", r.status === 302 && r.head.includes("site-login?return=https%3a%2f%2fsecret.skiff.test%2fpage%3fx%3d1"));
+  await admin("PUT", `${ROUTES}/0`, staticSite("site:secret", "secret.yoal.test", "secret", true));
+  r = await curl("secret.yoal.test", "/page?x=1");
+  check("protected: no cookie -> 302 to platform login", r.status === 302 && r.head.includes("site-login?return=https%3a%2f%2fsecret.yoal.test%2fpage%3fx%3d1"));
   const exp = Math.floor(Date.now() / 1000) + 3600;
-  const cookie = `__skiff_s=${exp}.${sign("secret.skiff.test", exp)}`;
-  r = await curl("secret.skiff.test", "/", ["-H", `Cookie: ${cookie}`]);
+  const cookie = `__yoal_s=${exp}.${sign("secret.yoal.test", exp)}`;
+  r = await curl("secret.yoal.test", "/", ["-H", `Cookie: ${cookie}`]);
   check("protected: valid cookie -> 200 + noindex", r.status === 200 && r.body.includes("secret") && r.head.includes("x-robots-tag: noindex"));
-  r = await curl("secret.skiff.test", "/", ["-H", `Cookie: __skiff_s=${exp}.forged`]);
+  r = await curl("secret.yoal.test", "/", ["-H", `Cookie: __yoal_s=${exp}.forged`]);
   check("protected: forged cookie -> 302", r.status === 302);
-  const crossCookie = `__skiff_s=${exp}.${sign("blog.skiff.test", exp)}`;
-  check("protected: cookie for another host rejected", (await curl("secret.skiff.test", "/", ["-H", `Cookie: ${crossCookie}`])).status === 302);
+  const crossCookie = `__yoal_s=${exp}.${sign("blog.yoal.test", exp)}`;
+  check("protected: cookie for another host rejected", (await curl("secret.yoal.test", "/", ["-H", `Cookie: ${crossCookie}`])).status === 302);
 
   // 6. Replace by @id (atomic) and delete by @id
   t0 = performance.now();
-  await admin("PATCH", "/id/site:secret", staticSite("site:secret", "secret.skiff.test", "secret", false));
-  check("replace by @id (unprotect) applies", (await curl("secret.skiff.test")).status === 200, `${Math.round(performance.now() - t0)}ms`);
+  await admin("PATCH", "/id/site:secret", staticSite("site:secret", "secret.yoal.test", "secret", false));
+  check("replace by @id (unprotect) applies", (await curl("secret.yoal.test")).status === 200, `${Math.round(performance.now() - t0)}ms`);
   await admin("DELETE", "/id/site:secret");
-  check("delete by @id -> falls to catch-all", (await curl("secret.skiff.test")).status === 404);
+  check("delete by @id -> falls to catch-all", (await curl("secret.yoal.test")).status === 404);
 
   // 7. Scale: 300 site routes, then measure a request + one more insert
   t0 = performance.now();
-  for (let i = 0; i < 300; i++) await admin("PUT", `${ROUTES}/0`, staticSite(`site:p${i}`, `p${i}.skiff.test`, "blog"));
+  for (let i = 0; i < 300; i++) await admin("PUT", `${ROUTES}/0`, staticSite(`site:p${i}`, `p${i}.yoal.test`, "blog"));
   const bulk = performance.now() - t0;
   t0 = performance.now();
-  await admin("PUT", `${ROUTES}/0`, staticSite("site:last", "last.skiff.test", "blog"));
+  await admin("PUT", `${ROUTES}/0`, staticSite("site:last", "last.yoal.test", "blog"));
   check("insert with 300 routes present < 250ms", performance.now() - t0 < 250, `${Math.round(performance.now() - t0)}ms (bulk 300: ${Math.round(bulk)}ms)`);
-  check("still serves with 300 routes", (await curl("p150.skiff.test")).status === 200);
+  check("still serves with 300 routes", (await curl("p150.yoal.test")).status === 200);
 
   // 8. Caddy RSS
   const rss = (await $`ps -o rss= -p ${caddy.pid}`.text()).trim();

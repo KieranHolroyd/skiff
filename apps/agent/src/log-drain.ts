@@ -4,7 +4,7 @@ import {
 	type DesiredState,
 	type RuntimeLogBatch,
 	type WorkloadDesired,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { HelperApi } from './helper-client.ts';
 
 const DEFAULT_INTERVAL_MS = 2_000;

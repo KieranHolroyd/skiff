@@ -1,6 +1,6 @@
 import { error, fail } from '@sveltejs/kit';
-import { CoreError } from '@skiff/core';
-import type { PipelineRepositoryView } from '@skiff/contracts';
+import { CoreError } from '@yoal/core';
+import type { PipelineRepositoryView } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { platformOrigin } from '#lib/server/config.js';
 import { formRawString, formString } from '../../_lib/errors.js';
@@ -86,6 +86,6 @@ export const actions: Actions = {
 		});
 		if (!result.ok) return result.failure;
 		if (result.value.error) return fail(400, { message: `The forge refused the webhook: ${result.value.error}` });
-		return { success: `${result.value.path} now sends its pushes and merge or pull requests to Skiff.` };
+		return { success: `${result.value.path} now sends its pushes and merge or pull requests to Yoal.` };
 	}
 };

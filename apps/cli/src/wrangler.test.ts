@@ -15,7 +15,7 @@ import {
 let dir = '';
 
 beforeEach(async () => {
-	dir = await mkdtemp(join(tmpdir(), 'skiff-cli-wrangler-'));
+	dir = await mkdtemp(join(tmpdir(), 'yoal-cli-wrangler-'));
 });
 
 afterEach(async () => {

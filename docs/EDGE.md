@@ -27,7 +27,7 @@ client IP is in `CF-Connecting-IP`.
 - Cloudflare token: `/etc/caddy/cloudflare.token` (`root:caddy`, `0640`), read at config load
   with `{file./etc/caddy/cloudflare.token}`. It needs `Zone:DNS:Edit` on both zones and is
   required for DNS-01 renewals. The installer asks for it whenever HTTPS is on and exports
-  `SKIFF_CLOUDFLARE_TOKEN_FILE` to the agent, which passes the token to Caddy's DNS-01 handler;
+  `YOAL_CLOUDFLARE_TOKEN_FILE` to the agent, which passes the token to Caddy's DNS-01 handler;
   a host without it serves no wildcard certificate and every site fails at the edge with 525.
 
 `/etc/systemd/system/caddy.service.d/override.conf`:
@@ -58,7 +58,7 @@ examplecloud.com, *.examplecloud.com {
 	import tls_cloudflare
 	encode zstd gzip
 	@apex host examplecloud.com
-	respond @apex "Skiff edge is up. Nothing is deployed here yet." 200
+	respond @apex "Yoal edge is up. Nothing is deployed here yet." 200
 	respond "Not found" 404
 }
 
@@ -66,13 +66,13 @@ examplecloud.com, *.examplecloud.com {
 control.example.com {
 	import tls_cloudflare
 	encode zstd gzip
-	reverse_proxy unix//run/skiff/control.sock
+	reverse_proxy unix//run/yoal/control.sock
 }
 ```
 
 The agent replaces this bootstrap config with the full platform + content route table via the
 admin API. The Caddyfile is only the bootstrap/catch-all config. The installer also gives Caddy
-the `skiff` supplementary group (to read release artifacts) and sets the admin socket to `0660`.
+the `yoal` supplementary group (to read release artifacts) and sets the admin socket to `0660`.
 
 ## Records
 
@@ -88,14 +88,14 @@ the wildcard covers exactly one label.
 
 ## Upstreams
 
-- `control.example.com` → `unix//run/skiff/control.sock` (adapter-bun on the control-plane socket).
+- `control.example.com` → `unix//run/yoal/control.sock` (adapter-bun on the control-plane socket).
   The installer rewrites the bootstrap Caddyfile to this upstream; the agent then owns the full
   config via the admin API.
 - Content apex → placeholder `200`; any `<slug>.examplecloud.com` → `404` until the agent
   adds a route.
 - A live project that has never been deployed (created in the dashboard, nothing pushed yet)
   answers `200` at `<slug>.examplecloud.com` with a default "Nothing deployed yet" page that
-  shows `skiff deploy` and links to the project in the dashboard. The control plane lists these
+  shows `yoal deploy` and links to the project in the dashboard. The control plane lists these
   hosts in the edge's desired state (`placeholders`); the first production deployment replaces
   the page with the real route. Workers have no host and get no page.
 

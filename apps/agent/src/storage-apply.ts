@@ -6,17 +6,17 @@ import {
 	storagePathProblem,
 	type NodeStorage,
 	type NodeStorageStatus,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { readStorageStatus, STORAGE_STATE_FILE } from './storage.ts';
 
 /**
- * `skiff-agent storage apply`: the root half of a node storage move (D48), run by
- * `skiff-storage.service` when the agent drops a request. It trusts nothing in that request.
+ * `yoal-agent storage apply`: the root half of a node storage move (D48), run by
+ * `yoal-storage.service` when the agent drops a request. It trusts nothing in that request.
  * It reads the node token from agent.env, asks the control plane for the paths, re-checks them,
  * and only then moves anything.
  *
  * - Data directory (release cache, site links, desired-state cache): stop the agent, copy with
- *   `cp -a`, point site links at the new tree, set `SKIFF_DATA_DIR` in agent.env (it outranks the
+ *   `cp -a`, point site links at the new tree, set `YOAL_DATA_DIR` in agent.env (it outranks the
  *   unit's Environment=), add the path to the agent's `ReadWritePaths=` with a drop-in, and start
  *   the agent again. Caddy keeps serving the old copy until the agent re-applies its config, and
  *   only then is the old copy deleted. Any failure puts everything back.
@@ -51,20 +51,20 @@ export interface StorageApplyOptions {
 	pathProblem: (path: string) => string | null;
 }
 
-export const AGENT_UNIT = 'skiff-agent.service';
-export const BUILDER_UNIT = 'skiff-builder.service';
-const DROP_IN = 'skiff-storage.conf';
+export const AGENT_UNIT = 'yoal-agent.service';
+export const BUILDER_UNIT = 'yoal-builder.service';
+const DROP_IN = 'yoal-storage.conf';
 
 export class StorageApplyError extends Error {}
 
 export function defaultStorageApplyOptions(): StorageApplyOptions {
 	return {
-		agentEnvFile: process.env.SKIFF_AGENT_ENV_FILE ?? '/etc/skiff/agent.env',
-		sharedEnvFile: process.env.SKIFF_ENV_FILE ?? '/etc/skiff/skiff.env',
-		stateFile: process.env.SKIFF_STORAGE_STATE_FILE ?? STORAGE_STATE_FILE,
-		systemdDir: process.env.SKIFF_SYSTEMD_DIR ?? '/etc/systemd/system',
-		agentUser: 'skiff',
-		agentGroup: 'skiff',
+		agentEnvFile: process.env.YOAL_AGENT_ENV_FILE ?? '/etc/yoal/agent.env',
+		sharedEnvFile: process.env.YOAL_ENV_FILE ?? '/etc/yoal/yoal.env',
+		stateFile: process.env.YOAL_STORAGE_STATE_FILE ?? STORAGE_STATE_FILE,
+		systemdDir: process.env.YOAL_SYSTEMD_DIR ?? '/etc/systemd/system',
+		agentUser: 'yoal',
+		agentGroup: 'yoal',
 		run: async (cmd) => {
 			const proc = Bun.spawn(cmd, { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' });
 			const [stdout, stderr, code] = await Promise.all([
@@ -84,7 +84,7 @@ export function defaultStorageApplyOptions(): StorageApplyOptions {
 		},
 		sleep: (ms) => Bun.sleep(ms),
 		now: () => new Date(),
-		log: (message) => console.log(`[skiff-storage] ${message}`),
+		log: (message) => console.log(`[yoal-storage] ${message}`),
 		settleMs: 20_000,
 		pathProblem: storagePathProblem,
 	};
@@ -152,13 +152,13 @@ export async function applyStorage(options: StorageApplyOptions): Promise<NodeSt
 	if (agentEnvText === null) throw new StorageApplyError(`${options.agentEnvFile} is missing; join the node first`);
 	const agentEnv = parseEnv(agentEnvText);
 	const sharedEnv = parseEnv((await readText(options.sharedEnvFile)) ?? '');
-	const controlUrl = agentEnv.get('SKIFF_CONTROL_URL');
-	const token = agentEnv.get('SKIFF_NODE_TOKEN');
+	const controlUrl = agentEnv.get('YOAL_CONTROL_URL');
+	const token = agentEnv.get('YOAL_NODE_TOKEN');
 	if (!controlUrl || !token) throw new StorageApplyError(`${options.agentEnvFile} has no control URL or node token`);
 
 	const previous = await readStorageStatus(options.stateFile);
 	const current = {
-		dataDir: agentEnv.get('SKIFF_DATA_DIR') || sharedEnv.get('SKIFF_DATA_DIR') || NODE_STORAGE_DEFAULTS.dataDir,
+		dataDir: agentEnv.get('YOAL_DATA_DIR') || sharedEnv.get('YOAL_DATA_DIR') || NODE_STORAGE_DEFAULTS.dataDir,
 		buildDir: previous?.buildDir ?? NODE_STORAGE_DEFAULTS.buildDir,
 	};
 
@@ -204,13 +204,13 @@ export async function applyStorage(options: StorageApplyOptions): Promise<NodeSt
 		return record(requested, current, 'applied', null);
 
 	// Never move (and later delete) something that is not plainly node data, such as the edge's
-	// control-plane directory if agent.env ever lost its SKIFF_DATA_DIR.
+	// control-plane directory if agent.env ever lost its YOAL_DATA_DIR.
 	if (target.dataDir !== current.dataDir && options.pathProblem(current.dataDir) !== null)
 		return record(
 			requested,
 			current,
 			'failed',
-			`The agent's current data directory (${current.dataDir}) is not one this service will move; set SKIFF_DATA_DIR in ${options.agentEnvFile}.`,
+			`The agent's current data directory (${current.dataDir}) is not one this service will move; set YOAL_DATA_DIR in ${options.agentEnvFile}.`,
 		);
 
 	if (await buildRunning(options)) {
@@ -245,7 +245,7 @@ async function buildRunning(options: StorageApplyOptions): Promise<boolean> {
 		'--state=active,activating',
 		'--no-legend',
 		'--plain',
-		'skiff-build-*',
+		'yoal-build-*',
 	]);
 	return result.code === 0 && result.stdout.trim().length > 0;
 }
@@ -261,7 +261,7 @@ async function must(options: StorageApplyOptions, cmd: string[]): Promise<Comman
 	return result;
 }
 
-/** Empty or missing, or already a Skiff data directory (a retried move): safe to copy into. */
+/** Empty or missing, or already a Yoal data directory (a retried move): safe to copy into. */
 async function usableTarget(path: string): Promise<{ created: boolean }> {
 	const stat = await fs.stat(path).catch(() => null);
 	if (!stat) return { created: true };
@@ -288,7 +288,7 @@ async function moveDataDir(
 	try {
 		await must(options, ['chown', `${options.agentUser}:${options.agentGroup}`, to]);
 		await fs.chmod(to, 0o750);
-		// Every existing parent must let the agent (and Caddy, via the skiff group) reach it too.
+		// Every existing parent must let the agent (and Caddy, via the yoal group) reach it too.
 		const reach = await options.run(['runuser', '-u', options.agentUser, '--', 'test', '-w', to]);
 		if (reach.code !== 0)
 			throw new StorageApplyError(
@@ -315,17 +315,17 @@ async function moveDataDir(
 		else
 			await writeAtomic(
 				dropInPath,
-				`# Written by skiff-storage (D48). Remove with the dashboard, not by hand.\n[Service]\nReadWritePaths=${to}\n`,
+				`# Written by yoal-storage (D48). Remove with the dashboard, not by hand.\n[Service]\nReadWritePaths=${to}\n`,
 				0o644,
 			);
-		await writeAtomic(options.agentEnvFile, setEnvLine(agentEnvText, 'SKIFF_DATA_DIR', to), 0o640);
+		await writeAtomic(options.agentEnvFile, setEnvLine(agentEnvText, 'YOAL_DATA_DIR', to), 0o640);
 		await options.run(['chown', `root:${options.agentGroup}`, options.agentEnvFile]);
 		await must(options, ['systemctl', 'daemon-reload']);
 		await must(options, ['systemctl', 'start', AGENT_UNIT]);
 		// It must stay up, not crash-loop on the new path.
 		await options.sleep(5_000);
 		if (!(await isActive(options, AGENT_UNIT)))
-			throw new StorageApplyError(`${AGENT_UNIT} did not stay running with ${to}; see journalctl -u skiff-agent`);
+			throw new StorageApplyError(`${AGENT_UNIT} did not stay running with ${to}; see journalctl -u yoal-agent`);
 	} catch (error) {
 		options.log(`rolling back to ${from}: ${errorText(error)}`);
 		await options.run(['systemctl', 'stop', AGENT_UNIT]);
@@ -377,7 +377,7 @@ async function moveBuildDir(options: StorageApplyOptions, from: string, to: stri
 	else
 		await writeAtomic(
 			dropInPath,
-			`# Written by skiff-storage (D48). Remove with the dashboard, not by hand.\n[Service]\nEnvironment=SKIFF_BUILD_DIR=${to}\nEnvironment=HOME=${to}\nWorkingDirectory=${to}\n`,
+			`# Written by yoal-storage (D48). Remove with the dashboard, not by hand.\n[Service]\nEnvironment=YOAL_BUILD_DIR=${to}\nEnvironment=HOME=${to}\nWorkingDirectory=${to}\n`,
 			0o644,
 		);
 	await must(options, ['systemctl', 'daemon-reload']);
@@ -396,11 +396,11 @@ function errorText(error: unknown): string {
 
 export async function runStorageCli(args: string[]): Promise<number> {
 	if (args[0] !== 'apply') {
-		console.error('usage: skiff-agent storage apply   (run as root by skiff-storage.service)');
+		console.error('usage: yoal-agent storage apply   (run as root by yoal-storage.service)');
 		return 2;
 	}
 	if (typeof process.getuid === 'function' && process.getuid() !== 0) {
-		console.error('skiff-agent storage apply must run as root');
+		console.error('yoal-agent storage apply must run as root');
 		return 1;
 	}
 	const options = defaultStorageApplyOptions();
@@ -409,7 +409,7 @@ export async function runStorageCli(args: string[]): Promise<number> {
 		options.log(`${status.status}: data ${status.dataDir}, builds ${status.buildDir}${status.message ? ` (${status.message})` : ''}`);
 		return status.status === 'failed' ? 1 : 0;
 	} catch (error) {
-		console.error(`[skiff-storage] ${errorText(error)}`);
+		console.error(`[yoal-storage] ${errorText(error)}`);
 		return 1;
 	}
 }

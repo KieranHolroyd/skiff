@@ -1,14 +1,14 @@
 /**
  * Minimal five-field cron parser, shared by backup schedules, the job scheduler and Functions
  * triggers (docs/FUNCTIONS.md §4.10). Supports wildcard, fixed values, ranges, step values and
- * comma lists. Times are UTC, matching every other timestamp Skiff stores.
+ * comma lists. Times are UTC, matching every other timestamp Yoal stores.
  *
  * We deliberately do not accept names (`MON`), seconds or macros: the contract already restricts
  * the characters, and a small parser is easier to reason about than a library. The module has no
  * imports at all, so it can run on the agent, in the control plane and in a test alike.
  *
  * Contracts has no `ValidationError`, so the public functions throw a plain `Error` carrying the
- * user-facing message. `@skiff/core` wraps the parser with `parseCronWith` to keep raising its own
+ * user-facing message. `@yoal/core` wraps the parser with `parseCronWith` to keep raising its own
  * `ValidationError` with exactly those messages.
  */
 export interface CronFields {

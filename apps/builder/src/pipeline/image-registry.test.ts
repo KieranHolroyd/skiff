@@ -21,7 +21,7 @@ function registry(username = 'ci', password = 'pw-secret'): FakeRegistry {
 }
 
 function tempDir(): string {
-	const dir = mkdtempSync(join(tmpdir(), 'skiff-image-index-'));
+	const dir = mkdtempSync(join(tmpdir(), 'yoal-image-index-'));
 	dirs.push(dir);
 	return dir;
 }
@@ -126,7 +126,7 @@ describe('createImageIndex against a registry with a token challenge', () => {
 	});
 });
 
-describe('skiff/image-index action', () => {
+describe('yoal/image-index action', () => {
 	test('expands registry/ tags, logs in as the job and outputs the index digest', async () => {
 		const token = 'job-token-123';
 		const fake = registry('job.job_test1', token);
@@ -135,7 +135,7 @@ describe('skiff/image-index action', () => {
 		const dir = tempDir();
 		const claim = { ...jobClaim({ steps: [] }), registry: { host: fake.host, namespace: `${fake.host}/acme`, push: true } };
 		const host = testHost({ claim, workspace: dir, temp: join(dir, 'tmp') });
-		const result = await runAction('skiff/image-index', { tag: 'registry/api:sha', sources: 'registry/api:sha-x64\nregistry/api:sha-arm64' }, host);
+		const result = await runAction('yoal/image-index', { tag: 'registry/api:sha', sources: 'registry/api:sha-x64\nregistry/api:sha-arm64' }, host);
 		expect(host.lines.join('\n')).not.toContain(token);
 		expect(result.outcome).toBe('success');
 		expect(result.outputs.digest).toBe(sha256Digest(fake.manifest('acme/api', 'sha')!.bytes));
@@ -143,7 +143,7 @@ describe('skiff/image-index action', () => {
 		expect(result.outputs.platforms).toBe('linux/amd64,linux/arm64');
 
 		const untrusted = testHost({ claim: { ...claim, registry: { ...claim.registry, push: false } }, workspace: dir, temp: join(dir, 'tmp') });
-		const refused = await runAction('skiff/image-index', { tag: 'registry/api:sha', sources: 'registry/api:sha-x64' }, untrusted);
+		const refused = await runAction('yoal/image-index', { tag: 'registry/api:sha', sources: 'registry/api:sha-x64' }, untrusted);
 		expect(refused.outcome).toBe('failure');
 		expect(untrusted.lines.join('\n')).toContain('cannot push');
 	});

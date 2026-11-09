@@ -30,7 +30,7 @@ import {
 let dir = '';
 
 beforeEach(async () => {
-	dir = await mkdtemp(join(tmpdir(), 'skiff-cli-profiles-'));
+	dir = await mkdtemp(join(tmpdir(), 'yoal-cli-profiles-'));
 	setProfileOverride(undefined);
 });
 
@@ -42,11 +42,11 @@ afterEach(async () => {
 const env = () =>
 	({
 		HOME: dir,
-		SKIFF_CONFIG_DIR: dir,
-		SKIFF_URL: undefined,
-		SKIFF_TOKEN: undefined,
-		SKIFF_CONTENT_DOMAIN: undefined,
-		SKIFF_PROFILE: undefined,
+		YOAL_CONFIG_DIR: dir,
+		YOAL_URL: undefined,
+		YOAL_TOKEN: undefined,
+		YOAL_CONTENT_DOMAIN: undefined,
+		YOAL_PROFILE: undefined,
 	}) as Record<string, string | undefined>;
 
 describe('profiles', () => {

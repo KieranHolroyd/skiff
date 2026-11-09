@@ -38,9 +38,9 @@ jobs:
           --health-cmd "clickhouse-client --password ci -q 'SELECT 1'"
           --health-interval 2s --health-timeout 5s --health-retries 30
     env:
-      SKIFF_TEST_CLICKHOUSE_URL: http://127.0.0.1:18123
-      SKIFF_TEST_CLICKHOUSE_USER: default
-      SKIFF_TEST_CLICKHOUSE_PASSWORD: ci
+      YOAL_TEST_CLICKHOUSE_URL: http://127.0.0.1:18123
+      YOAL_TEST_CLICKHOUSE_USER: default
+      YOAL_TEST_CLICKHOUSE_PASSWORD: ci
     steps:
       - uses: actions/checkout@v4
 
@@ -113,21 +113,21 @@ jobs:
           # Workspace packages were bundled into build/; their symlinks would dangle in
           # the tarball, so drop them rather than ship broken links. `.bin` is only for
           # build-time tooling.
-          rm -rf staging/node_modules/@skiff staging/node_modules/.bin
+          rm -rf staging/node_modules/@yoal staging/node_modules/.bin
           cp apps/control-plane/package.json staging/package.json
           cp -a packages/db/migrations staging/migrations
           cp -a scripts/systemd staging/systemd
           cp scripts/litestream.yml staging/litestream.yml
-          cp scripts/skiff-migrate.ts scripts/skiff-db-fingerprint.ts scripts/recovery-kit.ts staging/tools/
+          cp scripts/yoal-migrate.ts scripts/yoal-db-fingerprint.ts scripts/recovery-kit.ts staging/tools/
           cp scripts/*.sh staging/scripts/
           cp "bun-runtime/bun-linux-${{ matrix.bun_arch }}/bun" staging/runtime/bun
           chmod 0755 staging/runtime/bun staging/scripts/*.sh
-          tar -C staging -czf "skiff-control-plane-${VERSION}-linux-${{ matrix.arch }}.tar.gz" .
+          tar -C staging -czf "yoal-control-plane-${VERSION}-linux-${{ matrix.arch }}.tar.gz" .
 
       - uses: actions/upload-artifact@v4
         with:
           name: control-plane-${{ matrix.arch }}
-          path: skiff-control-plane-*-linux-${{ matrix.arch }}.tar.gz
+          path: yoal-control-plane-*-linux-${{ matrix.arch }}.tar.gz
           retention-days: 7
 
   agent:
@@ -160,13 +160,13 @@ jobs:
           bun build --compile --minify \
             --target=bun-linux-${{ matrix.bun_arch }} \
             apps/agent/src/main.ts \
-            --outfile dist/skiff-agent
-          tar -C dist -czf "skiff-agent-${VERSION}-linux-${{ matrix.arch }}.tar.gz" skiff-agent
+            --outfile dist/yoal-agent
+          tar -C dist -czf "yoal-agent-${VERSION}-linux-${{ matrix.arch }}.tar.gz" yoal-agent
 
       - uses: actions/upload-artifact@v4
         with:
           name: agent-${{ matrix.arch }}
-          path: skiff-agent-*-linux-${{ matrix.arch }}.tar.gz
+          path: yoal-agent-*-linux-${{ matrix.arch }}.tar.gz
           retention-days: 7
 
   caddy:
@@ -204,12 +204,12 @@ jobs:
           "$RUNNER_TEMP/bin/xcaddy" build "v${CADDY_VERSION}" \
             --with "github.com/caddy-dns/cloudflare@${CADDY_DNS_CLOUDFLARE_VERSION}" \
             --output caddy
-          tar -czf "skiff-caddy-${VERSION}-linux-${{ matrix.arch }}.tar.gz" caddy
+          tar -czf "yoal-caddy-${VERSION}-linux-${{ matrix.arch }}.tar.gz" caddy
 
       - uses: actions/upload-artifact@v4
         with:
           name: caddy-${{ matrix.arch }}
-          path: skiff-caddy-*-linux-${{ matrix.arch }}.tar.gz
+          path: yoal-caddy-*-linux-${{ matrix.arch }}.tar.gz
           retention-days: 7
 
   image:
@@ -230,7 +230,7 @@ jobs:
       - name: Resolve image name and version
         run: |
           echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
-          echo "IMAGE=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/skiff-node" >> "$GITHUB_ENV"
+          echo "IMAGE=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/yoal-node" >> "$GITHUB_ENV"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -250,7 +250,7 @@ jobs:
           push: true
           tags: ${{ env.IMAGE }}:${{ env.VERSION }}-linux-${{ matrix.arch }}
           build-args: |
-            SKIFF_VERSION=${{ env.VERSION }}
+            YOAL_VERSION=${{ env.VERSION }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.version=${{ env.VERSION }}
@@ -268,7 +268,7 @@ jobs:
       - name: Resolve image name and version
         run: |
           echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
-          echo "IMAGE=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/skiff-node" >> "$GITHUB_ENV"
+          echo "IMAGE=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/yoal-node" >> "$GITHUB_ENV"
 
       - uses: docker/login-action@v3
         with:
@@ -341,7 +341,7 @@ jobs:
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 ||
             gh release create "$GITHUB_REF_NAME" \
-              --title "Skiff $GITHUB_REF_NAME" \
+              --title "Yoal $GITHUB_REF_NAME" \
               --generate-notes \
               --verify-tag
           gh release upload "$GITHUB_REF_NAME" dist/* --clobber

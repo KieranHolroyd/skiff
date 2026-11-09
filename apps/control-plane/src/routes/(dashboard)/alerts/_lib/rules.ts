@@ -11,7 +11,7 @@ import {
 	type DatasetInfo,
 	type PanelQuery,
 	type QueryVariables
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { formatValue } from '../../dashboards/_lib/units.js';
 
 /**
@@ -375,4 +375,4 @@ export function draftFromPanel(input: {
 }
 
 /** Session storage key for a draft handed from a dashboard panel to the rule editor. */
-export const DRAFT_KEY = 'skiff:alert-draft';
+export const DRAFT_KEY = 'yoal:alert-draft';

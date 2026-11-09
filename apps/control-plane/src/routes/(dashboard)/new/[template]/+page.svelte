@@ -12,9 +12,9 @@
 	import CodeIcon from '@lucide/svelte/icons/code';
 	import RocketIcon from '@lucide/svelte/icons/rocket';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
-	import type { TemplatePlan } from '@skiff/contracts';
+	import type { TemplatePlan } from '@yoal/contracts';
 	import { toast } from 'svelte-sonner';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
@@ -239,7 +239,7 @@
 </script>
 
 <svelte:head>
-	<title>{template.name} · New project · Skiff</title>
+	<title>{template.name} · New project · Yoal</title>
 </svelte:head>
 
 <svelte:window {onkeydown} />
@@ -557,7 +557,7 @@
 			{/if}
 		</InputGroup.Root>
 		<Field.Description>
-			The project’s permanent address in Skiff. Secrets it creates are suffixed with it.
+			The project’s permanent address in Yoal. Secrets it creates are suffixed with it.
 		</Field.Description>
 		{#if slugError}<Field.Error>{slugError}</Field.Error>{/if}
 		{#if slugSuggestions.length > 0}

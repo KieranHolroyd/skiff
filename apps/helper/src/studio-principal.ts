@@ -2,7 +2,7 @@ import { assertRecord, ValidationError, type DatabaseEngine } from './validate.t
 
 /**
  * The read-only studio principal verb (plan 22, track G): `POST /v1/workloads/:id/studio-principal`
- * creates or updates one fixed `skiff_studio_ro` account inside a managed database, with only
+ * creates or updates one fixed `yoal_studio_ro` account inside a managed database, with only
  * read rights, so the database itself refuses a read-only studio session's writes.
  *
  * Like the credential verbs, the statements run through `podman exec` with the owner's (or, on
@@ -22,11 +22,11 @@ import { assertRecord, ValidationError, type DatabaseEngine } from './validate.t
  * a crash or a re-apply keeps the principal.
  */
 
-export const STUDIO_PRINCIPAL_USER = 'skiff_studio_ro';
+export const STUDIO_PRINCIPAL_USER = 'yoal_studio_ro';
 /** Two studio sessions of two connections each (plan 22 "Safety and limits"). */
 export const STUDIO_PRINCIPAL_CONNECTION_LIMIT = 4;
 /** Activation env that carries the Valkey/Redis principal's password into the generated config. */
-export const STUDIO_PRINCIPAL_ENV = 'SKIFF_STUDIO_RO_PASSWORD';
+export const STUDIO_PRINCIPAL_ENV = 'YOAL_STUDIO_RO_PASSWORD';
 const PASSWORD_PATTERN = /^[A-Za-z0-9_-]{32,128}$/;
 const STEP_TIMEOUT_MS = 60_000;
 
@@ -55,7 +55,7 @@ export function assertStudioPrincipalPassword(value: unknown, label = 'password'
 	return value;
 }
 
-/** The verb's body: exactly `{ user: "skiff_studio_ro", password }`. The engine comes from the workload. */
+/** The verb's body: exactly `{ user: "yoal_studio_ro", password }`. The engine comes from the workload. */
 export function parseStudioPrincipalRequest(body: unknown): { password: string } {
 	const record = assertRecord(body, 'request');
 	for (const key of Object.keys(record))
@@ -162,19 +162,19 @@ export function studioPrincipalPlan(owner: StudioPrincipalOwner, password: strin
 				`const c = connect('mongodb://127.0.0.1:27017/admin', ${JSON.stringify(owner.user)}, ${JSON.stringify(owner.password)});`,
 				`const found = c.runCommand({ usersInfo: ${JSON.stringify(user)} });`,
 				`const r = found.ok !== 1 ? found : found.users.length > 0 ? c.runCommand({ updateUser: ${JSON.stringify(user)}, pwd: ${JSON.stringify(password)}, roles: ${roles} }) : c.runCommand({ createUser: ${JSON.stringify(user)}, pwd: ${JSON.stringify(password)}, roles: ${roles} });`,
-				`print(r.ok === 1 ? 'skiff-ok-1' : 'skiff-error ' + String(r.codeName || r.errmsg || 'unknown'));`,
+				`print(r.ok === 1 ? 'yoal-ok-1' : 'yoal-error ' + String(r.codeName || r.errmsg || 'unknown'));`,
 				'',
 			].join('\n');
 			const verify = [
 				`const c = connect('mongodb://127.0.0.1:27017/admin', ${JSON.stringify(user)}, ${JSON.stringify(password)});`,
-				`print('skiff-ok-' + c.getSiblingDB(${JSON.stringify(owner.database)}).runCommand({ listCollections: 1, nameOnly: true }).ok);`,
+				`print('yoal-ok-' + c.getSiblingDB(${JSON.stringify(owner.database)}).runCommand({ listCollections: 1, nameOnly: true }).ok);`,
 				'',
 			].join('\n');
 			return {
 				apply: { command: ['mongosh', '--quiet', '--nodb'], env: {}, stdin: script },
-				applied: (stdout) => hasLine(stdout, 'skiff-ok-1'),
+				applied: (stdout) => hasLine(stdout, 'yoal-ok-1'),
 				verify: { command: ['mongosh', '--quiet', '--nodb'], env: {}, stdin: verify },
-				verified: (stdout) => hasLine(stdout, 'skiff-ok-1'),
+				verified: (stdout) => hasLine(stdout, 'yoal-ok-1'),
 			};
 		}
 		case 'valkey':

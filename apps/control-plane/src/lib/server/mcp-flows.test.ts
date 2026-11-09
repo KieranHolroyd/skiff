@@ -3,13 +3,13 @@ import { principalStub } from './principal-stub.test-support';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_FEATURES } from '@skiff/contracts';
-import { LocalObjectStore, buildPrincipal, createCore, flow, type Core } from '@skiff/core';
-import { createDb } from '@skiff/db';
+import { DEFAULT_FEATURES } from '@yoal/contracts';
+import { LocalObjectStore, buildPrincipal, createCore, flow, type Core } from '@yoal/core';
+import { createDb } from '@yoal/db';
 
 /** Flows (docs/FLOWS.md §5) through the shared async-task tools: get_task, get_operation, cancel_task. */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-mcp-flows-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-mcp-flows-'));
 const opened = createDb({ path: ':memory:' });
 const realCore: Core = createCore({
 	db: opened.db,

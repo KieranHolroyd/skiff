@@ -34,7 +34,7 @@ import { confirmOrRefuse } from './run-operation.ts';
 
 /** Managed object storage (docs/OBJECT-STORAGE.md). Every check lives on the server; this is a thin client. */
 
-const usage = `Usage: skif storage <command> [options]
+const usage = `Usage: yoal storage <command> [options]
 
 Commands:
   list                           List storage instances (the default); --all includes the trash
@@ -47,11 +47,11 @@ Commands:
   purge <name>                   Permanently delete a trashed instance and its objects
   credentials <name>             Print the root key as env lines (--json for everything)
   rotate-root <name>             Replace the root key (RustFS restarts; --cancel abandons a rotation)
-  keys <command>                 list|create|reveal|revoke named keys (\`skif storage keys --help\`)
+  keys <command>                 list|create|reveal|revoke named keys (\`yoal storage keys --help\`)
   move <name> --node <id>        Move it to another node, empty (objects are not copied)
   metrics <name>                 Usage samples (--since 1h, or --from/--to; --interval 1m|1h)
-  buckets <command>              list|create|update|delete buckets (\`skif storage buckets --help\`)
-  objects <command>              Browse and manage bucket contents (\`skif storage objects --help\`)
+  buckets <command>              list|create|update|delete buckets (\`yoal storage buckets --help\`)
+  objects <command>              Browse and manage bucket contents (\`yoal storage objects --help\`)
   attach <name> -p <project>     Give a project a scoped key (injects <PREFIX>_ENDPOINT_URL, …)
   grants <name> -p <project>     Replace an attachment's bucket grants
   detach <name> -p <project>     Revoke it; the app restarts without the variables
@@ -88,14 +88,14 @@ public. Use path-style addressing. A private instance serves apps on its own nod
 key needs the storage:credentials permission and every read is audited.
 
 Examples:
-  skif storage create media --bucket uploads --project api --prefix AWS
-  skif storage attach media --project worker --bucket uploads:read
-  set -a; eval "$(skif storage credentials media)"; set +a; aws s3 ls`;
+  yoal storage create media --bucket uploads --project api --prefix AWS
+  yoal storage attach media --project worker --bucket uploads:read
+  set -a; eval "$(yoal storage credentials media)"; set +a; aws s3 ls`;
 
-const keysUsage = `Usage: skif storage keys <command> <storage> [key id] [options]
+const keysUsage = `Usage: yoal storage keys <command> <storage> [key id] [options]
 
-Named keys are scoped to buckets, for a person or an outside service. Apps on Skiff get their own
-key with \`skif storage attach\` instead.
+Named keys are scoped to buckets, for a person or an outside service. Apps on Yoal get their own
+key with \`yoal storage attach\` instead.
 
 Commands:
   list <storage>                     List keys with grants, status and expiry (the default)
@@ -114,10 +114,10 @@ Options:
   -h, --help                         Show this help
 
 Examples:
-  skif storage keys create media backup-tool --bucket uploads:read --expires 90d
-  skif storage keys reveal media stk_123 > .env`;
+  yoal storage keys create media backup-tool --bucket uploads:read --expires 90d
+  yoal storage keys reveal media stk_123 > .env`;
 
-const bucketsUsage = `Usage: skif storage buckets <command> <storage> [bucket] [options]
+const bucketsUsage = `Usage: yoal storage buckets <command> <storage> [bucket] [options]
 
 Commands:
   list <storage>                     List buckets with access, state, size and objects (the default)
@@ -280,14 +280,14 @@ function parseNamed(argv: string[], spec: FlagSpec, command: string) {
 		console.log(usage);
 		return null;
 	}
-	const line = `Usage: skif storage ${command} <name>`;
+	const line = `Usage: yoal storage ${command} <name>`;
 	rejectExtraPositionals(args, 1, line);
 	const name = requirePositional(args, 0, `storage name.\n\n${line}`);
 	return { args, name };
 }
 
 function requireProject(project: string | undefined, command: string, name: string): string {
-	if (!project) throw new UsageError(`Name the project: skif storage ${command} ${name} --project <slug>`);
+	if (!project) throw new UsageError(`Name the project: yoal storage ${command} ${name} --project <slug>`);
 	return project;
 }
 
@@ -302,7 +302,7 @@ async function listStorage(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif storage list [--all] [--json]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal storage list [--all] [--json]');
 	const client = await authenticatedClient();
 	const { storage, raw } = await client.listStorage({ includeDeleted: args.boolean('all') });
 	if (args.boolean('json')) {
@@ -310,7 +310,7 @@ async function listStorage(argv: string[]): Promise<void> {
 		return;
 	}
 	if (storage.length === 0) {
-		console.log('No storage yet. Create one with `skif storage create <name> --bucket <bucket>`.');
+		console.log('No storage yet. Create one with `yoal storage create <name> --bucket <bucket>`.');
 		return;
 	}
 	console.log(storageTable(storage));
@@ -367,10 +367,10 @@ async function createStorage(argv: string[]): Promise<void> {
 			`Attached to ${attached.projectSlug} as ${attached.envPrefix}: it receives ${attached.envNames.join(', ')} at its next activation.`,
 		);
 	const steps = [
-		`Follow it:    skif storage info ${storage.name}`,
-		...(storage.buckets.length ? [] : [`Add a bucket: skif storage buckets create ${storage.name} <bucket>`]),
-		...(attached ? [] : [`Attach:       skif storage attach ${storage.name} --project <slug>`]),
-		`Root key:     skif storage credentials ${storage.name}`,
+		`Follow it:    yoal storage info ${storage.name}`,
+		...(storage.buckets.length ? [] : [`Add a bucket: yoal storage buckets create ${storage.name} <bucket>`]),
+		...(attached ? [] : [`Attach:       yoal storage attach ${storage.name} --project <slug>`]),
+		`Root key:     yoal storage credentials ${storage.name}`,
 	];
 	console.log(`\nNext steps:\n${indent(steps)}`);
 }
@@ -388,7 +388,7 @@ async function showStorage(argv: string[]): Promise<void> {
 	console.log(storageDetails(storage));
 	if (storage.deletedAt)
 		console.log(
-			`\nIn the trash. Restore with \`skif storage restore ${storage.name}\`; delete for good with \`skif storage purge ${storage.name}\`.`,
+			`\nIn the trash. Restore with \`yoal storage restore ${storage.name}\`; delete for good with \`yoal storage purge ${storage.name}\`.`,
 		);
 }
 
@@ -511,7 +511,7 @@ async function deleteStorage(argv: string[]): Promise<void> {
 			`Storage "${name}" is attached to ${current.attachments.map((item) => item.projectSlug).join(', ')}. Detach it first.`,
 			{
 				code: 'conflict',
-				suggestions: current.attachments.map((item) => `skif storage detach ${name} --project ${item.projectSlug}`),
+				suggestions: current.attachments.map((item) => `yoal storage detach ${name} --project ${item.projectSlug}`),
 			},
 		);
 	const confirmed = await confirmOrRefuse(
@@ -529,7 +529,7 @@ async function deleteStorage(argv: string[]): Promise<void> {
 		return;
 	}
 	console.log(`Deleted "${storage.name}".${storage.purgeAt ? ` It is purged for good after ${formatTime(storage.purgeAt)}.` : ''}`);
-	console.log(`Undo: skif storage restore ${storage.name}`);
+	console.log(`Undo: yoal storage restore ${storage.name}`);
 }
 
 async function restoreStorage(argv: string[]): Promise<void> {
@@ -543,7 +543,7 @@ async function restoreStorage(argv: string[]): Promise<void> {
 		return;
 	}
 	console.log(
-		`Restored "${storage.name}" on node ${nodeLabel(storage)} (${storage.status}). Re-attach projects with \`skif storage attach\`.`,
+		`Restored "${storage.name}" on node ${nodeLabel(storage)} (${storage.status}). Re-attach projects with \`yoal storage attach\`.`,
 	);
 }
 
@@ -556,7 +556,7 @@ async function purgeStorage(argv: string[]): Promise<void> {
 	if (!storage.deletedAt)
 		throw new CliError(`Storage "${name}" is not in the trash. Delete it first.`, {
 			code: 'conflict',
-			suggestions: [`skif storage delete ${name}`],
+			suggestions: [`yoal storage delete ${name}`],
 		});
 	const confirmed = await confirmOrRefuse(
 		`This permanently deletes storage "${name}" and every object in it on node ${nodeLabel(storage)}. It cannot be undone. Type ${name} to confirm: `,
@@ -572,7 +572,7 @@ async function purgeStorage(argv: string[]): Promise<void> {
 		printJson(raw);
 		return;
 	}
-	console.log(`Purging "${name}": its node deletes the data, then it disappears from \`skif storage list --all\`.`);
+	console.log(`Purging "${name}": its node deletes the data, then it disappears from \`yoal storage list --all\`.`);
 }
 
 async function showCredentials(argv: string[]): Promise<void> {
@@ -587,7 +587,7 @@ async function showCredentials(argv: string[]): Promise<void> {
 		printJson(raw);
 		return;
 	}
-	// Env lines alone on stdout, so `eval "$(skif storage credentials media)"` and `> .env` work.
+	// Env lines alone on stdout, so `eval "$(yoal storage credentials media)"` and `> .env` work.
 	console.log(credentialsEnv(credentials, prefix));
 	if (process.stderr.isTTY && credentials.note) process.stderr.write(`${credentials.note}\n`);
 }
@@ -634,9 +634,9 @@ async function rotateRootKey(argv: string[]): Promise<void> {
 			'comes back within 10 minutes.',
 	);
 	const steps = [
-		`Follow it:  skif storage info ${storage.name}`,
-		`New key:    skif storage credentials ${storage.name}`,
-		`Undo:       skif storage rotate-root ${storage.name} --cancel`,
+		`Follow it:  yoal storage info ${storage.name}`,
+		`New key:    yoal storage credentials ${storage.name}`,
+		`Undo:       yoal storage rotate-root ${storage.name} --cancel`,
 	];
 	console.log(`\nNext steps:\n${indent(steps)}`);
 }
@@ -647,13 +647,13 @@ async function moveStorage(argv: string[]): Promise<void> {
 	if (!parsed) return;
 	const { args, name } = parsed;
 	const node = args.string('node');
-	if (!node) throw new UsageError(`Name the target node: skif storage move ${name} --node <node id>`);
+	if (!node) throw new UsageError(`Name the target node: yoal storage move ${name} --node <node id>`);
 	const disk = args.string('disk') ?? args.string('volume');
 	const client = await authenticatedClient();
 	const { storage } = await client.getStorage(name);
 	const objects = storage.objects === null ? 'its objects' : `its ${plural(storage.objects, 'object')}`;
 	const confirmed = await confirmOrRefuse(
-		`Move "${name}" from ${nodeLabel(storage)} to ${node}? Skiff does not copy objects: the new instance starts empty with the ` +
+		`Move "${name}" from ${nodeLabel(storage)} to ${node}? Yoal does not copy objects: the new instance starts empty with the ` +
 			`same buckets, keys and attachments, and ${objects} on ${nodeLabel(storage)} are deleted once it is up. ` +
 			`Copy what you need first. Type ${name} to confirm: `,
 		{
@@ -672,7 +672,7 @@ async function moveStorage(argv: string[]): Promise<void> {
 	console.log(`Moving "${result.storage}" from ${label(result.from)} to ${label(result.to)}, empty.`);
 	if (result.projects.length > 0) console.log(`Attached apps move with it: ${result.projects.join(', ')}.`);
 	for (const warning of result.warnings) console.log(`Note: ${warning}`);
-	console.log(`Follow it: skif storage info ${result.storage}`);
+	console.log(`Follow it: yoal storage info ${result.storage}`);
 }
 
 // --- named keys ------------------------------------------------------------------------------
@@ -689,7 +689,7 @@ const keySubcommands: Record<string, (argv: string[]) => Promise<void>> = {
 async function keysCommand(argv: string[]): Promise<void> {
 	const first = argv[0];
 	const handler = first ? keySubcommands[first] : undefined;
-	// `skif storage keys media` lists, like `skif storage keys list media`.
+	// `yoal storage keys media` lists, like `yoal storage keys list media`.
 	if (handler) await handler(argv.slice(1));
 	else await listKeys(argv);
 }
@@ -700,7 +700,7 @@ function parseKeyArgs(argv: string[], command: string, second: string | null) {
 		console.log(keysUsage);
 		return null;
 	}
-	const line = `Usage: skif storage keys ${command} <storage>${second ? ` <${second}>` : ''}`;
+	const line = `Usage: yoal storage keys ${command} <storage>${second ? ` <${second}>` : ''}`;
 	rejectExtraPositionals(args, second ? 2 : 1, line);
 	const name = requirePositional(args, 0, `storage name.\n\n${line}`);
 	const value = second ? requirePositional(args, 1, `${second}.\n\n${line}`) : '';
@@ -732,7 +732,7 @@ async function listKeys(argv: string[]): Promise<void> {
 		return;
 	}
 	if (keys.length === 0) {
-		console.log(`No named keys on "${name}". Create one with \`skif storage keys create ${name} <name> --bucket <bucket>\`.`);
+		console.log(`No named keys on "${name}". Create one with \`yoal storage keys create ${name} <name> --bucket <bucket>\`.`);
 		return;
 	}
 	console.log(storageKeysTable(keys));
@@ -744,7 +744,7 @@ async function createKey(argv: string[]): Promise<void> {
 	const { args, name, value } = parsed;
 	const grants = parseGrants(args.strings('bucket'));
 	if (grants.length === 0)
-		throw new UsageError(`Name the buckets: skif storage keys create ${name} ${value} --bucket <b>[:read|:read-write] (repeatable).`);
+		throw new UsageError(`Name the buckets: yoal storage keys create ${name} ${value} --bucket <b>[:read|:read-write] (repeatable).`);
 	const input: StorageKeyCreateInput = { name: value, grants };
 	const purpose = args.string('purpose');
 	if (purpose) input.purpose = purpose;
@@ -758,7 +758,7 @@ async function createKey(argv: string[]): Promise<void> {
 	}
 	console.log(`Created key "${key.name}" (${key.id}, ${key.accessKeyId}) on "${name}" with ${grantsLabel(key.grants)}.`);
 	console.log('The node adds it within a minute.');
-	const steps = [`Secret:  skif storage keys reveal ${name} ${key.id}`, `Revoke:  skif storage keys revoke ${name} ${key.id}`];
+	const steps = [`Secret:  yoal storage keys reveal ${name} ${key.id}`, `Revoke:  yoal storage keys revoke ${name} ${key.id}`];
 	console.log(`\nNext steps:\n${indent(steps)}`);
 }
 
@@ -870,7 +870,7 @@ async function updateGrants(argv: string[]): Promise<void> {
 	const grants = parseGrants(args.strings('bucket'));
 	if (grants.length === 0)
 		throw new UsageError(
-			`Name the buckets: skif storage grants ${name} --project ${project} --bucket <b>[:read|:read-write] (repeatable). ` +
+			`Name the buckets: yoal storage grants ${name} --project ${project} --bucket <b>[:read|:read-write] (repeatable). ` +
 				'They replace the current grants.',
 		);
 	const client = await authenticatedClient();
@@ -913,7 +913,7 @@ const bucketSubcommands: Record<string, (argv: string[]) => Promise<void>> = {
 async function bucketsCommand(argv: string[]): Promise<void> {
 	const first = argv[0];
 	const handler = first ? bucketSubcommands[first] : undefined;
-	// `skif storage buckets media` lists, like `skif storage buckets list media`.
+	// `yoal storage buckets media` lists, like `yoal storage buckets list media`.
 	if (handler) await handler(argv.slice(1));
 	else await listBuckets(argv);
 }
@@ -925,7 +925,7 @@ function parseBucketArgs(argv: string[], command: string, withBucket: boolean) {
 		console.log(bucketsUsage);
 		return null;
 	}
-	const line = `Usage: skif storage buckets ${command} <storage>${withBucket ? ' <bucket>' : ''}`;
+	const line = `Usage: yoal storage buckets ${command} <storage>${withBucket ? ' <bucket>' : ''}`;
 	rejectExtraPositionals(args, withBucket ? 2 : 1, line);
 	const name = requirePositional(args, 0, `storage name.\n\n${line}`);
 	const bucket = withBucket ? requirePositional(args, 1, `bucket name.\n\n${line}`) : '';
@@ -943,7 +943,7 @@ async function listBuckets(argv: string[]): Promise<void> {
 		return;
 	}
 	if (buckets.length === 0) {
-		console.log(`No buckets in "${name}" yet. Create one with \`skif storage buckets create ${name} <bucket>\`.`);
+		console.log(`No buckets in "${name}" yet. Create one with \`yoal storage buckets create ${name} <bucket>\`.`);
 		return;
 	}
 	console.log(bucketTable(buckets));
@@ -995,8 +995,8 @@ async function createBucket(argv: string[]): Promise<void> {
 		console.log(
 			`Object lock is on (${view.objectLock.mode}, ${view.objectLock.retainDays} days) and cannot be undone.`,
 		);
-	console.log(`Follow it: skif storage bucket config ${name} ${view.name}`);
-	console.log(`Grant it to an app: skif storage attach ${name} --project <slug> --bucket ${view.name}`);
+	console.log(`Follow it: yoal storage bucket config ${name} ${view.name}`);
+	console.log(`Grant it to an app: yoal storage attach ${name} --project <slug> --bucket ${view.name}`);
 }
 
 async function showBucketConfig(argv: string[]): Promise<void> {
@@ -1021,7 +1021,7 @@ async function updateBucket(argv: string[]): Promise<void> {
 	const input = readBucketConfigInput(args);
 	if (!input)
 		throw new UsageError(
-			`Nothing to update: skif storage bucket update ${name} ${bucket} ` +
+			`Nothing to update: yoal storage bucket update ${name} ${bucket} ` +
 				'--access private|public-read --versioning on|off --quota 1G --lifecycle @rules.json --cors @cors.json',
 		);
 	const client = await authenticatedClient();

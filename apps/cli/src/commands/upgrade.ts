@@ -7,12 +7,12 @@ import { printJson } from '../output.ts';
 import { confirmOrRefuse } from './run-operation.ts';
 
 /**
- * Platform upgrade operations. These are host-level actions, so on a Skiff server the command
- * shells out to the root-owned `skiff-update-self` (the updater re-checks everything itself).
+ * Platform upgrade operations. These are host-level actions, so on a Yoal server the command
+ * shells out to the root-owned `yoal-update-self` (the updater re-checks everything itself).
  * `plan` also works remotely through the read-only API.
  */
 
-const usage = `Usage: skif upgrade <plan|apply|rollback> [options]
+const usage = `Usage: yoal upgrade <plan|apply|rollback> [options]
 
 Commands:
   plan                  Preflight the next release (disk, backup target, migrations, Postgres majors)
@@ -24,15 +24,15 @@ Options:
   --repo <owner/name>   GitHub repository (plan/apply)
   --ref <ref>           Branch, tag or sha (plan/apply)
   --force               Rebuild or deliberately downgrade (apply)
-  --with-agent          Restart skiff-agent on the new release
+  --with-agent          Restart yoal-agent on the new release
   --restore-db          Rollback: also restore the control DB snapshot (loses later writes)
   --keep-db             Rollback: run the old code against the newer schema
   --yes                 Don't ask for confirmation
   --json                JSON output
   -h, --help            Show this help
 
-Run apply/rollback on the Skiff host as root (or through the dashboard). The CLI delegates to
-\`skiff-update-self\`; an API key cannot perform a platform mutation.`;
+Run apply/rollback on the Yoal host as root (or through the dashboard). The CLI delegates to
+\`yoal-update-self\`; an API key cannot perform a platform mutation.`;
 
 const flags: FlagSpec = {
 	version: { type: 'string' },
@@ -47,7 +47,7 @@ const flags: FlagSpec = {
 	help: { type: 'boolean', short: 'h' }
 };
 
-const LOCAL_UPDATER = process.env.SKIFF_UPDATE_SELF ?? '/usr/local/sbin/skiff-update-self';
+const LOCAL_UPDATER = process.env.YOAL_UPDATE_SELF ?? '/usr/local/sbin/yoal-update-self';
 
 function onHost(): boolean {
 	return (process.getuid?.() ?? -1) === 0 && existsSync(LOCAL_UPDATER);
@@ -67,7 +67,7 @@ export async function upgradeCommand(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, `Usage: skif upgrade ${sub}`);
+	rejectExtraPositionals(args, 0, `Usage: yoal upgrade ${sub}`);
 
 	if (sub === 'plan') return plan(args);
 	if (sub === 'apply') return apply(args);
@@ -105,19 +105,19 @@ async function plan(args: ReturnType<typeof parseArgs>): Promise<void> {
 	for (const check of value.checks ?? [])
 		console.log(`${check.status === 'ok' ? 'ok  ' : check.status === 'warn' ? 'warn' : 'FAIL'} ${check.id}: ${check.message}`);
 	if (!value.ok)
-		console.error('Run `sudo skiff-update-self plan` on the server for the authoritative check.');
+		console.error('Run `sudo yoal-update-self plan` on the server for the authoritative check.');
 }
 
 async function apply(args: ReturnType<typeof parseArgs>): Promise<void> {
 	const confirmed = await confirmOrRefuse(
-		'Install the newest Skiff release? It snapshots the control DB and .env/APP_KEY, switches releases, and rolls back automatically if /readyz fails.',
+		'Install the newest Yoal release? It snapshots the control DB and .env/APP_KEY, switches releases, and rolls back automatically if /readyz fails.',
 		{ yes: args.boolean('yes'), refusal: 'Refusing to apply an upgrade without confirmation.' }
 	);
 	if (!confirmed) throw new UsageError('Cancelled.');
 	if (!onHost())
 		throw new CliError(
-			'Applying an upgrade requires root on the Skiff host. Run `sudo skiff-update-self update` there, or use Settings → Updates in the dashboard.',
-			{ code: 'local_required', suggestions: ['sudo skiff-update-self update'] }
+			'Applying an upgrade requires root on the Yoal host. Run `sudo yoal-update-self update` there, or use Settings → Updates in the dashboard.',
+			{ code: 'local_required', suggestions: ['sudo yoal-update-self update'] }
 		);
 	const localArgs = ['update'];
 	if (args.string('repo')) localArgs.push('--repo', args.string('repo')!);
@@ -137,8 +137,8 @@ async function rollback(args: ReturnType<typeof parseArgs>): Promise<void> {
 	if (!confirmed) throw new UsageError('Cancelled.');
 	if (!onHost())
 		throw new CliError(
-			'Rolling back requires root on the Skiff host. Run `sudo skiff-update-self rollback` there.',
-			{ code: 'local_required', suggestions: ['sudo skiff-update-self rollback'] }
+			'Rolling back requires root on the Yoal host. Run `sudo yoal-update-self rollback` there.',
+			{ code: 'local_required', suggestions: ['sudo yoal-update-self rollback'] }
 		);
 	const localArgs = ['rollback'];
 	if (args.boolean('restore-db')) localArgs.push('--restore-db');

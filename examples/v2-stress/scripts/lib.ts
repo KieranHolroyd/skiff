@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-/** Shared by the provision and stress scripts. No Skiff imports: the example is a black box. */
+/** Shared by the provision and stress scripts. No Yoal imports: the example is a black box. */
 
 export class ApiError extends Error {
 	readonly status: number;
@@ -22,7 +22,7 @@ export interface ApiClientOptions {
 	timeoutMs?: number;
 }
 
-/** Minimal bearer client for the Skiff REST API (`docs/API.md`). */
+/** Minimal bearer client for the Yoal REST API (`docs/API.md`). */
 export class ApiClient {
 	readonly baseUrl: string;
 	private readonly token: string;

@@ -1,14 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { FUNCTION_ANALYTICS_PORT } from '@skiff/contracts';
+import { FUNCTION_ANALYTICS_PORT } from '@yoal/contracts';
 import { BUILD_VERSION } from './build-version.ts';
 
 /**
  * Agent runtime configuration. Everything comes from the process environment so the compiled
  * binary can be dropped into a systemd unit with an EnvironmentFile (DESIGN §11).
  *
- * `skiff-agent join` writes `${dataDir}/node.json`; when the node id/token/control URL are not in
- * the environment, this loader falls back to that file so the unit only needs `SKIFF_DATA_DIR`.
+ * `yoal-agent join` writes `${dataDir}/node.json`; when the node id/token/control URL are not in
+ * the environment, this loader falls back to that file so the unit only needs `YOAL_DATA_DIR`.
  */
 
 export interface AgentConfig {
@@ -19,15 +19,15 @@ export interface AgentConfig {
 	 * of through Caddy (control-socket.ts, D105).
 	 */
 	controlSocket: string | null;
-	/** Bearer token issued by `skiff-agent join`. */
+	/** Bearer token issued by `yoal-agent join`. */
 	nodeToken: string;
 	/** Stable id of this node (`nod_…`). */
 	nodeId: string;
 	/** Root for cached state, releases and site symlinks. */
 	dataDir: string;
-	/** What skiff-storage.service last applied (D48). */
+	/** What yoal-storage.service last applied (D48). */
 	storageStateFile: string;
-	/** Dropped to ask skiff-storage.service to apply the desired storage paths. */
+	/** Dropped to ask yoal-storage.service to apply the desired storage paths. */
 	storageRequestFile: string;
 	agentVersion: string;
 	/** Caddy admin API socket. Caddy is never reachable over TCP (D7). */
@@ -40,11 +40,11 @@ export interface AgentConfig {
 	caddyAccessLog: string | null;
 	/** Host-only site session cookie name. */
 	cookieName: string;
-	/** Host-only Skiff Access session cookie name (IAM.md I25). */
+	/** Host-only Yoal Access session cookie name (IAM.md I25). */
 	accessCookieName: string;
-	/** HMAC secret for `Skiff-Access-Jwt`; null falls back to the route's site key. */
+	/** HMAC secret for `Yoal-Access-Jwt`; null falls back to the route's site key. */
 	accessJwtSecret: string | null;
-	/** How long a verified Skiff Access decision is cached (IAM.md §11.1, S6). */
+	/** How long a verified Yoal Access decision is cached (IAM.md §11.1, S6). */
 	accessCacheMs: number;
 	/** Dev-only: emit non-Secure cookies and http return URLs. */
 	insecureHttp: boolean;
@@ -69,7 +69,7 @@ export interface AgentConfig {
 	certProbe: { host: string; port: number } | null;
 	/** Root-only helper socket that renders systemd units (tier 2/3). */
 	helperSocket: string;
-	/** Node workload-slice memory budget applied to `skiff-workloads.slice`. */
+	/** Node workload-slice memory budget applied to `yoal-workloads.slice`. */
 	workloadSliceMb: number;
 	/** Directory where socket-activated workloads expose `<id>.sock` (functions) or `<projectId>.sock` (process apps). */
 	workloadSocketDir: string;
@@ -135,7 +135,7 @@ function parseListen(value: string): string[] {
 		.split(',')
 		.map((part) => part.trim())
 		.filter((part) => part.length > 0);
-	if (listen.length === 0) throw new ConfigError('SKIFF_CADDY_LISTEN must contain at least one address');
+	if (listen.length === 0) throw new ConfigError('YOAL_CADDY_LISTEN must contain at least one address');
 	for (const address of listen) {
 		// Caddy accepts `:443`, `127.0.0.1:8080`, `unix/…`. Reject obvious typos early.
 		if (!address.includes(':') && !address.startsWith('unix/'))
@@ -144,7 +144,7 @@ function parseListen(value: string): string[] {
 	return listen;
 }
 
-/** `SKIFF_CERT_PROBE_ADDR` (`host:port`, or `off`), else loopback on the TLS listen port. */
+/** `YOAL_CERT_PROBE_ADDR` (`host:port`, or `off`), else loopback on the TLS listen port. */
 export function parseCertProbe(
 	value: string | undefined,
 	listen: string[],
@@ -162,7 +162,7 @@ export function parseCertProbe(
 	};
 	if (raw) {
 		const probe = parse(raw);
-		if (!probe) throw new ConfigError(`Invalid SKIFF_CERT_PROBE_ADDR "${raw}" (expected host:port or off)`);
+		if (!probe) throw new ConfigError(`Invalid YOAL_CERT_PROBE_ADDR "${raw}" (expected host:port or off)`);
 		return probe;
 	}
 	if (!tls) return null;
@@ -175,10 +175,10 @@ function parseUrl(value: string): string {
 	try {
 		url = new URL(value);
 	} catch {
-		throw new ConfigError(`SKIFF_CONTROL_URL is not a valid URL: ${value}`);
+		throw new ConfigError(`YOAL_CONTROL_URL is not a valid URL: ${value}`);
 	}
 	if (url.protocol !== 'http:' && url.protocol !== 'https:')
-		throw new ConfigError('SKIFF_CONTROL_URL must be http or https');
+		throw new ConfigError('YOAL_CONTROL_URL must be http or https');
 	return value.replace(/\/+$/, '');
 }
 
@@ -218,7 +218,7 @@ function parseContentDomain(value: string | undefined): string | null {
 	return domain;
 }
 
-/** Read `${dataDir}/node.json` written by `skiff-agent join`. */
+/** Read `${dataDir}/node.json` written by `yoal-agent join`. */
 function readNodeFile(path: string): NodeFile | null {
 	let text: string;
 	try {
@@ -261,10 +261,10 @@ function readSecretFile(path: string | null): string | null {
 }
 
 export function loadConfig(env: Env = process.env): AgentConfig {
-	const dataDir = optional(env, 'SKIFF_DATA_DIR', '/var/lib/skiff-agent').replace(/\/+$/, '') || '/';
-	const envControlUrl = env.SKIFF_CONTROL_URL?.trim();
-	const envNodeToken = env.SKIFF_NODE_TOKEN?.trim();
-	const envNodeId = env.SKIFF_NODE_ID?.trim();
+	const dataDir = optional(env, 'YOAL_DATA_DIR', '/var/lib/yoal-agent').replace(/\/+$/, '') || '/';
+	const envControlUrl = env.YOAL_CONTROL_URL?.trim();
+	const envNodeToken = env.YOAL_NODE_TOKEN?.trim();
+	const envNodeId = env.YOAL_NODE_ID?.trim();
 
 	// Only touch disk when at least one credential is missing, so a fully configured environment
 	// does not depend on the node file at all.
@@ -273,31 +273,31 @@ export function loadConfig(env: Env = process.env): AgentConfig {
 			? null
 			: readNodeFile(join(dataDir, 'node.json'));
 
-	const controlUrl = parseUrl(envControlUrl || nodeFile?.controlUrl || required(env, 'SKIFF_CONTROL_URL'));
-	const nodeToken = envNodeToken || nodeFile?.token || required(env, 'SKIFF_NODE_TOKEN');
-	const nodeId = envNodeId || nodeFile?.nodeId || required(env, 'SKIFF_NODE_ID');
+	const controlUrl = parseUrl(envControlUrl || nodeFile?.controlUrl || required(env, 'YOAL_CONTROL_URL'));
+	const nodeToken = envNodeToken || nodeFile?.token || required(env, 'YOAL_NODE_TOKEN');
+	const nodeId = envNodeId || nodeFile?.nodeId || required(env, 'YOAL_NODE_ID');
 
-	const insecureHttp = parseBoolean(env, 'SKIFF_AGENT_INSECURE_HTTP');
+	const insecureHttp = parseBoolean(env, 'YOAL_AGENT_INSECURE_HTTP');
 	if (insecureHttp && env.NODE_ENV === 'production')
-		throw new ConfigError('SKIFF_AGENT_INSECURE_HTTP must not be enabled in production');
+		throw new ConfigError('YOAL_AGENT_INSECURE_HTTP must not be enabled in production');
 
-	const acmeEmail = optionalValue(env, 'SKIFF_ACME_EMAIL');
-	const tls = parseBooleanValue(env.SKIFF_TLS) ?? acmeEmail !== null;
+	const acmeEmail = optionalValue(env, 'YOAL_ACME_EMAIL');
+	const tls = parseBooleanValue(env.YOAL_TLS) ?? acmeEmail !== null;
 	if (tls && env.NODE_ENV === 'production' && !acmeEmail)
-		throw new ConfigError('SKIFF_ACME_EMAIL is required when SKIFF_TLS is enabled in production');
+		throw new ConfigError('YOAL_ACME_EMAIL is required when YOAL_TLS is enabled in production');
 
-	const caddyAccessLog = env.SKIFF_CADDY_ACCESS_LOG?.trim();
-	const caddyListen = parseListen(optional(env, 'SKIFF_CADDY_LISTEN', ':443,:80'));
-	const cookieName = optional(env, 'SKIFF_SITE_COOKIE_COOKIE_NAME', '__skiff_s');
+	const caddyAccessLog = env.YOAL_CADDY_ACCESS_LOG?.trim();
+	const caddyListen = parseListen(optional(env, 'YOAL_CADDY_LISTEN', ':443,:80'));
+	const cookieName = optional(env, 'YOAL_SITE_COOKIE_COOKIE_NAME', '__yoal_s');
 	if (!/^[A-Za-z0-9!#$%&'*+\-.^_`|~]+$/.test(cookieName))
-		throw new ConfigError('SKIFF_SITE_COOKIE_COOKIE_NAME is not a valid cookie name');
-	const accessCookieName = optional(env, 'SKIFF_ACCESS_COOKIE_NAME', '__skiff_a');
+		throw new ConfigError('YOAL_SITE_COOKIE_COOKIE_NAME is not a valid cookie name');
+	const accessCookieName = optional(env, 'YOAL_ACCESS_COOKIE_NAME', '__yoal_a');
 	if (!/^[A-Za-z0-9!#$%&'*+\-.^_`|~]+$/.test(accessCookieName))
-		throw new ConfigError('SKIFF_ACCESS_COOKIE_NAME is not a valid cookie name');
+		throw new ConfigError('YOAL_ACCESS_COOKIE_NAME is not a valid cookie name');
 
-	const controlSocket = optionalValue(env, 'SKIFF_CONTROL_SOCKET');
+	const controlSocket = optionalValue(env, 'YOAL_CONTROL_SOCKET');
 	if (controlSocket && !controlSocket.startsWith('/'))
-		throw new ConfigError('SKIFF_CONTROL_SOCKET must be an absolute path');
+		throw new ConfigError('YOAL_CONTROL_SOCKET must be an absolute path');
 
 	return {
 		controlUrl,
@@ -305,40 +305,40 @@ export function loadConfig(env: Env = process.env): AgentConfig {
 		nodeToken,
 		nodeId,
 		dataDir,
-		storageStateFile: optional(env, 'SKIFF_STORAGE_STATE_FILE', '/etc/skiff/storage.json'),
-		storageRequestFile: optional(env, 'SKIFF_STORAGE_REQUEST_FILE', '/run/skiff/storage.request'),
+		storageStateFile: optional(env, 'YOAL_STORAGE_STATE_FILE', '/etc/yoal/storage.json'),
+		storageRequestFile: optional(env, 'YOAL_STORAGE_REQUEST_FILE', '/run/yoal/storage.request'),
 		// Embedded at build time, never from env: an env file outlives the binary it described (D99).
 		agentVersion: BUILD_VERSION,
-		caddyAdminSocket: optional(env, 'SKIFF_CADDY_ADMIN_SOCKET', '/var/lib/caddy/admin.sock'),
+		caddyAdminSocket: optional(env, 'YOAL_CADDY_ADMIN_SOCKET', '/var/lib/caddy/admin.sock'),
 		caddyListen,
-		agentSocket: optional(env, 'SKIFF_AGENT_SOCKET', '/run/skiff-agent/agent.sock'),
+		agentSocket: optional(env, 'YOAL_AGENT_SOCKET', '/run/yoal-agent/agent.sock'),
 		caddyAccessLog: caddyAccessLog ? caddyAccessLog : null,
 		cookieName,
-		accessCookieName: optional(env, 'SKIFF_ACCESS_COOKIE_NAME', '__skiff_a'),
-		accessJwtSecret: optionalValue(env, 'SKIFF_ACCESS_JWT_SECRET'),
+		accessCookieName: optional(env, 'YOAL_ACCESS_COOKIE_NAME', '__yoal_a'),
+		accessJwtSecret: optionalValue(env, 'YOAL_ACCESS_JWT_SECRET'),
 		// 0 disables the positive cache (the short negative cache then expires at once too).
-		accessCacheMs: parseIntegerEnv(env, 'SKIFF_ACCESS_CACHE_MS', 15_000, 0, 3_600_000),
+		accessCacheMs: parseIntegerEnv(env, 'YOAL_ACCESS_CACHE_MS', 15_000, 0, 3_600_000),
 		insecureHttp,
 		tls,
 		acmeEmail,
-		acmeCa: optionalValue(env, 'SKIFF_ACME_CA'),
+		acmeCa: optionalValue(env, 'YOAL_ACME_CA'),
 		cloudflareApiToken:
-			optionalValue(env, 'SKIFF_CLOUDFLARE_API_TOKEN') ??
-			readSecretFile(optionalValue(env, 'SKIFF_CLOUDFLARE_API_TOKEN_FILE')),
-		contentDomain: parseContentDomain(env.SKIFF_CONTENT_DOMAIN),
-		platformHost: parseContentDomain(env.SKIFF_PLATFORM_HOST),
-		platformUpstream: optional(env, 'SKIFF_PLATFORM_UPSTREAM', 'unix//run/skiff/control.sock'),
-		certProbe: parseCertProbe(env.SKIFF_CERT_PROBE_ADDR, caddyListen, tls),
-		helperSocket: parseAbsolutePath(env, 'SKIFF_HELPER_SOCKET', '/run/skiff-helper/helper.sock'),
-		workloadSliceMb: parseIntegerEnv(env, 'SKIFF_WORKLOAD_SLICE_MB', 1024, 32, 1_048_576),
+			optionalValue(env, 'YOAL_CLOUDFLARE_API_TOKEN') ??
+			readSecretFile(optionalValue(env, 'YOAL_CLOUDFLARE_API_TOKEN_FILE')),
+		contentDomain: parseContentDomain(env.YOAL_CONTENT_DOMAIN),
+		platformHost: parseContentDomain(env.YOAL_PLATFORM_HOST),
+		platformUpstream: optional(env, 'YOAL_PLATFORM_UPSTREAM', 'unix//run/yoal/control.sock'),
+		certProbe: parseCertProbe(env.YOAL_CERT_PROBE_ADDR, caddyListen, tls),
+		helperSocket: parseAbsolutePath(env, 'YOAL_HELPER_SOCKET', '/run/yoal-helper/helper.sock'),
+		workloadSliceMb: parseIntegerEnv(env, 'YOAL_WORKLOAD_SLICE_MB', 1024, 32, 1_048_576),
 		workloadSocketDir: parseAbsolutePath(
 			env,
-			'SKIFF_WORKLOAD_SOCKET_DIR',
-			'/run/skiff-workloads',
+			'YOAL_WORKLOAD_SOCKET_DIR',
+			'/run/yoal-workloads',
 		),
 		workloadHealthTimeoutMs: parseIntegerEnv(
 			env,
-			'SKIFF_WORKLOAD_HEALTH_TIMEOUT_MS',
+			'YOAL_WORKLOAD_HEALTH_TIMEOUT_MS',
 			30_000,
 			1_000,
 			600_000,
@@ -346,8 +346,8 @@ export function loadConfig(env: Env = process.env): AgentConfig {
 		// Fixed: the agent renders the same port into every function's Analytics Engine sink, so
 		// an environment override here would silently diverge from that config.
 		functionAnalyticsPort: FUNCTION_ANALYTICS_PORT,
-		logDrain: parseBooleanValue(env.SKIFF_LOG_DRAIN) ?? true,
-		logDrainIntervalMs: parseIntegerEnv(env, 'SKIFF_LOG_DRAIN_INTERVAL_MS', 2_000, 500, 60_000),
+		logDrain: parseBooleanValue(env.YOAL_LOG_DRAIN) ?? true,
+		logDrainIntervalMs: parseIntegerEnv(env, 'YOAL_LOG_DRAIN_INTERVAL_MS', 2_000, 500, 60_000),
 	};
 }
 

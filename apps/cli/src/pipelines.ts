@@ -1,7 +1,7 @@
 /**
  * Pipelines (docs/PIPELINES.md §8): a thin client for `/api/v1/repositories/…` plus the CLI's
  * formatting. Every rule (workflow syntax, permissions, secrets) lives on the server; the only
- * local check is `skif workflow lint`, which runs the same parser the control plane runs.
+ * local check is `yoal workflow lint`, which runs the same parser the control plane runs.
  *
  * Types come straight from the contracts package (type-only, so nothing is bundled for them).
  */
@@ -54,7 +54,7 @@ export type RunListQuery = {
 };
 
 /** Directory workflow files are read from (mirrors `PIPELINE_WORKFLOW_DIR`). */
-export const WORKFLOW_DIR = '.skiff/workflows';
+export const WORKFLOW_DIR = '.yoal/workflows';
 
 const RUN_STATUSES = ['queued', 'in_progress', 'completed'] as const;
 const CONCLUSIONS = ['success', 'failure', 'cancelled', 'skipped', 'timed_out'] as const;
@@ -177,7 +177,7 @@ export function parseInputs(pairs: string[]): Record<string, string> {
 	return inputs;
 }
 
-/** `ci.yml` → `.skiff/workflows/ci.yml` (the server stores and filters by full path). */
+/** `ci.yml` → `.yoal/workflows/ci.yml` (the server stores and filters by full path). */
 export function workflowPath(workflow: string): string {
 	return workflow.includes('/') ? workflow.replace(/^\.?\//, '') : `${WORKFLOW_DIR}/${workflow}`;
 }
@@ -205,7 +205,7 @@ export function parseLimit(value: string | undefined, fallback: number, max = 10
 export function assertVariableName(name: string, kind: 'secret' | 'variable'): void {
 	if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
 		throw new UsageError(`"${name}" is not a valid ${kind} name. Use letters, digits and underscores, not starting with a digit.`);
-	if (/^(SKIFF|GITHUB)_/i.test(name)) throw new UsageError(`${kind === 'secret' ? 'Secret' : 'Variable'} names starting with SKIFF_ or GITHUB_ are reserved.`);
+	if (/^(YOAL|GITHUB)_/i.test(name)) throw new UsageError(`${kind === 'secret' ? 'Secret' : 'Variable'} names starting with YOAL_ or GITHUB_ are reserved.`);
 }
 
 // ---------------------------------------------------------------- status
@@ -243,7 +243,7 @@ export function runExitCode(run: { conclusion: string | null }): number {
 	return run.conclusion === 'success' || run.conclusion === 'skipped' ? 0 : 1;
 }
 
-/** The job `skif run logs` shows by default: the first failed one, else the last one. */
+/** The job `yoal run logs` shows by default: the first failed one, else the last one. */
 export function defaultLogJob(run: PipelineRunView): PipelineJobView | undefined {
 	return run.jobs.find((job) => job.conclusion === 'failure' || job.conclusion === 'timed_out') ?? run.jobs.find(isFailed) ?? run.jobs.at(-1);
 }
@@ -336,7 +336,7 @@ function stepLabel(step: PipelineStepView): string {
 	return `${step.index + 1}. ${step.name}`;
 }
 
-/** `skif run view`: header, jobs with their steps (the failing step marked), artifacts. */
+/** `yoal run view`: header, jobs with their steps (the failing step marked), artifacts. */
 export function runDetails(run: RunView, now = Date.now()): string[] {
 	const out = [
 		`Run #${run.number} ${run.workflowName}  ${statusMark(run)} ${statusLabel(run)}${run.attempt > 1 ? `  (attempt ${run.attempt})` : ''}`,
@@ -374,11 +374,11 @@ export function runDetails(run: RunView, now = Date.now()): string[] {
 		);
 	}
 	const failedJob = run.jobs.find(isFailed);
-	if (failedJob) out.push('', `Logs: skif run logs ${run.repository} ${run.number} --job ${failedJob.id}`);
+	if (failedJob) out.push('', `Logs: yoal run logs ${run.repository} ${run.number} --job ${failedJob.id}`);
 	return out;
 }
 
-/** What changed between two polls of a run, as lines for `skif run watch`. `prev` null = first poll. */
+/** What changed between two polls of a run, as lines for `yoal run watch`. `prev` null = first poll. */
 export function runTransitions(prev: PipelineRunView | null, next: PipelineRunView): string[] {
 	const out: string[] = [];
 	const before = new Map((prev?.jobs ?? []).map((job) => [job.id, job]));
@@ -449,7 +449,7 @@ export interface LintResult {
  */
 export async function lintWorkflow(text: string, path: string): Promise<LintResult> {
 	const yaml = (globalThis as { Bun?: { YAML?: { parse(text: string): unknown } } }).Bun?.YAML;
-	if (!yaml) throw new CliError('skif workflow lint needs the Bun runtime (Bun.YAML). Run it with bun, or use the standalone skif binary.');
+	if (!yaml) throw new CliError('yoal workflow lint needs the Bun runtime (Bun.YAML). Run it with bun, or use the standalone yoal binary.');
 	let doc: unknown;
 	try {
 		doc = yaml.parse(text);
@@ -462,7 +462,7 @@ export async function lintWorkflow(text: string, path: string): Promise<LintResu
 /** Bun's YAML parser, or a clear error on Node (the npm bundle). */
 export function bunYaml(command: string): { parse(text: string): unknown } {
 	const yaml = (globalThis as { Bun?: { YAML?: { parse(text: string): unknown } } }).Bun?.YAML;
-	if (!yaml) throw new CliError(`${command} needs the Bun runtime (Bun.YAML). Run it with bun, or use the standalone skif binary.`);
+	if (!yaml) throw new CliError(`${command} needs the Bun runtime (Bun.YAML). Run it with bun, or use the standalone yoal binary.`);
 	return yaml;
 }
 
@@ -478,7 +478,7 @@ export async function lintDocument(doc: unknown, path: string): Promise<LintResu
 	}
 }
 
-// ---------------------------------------------------------------- import (.github → .skiff)
+// ---------------------------------------------------------------- import (.github → .yoal)
 
 export interface ImportNote {
 	/** JSON-path-ish location in the source workflow (`jobs.build.steps[3].uses`). */
@@ -498,28 +498,28 @@ const isObject = (value: unknown): value is Json => typeof value === 'object' &&
 const SUPPORTED_EVENTS = new Set(['push', 'pull_request', 'workflow_dispatch', 'schedule', 'workflow_call']);
 /** Built-in actions and their `actions/*` aliases (mirrors `resolvePipelineAction`). */
 const BUILTIN_ACTIONS = new Set([
-	'skiff/checkout',
-	'skiff/cache',
-	'skiff/upload-artifact',
-	'skiff/download-artifact',
-	'skiff/deploy',
-	'skiff/build-image',
-	'skiff/image-index',
-	'skiff/oidc-token',
+	'yoal/checkout',
+	'yoal/cache',
+	'yoal/upload-artifact',
+	'yoal/download-artifact',
+	'yoal/deploy',
+	'yoal/build-image',
+	'yoal/image-index',
+	'yoal/oidc-token',
 	'actions/checkout',
 	'actions/cache',
 	'actions/upload-artifact',
 	'actions/download-artifact',
 ]);
 const IMAGE_ACTIONS: Record<string, string> = {
-	'docker/build-push-action': 'use skiff/build-image (BuildKit sidecar, registry/<name> tags, secrets as mounts) instead',
-	'docker/setup-buildx-action': 'not needed with skiff/build-image; remove it',
-	'docker/setup-qemu-action': 'not needed: build each arch natively (matrix over runs-on [linux, <arch>]) and join them with skiff/image-index',
-	'docker/login-action': 'not needed for Skiff\'s registry (jobs log in with their job token); for other registries pass username/password to skiff/build-image',
-	'docker/metadata-action': 'compute tags in a run: step and write them to $SKIFF_OUTPUT',
+	'docker/build-push-action': 'use yoal/build-image (BuildKit sidecar, registry/<name> tags, secrets as mounts) instead',
+	'docker/setup-buildx-action': 'not needed with yoal/build-image; remove it',
+	'docker/setup-qemu-action': 'not needed: build each arch natively (matrix over runs-on [linux, <arch>]) and join them with yoal/image-index',
+	'docker/login-action': 'not needed for Yoal\'s registry (jobs log in with their job token); for other registries pass username/password to yoal/build-image',
+	'docker/metadata-action': 'compute tags in a run: step and write them to $YOAL_OUTPUT',
 };
 
-/** A GitHub-hosted runner label → Skiff labels (`ubuntu-*` → `linux`, `*-arm` adds `arm64`). */
+/** A GitHub-hosted runner label → Yoal labels (`ubuntu-*` → `linux`, `*-arm` adds `arm64`). */
 function mapRunnerLabel(label: string): { labels: string[]; unsupported?: string } {
 	const lower = label.toLowerCase();
 	if (/^ubuntu-.*-arm(64)?$/.test(lower)) return { labels: ['linux', 'arm64'] };
@@ -527,7 +527,7 @@ function mapRunnerLabel(label: string): { labels: string[]; unsupported?: string
 	if (lower === 'self-hosted') return { labels: [] };
 	if (lower === 'x64' || lower === 'arm64' || lower === 'linux') return { labels: [lower] };
 	if (lower.startsWith('macos-') || lower.startsWith('windows-') || lower === 'macos' || lower === 'windows')
-		return { labels: [label], unsupported: `${label} runners do not exist on Skiff (jobs run in Linux containers); use the GitHub runner pool for this job` };
+		return { labels: [label], unsupported: `${label} runners do not exist on Yoal (jobs run in Linux containers); use the GitHub runner pool for this job` };
 	return { labels: [label] };
 }
 
@@ -548,8 +548,8 @@ function rewriteStrings(value: unknown, rewrite: (text: string) => string): unkn
 }
 
 /**
- * Convert a `.github/workflows` file into a Skiff workflow (W1): hosted `runs-on` labels become
- * Skiff labels, `permissions` go, `secrets.GITHUB_TOKEN` becomes `secrets.GH_TOKEN`, and every
+ * Convert a `.github/workflows` file into a Yoal workflow (W1): hosted `runs-on` labels become
+ * Yoal labels, `permissions` go, `secrets.GITHUB_TOKEN` becomes `secrets.GH_TOKEN`, and every
  * construct that will not carry over (or deserves a look) is listed with its path. The result
  * still goes through the real parser (`lintWorkflow`) afterwards.
  */
@@ -558,7 +558,7 @@ export function importGithubWorkflow(source: unknown): ImportResult {
 	const note = (path: string, kind: ImportNote['kind'], message: string) => notes.push({ path, kind, message });
 	if (!isObject(source)) throw new CliError('The workflow is not a YAML mapping');
 
-	// github.token / secrets.GITHUB_TOKEN: Skiff has no ambient GitHub token.
+	// github.token / secrets.GITHUB_TOKEN: Yoal has no ambient GitHub token.
 	let tokenRewritten = false;
 	const doc = rewriteStrings(source, (text) => {
 		const next = text.replace(/\bsecrets\.GITHUB_TOKEN\b/g, 'secrets.GH_TOKEN').replace(/\bgithub\.token\b/g, 'secrets.GH_TOKEN');
@@ -566,12 +566,12 @@ export function importGithubWorkflow(source: unknown): ImportResult {
 		return next;
 	}) as Json;
 	if (tokenRewritten)
-		note('', 'changed', 'secrets.GITHUB_TOKEN / github.token became secrets.GH_TOKEN: Skiff has no ambient GitHub token, so add a GH_TOKEN secret (scoped to an environment if it can write)');
+		note('', 'changed', 'secrets.GITHUB_TOKEN / github.token became secrets.GH_TOKEN: Yoal has no ambient GitHub token, so add a GH_TOKEN secret (scoped to an environment if it can write)');
 
 	const out: Json = {};
 	for (const [key, value] of Object.entries(doc)) {
 		if (key === 'permissions') {
-			note('permissions', 'changed', 'Dropped: Skiff job tokens are already scoped to the repository and trust tier (W9/W10)');
+			note('permissions', 'changed', 'Dropped: Yoal job tokens are already scoped to the repository and trust tier (W9/W10)');
 			continue;
 		}
 		if (key === 'on') {
@@ -598,10 +598,10 @@ function convertTriggers(value: unknown, note: (path: string, kind: ImportNote['
 		}
 		const hint =
 			event === 'pull_request_target'
-				? 'use pull_request: runs from forks are untrusted (no secrets) on Skiff'
+				? 'use pull_request: runs from forks are untrusted (no secrets) on Yoal'
 				: event === 'release' || event === 'create'
 					? 'use push with tags: filters'
-					: 'Skiff triggers are push, pull_request, workflow_dispatch, schedule, workflow_call and skiff_event';
+					: 'Yoal triggers are push, pull_request, workflow_dispatch, schedule, workflow_call and yoal_event';
 		note(`on.${event}`, 'unsupported', `Dropped the ${event} trigger: ${hint}`);
 	}
 	if (!Object.keys(kept).length) {
@@ -618,7 +618,7 @@ function convertJob(id: string, raw: unknown, note: (path: string, kind: ImportN
 	const runnerKeys = new Set<string>();
 	for (const [key, value] of Object.entries(raw)) {
 		if (key === 'permissions') {
-			note(`${base}.permissions`, 'changed', 'Dropped: job tokens are scoped by Skiff, not by GitHub permissions');
+			note(`${base}.permissions`, 'changed', 'Dropped: job tokens are scoped by Yoal, not by GitHub permissions');
 			continue;
 		}
 		if (key === 'runs-on') {
@@ -627,11 +627,11 @@ function convertJob(id: string, raw: unknown, note: (path: string, kind: ImportN
 		}
 		if (key === 'uses' && typeof value === 'string') {
 			if (value.startsWith('./.github/workflows/')) {
-				job.uses = value.replace('./.github/workflows/', './.skiff/workflows/');
+				job.uses = value.replace('./.github/workflows/', './.yoal/workflows/');
 				note(`${base}.uses`, 'changed', `Reusable workflow now read from ${job.uses}; import that file too`);
 			} else {
 				job.uses = value;
-				note(`${base}.uses`, 'unsupported', 'Reusable workflows from other repositories are not supported; copy it into .skiff/workflows');
+				note(`${base}.uses`, 'unsupported', 'Reusable workflows from other repositories are not supported; copy it into .yoal/workflows');
 			}
 			continue;
 		}
@@ -639,7 +639,7 @@ function convertJob(id: string, raw: unknown, note: (path: string, kind: ImportN
 			job.steps = value.map((step, index) => convertStep(step, `${base}.steps[${index}]`, note));
 			continue;
 		}
-		if (key === 'environment') note(`${base}.environment`, 'note', 'Create this environment on the repository (allowed refs, approvers, secrets): skif repo / dashboard → Environments');
+		if (key === 'environment') note(`${base}.environment`, 'note', 'Create this environment on the repository (allowed refs, approvers, secrets): yoal repo / dashboard → Environments');
 		if (key === 'services' && isObject(value))
 			for (const name of Object.keys(value)) note(`${base}.services.${name}`, 'note', `Services run on a per-job network: reach them by their service name (${name}:<port>), not localhost or a mapped port`);
 		job[key] = value;
@@ -673,7 +673,7 @@ function convertJob(id: string, raw: unknown, note: (path: string, kind: ImportN
 function convertRunsOn(value: unknown, path: string, note: (path: string, kind: ImportNote['kind'], message: string) => void, runnerKeys: Set<string>): unknown {
 	const list = typeof value === 'string' ? [value] : Array.isArray(value) ? value.map(String) : isObject(value) && Array.isArray(value.labels) ? value.labels.map(String) : null;
 	if (!list) return value;
-	if (isObject(value) && value.group !== undefined) note(`${path}.group`, 'changed', 'Dropped: Skiff places jobs by labels only');
+	if (isObject(value) && value.group !== undefined) note(`${path}.group`, 'changed', 'Dropped: Yoal places jobs by labels only');
 	const labels: string[] = [];
 	let expression = false;
 	for (const label of list) {
@@ -691,7 +691,7 @@ function convertRunsOn(value: unknown, path: string, note: (path: string, kind: 
 	if (expression && !labels.includes('linux')) labels.unshift('linux');
 	if (!labels.length) labels.push('linux');
 	const result = labels.length === 1 ? labels[0]! : labels;
-	if (JSON.stringify(result) !== JSON.stringify(value)) note(path, 'changed', `runs-on ${JSON.stringify(value)} → ${JSON.stringify(result)} (Skiff node labels: linux, x64/arm64, oci-build, …)`);
+	if (JSON.stringify(result) !== JSON.stringify(value)) note(path, 'changed', `runs-on ${JSON.stringify(value)} → ${JSON.stringify(result)} (Yoal node labels: linux, x64/arm64, oci-build, …)`);
 	return result;
 }
 
@@ -701,12 +701,12 @@ function convertStep(raw: unknown, path: string, note: (path: string, kind: Impo
 	if (uses) {
 		const name = uses.split('@')[0]!.toLowerCase();
 		const ref = uses.includes('@') ? uses.slice(uses.indexOf('@') + 1) : '';
-		if (uses.startsWith('docker://')) note(`${path}.uses`, 'unsupported', `Docker-container actions (${uses}) do not run on Skiff; use a run: step with the tool, or container: on the job`);
+		if (uses.startsWith('docker://')) note(`${path}.uses`, 'unsupported', `Docker-container actions (${uses}) do not run on Yoal; use a run: step with the tool, or container: on the job`);
 		else if (BUILTIN_ACTIONS.has(name)) {
 			if (name === 'actions/checkout' && isObject(raw.with) && (raw.with.path || raw.with.repository))
-				note(`${path}.with`, 'note', 'skiff/checkout only checks out this repository into the workspace root; path/repository are not supported');
+				note(`${path}.with`, 'note', 'yoal/checkout only checks out this repository into the workspace root; path/repository are not supported');
 		} else if (IMAGE_ACTIONS[name]) note(`${path}.uses`, 'unsupported', `${uses}: ${IMAGE_ACTIONS[name]}`);
-		else if (uses.startsWith('./')) note(`${path}.uses`, 'note', 'Local action: composite and JavaScript actions run on Skiff; Docker actions do not');
+		else if (uses.startsWith('./')) note(`${path}.uses`, 'note', 'Local action: composite and JavaScript actions run on Yoal; Docker actions do not');
 		else
 			note(
 				`${path}.uses`,

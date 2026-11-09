@@ -5,11 +5,11 @@ import { arch, platform, release } from 'node:os';
 import { join } from 'node:path';
 
 /**
- * v2-stress — a deliberately boring Bun app that exposes every knob Skiff v2 can turn.
+ * v2-stress — a deliberately boring Bun app that exposes every knob Yoal v2 can turn.
  *
  * It is a normal tier-2 workload: bind loopback, answer a health path, keep a little state in
  * /data, read injected env and secrets, and make CPU/memory/streaming failures easy to provoke.
- * Nothing here is Skiff-specific; the point is that Skiff's runtime should be invisible.
+ * Nothing here is Yoal-specific; the point is that Yoal's runtime should be invisible.
  */
 
 const PORT = readInt(process.env.PORT, 3000, 1, 65_535);
@@ -391,7 +391,7 @@ function htmlPage(): string {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Skiff v2 stress</title>
+<title>Yoal v2 stress</title>
 <style>
 	:root { color-scheme: dark; font: 15px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
 	body { max-width: 60rem; margin: 3rem auto; padding: 0 1.5rem; background: #0b0d10; color: #d7dde5; }
@@ -404,7 +404,7 @@ function htmlPage(): string {
 </head>
 <body>
 <h1>v2-stress <span class="badge">up</span></h1>
-<p><small>Skiff v2 tier-2 workload. Live facts refresh below; the full surface is at <code>/api/info</code>.</small></p>
+<p><small>Yoal v2 tier-2 workload. Live facts refresh below; the full surface is at <code>/api/info</code>.</small></p>
 <pre id="facts">loading…</pre>
 <p><small>Run the harness from the repository: <code>bun examples/v2-stress/scripts/stress.ts --base &lt;url&gt;</code></small></p>
 <script>

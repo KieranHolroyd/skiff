@@ -9,12 +9,12 @@ import { fetchServiceAccounts, resolveServiceAccount } from './service-accounts.
 
 /**
  * Access keys (docs/IAM.md I14, §7.2; docs/API.md §Access keys). A key belongs to one org and one
- * principal: the caller (`user`) or a service account. The raw `skif_…` key is shown exactly once,
+ * principal: the caller (`user`) or a service account. The raw `yoal_…` key is shown exactly once,
  * from `create`; every later read carries only its `start`. Server checks decide who may list and
  * revoke; this is a thin client over `/api/v1/access-keys`.
  */
 
-const usage = `Usage: skif key <command> [options]
+const usage = `Usage: yoal key <command> [options]
 
 Commands:
   list [list]                  Keys you can see (--principal to filter by principal id)
@@ -39,10 +39,10 @@ Server-side key defaults: service-account keys expire after 90 days; user keys d
 with CIDRs is refused when the request carries no IP.
 
 Examples:
-  skif key create ci --service-account ci-bot --expires 90d
-  skif key create ci --service-account ci-bot --permission project:read --cidr 10.0.0.0/8
-  skif key list
-  skif key revoke ak_abc123`;
+  yoal key create ci --service-account ci-bot --expires 90d
+  yoal key create ci --service-account ci-bot --permission project:read --cidr 10.0.0.0/8
+  yoal key list
+  yoal key revoke ak_abc123`;
 
 export interface AccessKeyView {
 	id: string;
@@ -105,7 +105,7 @@ async function listAccessKeys(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif key [list] [--principal <id>] [--json]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal key [list] [--principal <id>] [--json]');
 	const client = await authenticatedClient();
 	const keys = await fetchAccessKeys(client, args.string('principal'));
 	if (args.boolean('json')) {
@@ -113,7 +113,7 @@ async function listAccessKeys(argv: string[]): Promise<void> {
 		return;
 	}
 	if (keys.length === 0) {
-		console.log('No access keys. Mint one with `skif key create <name>`.');
+		console.log('No access keys. Mint one with `yoal key create <name>`.');
 		return;
 	}
 	console.log(accessKeyTable(keys));
@@ -125,7 +125,7 @@ async function createAccessKey(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif key create <name> [--service-account <name|id>] [options]');
+	rejectExtraPositionals(args, 1, 'Usage: yoal key create <name> [--service-account <name|id>] [options]');
 	const name = requirePositional(args, 0, `key name.\n\n${usage}`);
 	const client = await authenticatedClient();
 
@@ -172,7 +172,7 @@ async function revokeAccessKey(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif key revoke <id> [--yes]');
+	rejectExtraPositionals(args, 1, 'Usage: yoal key revoke <id> [--yes]');
 	const id = requirePositional(args, 0, `access key id.\n\n${usage}`);
 	const confirmed = await confirmOrRefuse(`Revoke access key ${id}? It stops working at once. [y/N] `, {
 		yes: args.boolean('yes'),
@@ -213,7 +213,7 @@ export function parseCidrs(values: string[]): string[] {
 	return [...new Set(cidrs)];
 }
 
-/** The API takes a TTL in seconds; `--expires` accepts the same durations as `skif iam --expires`. */
+/** The API takes a TTL in seconds; `--expires` accepts the same durations as `yoal iam --expires`. */
 export function parseExpiresInSeconds(value: string, now = Date.now()): number {
 	return Math.max(1, Math.round((parseExpiry(value, now) - now) / 1000));
 }
@@ -260,7 +260,7 @@ function asAccessKey(value: unknown): AccessKeyView | undefined {
 		principalType: stringValue(record.principalType) ?? 'user',
 		principalId: stringValue(record.principalId) ?? '',
 		name,
-		prefix: stringValue(record.prefix) ?? 'skif_',
+		prefix: stringValue(record.prefix) ?? 'yoal_',
 		start: stringValue(record.start) ?? '',
 		permissions: stringArray(record.permissions),
 		resources: stringArray(record.resources),

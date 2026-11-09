@@ -12,7 +12,7 @@
 
 ## Goal
 
-Make Skiff's Postgres feel like a real application database: enable common extensions (pgvector,
+Make Yoal's Postgres feel like a real application database: enable common extensions (pgvector,
 PostGIS, pg_trgm, pg_cron, pg_stat_statements), show slow queries, and document the vector use case
 without shipping a separate vector database.
 
@@ -30,7 +30,7 @@ without shipping a separate vector database.
   `pg_stat_statements`.
 - `shared_preload_libraries` is not set; `pg_cron`/`pg_stat_statements` need it.
 - The dashboard shows tables and charts, no slow-query view.
-- Supabase pre-installs 50+ extensions; Fly includes pgvector/PostGIS; Skiff is vanilla.
+- Supabase pre-installs 50+ extensions; Fly includes pgvector/PostGIS; Yoal is vanilla.
 
 ## Design
 
@@ -86,7 +86,7 @@ without shipping a separate vector database.
 
 - REST: `GET/PATCH /databases/:name/extensions`, `GET /databases/:name/queries`.
 - MCP: `list_database_extensions`, `enable_database_extension` (confirmed), `get_slow_queries`.
-- CLI: `skif db extensions list|enable`, `skif db queries`.
+- CLI: `yoal db extensions list|enable`, `yoal db queries`.
 - Dashboard: Extensions panel with toggles, vector/POSTGIS snippets, slow queries.
 - Docs: `docs/DATABASES.md` sections for pgvector, PostGIS, pg_cron, pg_stat_statements.
 
@@ -129,7 +129,7 @@ without shipping a separate vector database.
 
 ## Rollout
 
-Ship the read-only slow-query panel first; extension enablement behind `SKIFF_FEATURE_DB_EXTENSIONS`
+Ship the read-only slow-query panel first; extension enablement behind `YOAL_FEATURE_DB_EXTENSIONS`
 off by default. Enable for new databases, then existing on restart.
 
 ## Open questions

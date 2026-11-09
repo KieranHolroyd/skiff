@@ -4,7 +4,7 @@
 	 * macros) for callers allowed to run SQL. "Edit as SQL" starts from the SQL the builder last
 	 * produced.
 	 */
-	import type { ObservabilitySchema, PanelQuery } from '@skiff/contracts';
+	import type { ObservabilitySchema, PanelQuery } from '@yoal/contracts';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import CircleHelpIcon from '@lucide/svelte/icons/circle-help';
 	import CodeXmlIcon from '@lucide/svelte/icons/code-xml';

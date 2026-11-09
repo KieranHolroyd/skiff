@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 
 	/**
 	 * The banner every Email page except the overview shows until a mail node is chosen

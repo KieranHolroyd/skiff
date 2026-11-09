@@ -16,7 +16,7 @@ let data: string;
 let host: string;
 
 beforeEach(() => {
-	base = realpathSync(mkdtempSync(join(tmpdir(), 'skiff-ctr-files-')));
+	base = realpathSync(mkdtempSync(join(tmpdir(), 'yoal-ctr-files-')));
 	rootfs = join(base, 'merged');
 	data = join(base, 'data');
 	host = join(base, 'host');
@@ -43,7 +43,7 @@ function filesystem(): ContainerFilesystem {
 		[
 			{ destination: '/', source: rootfs, type: 'rootfs', readOnly: true, note: null },
 			{ destination: '/data', source: data, type: 'bind', readOnly: false, note: null },
-			{ destination: '/run/skiff-secrets', source: null, type: 'bind', readOnly: true, note: 'secrets' },
+			{ destination: '/run/yoal-secrets', source: null, type: 'bind', readOnly: true, note: 'secrets' },
 			{ destination: '/tmp', source: null, type: 'tmpfs', readOnly: false, note: 'tmpfs' },
 		],
 		testFdView,
@@ -109,7 +109,7 @@ describe('ContainerFilesystem', () => {
 
 	test('refuses secrets and tmpfs mounts', () => {
 		const fs = filesystem();
-		expect(() => fs.list('/run/skiff-secrets', 10)).toThrow('Secret files are not shown');
+		expect(() => fs.list('/run/yoal-secrets', 10)).toThrow('Secret files are not shown');
 		expect(() => fs.list('/tmp', 10)).toThrow('tmpfs');
 	});
 

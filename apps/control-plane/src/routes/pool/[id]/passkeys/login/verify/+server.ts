@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import type { UserPoolPasskeyAuthenticationResponse } from '@skiff/core';
+import type { UserPoolPasskeyAuthenticationResponse } from '@yoal/core';
 import { safeRedirect } from '#lib/redirect.js';
 import { platformOrigin } from '#lib/server/config.js';
 import { core } from '#lib/server/core.js';

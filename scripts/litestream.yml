@@ -1,28 +1,28 @@
-# Skiff SQLite -> Cloudflare R2 continuous replication.
+# Yoal SQLite -> Cloudflare R2 continuous replication.
 #
-# Installed at /etc/skiff/litestream.yml and read by skiff-litestream.service.
-# Litestream expands ${VAR} from the service environment (EnvironmentFile=/etc/skiff/skiff.env).
-# Do not put literal credentials in this file; keep them in /etc/skiff/skiff.env (0640 root:skiff).
+# Installed at /etc/yoal/litestream.yml and read by yoal-litestream.service.
+# Litestream expands ${VAR} from the service environment (EnvironmentFile=/etc/yoal/yoal.env).
+# Do not put literal credentials in this file; keep them in /etc/yoal/yoal.env (0640 root:yoal).
 #
 # Required env: the same names the control plane uses, all written by the installer when
 # --object-store r2 is selected:
-#   SKIFF_DATA_DIR         /var/lib/skiff/data
+#   YOAL_DATA_DIR         /var/lib/yoal/data
 #   R2_BUCKET
 #   R2_ENDPOINT            https://<account-id>.r2.cloudflarestorage.com
 #   R2_ACCESS_KEY_ID
 #   R2_SECRET_ACCESS_KEY
-# Replicas live under the fixed prefix skiff/sqlite/ in the bucket, apart from release artifacts
+# Replicas live under the fixed prefix yoal/sqlite/ in the bucket, apart from release artifacts
 # and the telemetry Parquet archive.
 #
-# Restore:  skiff-restore              (scripts/restore.sh --yes)
-# Drill:    skiff-restore-drill        (systemctl start skiff-restore-drill.service)
+# Restore:  yoal-restore              (scripts/restore.sh --yes)
+# Drill:    yoal-restore-drill        (systemctl start yoal-restore-drill.service)
 
 dbs:
-  - path: ${SKIFF_DATA_DIR}/skiff.db
+  - path: ${YOAL_DATA_DIR}/yoal.db
     replicas:
       - type: s3
         bucket: ${R2_BUCKET}
-        path: skiff/sqlite
+        path: yoal/sqlite
         endpoint: ${R2_ENDPOINT}
         region: auto
         access-key-id: ${R2_ACCESS_KEY_ID}

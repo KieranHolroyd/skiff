@@ -11,9 +11,9 @@ import {
 	CONTAINER_CONSOLE_TOKEN_HEADER,
 	STUDIO_TOKEN_HEADER,
 	telemetryBatchSchema
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
-import { identityGeneration } from '@skiff/core';
+import { identityGeneration } from '@yoal/core';
 import { json, readJson, route } from '#lib/server/api.js';
 
 function nodeToken(request: Request): string {
@@ -87,12 +87,12 @@ const handler: RequestHandler = async (event) => {
 		}
 
 		// Workload identity (IAM.md I18): the node's agent mints a token for one of its workloads,
-		// either for the file it delivers (aud=skiff) or for the metadata endpoint's other audiences.
+		// either for the file it delivers (aud=yoal) or for the metadata endpoint's other audiences.
 		const identity = /^workloads\/([^/]+)\/identity$/.exec(action);
 		if (identity) {
 			if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
 			const node = core.nodes.authenticate(token);
-			const audience = url.searchParams.get('audience')?.trim() || 'skiff';
+			const audience = url.searchParams.get('audience')?.trim() || 'yoal';
 			return json(await core.workloads.identityFor(node.id, identity[1]!, audience), 200, {
 				'cache-control': 'no-store',
 			});
@@ -198,7 +198,7 @@ const handler: RequestHandler = async (event) => {
 			return core.databases.rotationActivation(node.id, rotation[1]!);
 		}
 
-		// The primary's `skiff_repl` password for one replication task (C7); never in desired state.
+		// The primary's `yoal_repl` password for one replication task (C7); never in desired state.
 		const replication = /^database-replication\/([^/]+)$/.exec(action);
 		if (replication) {
 			if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
@@ -275,7 +275,7 @@ const handler: RequestHandler = async (event) => {
 				>(
 					`SELECT c.id, c.pool_id, c.client_id, c.client_secret_sealed, p.org_id
 					   FROM user_pool_clients c JOIN user_pools p ON p.id = c.pool_id
-					  WHERE p.disabled_at IS NULL AND p.engine = 'skiff-identity'
+					  WHERE p.disabled_at IS NULL AND p.engine = 'yoal-identity'
 					  ORDER BY c.name COLLATE NOCASE`,
 				)
 				.all()
@@ -295,7 +295,7 @@ const handler: RequestHandler = async (event) => {
 				>(
 					`SELECT o.pool_id, o.provider, o.client_id, o.client_secret_sealed, o.scopes_json, o.enabled, p.org_id
 					   FROM user_pool_oauth_providers o JOIN user_pools p ON p.id = o.pool_id
-					  WHERE p.disabled_at IS NULL AND p.engine = 'skiff-identity'`,
+					  WHERE p.disabled_at IS NULL AND p.engine = 'yoal-identity'`,
 				)
 				.all()
 				.filter((provider) => wanted.has(provider.pool_id));

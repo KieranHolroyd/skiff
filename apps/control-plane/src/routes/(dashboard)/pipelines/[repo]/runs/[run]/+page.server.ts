@@ -1,5 +1,5 @@
 import { error, fail } from '@sveltejs/kit';
-import { CoreError } from '@skiff/core';
+import { CoreError } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import { formBoolean, formString } from '../../../../_lib/errors.js';
 import type { RunDetail } from '../../../_lib/api.js';

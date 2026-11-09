@@ -1,5 +1,5 @@
 import { and, eq } from 'drizzle-orm';
-import { deployments, nodes, pipelineRuns, projects, registryOidcTrusts, registryPins, registryRepositories, settings, workloads } from '@skiff/db';
+import { deployments, nodes, pipelineRuns, projects, registryOidcTrusts, registryPins, registryRepositories, settings, workloads } from '@yoal/db';
 import {
 	REGISTRY_DEFAULT_PORT,
 	REGISTRY_DEFAULT_VERSION,
@@ -31,7 +31,7 @@ import {
 	type StorageRoute,
 	type WorkloadActivation,
 	type WorkloadDesired,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { buildSystemPrincipal } from './iam/system.ts';
@@ -45,7 +45,7 @@ import { hmac, newId, parseJson, randomBytes, randomToken, safeEqual, sha256Hex 
  * The platform container registry (docs/REGISTRY.md G1).
  *
  * zot runs as a managed container on one node (the helper derives its image and config, D61);
- * everything Skiff-specific lives here: settings, the Docker token realm, who may pull or push
+ * everything Yoal-specific lives here: settings, the Docker token realm, who may pull or push
  * which repository, repository ownership, push events, and listing tags for the dashboard.
  *
  * **Names.** A repository is `<org slug>/<name>`; the first segment is the tenancy boundary.
@@ -317,16 +317,16 @@ export class RegistryService {
 
 	private adminHtpasswdCache: { password: string; line: string } | null = null;
 
-	/** `skiff-admin:<bcrypt>`: hashed once per password (bcrypt salts differ, so cache it). */
+	/** `yoal-admin:<bcrypt>`: hashed once per password (bcrypt salts differ, so cache it). */
 	private adminHtpasswd(config: RegistryConfig): string | null {
 		const password = this.adminPassword(config);
 		if (!password) return null;
 		if (this.adminHtpasswdCache?.password !== password) {
 			const stored = this.ctx.db.select().from(settings).where(eq(settings.key, `${CONFIG_KEY}.htpasswd`)).get();
 			const line =
-				stored && Bun.password.verifySync(password, stored.value.slice('skiff-admin:'.length))
+				stored && Bun.password.verifySync(password, stored.value.slice('yoal-admin:'.length))
 					? stored.value
-					: `skiff-admin:${Bun.password.hashSync(password, { algorithm: 'bcrypt', cost: 10 })}`;
+					: `yoal-admin:${Bun.password.hashSync(password, { algorithm: 'bcrypt', cost: 10 })}`;
 			if (!stored || stored.value !== line)
 				this.ctx.db
 					.insert(settings)
@@ -356,7 +356,7 @@ export class RegistryService {
 		if (config.cosignKeysSyncedHash === hash) return true;
 		const password = this.adminPassword(config);
 		if (!password) return false;
-		const authorization = `Basic ${Buffer.from(`skiff-admin:${password}`).toString('base64')}`;
+		const authorization = `Basic ${Buffer.from(`yoal-admin:${password}`).toString('base64')}`;
 		for (const key of config.cosignKeys) {
 			const response = await this.transport()(this.registryUrl('/v2/_zot/ext/cosign'), {
 				method: 'POST',
@@ -461,7 +461,7 @@ export class RegistryService {
 			}
 		}
 		const { kid, privateKeyPem } = this.ctx.signingKeys.activePrivateKeyPem('registry');
-		const certificatePem = certificateFromPrivateKeyPem(privateKeyPem, 'skiff-registry-token', this.ctx.now());
+		const certificatePem = certificateFromPrivateKeyPem(privateKeyPem, 'yoal-registry-token', this.ctx.now());
 		const value = JSON.stringify({ kid, certificatePem });
 		this.ctx.db
 			.insert(settings)
@@ -575,14 +575,14 @@ export class RegistryService {
 			workloadId: id,
 			activationVersion: this.activationVersionOf(config),
 			env: {
-				SKIFF_REGISTRY_TOKEN_CERT: this.signingCertificate().certificatePem,
-				SKIFF_REGISTRY_EVENTS_URL: this.eventsUrl(config),
-				...(this.trustOn(config) ? { SKIFF_REGISTRY_ADMIN_HTPASSWD: this.adminHtpasswd(config)! } : {}),
+				YOAL_REGISTRY_TOKEN_CERT: this.signingCertificate().certificatePem,
+				YOAL_REGISTRY_EVENTS_URL: this.eventsUrl(config),
+				...(this.trustOn(config) ? { YOAL_REGISTRY_ADMIN_HTPASSWD: this.adminHtpasswd(config)! } : {}),
 				...(config.s3
 					? {
-							SKIFF_REGISTRY_S3_ACCESS_KEY: config.s3.accessKeyId,
-							SKIFF_REGISTRY_S3_SECRET_KEY: this.ctx.secrets.open(PLATFORM_KEY_ORG, config.s3.secretSealed),
-							SKIFF_REGISTRY_CACHE_URL: this.ctx.secrets.open(PLATFORM_KEY_ORG, config.s3.cacheUrlSealed),
+							YOAL_REGISTRY_S3_ACCESS_KEY: config.s3.accessKeyId,
+							YOAL_REGISTRY_S3_SECRET_KEY: this.ctx.secrets.open(PLATFORM_KEY_ORG, config.s3.secretSealed),
+							YOAL_REGISTRY_CACHE_URL: this.ctx.secrets.open(PLATFORM_KEY_ORG, config.s3.cacheUrlSealed),
 						}
 					: {}),
 			},
@@ -627,7 +627,7 @@ export class RegistryService {
 
 	/** A token the control plane uses itself: pull (and optionally delete) on one repository. */
 	internalToken(repository: string, actions: string[] = ['pull']): string {
-		return this.mintRegistryToken('skiff-control-plane', [{ type: 'repository', name: repository, actions }], 120).token;
+		return this.mintRegistryToken('yoal-control-plane', [{ type: 'repository', name: repository, actions }], 120).token;
 	}
 
 	/**
@@ -664,7 +664,7 @@ export class RegistryService {
 			subject = client.username;
 			access = scopes.flatMap((scope) => this.grantForJob(job, scope));
 		} else {
-			throw new CoreError('unauthorized', 'Sign in with your Skiff API key as the password.', 401);
+			throw new CoreError('unauthorized', 'Sign in with your Yoal API key as the password.', 401);
 		}
 		const signed = this.mintRegistryToken(subject, access, TOKEN_TTL_SECONDS);
 		return { token: signed.token, access_token: signed.token, expires_in: signed.expiresIn, issued_at: signed.issuedAt };
@@ -913,7 +913,7 @@ export class RegistryService {
 		return [{ type: 'repository', name: parsed.name, actions: [...new Set(actions)] }];
 	}
 
-	/** What a pipeline job sees of the registry (claim + `skiff.registry*`), or null when it is off. */
+	/** What a pipeline job sees of the registry (claim + `yoal.registry*`), or null when it is off. */
 	jobRegistry(orgId: string, trust: string): { host: string; namespace: string; push: boolean } | null {
 		if (!this.enabled()) return null;
 		const slug = this.orgSlug(orgId);
@@ -1024,7 +1024,7 @@ export class RegistryService {
 				throw new ValidationError(`"${project.slug}" is not a container project; only containers deploy an image.`);
 			tag = (input.tag ?? 'latest').trim();
 			if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(tag) || tag.startsWith(REGISTRY_PIN_TAG_PREFIX))
-				throw new ValidationError(`"${tag}" is not a tag Skiff can deploy on push.`);
+				throw new ValidationError(`"${tag}" is not a tag Yoal can deploy on push.`);
 			projectId = project.id;
 		} else {
 			this.ctx.iam.require(principal, 'deployment:create', { type: 'org' });
@@ -1123,7 +1123,7 @@ export class RegistryService {
 	// ------------------------------------------------------------------------ pins (R11)
 
 	/**
-	 * Tag the digest a new deployment runs as `skiff-d-<deployment>`, so retention keeps it for as
+	 * Tag the digest a new deployment runs as `yoal-d-<deployment>`, so retention keeps it for as
 	 * long as the deployment exists (rollback included). Best effort: a failure is logged and the
 	 * deployment stands; the pin sweep retries nothing, the next deploy pins again.
 	 */
@@ -1387,7 +1387,7 @@ export class RegistryService {
 	async deleteTag(principal: Principal, name: string, tag: string): Promise<void> {
 		const row = this.requireRepository(principal, name);
 		this.ctx.iam.require(principal, 'image:delete', { type: 'repository', id: row.id });
-		if (tag.startsWith(REGISTRY_PIN_TAG_PREFIX)) throw new ValidationError('Deployment pins are managed by Skiff.');
+		if (tag.startsWith(REGISTRY_PIN_TAG_PREFIX)) throw new ValidationError('Deployment pins are managed by Yoal.');
 		const response = await this.transport()(this.registryUrl(`/v2/${name}/manifests/${encodeURIComponent(tag)}`), {
 			method: 'DELETE',
 			headers: { Authorization: `Bearer ${this.internalToken(name, ['pull', 'delete'])}` },

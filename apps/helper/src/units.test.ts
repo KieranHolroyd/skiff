@@ -33,7 +33,7 @@ function workload(overrides: Record<string, unknown> = {}): WorkloadDesired {
 		runtime: 'process',
 		status: 'running',
 		release: SHA,
-		upstream: 'unix//run/skiff-workloads/prj_abc123.sock',
+		upstream: 'unix//run/yoal-workloads/prj_abc123.sock',
 		memoryMb: 256,
 		cpus: 1.5,
 		port: 3000,
@@ -60,8 +60,8 @@ describe('process unit', () => {
 	test('is hardened and runs from the release directory', () => {
 		const unit = renderProcessUnit({
 			workload: workload(),
-			releaseDir: '/srv/skiff/releases/' + SHA,
-			envFile: '/run/skiff-workloads/wld_abc123/env',
+			releaseDir: '/srv/yoal/releases/' + SHA,
+			envFile: '/run/yoal-workloads/wld_abc123/env',
 			secrets: [],
 			command: ['bun', 'run', 'start'],
 			envNames: ['NODE_ENV'],
@@ -69,12 +69,12 @@ describe('process unit', () => {
 
 		for (const expected of [
 			'DynamicUser=yes',
-			'StateDirectory=skiff-workloads/wld_abc123',
-			`WorkingDirectory=/srv/skiff/releases/${SHA}`,
-			'EnvironmentFile=-/run/skiff-workloads/wld_abc123/env',
+			'StateDirectory=yoal-workloads/wld_abc123',
+			`WorkingDirectory=/srv/yoal/releases/${SHA}`,
+			'EnvironmentFile=-/run/yoal-workloads/wld_abc123/env',
 			'MemoryMax=256M',
 			'CPUQuota=150%',
-			'Slice=skiff-workloads.slice',
+			'Slice=yoal-workloads.slice',
 			'Restart=on-failure',
 			'NoNewPrivileges=yes',
 			'ProtectSystem=strict',
@@ -94,8 +94,8 @@ describe('process unit', () => {
 	test('sets loopback PORT/HOST when not socket-activated', () => {
 		const unit = renderProcessUnit({
 			workload: workload({ socketActivation: false }),
-			releaseDir: '/srv/skiff/releases/' + SHA,
-			envFile: '/run/skiff-workloads/wld_abc123/env',
+			releaseDir: '/srv/yoal/releases/' + SHA,
+			envFile: '/run/yoal-workloads/wld_abc123/env',
 			secrets: [],
 			command: ['/opt/app/server'],
 			envNames: ['NODE_ENV'],
@@ -105,33 +105,33 @@ describe('process unit', () => {
 		expect(unit).toContain('ExecStart="/opt/app/server"');
 		expect(unit).toContain('[Install]');
 		expect(unit).toContain('WantedBy=multi-user.target');
-		expect(unit).not.toContain('Requires=skiff-workload-');
+		expect(unit).not.toContain('Requires=yoal-workload-');
 	});
 
 	test('a socket-activated service requires and orders after its own socket', () => {
 		const unit = renderProcessUnit({
 			workload: workload({ socketActivation: true }),
-			releaseDir: '/srv/skiff/releases/' + SHA,
-			envFile: '/run/skiff-workloads/wld_abc123/env',
+			releaseDir: '/srv/yoal/releases/' + SHA,
+			envFile: '/run/yoal-workloads/wld_abc123/env',
 			secrets: [],
 			command: ['/opt/app/server'],
 			envNames: [],
 		});
-		expect(unit).toContain('Requires=skiff-workload-wld_abc123.socket');
-		expect(unit).toContain('After=skiff-workload-wld_abc123.socket');
+		expect(unit).toContain('Requires=yoal-workload-wld_abc123.socket');
+		expect(unit).toContain('After=yoal-workload-wld_abc123.socket');
 	});
 
 	test('file secrets go through LoadCredential and NAME_FILE', () => {
 		const unit = renderProcessUnit({
 			workload: workload({ secrets: [{ name: 'TLS_KEY', delivery: 'file' }] }),
-			releaseDir: '/srv/skiff/releases/' + SHA,
-			envFile: '/run/skiff-workloads/wld_abc123/env',
-			secrets: [{ name: 'TLS_KEY', path: '/run/skiff-workloads/wld_abc123/secrets/TLS_KEY' }],
+			releaseDir: '/srv/yoal/releases/' + SHA,
+			envFile: '/run/yoal-workloads/wld_abc123/env',
+			secrets: [{ name: 'TLS_KEY', path: '/run/yoal-workloads/wld_abc123/secrets/TLS_KEY' }],
 			command: ['bun', 'run', 'start'],
 			envNames: ['NODE_ENV', 'TLS_KEY'],
 		});
 		expect(unit).toContain(
-			'LoadCredential=TLS_KEY:/run/skiff-workloads/wld_abc123/secrets/TLS_KEY',
+			'LoadCredential=TLS_KEY:/run/yoal-workloads/wld_abc123/secrets/TLS_KEY',
 		);
 		expect(unit).toContain('Environment=TLS_KEY_FILE=%d/TLS_KEY');
 	});
@@ -139,8 +139,8 @@ describe('process unit', () => {
 	test('does not override an explicit PORT in the activation env', () => {
 		const unit = renderProcessUnit({
 			workload: workload({ socketActivation: false }),
-			releaseDir: '/srv/skiff/releases/' + SHA,
-			envFile: '/run/skiff-workloads/wld_abc123/env',
+			releaseDir: '/srv/yoal/releases/' + SHA,
+			envFile: '/run/yoal-workloads/wld_abc123/env',
 			secrets: [],
 			command: ['bun', 'run', 'start'],
 			envNames: ['PORT'],
@@ -151,8 +151,8 @@ describe('process unit', () => {
 	test('escapes systemd variable/specifier expansion in argv', () => {
 		const unit = renderProcessUnit({
 			workload: workload(),
-			releaseDir: '/srv/skiff/releases/' + SHA,
-			envFile: '/run/skiff-workloads/wld_abc123/env',
+			releaseDir: '/srv/yoal/releases/' + SHA,
+			envFile: '/run/yoal-workloads/wld_abc123/env',
 			secrets: [],
 			command: ['bun', 'run', '--flag=$HOME%n', 'quote"and\\slash'],
 			envNames: [],
@@ -166,11 +166,11 @@ describe('socket unit', () => {
 	test('listens on the project socket with the configured ownership', () => {
 		const unit = renderSocketUnit({
 			workload: workload(),
-			socketPath: '/run/skiff-workloads/prj_abc123.sock',
+			socketPath: '/run/yoal-workloads/prj_abc123.sock',
 			socketMode: '0660',
 			socketGroup: 'caddy',
 		});
-		expect(unit).toContain('ListenStream=/run/skiff-workloads/prj_abc123.sock');
+		expect(unit).toContain('ListenStream=/run/yoal-workloads/prj_abc123.sock');
 		expect(unit).toContain('SocketMode=0660');
 		expect(unit).toContain('SocketGroup=caddy');
 		expect(unit).toContain('WantedBy=sockets.target');
@@ -179,7 +179,7 @@ describe('socket unit', () => {
 	test('omits SocketGroup when none is configured', () => {
 		const unit = renderSocketUnit({
 			workload: workload(),
-			socketPath: '/run/skiff-workloads/prj_abc123.sock',
+			socketPath: '/run/yoal-workloads/prj_abc123.sock',
 			socketMode: '0666',
 			socketGroup: null,
 		});
@@ -187,8 +187,8 @@ describe('socket unit', () => {
 	});
 
 	test('unit names are stable and id-scoped', () => {
-		expect(serviceUnitName('wld_1')).toBe('skiff-workload-wld_1.service');
-		expect(socketUnitName('wld_1')).toBe('skiff-workload-wld_1.socket');
+		expect(serviceUnitName('wld_1')).toBe('yoal-workload-wld_1.service');
+		expect(socketUnitName('wld_1')).toBe('yoal-workload-wld_1.socket');
 	});
 });
 
@@ -203,26 +203,26 @@ describe('container unit', () => {
 				socketActivation: false,
 			}),
 			image: 'ghcr.io/acme/app:1.2.3',
-			envFile: '/run/skiff-workloads/wld_abc123/env',
-			dataDir: '/var/lib/skiff-workloads/wld_abc123',
-			secretsDir: '/run/skiff-workloads/wld_abc123/secrets',
+			envFile: '/run/yoal-workloads/wld_abc123/env',
+			dataDir: '/var/lib/yoal-workloads/wld_abc123',
+			secretsDir: '/run/yoal-workloads/wld_abc123/secrets',
 		});
 		expect(unit).toContain('Image=ghcr.io/acme/app:1.2.3');
 		expect(unit).toContain('PublishPort=127.0.0.1:3000:3000');
-		expect(unit).toContain('EnvironmentFile=/run/skiff-workloads/wld_abc123/env');
-		expect(unit).toContain('Volume=/var/lib/skiff-workloads/wld_abc123:/data:Z,U');
-		expect(unit).toContain('Volume=/run/skiff-workloads/wld_abc123/secrets:/run/skiff-secrets:ro,Z,U');
+		expect(unit).toContain('EnvironmentFile=/run/yoal-workloads/wld_abc123/env');
+		expect(unit).toContain('Volume=/var/lib/yoal-workloads/wld_abc123:/data:Z,U');
+		expect(unit).toContain('Volume=/run/yoal-workloads/wld_abc123/secrets:/run/yoal-secrets:ro,Z,U');
 		// Container root is an unprivileged host uid, not host root.
 		expect(unit).toContain('UserNS=auto:size=65536');
-		expect(unit).toContain('Environment=TLS_KEY_FILE=/run/skiff-secrets/TLS_KEY');
+		expect(unit).toContain('Environment=TLS_KEY_FILE=/run/yoal-secrets/TLS_KEY');
 		expect(unit).toContain('DropCapability=all');
 		expect(unit).toContain('NoNewPrivileges=true');
 		expect(unit).toContain('MemoryMax=256M');
 		expect(unit).toContain('CPUQuota=150%');
-		expect(unit).toContain('Slice=skiff-workloads.slice');
+		expect(unit).toContain('Slice=yoal-workloads.slice');
 		expect(unit).toContain('WantedBy=default.target');
 		// Every container joins the shared network, so it can reach databases by alias.
-		expect(unit).toContain('Network=skiff-workloads.network');
+		expect(unit).toContain('Network=yoal-workloads.network');
 		expect(unit).not.toContain('NetworkAlias=');
 		expect(unit).not.toContain('User=');
 	});
@@ -236,8 +236,8 @@ describe('container unit', () => {
 				socketActivation: false,
 			}),
 			image: 'ghcr.io/acme/app:1.2.3',
-			envFile: '/run/skiff-workloads/wld_abc123/env',
-			dataDir: '/var/lib/skiff-workloads/wld_abc123',
+			envFile: '/run/yoal-workloads/wld_abc123/env',
+			dataDir: '/var/lib/yoal-workloads/wld_abc123',
 			secretsDir: null,
 		};
 		expect(renderContainerUnit(base)).not.toContain('PodmanArgs=');
@@ -250,13 +250,13 @@ describe('container unit', () => {
 		const base = {
 			workload: workload({ runtime: 'container', release: null, image: 'ghcr.io/acme/app:1', socketActivation: false }),
 			image: 'ghcr.io/acme/app:1',
-			envFile: '/run/skiff-workloads/wld_abc123/env',
-			dataDir: '/var/lib/skiff-workloads/wld_abc123',
+			envFile: '/run/yoal-workloads/wld_abc123/env',
+			dataDir: '/var/lib/yoal-workloads/wld_abc123',
 			secretsDir: null,
 		};
 		expect(renderContainerUnit(base)).not.toContain('--authfile');
-		expect(renderContainerUnit({ ...base, authFile: '/run/skiff-workloads/wld_abc123/auth.json' })).toContain(
-			'PodmanArgs=--authfile=/run/skiff-workloads/wld_abc123/auth.json',
+		expect(renderContainerUnit({ ...base, authFile: '/run/yoal-workloads/wld_abc123/auth.json' })).toContain(
+			'PodmanArgs=--authfile=/run/yoal-workloads/wld_abc123/auth.json',
 		);
 	});
 });
@@ -265,14 +265,14 @@ describe('network unit', () => {
 	test('is a Quadlet network with a fixed name', () => {
 		const unit = renderNetworkUnit();
 		expect(unit).toContain('[Network]');
-		expect(unit).toContain('NetworkName=skiff-workloads');
-		expect(unit.startsWith('# Generated by skiff-helper')).toBe(true);
+		expect(unit).toContain('NetworkName=yoal-workloads');
+		expect(unit.startsWith('# Generated by yoal-helper')).toBe(true);
 	});
 
 	test('renders an org network on demand', () => {
-		const unit = renderNetworkUnit('skiff-org-org_1');
-		expect(unit).toContain('NetworkName=skiff-org-org_1');
-		expect(unit).not.toContain('NetworkName=skiff-workloads');
+		const unit = renderNetworkUnit('yoal-org-org_1');
+		expect(unit).toContain('NetworkName=yoal-org-org_1');
+		expect(unit).not.toContain('NetworkName=yoal-workloads');
 	});
 
 	test('container units join the workload org network, falling back for old state', () => {
@@ -283,14 +283,14 @@ describe('network unit', () => {
 				image: 'ghcr.io/acme/app:1',
 				socketActivation: false,
 				orgId: 'org_1',
-				networkName: 'skiff-org-org_1',
+				networkName: 'yoal-org-org_1',
 			}),
 			image: 'ghcr.io/acme/app:1',
-			envFile: '/run/skiff-workloads/wld_abc123/env',
-			dataDir: '/var/lib/skiff-workloads/wld_abc123',
+			envFile: '/run/yoal-workloads/wld_abc123/env',
+			dataDir: '/var/lib/yoal-workloads/wld_abc123',
 			secretsDir: null,
 		});
-		expect(isolated).toContain('Network=skiff-org-org_1.network');
+		expect(isolated).toContain('Network=yoal-org-org_1.network');
 
 		const legacy = renderContainerUnit({
 			workload: workload({
@@ -300,11 +300,11 @@ describe('network unit', () => {
 				socketActivation: false,
 			}),
 			image: 'ghcr.io/acme/app:1',
-			envFile: '/run/skiff-workloads/wld_abc123/env',
-			dataDir: '/var/lib/skiff-workloads/wld_abc123',
+			envFile: '/run/yoal-workloads/wld_abc123/env',
+			dataDir: '/var/lib/yoal-workloads/wld_abc123',
 			secretsDir: null,
 		});
-		expect(legacy).toContain('Network=skiff-workloads.network');
+		expect(legacy).toContain('Network=yoal-workloads.network');
 	});
 });
 
@@ -333,19 +333,19 @@ describe('database unit', () => {
 	test('renders the fixed profile with loopback-only publishing', () => {
 		const options = {
 			workload: database(),
-			envFile: `/run/skiff-workloads/${DB_ID}/env`,
-			dataDir: `/var/lib/skiff-workloads/${DB_ID}`,
+			envFile: `/run/yoal-workloads/${DB_ID}/env`,
+			dataDir: `/var/lib/yoal-workloads/${DB_ID}`,
 		};
 		const unit = renderDatabaseUnit(options);
 		for (const expected of [
-			`ContainerName=skiff-workload-${DB_ID}`,
+			`ContainerName=yoal-workload-${DB_ID}`,
 			'Image=docker.io/library/postgres:17-alpine',
 			'User=70:70',
 			'PublishPort=127.0.0.1:15432:5432',
-			'Network=skiff-workloads.network',
+			'Network=yoal-workloads.network',
 			'NetworkAlias=db-0123456789abcdef0123456789abcdef',
-			`EnvironmentFile=/run/skiff-workloads/${DB_ID}/env`,
-			`Volume=/var/lib/skiff-workloads/${DB_ID}:/data:Z`,
+			`EnvironmentFile=/run/yoal-workloads/${DB_ID}/env`,
+			`Volume=/var/lib/yoal-workloads/${DB_ID}:/data:Z`,
 			'Tmpfs=/var/run/postgresql:rw,size=8m,mode=1777',
 			'Tmpfs=/tmp:rw,size=64m',
 			'DropCapability=all',
@@ -356,12 +356,12 @@ describe('database unit', () => {
 			'TimeoutStopSec=120',
 			'MemoryMax=512M',
 			'CPUQuota=50%',
-			'Slice=skiff-workloads.slice',
+			'Slice=yoal-workloads.slice',
 		]) {
 			expect(unit).toContain(expected);
 		}
 		expect(unit.match(/^PublishPort=/gm)).toHaveLength(1);
-		expect(unit).not.toContain('skiff-secrets');
+		expect(unit).not.toContain('yoal-secrets');
 		// The generic renderer switches to the same profile.
 		expect(renderContainerUnit({ ...options, image: 'ignored', secretsDir: '/run/x/secrets' })).toBe(unit);
 	});
@@ -379,14 +379,14 @@ describe('database unit', () => {
 	test('the pg_cron variant preloads pg_cron in the owner database (D126)', () => {
 		const cron = renderDatabaseUnit({
 			workload: database({
-				image: 'ghcr.io/kieranholroyd/skiff-postgres:18-pg_cron-1',
+				image: 'ghcr.io/kieranholroyd/yoal-postgres:18-pg_cron-1',
 				env: { POSTGRES_USER: 'orders', POSTGRES_DB: 'orders' },
 				database: { engine: 'postgres', version: '18', variant: 'pg_cron' },
 			}),
 			envFile: '/run/env',
 			dataDir: '/var/lib/x',
 		});
-		expect(cron).toContain('Image=ghcr.io/kieranholroyd/skiff-postgres:18-pg_cron-1');
+		expect(cron).toContain('Image=ghcr.io/kieranholroyd/yoal-postgres:18-pg_cron-1');
 		expect(cron).toContain('shared_preload_libraries=pg_stat_statements,pg_cron');
 		expect(cron).toContain('cron.database_name=orders');
 		expect(cron).toContain('cron.host=/var/run/postgresql');
@@ -394,20 +394,20 @@ describe('database unit', () => {
 		expect(cron).toContain('ReadOnly=true');
 		const postgis = renderDatabaseUnit({
 			workload: database({
-				image: 'ghcr.io/kieranholroyd/skiff-postgres:18-postgis-1',
+				image: 'ghcr.io/kieranholroyd/yoal-postgres:18-postgis-1',
 				database: { engine: 'postgres', version: '18', variant: 'postgis' },
 			}),
 			envFile: '/run/env',
 			dataDir: '/var/lib/x',
 		});
-		expect(postgis).toContain('Image=ghcr.io/kieranholroyd/skiff-postgres:18-postgis-1');
+		expect(postgis).toContain('Image=ghcr.io/kieranholroyd/yoal-postgres:18-postgis-1');
 		expect(postgis).toContain('"shared_preload_libraries=pg_stat_statements"');
 		expect(postgis).not.toContain('cron.');
 		// The cron database name lands in argv, so only a plain identifier is accepted.
 		expect(() =>
 			renderDatabaseUnit({
 				workload: database({
-					image: 'ghcr.io/kieranholroyd/skiff-postgres:18-pg_cron-1',
+					image: 'ghcr.io/kieranholroyd/yoal-postgres:18-pg_cron-1',
 					env: { POSTGRES_DB: 'x -c archive_command=evil' },
 					database: { engine: 'postgres', version: '18', variant: 'pg_cron' },
 				}),
@@ -428,21 +428,21 @@ describe('database unit', () => {
 			workload: database(),
 			envFile: '/run/env',
 			dataDir: '/var/lib/x',
-			tlsDir: `/run/skiff-workloads/${DB_ID}/tls`,
+			tlsDir: `/run/yoal-workloads/${DB_ID}/tls`,
 		});
-		expect(unit).toContain(`Volume=/run/skiff-workloads/${DB_ID}/tls:/run/skiff-tls:ro,z`);
+		expect(unit).toContain(`Volume=/run/yoal-workloads/${DB_ID}/tls:/run/yoal-tls:ro,z`);
 		// Managed services keep the image's fixed uid and get no user namespace; only app and
 		// runner containers do (see the app unit test).
 		expect(unit).not.toContain('UserNS=');
 		expect(unit).toContain('ssl=on');
-		expect(unit).toContain('ssl_cert_file=/run/skiff-tls/server.crt');
-		expect(unit).toContain('ssl_key_file=/run/skiff-tls/server.key');
+		expect(unit).toContain('ssl_cert_file=/run/yoal-tls/server.crt');
+		expect(unit).toContain('ssl_key_file=/run/yoal-tls/server.key');
 		expect(unit).toContain('ssl_min_protocol_version=TLSv1.2');
 	});
 
 	test('does not mount TLS when the directory is absent', () => {
 		const unit = renderDatabaseUnit({ workload: database(), envFile: '/run/env', dataDir: '/var/lib/x' });
-		expect(unit).not.toContain('/run/skiff-tls');
+		expect(unit).not.toContain('/run/yoal-tls');
 		expect(unit).not.toContain('ssl=on');
 	});
 });
@@ -470,8 +470,8 @@ describe('database pooler unit', () => {
 	test('renders a loopback-only sidecar with read-only config mounts', () => {
 		const unit = renderPoolerUnit({
 			workload: database(),
-			configPath: '/run/skiff-workloads/db_abc123/pgbouncer.ini',
-			userlistPath: '/run/skiff-workloads/db_abc123/pgbouncer-users.txt',
+			configPath: '/run/yoal-workloads/db_abc123/pgbouncer.ini',
+			userlistPath: '/run/yoal-workloads/db_abc123/pgbouncer-users.txt',
 		});
 		expect(unit).toContain('PublishPort=127.0.0.1:16432:6432');
 		expect(unit).toContain('NetworkAlias=db-abc123-pool');
@@ -501,20 +501,20 @@ describe('database pooler unit', () => {
 			databaseAlias: 'db-abc123',
 			authFile: '/etc/pgbouncer/userlist.txt',
 			adminUser: 'main_db',
-			tls: { certFile: '/run/skiff-tls/server.crt', keyFile: '/run/skiff-tls/server.key' },
+			tls: { certFile: '/run/yoal-tls/server.crt', keyFile: '/run/yoal-tls/server.key' },
 		});
 		expect(config).toContain('admin_users = main_db');
 		expect(config).toContain('client_tls_sslmode = require');
-		expect(config).toContain('client_tls_cert_file = /run/skiff-tls/server.crt');
-		expect(config).toContain('client_tls_key_file = /run/skiff-tls/server.key');
+		expect(config).toContain('client_tls_cert_file = /run/yoal-tls/server.crt');
+		expect(config).toContain('client_tls_key_file = /run/yoal-tls/server.key');
 		expect(
 			renderPoolerUnit({
 				workload: database(),
 				configPath: '/run/pgbouncer.ini',
 				userlistPath: '/run/users.txt',
-				tlsDir: '/run/skiff-workloads/db_abc123/tls',
+				tlsDir: '/run/yoal-workloads/db_abc123/tls',
 			}),
-		).toContain('Volume=/run/skiff-workloads/db_abc123/tls:/run/skiff-tls:ro,z');
+		).toContain('Volume=/run/yoal-workloads/db_abc123/tls:/run/yoal-tls:ro,z');
 	});
 });
 
@@ -543,19 +543,19 @@ describe('storage unit', () => {
 	test('renders the fixed profile with a digest-pinned image and loopback-only publishing', () => {
 		const options = {
 			workload: storage(),
-			envFile: `/run/skiff-workloads/${ST_ID}/env`,
-			dataDir: `/var/lib/skiff-workloads/${ST_ID}`,
+			envFile: `/run/yoal-workloads/${ST_ID}/env`,
+			dataDir: `/var/lib/yoal-workloads/${ST_ID}`,
 		};
 		const unit = renderStorageUnit(options);
 		for (const expected of [
-			`ContainerName=skiff-workload-${ST_ID}`,
+			`ContainerName=yoal-workload-${ST_ID}`,
 			'Image=docker.io/rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2',
 			'User=10001:10001',
 			'PublishPort=127.0.0.1:19003:9000',
-			'Network=skiff-workloads.network',
+			'Network=yoal-workloads.network',
 			'NetworkAlias=s3-fedcba9876543210fedcba9876543210',
-			`EnvironmentFile=/run/skiff-workloads/${ST_ID}/env`,
-			`Volume=/var/lib/skiff-workloads/${ST_ID}:/data:Z`,
+			`EnvironmentFile=/run/yoal-workloads/${ST_ID}/env`,
+			`Volume=/var/lib/yoal-workloads/${ST_ID}:/data:Z`,
 			'Tmpfs=/tmp:rw,size=64m',
 			'DropCapability=all',
 			'NoNewPrivileges=true',
@@ -564,14 +564,14 @@ describe('storage unit', () => {
 			'TimeoutStartSec=600',
 			'MemoryMax=512M',
 			'CPUQuota=100%',
-			'Slice=skiff-workloads.slice',
+			'Slice=yoal-workloads.slice',
 			'WantedBy=default.target',
 		]) {
 			expect(unit).toContain(expected);
 		}
 		expect(unit.match(/^PublishPort=/gm)).toHaveLength(1);
 		expect(unit.match(/^Volume=/gm)).toHaveLength(1);
-		expect(unit).not.toContain('skiff-secrets');
+		expect(unit).not.toContain('yoal-secrets');
 		expect(unit).not.toContain('postgresql');
 		expect(renderContainerUnit({ ...options, image: 'ignored', secretsDir: '/run/x/secrets' })).toBe(unit);
 	});
@@ -629,22 +629,22 @@ describe('app volume mounts (plan 07)', () => {
 					{ id: 'av_2', mountPath: '/var/lib/media', readOnly: true, backing: 'state_dir' },
 				],
 			}),
-			releaseDir: '/srv/skiff/releases/' + SHA,
-			envFile: '/run/skiff-workloads/wld_abc123/env',
+			releaseDir: '/srv/yoal/releases/' + SHA,
+			envFile: '/run/yoal-workloads/wld_abc123/env',
 			secrets: [],
 			command: ['bun', 'run', 'start'],
 			envNames: [],
 			volumeMounts: [
-				{ hostPath: '/var/lib/skiff-workloads/apps/prj_abc123/av_1', mountPath: '/var/lib/app', readOnly: false },
-				{ hostPath: '/var/lib/skiff-workloads/apps/prj_abc123/av_2', mountPath: '/var/lib/media', readOnly: true },
+				{ hostPath: '/var/lib/yoal-workloads/apps/prj_abc123/av_1', mountPath: '/var/lib/app', readOnly: false },
+				{ hostPath: '/var/lib/yoal-workloads/apps/prj_abc123/av_2', mountPath: '/var/lib/media', readOnly: true },
 			],
 		});
 		expect(unit).toContain(
-			'BindPaths=/var/lib/skiff-workloads/apps/prj_abc123/av_1:/var/lib/app',
+			'BindPaths=/var/lib/yoal-workloads/apps/prj_abc123/av_1:/var/lib/app',
 		);
 		expect(unit).toContain('ReadWritePaths=/var/lib/app');
 		expect(unit).toContain(
-			'BindReadOnlyPaths=/var/lib/skiff-workloads/apps/prj_abc123/av_2:/var/lib/media',
+			'BindReadOnlyPaths=/var/lib/yoal-workloads/apps/prj_abc123/av_2:/var/lib/media',
 		);
 		expect(unit).not.toContain('ReadWritePaths=/var/lib/media');
 		// The legacy /data mount is not reused for app volumes.
@@ -663,19 +663,19 @@ describe('app volume mounts (plan 07)', () => {
 				],
 			}),
 			image: 'docker.io/library/nginx:1',
-			envFile: '/run/skiff-workloads/wld_abc123/env',
-			dataDir: '/var/lib/skiff-workloads/wld_abc123',
+			envFile: '/run/yoal-workloads/wld_abc123/env',
+			dataDir: '/var/lib/yoal-workloads/wld_abc123',
 			secretsDir: null,
 			volumeMounts: [
-				{ hostPath: '/var/lib/skiff-workloads/apps/prj_abc123/av_1', mountPath: '/var/lib/app', readOnly: false },
-				{ hostPath: '/var/lib/skiff-workloads/apps/prj_abc123/av_2', mountPath: '/var/lib/media', readOnly: true },
+				{ hostPath: '/var/lib/yoal-workloads/apps/prj_abc123/av_1', mountPath: '/var/lib/app', readOnly: false },
+				{ hostPath: '/var/lib/yoal-workloads/apps/prj_abc123/av_2', mountPath: '/var/lib/media', readOnly: true },
 			],
 		});
 		expect(unit).toContain(
-			'Volume=/var/lib/skiff-workloads/apps/prj_abc123/av_1:/var/lib/app:Z,U',
+			'Volume=/var/lib/yoal-workloads/apps/prj_abc123/av_1:/var/lib/app:Z,U',
 		);
 		expect(unit).toContain(
-			'Volume=/var/lib/skiff-workloads/apps/prj_abc123/av_2:/var/lib/media:ro,Z',
+			'Volume=/var/lib/yoal-workloads/apps/prj_abc123/av_2:/var/lib/media:ro,Z',
 		);
 	});
 });
@@ -683,8 +683,8 @@ describe('app volume mounts (plan 07)', () => {
 describe('worker and runner units (plan 21)', () => {
 	const options = {
 		image: 'ghcr.io/actions/actions-runner:latest',
-		envFile: '/run/skiff-workloads/wld_abc123-r1/env',
-		dataDir: '/var/lib/skiff-workloads/wld_abc123-r1',
+		envFile: '/run/yoal-workloads/wld_abc123-r1/env',
+		dataDir: '/var/lib/yoal-workloads/wld_abc123-r1',
 		secretsDir: null,
 	};
 
@@ -704,7 +704,7 @@ describe('worker and runner units (plan 21)', () => {
 		expect(unit).not.toContain('PublishPort=');
 		expect(unit).toContain('ReadOnly=true');
 		expect(unit).toContain('Restart=on-failure');
-		expect(unit).toContain('Volume=/var/lib/skiff-workloads/wld_abc123-r1:/data:Z,U');
+		expect(unit).toContain('Volume=/var/lib/yoal-workloads/wld_abc123-r1:/data:Z,U');
 		expect(unit).toContain('UserNS=auto:size=65536');
 	});
 
@@ -722,7 +722,7 @@ describe('worker and runner units (plan 21)', () => {
 			}),
 			...options,
 		});
-		expect(unit).toContain('ContainerName=skiff-workload-wld_abc123-r1');
+		expect(unit).toContain('ContainerName=yoal-workload-wld_abc123-r1');
 		expect(unit).toContain('Exec=/home/runner/run.sh');
 		expect(unit).toContain('Pull=newer');
 		expect(unit).toContain('Restart=no');
@@ -734,7 +734,7 @@ describe('worker and runner units (plan 21)', () => {
 		// Still unprivileged: sudo inside the runner image cannot escalate.
 		expect(unit).toContain('DropCapability=all');
 		expect(unit).toContain('NoNewPrivileges=true');
-		expect(unit).toContain('Slice=skiff-workloads.slice');
+		expect(unit).toContain('Slice=yoal-workloads.slice');
 	});
 });
 
@@ -798,10 +798,10 @@ describe('engine database units (D95)', () => {
 			workload: engineDb('valkey', '9.1', 'docker.io/valkey/valkey:9.1-alpine'),
 			envFile: '/run/env',
 			dataDir: '/var/lib/x',
-			serverConfigPath: '/run/skiff-workloads/db_x/server.conf',
+			serverConfigPath: '/run/yoal-workloads/db_x/server.conf',
 		});
-		expect(valkey).toContain('Exec="valkey-server" "/etc/skiff/server.conf"');
-		expect(valkey).toContain('Volume=/run/skiff-workloads/db_x/server.conf:/etc/skiff/server.conf:ro,Z');
+		expect(valkey).toContain('Exec="valkey-server" "/etc/yoal/server.conf"');
+		expect(valkey).toContain('Volume=/run/yoal-workloads/db_x/server.conf:/etc/yoal/server.conf:ro,Z');
 		expect(valkey).toContain('User=999:1000');
 		expect(valkey).toContain('PublishPort=127.0.0.1:15432:6379');
 		expect(() =>
@@ -818,7 +818,7 @@ describe('engine database units (D95)', () => {
 			workload: engineDb('clickhouse', '26.8', 'docker.io/clickhouse/clickhouse-server:26.8', 2048),
 			envFile: '/run/env',
 			dataDir: '/var/lib/x',
-			serverConfigPath: '/run/skiff-workloads/db_x/clickhouse',
+			serverConfigPath: '/run/yoal-workloads/db_x/clickhouse',
 		});
 		expect(unit).toContain('Image=docker.io/clickhouse/clickhouse-server:26.8');
 		// No Exec: the entrypoint creates the database on first start, then runs the server.
@@ -827,7 +827,7 @@ describe('engine database units (D95)', () => {
 		expect(unit).toContain('User=101:101');
 		expect(unit).toContain('PublishPort=127.0.0.1:15432:8123');
 		expect(unit).toContain('Volume=/var/lib/x:/data:Z');
-		expect(unit).toContain('Volume=/run/skiff-workloads/db_x/clickhouse:/etc/skiff/clickhouse:ro,Z');
+		expect(unit).toContain('Volume=/run/yoal-workloads/db_x/clickhouse:/etc/yoal/clickhouse:ro,Z');
 		expect(unit).toContain('Tmpfs=/tmp:rw,size=64m');
 		expect(unit).toContain('ReadOnly=true');
 		expect(unit).toContain('DropCapability=all');

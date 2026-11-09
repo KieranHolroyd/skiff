@@ -1,5 +1,5 @@
 import { error } from '@sveltejs/kit';
-import { hasPermission } from '@skiff/contracts';
+import { hasPermission } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import type { RequestHandler } from './$types';
 
@@ -26,12 +26,12 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 			.toLowerCase()
 			.replace(/[^a-z0-9.-]+/g, '-')
 			.replace(/^-+|-+$/g, '') || 'org';
-	const filename = `skiff-config-${label}-${doc.exportedAt.slice(0, 10)}.${format}`;
+	const filename = `yoal-config-${label}-${doc.exportedAt.slice(0, 10)}.${format}`;
 	const body =
 		format === 'json'
 			? `${JSON.stringify(doc, null, 2)}\n`
 			: [
-					'# Skiff config export: configuration only, no data and no secret values.',
+					'# Yoal config export: configuration only, no data and no secret values.',
 					`# ${doc.platform.url}, org ${doc.org.slug ?? doc.org.id}, exported ${doc.exportedAt}`,
 					Bun.YAML.stringify(JSON.parse(JSON.stringify(doc)), null, 2)
 				].join('\n');

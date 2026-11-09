@@ -2,8 +2,8 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { MetricBucket } from '@skiff/contracts';
-import { createDb } from '@skiff/db';
+import type { MetricBucket } from '@yoal/contracts';
+import { createDb } from '@yoal/db';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
@@ -11,7 +11,7 @@ import { disposeTelemetryStore, hasClickHouse, testTelemetryStore } from './test
 import type { Core } from './index.ts';
 
 const MINUTE = 60_000;
-const dir = mkdtempSync(join(tmpdir(), 'skiff-deployment-detail-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-deployment-detail-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 let clock = Math.floor(Date.parse('2026-11-06T12:00:00Z') / MINUTE) * MINUTE;

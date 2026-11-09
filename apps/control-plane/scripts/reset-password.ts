@@ -1,5 +1,5 @@
 /**
- * Reset a Skiff user's password directly in the control-plane database. For installs without
+ * Reset a Yoal user's password directly in the control-plane database. For installs without
  * email (no SMTP, so "Forgot password?" can't send a link) and for recovery.
  *
  *   bun run reset-password <email> [--password …]
@@ -10,7 +10,7 @@
  *   email. It does not touch passkeys or the authenticator app: an owner still proves a second
  *   factor at the next sign-in (D10). An account without a password gets one.
  * - Recorded in the audit log of each organisation the user belongs to, as the system.
- * - Uses the same SKIFF_DATA_DIR as the server (default `.data`, relative to the cwd).
+ * - Uses the same YOAL_DATA_DIR as the server (default `.data`, relative to the cwd).
  *
  * `src/lib/server/auth.ts` imports SvelteKit's `$app/*` modules, so this script builds a minimal
  * Better Auth instance over the same SQLite file for its adapter and password hasher, as
@@ -19,8 +19,8 @@
 import { parseArgs } from 'node:util';
 import { existsSync } from 'node:fs';
 import { betterAuth } from 'better-auth';
-import { createDb } from '@skiff/db';
-import { AuditService, type CoreContext } from '@skiff/core';
+import { createDb } from '@yoal/db';
+import { AuditService, type CoreContext } from '@yoal/core';
 import { deleteResetTokens, recordPasswordReset } from '../src/lib/server/password-reset';
 
 const MIN_PASSWORD_LENGTH = 12;
@@ -56,10 +56,10 @@ if (positionals.length !== 1) fail(`give exactly one email address\n${usage}`);
 const email = positionals[0]!.trim().toLowerCase();
 if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) fail(`a valid email is required\n${usage}`);
 
-const dataDir = process.env.SKIFF_DATA_DIR ?? '.data';
-const dbPath = `${dataDir}/skiff.db`;
+const dataDir = process.env.YOAL_DATA_DIR ?? '.data';
+const dbPath = `${dataDir}/yoal.db`;
 if (!existsSync(dbPath))
-	fail(`no database at ${dbPath}. Set SKIFF_DATA_DIR to the control plane's data directory.`);
+	fail(`no database at ${dbPath}. Set YOAL_DATA_DIR to the control plane's data directory.`);
 
 const { sqlite, db } = createDb({ path: dbPath });
 const hasUserTable = sqlite

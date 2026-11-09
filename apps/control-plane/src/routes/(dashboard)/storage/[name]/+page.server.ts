@@ -1,5 +1,5 @@
 import { error, fail, redirect } from '@sveltejs/kit';
-import { CoreError } from '@skiff/core';
+import { CoreError } from '@yoal/core';
 import {
 	bucketAccesses,
 	bucketCreateSchema,
@@ -16,7 +16,7 @@ import {
 	type StorageKeyView,
 	type StorageMetricPoint,
 	type StorageView
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { parseTrafficRange, trafficRangeHref, trafficRanges } from '#lib/server/traffic-range.js';
 import { failStatus, formBoolean, formString, toFormFailure } from '../../_lib/errors.js';

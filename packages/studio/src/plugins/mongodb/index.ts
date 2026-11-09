@@ -1,7 +1,7 @@
 /**
  * MongoDB studio plugin (plan 22, Phase 2 track C).
  *
- * Skiff runs one standalone `mongod` per database, with the owner in the `admin` auth database.
+ * Yoal runs one standalone `mongod` per database, with the owner in the `admin` auth database.
  * `run` takes ONE EJSON command document (`{"find":"c","filter":{}}`); nothing is ever evaluated
  * as JavaScript on the client. `find`/`aggregate` stream through a real cursor; any other
  * command goes to `db.command` and comes back as one document.
@@ -15,7 +15,7 @@
 import { randomBytes } from 'node:crypto';
 import { createSecureContext } from 'node:tls';
 import { BSON, MongoClient, type AbstractCursor, type Collection, type Db, type MongoClientOptions } from 'mongodb';
-import type { DatabaseEngine } from '@skiff/contracts';
+import type { DatabaseEngine } from '@yoal/contracts';
 import type { RunOptions, SessionOptions, StudioPlugin, StudioSession, StudioTarget } from '../../driver.ts';
 import {
 	StudioError,
@@ -99,7 +99,7 @@ export function connectionUrl(target: Pick<StudioTarget, 'host' | 'port' | 'data
 export function clientOptions(target: Pick<StudioTarget, 'tls'>): MongoClientOptions {
 	const options: MongoClientOptions = {
 		maxPoolSize: 3,
-		appName: 'skiff-studio',
+		appName: 'yoal-studio',
 		serverSelectionTimeoutMS: 5_000,
 		connectTimeoutMS: 5_000,
 		// A standalone on loopback: never follow advertised hosts (they are container names).
@@ -673,7 +673,7 @@ class MongoSession implements StudioSession {
 	// ------------------------------------------------------------ plumbing
 
 	private op(signal: AbortSignal, timeoutMs = this.options.limits.statementTimeoutMs): OpContext {
-		return { comment: `skiff-studio:${randomBytes(8).toString('hex')}`, deadline: Date.now() + timeoutMs, signal };
+		return { comment: `yoal-studio:${randomBytes(8).toString('hex')}`, deadline: Date.now() + timeoutMs, signal };
 	}
 
 	/** Milliseconds left for `maxTimeMS` (at least 1: 0 would mean "no limit"). */

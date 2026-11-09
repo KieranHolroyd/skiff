@@ -1,6 +1,6 @@
 import { and, eq, inArray, lt } from 'drizzle-orm';
-import { uploadSessions } from '@skiff/db';
-import { limits, type InlineFile, type Principal } from '@skiff/contracts';
+import { uploadSessions } from '@yoal/db';
+import { limits, type InlineFile, type Principal } from '@yoal/contracts';
 import { entriesFromFiles, entriesFromZip, type FileEntry } from './artifact.ts';
 import type { CoreContext } from './context.ts';
 import { NotFoundError, ValidationError } from './errors.ts';

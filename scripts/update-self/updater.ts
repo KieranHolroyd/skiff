@@ -1,12 +1,12 @@
 /**
- * Skiff self-updater (stage-0): orchestration.
+ * Yoal self-updater (stage-0): orchestration.
  *
  * Invariant: a release that has been proven to serve is always either running or one atomic
  * rename away. Concretely:
  *
- *   /opt/skiff/current  -> the release serving now (what boots after a reboot)
- *   /opt/skiff/previous -> the release that served before it (kept until the next good update)
- *   /opt/skiff/standby  -> the incoming release, only while an update is in flight
+ *   /opt/yoal/current  -> the release serving now (what boots after a reboot)
+ *   /opt/yoal/previous -> the release that served before it (kept until the next good update)
+ *   /opt/yoal/standby  -> the incoming release, only while an update is in flight
  *
  * An update stages a release (a signed, CI-built artifact when one is published; otherwise a
  * source build), asks the *new release's own* hook to boot it against a copy of the live
@@ -14,7 +14,7 @@
  *
  *   1. start the standby unit on the new release (the primary keeps serving)
  *   2. prove it healthy on its own socket
- *   3. rename /run/skiff/control.sock to point at the standby (atomic; open requests finish)
+ *   3. rename /run/yoal/control.sock to point at the standby (atomic; open requests finish)
  *   4. bake: watch it serve real traffic; any failure points control.sock back (code-only revert)
  *   5. commit: move `current`, restart the primary on it, point control.sock back, stop the standby
  *
@@ -84,12 +84,12 @@ import type { KeyObject } from 'node:crypto';
 
 export const CONTROL_PLANE = PRIMARY_UNIT;
 export const STANDBY = STANDBY_UNIT;
-export const AGENT = 'skiff-agent.service';
+export const AGENT = 'yoal-agent.service';
 /** The on-demand database studio (plan 22). Never enabled; it follows the agent's binary. */
 export const STUDIO = STUDIO_UNIT;
-export const HELPER = 'skiff-helper.service';
-export const LITESTREAM = 'skiff-litestream.service';
-export const DEFAULT_REPO = 'KieranHolroyd/skiff';
+export const HELPER = 'yoal-helper.service';
+export const LITESTREAM = 'yoal-litestream.service';
+export const DEFAULT_REPO = 'KieranHolroyd/yoal';
 export const DEFAULT_REF = 'main';
 
 export interface Layout {
@@ -99,7 +99,7 @@ export interface Layout {
 	previousLink: string;
 	/** The incoming release while an update is in flight (the standby unit runs it). */
 	standbyLink: string;
-	/** Stage-0 installs: <updaterDir>/<identity>/skiff-updated, <updaterDir>/current. */
+	/** Stage-0 installs: <updaterDir>/<identity>/yoal-updated, <updaterDir>/current. */
 	updaterDir: string;
 	dbPath: string;
 	backupsDir: string;
@@ -113,24 +113,24 @@ export interface Layout {
 }
 
 export function layoutFromEnv(env: Record<string, string | undefined> = process.env): Layout {
-	const optDir = env.SKIFF_OPT_DIR ?? '/opt/skiff';
-	const varDir = env.SKIFF_VAR_DIR ?? '/var/lib/skiff';
-	const systemdDir = env.SKIFF_SYSTEMD_DIR ?? '/etc/systemd/system';
+	const optDir = env.YOAL_OPT_DIR ?? '/opt/yoal';
+	const varDir = env.YOAL_VAR_DIR ?? '/var/lib/yoal';
+	const systemdDir = env.YOAL_SYSTEMD_DIR ?? '/etc/systemd/system';
 	return {
 		optDir,
 		releasesDir: join(optDir, 'releases'),
 		currentLink: join(optDir, 'current'),
 		previousLink: join(optDir, 'previous'),
 		standbyLink: join(optDir, 'standby'),
-		updaterDir: env.SKIFF_UPDATER_DIR ?? '/usr/local/lib/skiff-updater',
-		dbPath: join(varDir, 'data', 'skiff.db'),
+		updaterDir: env.YOAL_UPDATER_DIR ?? '/usr/local/lib/yoal-updater',
+		dbPath: join(varDir, 'data', 'yoal.db'),
 		backupsDir: join(varDir, 'backups'),
 		canaryDir: join(varDir, 'update-canary'),
 		stateFile: join(optDir, 'update-state.json'),
 		lockFile: join(optDir, 'update.lock'),
-		bunBin: env.SKIFF_BUN_BIN ?? join(optDir, 'runtime', 'bin', 'bun'),
+		bunBin: env.YOAL_BUN_BIN ?? join(optDir, 'runtime', 'bin', 'bun'),
 		controlPlaneUnitFile: join(systemdDir, CONTROL_PLANE),
-		caddyUnitFile: join(systemdDir, 'skiff-caddy.service'),
+		caddyUnitFile: join(systemdDir, 'yoal-caddy.service'),
 	};
 }
 
@@ -210,7 +210,7 @@ export interface Host {
 	restart(unit: string): Promise<void>;
 	/** `systemctl try-restart`: restart only if active; never throws (the unit may not exist yet). */
 	tryRestart?(unit: string): Promise<void>;
-	/** Install/refresh skiff-helper from `release` (older hosts may lack the unit). */
+	/** Install/refresh yoal-helper from `release` (older hosts may lack the unit). */
 	ensureHelper(release: string): void;
 	/**
 	 * Install this release's Caddy binary at the path the running unit executes and restart it.
@@ -231,8 +231,8 @@ export interface Host {
 	/** Poll the public platform URL (through Caddy) until healthy or `timeoutMs` elapses. */
 	publicHealthy(timeoutMs: number): Promise<boolean>;
 	agentEnrolled(): boolean;
-	/** chown -R skiff:skiff */
-	chownToSkiff(path: string): void;
+	/** chown -R yoal:yoal */
+	chownToYoal(path: string): void;
 	freeBytes(path: string): number;
 	/** Probe the configured backup target before an upgrade. Optional for old hosts/tests. */
 	backupTarget?(): Promise<{ ok: boolean; kind: string; error?: string }>;
@@ -469,7 +469,7 @@ export class Updater {
 	}
 
 	/**
-	 * Additive skiff.env defaults `release` needs before it first boots (canary, standby). The
+	 * Additive yoal.env defaults `release` needs before it first boots (canary, standby). The
 	 * running release keeps serving with them, so the hook only ever adds settings.
 	 */
 	private async prepareHost(release: string): Promise<void> {
@@ -643,7 +643,7 @@ export class Updater {
 			}
 			for (const warning of stagedPreflight.warnings) host.warn(`preflight: ${warning}`);
 
-			// Settings the new release needs before it first boots (the canary reads skiff.env too).
+			// Settings the new release needs before it first boots (the canary reads yoal.env too).
 			await this.prepareHost(release);
 
 			// 2. Boot it in isolation against a copy of the live database, judged by its own hook.
@@ -902,7 +902,7 @@ export class Updater {
 
 	/**
 	 * Source builds (and artifacts built before Caddy was bundled) carry no Caddy binary. Keep the
-	 * running one in the staged release so `/opt/skiff/current/caddy/caddy` still resolves after
+	 * running one in the staged release so `/opt/yoal/current/caddy/caddy` still resolves after
 	 * the swap; the canary does not exercise Caddy.
 	 */
 	/**
@@ -1300,7 +1300,7 @@ export class Updater {
 	}
 
 	/**
-	 * Boot-time arbiter (skiff-update-guard.service, ordered before the control plane). Like a
+	 * Boot-time arbiter (yoal-update-guard.service, ordered before the control plane). Like a
 	 * bootloader's try-counter: a zero-downtime update that never committed falls back to the
 	 * committed release. Filesystem only, so it cannot wait on the units it runs before.
 	 */
@@ -1317,7 +1317,7 @@ export class Updater {
 			else if (readLink(layout.previousLink) === sw.from) rmSync(layout.previousLink, { force: true });
 			if (sw.mode === 'fenced' && sw.snapshot && existsSync(sw.snapshot)) {
 				restoreDbFile(sw.snapshot, layout.dbPath);
-				host.chownToSkiff(layout.dbPath);
+				host.chownToYoal(layout.dbPath);
 			}
 			rmSync(layout.standbyLink, { force: true });
 			delete state.inProgress;
@@ -1339,7 +1339,7 @@ export class Updater {
 	 */
 	private async maybeInstallUpdater(release: string): Promise<void> {
 		const { host, layout } = this;
-		const binary = join(release, 'updater', 'skiff-updated');
+		const binary = join(release, 'updater', 'yoal-updated');
 		if (!existsSync(binary) || !host.updaterIdentity || !host.qualifyUpdater) return;
 		try {
 			const identity = await host.updaterIdentity(binary);
@@ -1353,7 +1353,7 @@ export class Updater {
 			if (installed && basename(installed) === name) return;
 			const dir = join(layout.updaterDir, name);
 			mkdirSync(dir, { recursive: true });
-			const target = join(dir, 'skiff-updated');
+			const target = join(dir, 'yoal-updated');
 			copyFileSync(binary, `${target}.tmp`);
 			chmodSync(`${target}.tmp`, 0o755);
 			renameSync(`${target}.tmp`, target);
@@ -1535,7 +1535,7 @@ export class Updater {
 	/**
 	 * Restart the agent on `current`. The studio runs the same binary from its own unit: after an
 	 * update a running studio follows (`try-restart`, so a stopped one stays stopped); after a
-	 * rollback it is stopped, because the restored agent may predate `skiff-agent studio` and starts
+	 * rollback it is stopped, because the restored agent may predate `yoal-agent studio` and starts
 	 * it on demand anyway.
 	 */
 	private async restartAgent(withAgent: boolean, studio: 'follow' | 'stop'): Promise<void> {
@@ -1656,7 +1656,7 @@ export class Updater {
 	}
 
 	/**
-	 * Read-only plan for `skiff-update-self plan` and the CLI. Uses the running release's migration
+	 * Read-only plan for `yoal-update-self plan` and the CLI. Uses the running release's migration
 	 * list; the update itself re-runs this against the exact staged release before the canary.
 	 */
 	async plan(options: Pick<UpdateOptions, 'repo' | 'ref' | 'source' | 'channel'> = {}): Promise<{ check: CheckResult; preflight: UpgradePreflight }> {
@@ -1687,7 +1687,7 @@ export class Updater {
 		return evaluateUpgradePreflight({
 			currentVersion: (readLink(layout.currentLink) && readMeta(readLink(layout.currentLink)!).version) || '0.0.0',
 			targetVersion: input.targetVersion,
-			channel: process.env.SKIFF_RELEASE_CHANNEL === 'edge' ? 'edge' : 'stable',
+			channel: process.env.YOAL_RELEASE_CHANNEL === 'edge' ? 'edge' : 'stable',
 			migrations,
 			appliedMigrations: readAppliedMigrations(layout.dbPath),
 			controlDbBytes: fileBytes(layout.dbPath),
@@ -1725,14 +1725,14 @@ export class Updater {
 		const bundle = createUpgradeSnapshotBundle({
 			backupsDir: layout.backupsDir,
 			dbPath: layout.dbPath,
-			envDir: process.env.SKIFF_ETC_DIR ?? '/etc/skiff',
+			envDir: process.env.YOAL_ETC_DIR ?? '/etc/yoal',
 			dataDir: dirname(layout.dbPath),
 			label: name.replace(/^pre-update-/, ''),
 			kind: 'pre-update',
 			fromVersion: input.fromVersion,
 			targetVersion: input.targetVersion,
 			migrations: input.migrations,
-			agentVersion: process.env.SKIFF_AGENT_VERSION ?? null,
+			agentVersion: process.env.YOAL_AGENT_VERSION ?? null,
 			desiredStateVersion: readDesiredStateVersion(layout.dbPath),
 			pinned: true,
 			retain: this.snapshotKeep,
@@ -1749,7 +1749,7 @@ export class Updater {
 		const path = join(layout.backupsDir, `${name}.db`);
 		snapshotDb(layout.dbPath, path);
 		chmodSync(path, 0o640);
-		host.chownToSkiff(path);
+		host.chownToYoal(path);
 		fixSidecarOwnership(layout.dbPath, host);
 		host.log(`database snapshot ${path}`);
 		return path;
@@ -1762,7 +1762,7 @@ export class Updater {
 		if (litestream) await host.stop(LITESTREAM);
 		try {
 			restoreDbFile(snapshot, layout.dbPath);
-			host.chownToSkiff(layout.dbPath);
+			host.chownToYoal(layout.dbPath);
 			host.log(`database restored from ${snapshot}`);
 		} finally {
 			if (litestream) await host.start(LITESTREAM);
@@ -1952,32 +1952,32 @@ export function assembleRelease(release: string, bunBin: string): void {
 		}
 	}
 	mkdirSync(join(release, 'agent'), { recursive: true });
-	const agent = join(release, 'repo', 'apps', 'agent', 'dist', 'skiff-agent');
+	const agent = join(release, 'repo', 'apps', 'agent', 'dist', 'yoal-agent');
 	if (existsSync(agent)) {
-		copyFileSync(agent, join(release, 'agent', 'skiff-agent'));
-		chmodSync(join(release, 'agent', 'skiff-agent'), 0o755);
+		copyFileSync(agent, join(release, 'agent', 'yoal-agent'));
+		chmodSync(join(release, 'agent', 'yoal-agent'), 0o755);
 		linkAgentCommands(release);
 	}
-	// Optional: `/usr/local/bin/skif` falls back to the previous release if this one lacks it.
-	const cli = join(release, 'repo', 'apps', 'cli', 'dist', 'skif.js');
+	// Optional: `/usr/local/bin/yoal` falls back to the previous release if this one lacks it.
+	const cli = join(release, 'repo', 'apps', 'cli', 'dist', 'yoal.js');
 	if (existsSync(cli)) {
 		mkdirSync(join(release, 'cli'), { recursive: true });
-		copyFileSync(cli, join(release, 'cli', 'skif.js'));
-		chmodSync(join(release, 'cli', 'skif.js'), 0o644);
+		copyFileSync(cli, join(release, 'cli', 'yoal.js'));
+		chmodSync(join(release, 'cli', 'yoal.js'), 0o644);
 	}
 	// Stage-0 updater compiled from this release (a CI artifact ships it at updater/ already).
-	const updater = join(release, 'repo', 'scripts', 'update-self', 'dist', 'skiff-updated');
-	if (existsSync(updater) && !existsSync(join(release, 'updater', 'skiff-updated'))) {
+	const updater = join(release, 'repo', 'scripts', 'update-self', 'dist', 'yoal-updated');
+	if (existsSync(updater) && !existsSync(join(release, 'updater', 'yoal-updated'))) {
 		mkdirSync(join(release, 'updater'), { recursive: true });
-		copyFileSync(updater, join(release, 'updater', 'skiff-updated'));
-		chmodSync(join(release, 'updater', 'skiff-updated'), 0o755);
+		copyFileSync(updater, join(release, 'updater', 'yoal-updated'));
+		chmodSync(join(release, 'updater', 'yoal-updated'), 0o755);
 	}
 	// The privileged helper is part of the release so a `current` swap upgrades it atomically.
-	const helper = join(release, 'repo', 'apps', 'helper', 'dist', 'skiff-helper');
+	const helper = join(release, 'repo', 'apps', 'helper', 'dist', 'yoal-helper');
 	if (existsSync(helper)) {
 		mkdirSync(join(release, 'helper'), { recursive: true });
-		copyFileSync(helper, join(release, 'helper', 'skiff-helper'));
-		chmodSync(join(release, 'helper', 'skiff-helper'), 0o755);
+		copyFileSync(helper, join(release, 'helper', 'yoal-helper'));
+		chmodSync(join(release, 'helper', 'yoal-helper'), 0o755);
 	}
 	// CI-built Caddy ships at the release root (`caddy/caddy`); the updater installs it.
 	const caddy = join(release, 'caddy', 'caddy');
@@ -2008,7 +2008,7 @@ export function verifyRelease(
 	const required = new Set([
 		'repo/apps/control-plane/build/index.js',
 		'runtime/bun',
-		'agent/skiff-agent',
+		'agent/yoal-agent',
 	]);
 	for (const unitFile of [layout.controlPlaneUnitFile, layout.caddyUnitFile]) {
 		if (!existsSync(unitFile)) continue;
@@ -2043,7 +2043,7 @@ export function restoreDbFile(snapshot: string, dbPath: string): void {
 
 /** Opening the DB as root can create -wal/-shm owned by root, which would lock out the service user. */
 function fixSidecarOwnership(dbPath: string, host: Host): void {
-	for (const suffix of ['-wal', '-shm']) if (existsSync(`${dbPath}${suffix}`)) host.chownToSkiff(`${dbPath}${suffix}`);
+	for (const suffix of ['-wal', '-shm']) if (existsSync(`${dbPath}${suffix}`)) host.chownToYoal(`${dbPath}${suffix}`);
 }
 
 /** Migration ids `release` ships that the database has not applied yet (the schema would change). */
@@ -2074,9 +2074,9 @@ export function unknownMigrations(dbPath: string, release: string): string[] | n
 	if (!existsSync(dbPath)) return [];
 	const db = new Database(dbPath, { readonly: true });
 	try {
-		const table = db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='skiff_migrations'").get();
+		const table = db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='yoal_migrations'").get();
 		if (!table) return [];
-		const applied = db.query<{ id: string }, []>('SELECT id FROM skiff_migrations ORDER BY id').all();
+		const applied = db.query<{ id: string }, []>('SELECT id FROM yoal_migrations ORDER BY id').all();
 		return applied.map((row) => row.id).filter((id) => !shipped.has(id));
 	} finally {
 		db.close();

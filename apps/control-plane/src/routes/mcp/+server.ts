@@ -1,11 +1,11 @@
 import { requireMcpAuth } from '@better-auth/mcp';
-import { WORKLOAD_IDENTITY_AUDIENCE } from '@skiff/contracts';
+import { WORKLOAD_IDENTITY_AUDIENCE } from '@yoal/contracts';
 import { auth } from '#lib/server/auth.js';
 import { mcpResource } from '#lib/server/config.js';
 import { core } from '#lib/server/core.js';
 import { mcpHandler } from '#lib/server/mcp.js';
 import { grantRevokedResponse } from '#lib/server/mcp-grant.js';
-import { principalFromSkiffBearer } from '#lib/server/principal.js';
+import { principalFromYoalBearer } from '#lib/server/principal.js';
 import type { RequestHandler } from './$types';
 
 /**
@@ -46,16 +46,16 @@ const handle = requireMcpAuth(
 
 /**
  * OAuth first (better-auth verifies the audience-bound user JWT). A workload or STS token is not
- * one of those, so a 401 from that path falls back to Skiff's ring: it must carry `aud` `skiff`
+ * one of those, so a 401 from that path falls back to Yoal's ring: it must carry `aud` `yoal`
  * (or this MCP resource) and names a service account, whose bindings and token restriction become
  * the principal. Anything else keeps the original OAuth challenge so clients can start sign-in.
  */
-async function handleWithSkiffToken(request: Request): Promise<Response> {
+async function handleWithYoalToken(request: Request): Promise<Response> {
 	const response = await handle(request);
 	if (response.status !== 401) return response;
 	const token = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '').trim() ?? '';
 	if (!token) return response;
-	const principal = await principalFromSkiffBearer(token, request, {
+	const principal = await principalFromYoalBearer(token, request, {
 		workloadAudiences: [WORKLOAD_IDENTITY_AUDIENCE],
 		stsAudiences: [WORKLOAD_IDENTITY_AUDIENCE, mcpResource],
 	});
@@ -70,6 +70,6 @@ async function handleWithSkiffToken(request: Request): Promise<Response> {
 	});
 }
 
-export const POST: RequestHandler = ({ request }) => handleWithSkiffToken(request);
-export const GET: RequestHandler = ({ request }) => handleWithSkiffToken(request);
-export const DELETE: RequestHandler = ({ request }) => handleWithSkiffToken(request);
+export const POST: RequestHandler = ({ request }) => handleWithYoalToken(request);
+export const GET: RequestHandler = ({ request }) => handleWithYoalToken(request);
+export const DELETE: RequestHandler = ({ request }) => handleWithYoalToken(request);

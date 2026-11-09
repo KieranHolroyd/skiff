@@ -1,7 +1,7 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { and, eq } from 'drizzle-orm';
-import { forgeConnections, forgeWebhooks, gitSources, pipelineRepositories, projects } from '@skiff/db';
+import { forgeConnections, forgeWebhooks, gitSources, pipelineRepositories, projects } from '@yoal/db';
 import {
 	FORGE_LABELS,
 	canAdministerPlatform,
@@ -19,7 +19,7 @@ import {
 	type ForgeWebhookView,
 	type GitRepositoryView,
 	type Principal,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from '../context.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from '../errors.ts';
 import type { GithubPathContent } from '../github-app.ts';
@@ -68,7 +68,7 @@ export interface ForgeCoverage {
 	connectionId: string | null;
 	connectionName: string | null;
 	fullName: string | null;
-	/** The forge's refusal the last time Skiff tried to create the webhook. */
+	/** The forge's refusal the last time Yoal tried to create the webhook. */
 	error: string | null;
 }
 
@@ -231,7 +231,7 @@ export class ForgeService {
 		const baseKey = forgeBaseKey(parsed.baseUrl);
 		if (!baseKey) throw new ValidationError('Enter the instance URL, e.g. https://gitlab.com.');
 		if (baseKey === 'github.com' || baseKey.endsWith('.github.com'))
-			throw new ValidationError('GitHub connects through Skiff’s GitHub App, in Settings → GitHub.');
+			throw new ValidationError('GitHub connects through Yoal’s GitHub App, in Settings → GitHub.');
 		if (this.rows(principal.orgId).some((row) => forgeBaseKey(row.baseUrl) === baseKey))
 			throw new ConflictError(`${parsed.baseUrl} is already connected. Update its token instead.`);
 		const allowPrivate = await this.privateNetworkFor(principal, parsed.baseUrl);
@@ -288,7 +288,7 @@ export class ForgeService {
 		return this.view({ ...row, ...patch });
 	}
 
-	/** Forget the connection; hooks Skiff created on the forge are deleted (best effort). */
+	/** Forget the connection; hooks Yoal created on the forge are deleted (best effort). */
 	async remove(principal: Principal, id: string): Promise<void> {
 		this.requireManager(principal);
 		const row = this.row(principal.orgId, id);
@@ -324,7 +324,7 @@ export class ForgeService {
 		return best ? { row: best.row, fullName: best.fullName } : null;
 	}
 
-	/** Whether a Skiff-created hook (repository or namespace) delivers this repository's events. */
+	/** Whether a Yoal-created hook (repository or namespace) delivers this repository's events. */
 	deliversFor(connectionId: string, fullName: string): boolean {
 		const name = fullName.toLowerCase();
 		return this.webhookRows(connectionId).some(
@@ -443,7 +443,7 @@ export class ForgeService {
 		if (!row.cloneTokenSealed) return null;
 		try {
 			const token = this.ctx.secrets.open(row.orgId, row.cloneTokenSealed);
-			return { host, username: row.kind === 'gitlab' ? 'oauth2' : (row.cloneLogin ?? 'skiff'), token };
+			return { host, username: row.kind === 'gitlab' ? 'oauth2' : (row.cloneLogin ?? 'yoal'), token };
 		} catch {
 			return null;
 		}
@@ -498,7 +498,7 @@ export class ForgeService {
 		try {
 			const secret = this.ctx.secrets.open(row.orgId, row.webhookSecretSealed);
 			let hookId = await client.findHook(scope, path, url);
-			// An existing hook with Skiff's URL may carry an old secret: replace it.
+			// An existing hook with Yoal's URL may carry an old secret: replace it.
 			if (hookId) await client.deleteHook(scope, path, hookId);
 			hookId = await client.createHook(scope, path, url, secret);
 			return this.upsertHook(row, scope, path, { hookId, error: null });
@@ -510,7 +510,7 @@ export class ForgeService {
 
 	/**
 	 * Make sure the forge delivers a repository's events (D174): when a connection serves `url` and
-	 * no hook of Skiff's covers it, create a repository hook. Best effort: failures are recorded on
+	 * no hook of Yoal's covers it, create a repository hook. Best effort: failures are recorded on
 	 * the connection page, never thrown.
 	 */
 	async ensureWebhook(orgId: string, url: string): Promise<void> {
@@ -522,7 +522,7 @@ export class ForgeService {
 
 	/**
 	 * Create the webhook for every repository the org already builds or runs pipelines for on this
-	 * connection (enabled git sources and pipeline repositories) that no hook of Skiff's covers yet,
+	 * connection (enabled git sources and pipeline repositories) that no hook of Yoal's covers yet,
 	 * including ones that failed before (D174). Called when a connection is added or its token
 	 * replaced. Returns how many hooks were created; failures are recorded on the connection.
 	 */

@@ -1,9 +1,9 @@
 <script lang="ts">
-	import '@skiff/docs/prose.css';
+	import '@yoal/docs/prose.css';
 	import { resolve } from '$app/paths';
 	import ArrowLeftIcon from '@lucide/svelte/icons/arrow-left';
 	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
-	import { enhanceDiagrams } from '@skiff/docs/diagrams';
+	import { enhanceDiagrams } from '@yoal/docs/diagrams';
 	import DocsSearch from '../_lib/DocsSearch.svelte';
 	import PageHeader from '../../_lib/PageHeader.svelte';
 	import type { PageProps } from './$types';
@@ -65,7 +65,7 @@
 </script>
 
 <svelte:head>
-	<title>{doc.title} · Docs · Skiff</title>
+	<title>{doc.title} · Docs · Yoal</title>
 	<meta name="description" content={doc.description} />
 </svelte:head>
 

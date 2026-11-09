@@ -23,8 +23,8 @@
 	import RocketIcon from '@lucide/svelte/icons/rocket';
 	import ServerIcon from '@lucide/svelte/icons/server';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
-	import StatusDot from '#lib/components/skiff/StatusDot.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
+	import StatusDot from '#lib/components/yoal/StatusDot.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Progress } from '#lib/components/ui/progress/index.js';
@@ -265,7 +265,7 @@
 </script>
 
 <svelte:head>
-	<title>Overview · Skiff</title>
+	<title>Overview · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">

@@ -2,15 +2,15 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_FEATURES, type FunctionBinding } from '@skiff/contracts';
-import { createDb } from '@skiff/db';
+import { DEFAULT_FEATURES, type FunctionBinding } from '@yoal/contracts';
+import { createDb } from '@yoal/db';
 import { createCore } from '../index.ts';
 import { LocalObjectStore } from '../object-store.ts';
 import { buildPrincipal } from '../orgs.ts';
 import type { Core } from '../index.ts';
 import { resolveR2Binding } from './r2.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-r2-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-r2-'));
 const opened = createDb({ path: ':memory:' });
 const core: Core = createCore({
 	db: opened.db,

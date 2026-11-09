@@ -1,6 +1,6 @@
 -- The platform signing-key ring (docs/IAM.md I15, §4, §7.3). Additive only.
 --
--- One ring per purpose (`sts`, `registry`, `oidc`, `workload`, or `pool:<id>`), so every token Skiff
+-- One ring per purpose (`sts`, `registry`, `oidc`, `workload`, or `pool:<id>`), so every token Yoal
 -- mints can share one issuer and one JWKS. A key moves next → active → retired: a `next` key is
 -- published 24 hours before it signs anything, and a `retired` key stays published until every
 -- token it signed has expired (plus a margin). `retire_after` is epoch milliseconds and is NULL

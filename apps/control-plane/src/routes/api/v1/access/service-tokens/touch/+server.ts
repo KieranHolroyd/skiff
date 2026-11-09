@@ -1,5 +1,5 @@
 import type { RequestHandler } from './$types';
-import { accessServiceTokenTouchSchema } from '@skiff/contracts';
+import { accessServiceTokenTouchSchema } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { readJson, route } from '#lib/server/api.js';
 

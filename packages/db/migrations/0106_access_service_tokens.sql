@@ -1,4 +1,4 @@
--- Skiff Access machine tokens (IAM.md I25, §11.1). Additive only.
+-- Yoal Access machine tokens (IAM.md I25, §11.1). Additive only.
 --
 -- A machine token is a header pair a CI job, webhook or script presents to a host guarded by a
 -- policy. New tokens live here so they can be named, listed and revoked without rewriting the
@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS access_service_tokens (
   org_id TEXT NOT NULL,
   policy_id TEXT NOT NULL,
   name TEXT NOT NULL,
-  -- Header name the machine sends, e.g. `X-Skiff-Access-Token`.
+  -- Header name the machine sends, e.g. `X-Yoal-Access-Token`.
   header TEXT NOT NULL,
   -- Lowercase hex SHA-256 of the header value; the value itself is never stored.
   token_hash TEXT NOT NULL UNIQUE,

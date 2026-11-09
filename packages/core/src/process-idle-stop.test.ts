@@ -2,13 +2,13 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
+import { createDb } from '@yoal/db';
 import { buildPrincipal } from './orgs.ts';
 import { createCore, type Core } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 
 /** Scale to zero for process apps (D121): the spec field reaches the node's desired state. */
-const dir = mkdtempSync(join(tmpdir(), 'skiff-idle-stop-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-idle-stop-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 

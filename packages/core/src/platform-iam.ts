@@ -36,7 +36,7 @@ import {
 	type PlatformRole,
 	type Principal,
 	type ScopeRef,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { ForbiddenError, ConflictError, NotFoundError, ValidationError } from './errors.ts';
 import type {

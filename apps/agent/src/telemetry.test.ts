@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import type { AnalyticsEvent, FunctionTailEvent } from '@skiff/contracts';
+import type { AnalyticsEvent, FunctionTailEvent } from '@yoal/contracts';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -57,7 +57,7 @@ const directories: string[] = [];
 const restores: Array<() => void> = [];
 
 function makeClient(): TelemetryClient {
-	const directory = mkdtempSync(join(tmpdir(), 'skiff-agent-telemetry-'));
+	const directory = mkdtempSync(join(tmpdir(), 'yoal-agent-telemetry-'));
 	directories.push(directory);
 	const accessLogPath = join(directory, 'access.log');
 	writeFileSync(accessLogPath, '');

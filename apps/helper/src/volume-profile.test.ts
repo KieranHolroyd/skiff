@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fioJobFile, parseDdStats, parseFioOutput, VolumeProfiler } from './volume-profile.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-profile-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-profile-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 const FIO_JSON = JSON.stringify({
@@ -54,8 +54,8 @@ describe('VolumeProfiler', () => {
 			direct: true,
 			notes: [],
 		});
-		expect(calls[0]!.slice(1)).toEqual(['--output-format=json', join(mount, 'skiff', '.profile', 'profile.fio')]);
-		expect(existsSync(join(mount, 'skiff', '.profile'))).toBe(false);
+		expect(calls[0]!.slice(1)).toEqual(['--output-format=json', join(mount, 'yoal', '.profile', 'profile.fio')]);
+		expect(existsSync(join(mount, 'yoal', '.profile'))).toBe(false);
 	});
 
 	test('falls back to dd without fio, and retries without O_DIRECT when the filesystem refuses it', async () => {
@@ -93,7 +93,7 @@ describe('VolumeProfiler', () => {
 	});
 
 	test('job file and parsers', () => {
-		const job = fioJobFile('/mnt/x/skiff/.profile/profile.dat', { volumeId: 'v', sizeMb: 128, runtimeSeconds: 5 }, true);
+		const job = fioJobFile('/mnt/x/yoal/.profile/profile.dat', { volumeId: 'v', sizeMb: 128, runtimeSeconds: 5 }, true);
 		expect(job).toContain('direct=1');
 		expect(job).toContain('[sync-write]\nrw=randwrite\nbs=4k\niodepth=1\nioengine=psync\nfdatasync=1');
 		expect(parseFioOutput(FIO_JSON).seqReadMBps).toBe(1000);

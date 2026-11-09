@@ -12,7 +12,7 @@ export const CONTAINER_CONSOLE_DEFAULT_PORT = 8084;
 /** Internal host suffix the gateway matches for a node's console front (never public DNS). */
 export const CONTAINER_CONSOLE_GATEWAY_SUFFIX = 'console.internal';
 /** Request header the control plane adds on the gateway hop. Never sent by a browser. */
-export const CONTAINER_CONSOLE_TOKEN_HEADER = 'x-skiff-console-token';
+export const CONTAINER_CONSOLE_TOKEN_HEADER = 'x-yoal-console-token';
 /** Agents advertising this run the console front and the helper's container verbs. */
 export const CONTAINER_CONSOLE_CAPABILITY = 'container-console';
 export const CONTAINER_CONSOLE_PROTOCOL_VERSION = 1;

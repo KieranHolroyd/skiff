@@ -13,12 +13,12 @@ import * as z from "zod";
 // --- page context ---------------------------------------------------------
 
 /**
- * A compact outline of what the user can see. The browser collects `[data-skiff-target]` elements
+ * A compact outline of what the user can see. The browser collects `[data-yoal-target]` elements
  * plus headings, buttons, links and tabs, and sends stable ids and CSS selectors. The agent picks
  * from this list, so it points at a real element instead of guessing at the DOM.
  */
 export const assistantPageTargetSchema = z.object({
-  /** Stable `data-skiff-target` id, when the element has one. */
+  /** Stable `data-yoal-target` id, when the element has one. */
   id: z.string().max(120).optional(),
   /** Authenticated CSS selector, as a fallback for elements without an id. */
   selector: z.string().max(500).optional(),
@@ -61,7 +61,7 @@ export type AssistantChatRequest = z.infer<typeof assistantChatRequestSchema>;
 export const assistantGuideStepSchema = z.object({
   /** Navigate first when the step is on another page. */
   path: z.string().max(500).optional(),
-  /** Prefer a `data-skiff-target` id from the page outline. */
+  /** Prefer a `data-yoal-target` id from the page outline. */
   target: z.string().max(120).optional(),
   /** Fallback CSS selector. */
   selector: z.string().max(500).optional(),
@@ -149,7 +149,7 @@ export interface AssistantStatus {
 export interface AssistantAgentDetail {
   /** The full system prompt. */
   instructions: string;
-  /** Optional model override; null uses SKIFF_ASSISTANT_MODEL. */
+  /** Optional model override; null uses YOAL_ASSISTANT_MODEL. */
   model: string | null;
   /** MCP tool names the assistant may call; null means every tool in the catalog. */
   tools: string[] | null;

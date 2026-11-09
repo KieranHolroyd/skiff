@@ -23,10 +23,10 @@ export interface HelperConfig {
 	stateDir: string;
 	/**
 	 * The agent's replica link root (C7, docs/CLUSTERING.md §9.2): it must equal the agent's
-	 * `<SKIFF_DATA_DIR>/replication`. Only `<dir>/<replica id>` is ever mounted, read-only.
+	 * `<YOAL_DATA_DIR>/replication`. Only `<dir>/<replica id>` is ever mounted, read-only.
 	 */
 	replicationDir: string;
-	/** Release roots to probe, in order. The agent's cache and /srv/skiff may differ. */
+	/** Release roots to probe, in order. The agent's cache and /srv/yoal may differ. */
 	releaseDirs: string[];
 	/** Absolute bun used for the default `bun run start` process command. */
 	bunPath: string;
@@ -57,7 +57,7 @@ export interface HelperConfig {
 	controlSocketGroup: string | null;
 	/** Advertised helper version. */
 	version: string;
-	/** Install missing storage tools (fio, nfs-common, cifs-utils) at start; `SKIFF_HELPER_STORAGE_TOOLS=0` turns it off. */
+	/** Install missing storage tools (fio, nfs-common, cifs-utils) at start; `YOAL_HELPER_STORAGE_TOOLS=0` turns it off. */
 	installStorageTools: boolean;
 	/** Binaries the `node/update` verb replaces (D99). */
 	nodeUpdate: {
@@ -72,7 +72,7 @@ export interface HelperConfig {
 
 type Env = Record<string, string | undefined>;
 
-const DEFAULT_RELEASE_DIRS = ['/srv/skiff/releases', '/var/lib/skiff/agent/releases'];
+const DEFAULT_RELEASE_DIRS = ['/srv/yoal/releases', '/var/lib/yoal/agent/releases'];
 
 export class HelperConfigError extends Error {
 	constructor(message: string) {
@@ -105,9 +105,9 @@ function releaseDirs(value: string): string[] {
 		.split(',')
 		.map((entry) => entry.trim())
 		.filter((entry) => entry.length > 0);
-	if (dirs.length === 0) throw new HelperConfigError('SKIFF_HELPER_RELEASE_DIRS must not be empty');
+	if (dirs.length === 0) throw new HelperConfigError('YOAL_HELPER_RELEASE_DIRS must not be empty');
 	try {
-		return dirs.map((dir) => assertAbsolutePath(dir, 'SKIFF_HELPER_RELEASE_DIRS entry'));
+		return dirs.map((dir) => assertAbsolutePath(dir, 'YOAL_HELPER_RELEASE_DIRS entry'));
 	} catch (error) {
 		throw new HelperConfigError(error instanceof Error ? error.message : String(error));
 	}
@@ -120,9 +120,9 @@ function socketMode(value: string, label: string): string {
 
 /** The helper socket must not be reachable by "other". */
 function controlSocketMode(value: string): string {
-	const mode = socketMode(value, 'SKIFF_HELPER_CONTROL_SOCKET_MODE');
+	const mode = socketMode(value, 'YOAL_HELPER_CONTROL_SOCKET_MODE');
 	if ((Number.parseInt(mode, 8) & 0o007) !== 0)
-		throw new HelperConfigError('SKIFF_HELPER_CONTROL_SOCKET_MODE must not grant permissions to other users');
+		throw new HelperConfigError('YOAL_HELPER_CONTROL_SOCKET_MODE must not grant permissions to other users');
 	return mode;
 }
 
@@ -152,56 +152,56 @@ function apparmorProfile(value: string | null): string | null {
 	}
 	if (value === 'none') return null;
 	if (!/^[A-Za-z0-9_.-]+$/.test(value))
-		throw new HelperConfigError('SKIFF_HELPER_APPARMOR_PROFILE must be "auto", "none" or a profile name');
+		throw new HelperConfigError('YOAL_HELPER_APPARMOR_PROFILE must be "auto", "none" or a profile name');
 	return value;
 }
 
 export function loadHelperConfig(env: Env = process.env): HelperConfig {
-	const socketPath = absolute(env, 'SKIFF_HELPER_SOCKET', '/run/skiff-helper/helper.sock');
-	const runtimeDir = absolute(env, 'SKIFF_HELPER_RUNTIME_DIR', '/run/skiff-workloads');
+	const socketPath = absolute(env, 'YOAL_HELPER_SOCKET', '/run/yoal-helper/helper.sock');
+	const runtimeDir = absolute(env, 'YOAL_HELPER_RUNTIME_DIR', '/run/yoal-workloads');
 	if (socketPath.startsWith(`${runtimeDir}/`))
-		throw new HelperConfigError('SKIFF_HELPER_SOCKET must not live inside the workload runtime dir');
+		throw new HelperConfigError('YOAL_HELPER_SOCKET must not live inside the workload runtime dir');
 
 
 	return {
 		socketPath,
-		unitDir: absolute(env, 'SKIFF_HELPER_UNIT_DIR', '/etc/systemd/system'),
-		quadletDir: absolute(env, 'SKIFF_HELPER_QUADLET_DIR', '/etc/containers/systemd'),
+		unitDir: absolute(env, 'YOAL_HELPER_UNIT_DIR', '/etc/systemd/system'),
+		quadletDir: absolute(env, 'YOAL_HELPER_QUADLET_DIR', '/etc/containers/systemd'),
 		runtimeDir,
-		stateDir: absolute(env, 'SKIFF_HELPER_STATE_DIR', '/var/lib/skiff-workloads'),
-		replicationDir: absolute(env, 'SKIFF_HELPER_REPLICATION_DIR', '/var/lib/skiff/agent/replication'),
-		releaseDirs: releaseDirs(optional(env, 'SKIFF_HELPER_RELEASE_DIRS', DEFAULT_RELEASE_DIRS.join(','))),
-		bunPath: absolute(env, 'SKIFF_HELPER_BUN_PATH', '/usr/local/bin/bun'),
-		nodePath: absolute(env, 'SKIFF_HELPER_NODE_PATH', '/usr/local/bin/node'),
-		workerdDir: absolute(env, 'SKIFF_HELPER_WORKERD_DIR', '/usr/lib/skiff/workerd'),
-		systemctlPath: absolute(env, 'SKIFF_HELPER_SYSTEMCTL', '/usr/bin/systemctl'),
-		journalctlPath: absolute(env, 'SKIFF_HELPER_JOURNALCTL', '/usr/bin/journalctl'),
-		podmanPath: absolute(env, 'SKIFF_HELPER_PODMAN', '/usr/bin/podman'),
-		opensslPath: absolute(env, 'SKIFF_HELPER_OPENSSL', '/usr/bin/openssl'),
-		apparmorProfile: apparmorProfile(optionalValue(env, 'SKIFF_HELPER_APPARMOR_PROFILE')),
+		stateDir: absolute(env, 'YOAL_HELPER_STATE_DIR', '/var/lib/yoal-workloads'),
+		replicationDir: absolute(env, 'YOAL_HELPER_REPLICATION_DIR', '/var/lib/yoal/agent/replication'),
+		releaseDirs: releaseDirs(optional(env, 'YOAL_HELPER_RELEASE_DIRS', DEFAULT_RELEASE_DIRS.join(','))),
+		bunPath: absolute(env, 'YOAL_HELPER_BUN_PATH', '/usr/local/bin/bun'),
+		nodePath: absolute(env, 'YOAL_HELPER_NODE_PATH', '/usr/local/bin/node'),
+		workerdDir: absolute(env, 'YOAL_HELPER_WORKERD_DIR', '/usr/lib/yoal/workerd'),
+		systemctlPath: absolute(env, 'YOAL_HELPER_SYSTEMCTL', '/usr/bin/systemctl'),
+		journalctlPath: absolute(env, 'YOAL_HELPER_JOURNALCTL', '/usr/bin/journalctl'),
+		podmanPath: absolute(env, 'YOAL_HELPER_PODMAN', '/usr/bin/podman'),
+		opensslPath: absolute(env, 'YOAL_HELPER_OPENSSL', '/usr/bin/openssl'),
+		apparmorProfile: apparmorProfile(optionalValue(env, 'YOAL_HELPER_APPARMOR_PROFILE')),
 		workloadSocketMode: socketMode(
-			optional(env, 'SKIFF_HELPER_WORKLOAD_SOCKET_MODE', '0666'),
-			'SKIFF_HELPER_WORKLOAD_SOCKET_MODE',
+			optional(env, 'YOAL_HELPER_WORKLOAD_SOCKET_MODE', '0666'),
+			'YOAL_HELPER_WORKLOAD_SOCKET_MODE',
 		),
 		workloadSocketGroup: socketGroup(
-			optionalValue(env, 'SKIFF_HELPER_WORKLOAD_SOCKET_GROUP'),
-			'SKIFF_HELPER_WORKLOAD_SOCKET_GROUP',
+			optionalValue(env, 'YOAL_HELPER_WORKLOAD_SOCKET_GROUP'),
+			'YOAL_HELPER_WORKLOAD_SOCKET_GROUP',
 		),
 		controlSocketMode: controlSocketMode(
-			optional(env, 'SKIFF_HELPER_CONTROL_SOCKET_MODE', '0660'),
+			optional(env, 'YOAL_HELPER_CONTROL_SOCKET_MODE', '0660'),
 		),
 		controlSocketGroup: socketGroup(
-			optional(env, 'SKIFF_HELPER_CONTROL_SOCKET_GROUP', 'skiff'),
-			'SKIFF_HELPER_CONTROL_SOCKET_GROUP',
+			optional(env, 'YOAL_HELPER_CONTROL_SOCKET_GROUP', 'yoal'),
+			'YOAL_HELPER_CONTROL_SOCKET_GROUP',
 		),
 		// Embedded at build time, never configurable: it must name the binary that is running (D99).
 		version: BUILD_VERSION,
-		installStorageTools: (env.SKIFF_HELPER_STORAGE_TOOLS ?? '1').trim() !== '0',
+		installStorageTools: (env.YOAL_HELPER_STORAGE_TOOLS ?? '1').trim() !== '0',
 		nodeUpdate: {
-			agentBinary: absolute(env, 'SKIFF_HELPER_AGENT_BINARY', '/opt/skiff/current/agent/skiff-agent'),
-			helperBinary: absolute(env, 'SKIFF_HELPER_SELF_BINARY', '/opt/skiff/helper/skiff-helper'),
-			releaseLink: absolute(env, 'SKIFF_HELPER_RELEASE_LINK', '/opt/skiff/current'),
-			workDir: absolute(env, 'SKIFF_HELPER_UPDATE_DIR', '/var/lib/skiff-helper/node-update'),
+			agentBinary: absolute(env, 'YOAL_HELPER_AGENT_BINARY', '/opt/yoal/current/agent/yoal-agent'),
+			helperBinary: absolute(env, 'YOAL_HELPER_SELF_BINARY', '/opt/yoal/helper/yoal-helper'),
+			releaseLink: absolute(env, 'YOAL_HELPER_RELEASE_LINK', '/opt/yoal/current'),
+			workDir: absolute(env, 'YOAL_HELPER_UPDATE_DIR', '/var/lib/yoal-helper/node-update'),
 		},
 		socketDirMode: 0o750,
 	};

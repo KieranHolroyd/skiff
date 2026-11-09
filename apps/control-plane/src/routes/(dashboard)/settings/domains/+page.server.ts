@@ -10,7 +10,7 @@ import {
 	validCloudflareToken,
 	validateDomainSettings,
 	type DomainSettings
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { interfaceAddresses, probeDomains, primaryAddress, serverAddresses, type DnsProbe } from '#lib/server/dns-probe.js';
 import { enforceOwnerSecondFactor, userHasTotp } from '#lib/server/second-factor.js';
 import { configState, queueConfig, requireOwnerPage } from '../_platform.server.js';
@@ -18,8 +18,8 @@ import type { Actions, PageServerLoad } from './$types';
 
 /**
  * Settings → Domains (D105): the dashboard host, the content domain and HTTPS. The values come
- * from this process's environment (skiff.env as of the last restart); a change goes to the root
- * helper, which rewrites skiff.env and the edge agent's agent.env, restarts both and reverts if the
+ * from this process's environment (yoal.env as of the last restart); a change goes to the root
+ * helper, which rewrites yoal.env and the edge agent's agent.env, restarts both and reverts if the
  * new address does not answer.
  */
 
@@ -30,8 +30,8 @@ function current(): DomainSettings {
 }
 
 function cloudflareTokenSaved(): boolean {
-	const file = process.env.SKIFF_CLOUDFLARE_TOKEN_FILE;
-	return Boolean(process.env.SKIFF_CLOUDFLARE_API_TOKEN) || Boolean(file && existsSync(file));
+	const file = process.env.YOAL_CLOUDFLARE_TOKEN_FILE;
+	return Boolean(process.env.YOAL_CLOUDFLARE_API_TOKEN) || Boolean(file && existsSync(file));
 }
 
 /** Addresses from the interfaces alone (no DNS), for hints on page load. */
@@ -57,7 +57,7 @@ export const load: PageServerLoad = ({ locals }) => {
 		cloudflareTokenSaved: cloudflareTokenSaved(),
 		/** Cloudflare token form pre-filled with Zone Read + DNS Edit. */
 		cloudflareTokenUrl: cloudflareTokenCreateUrl({
-			name: isTemporaryContentDomain(settings.contentDomain) ? 'Skiff DNS' : `Skiff DNS (${settings.contentDomain})`
+			name: isTemporaryContentDomain(settings.contentDomain) ? 'Yoal DNS' : `Yoal DNS (${settings.contentDomain})`
 		}),
 		/** Changing the dashboard host breaks passkeys (they are bound to it), so owners need TOTP first. */
 		needsAuthenticator: enforceOwnerSecondFactor && !userHasTotp(locals.user!.id),
@@ -155,7 +155,7 @@ export const actions: Actions = {
 		const result = queueConfig(
 			locals,
 			{ action: 'domains', ...next, ...(values.cloudflareToken ? { cloudflareToken: values.cloudflareToken } : {}) },
-			`Moving Skiff to ${platformOriginFor(next)}.`
+			`Moving Yoal to ${platformOriginFor(next)}.`
 		);
 		if (isActionFailure(result)) return result;
 		return { ...result, newOrigin: platformOriginFor(next), hostChanges };

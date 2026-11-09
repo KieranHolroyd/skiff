@@ -1,0 +1,68 @@
+[Unit]
+Description=Yoal node agent
+Documentation=https://github.com/kieranholroyd/private-cloud-deploys/blob/main/docs/OPS.md
+After=network-online.target yoal-caddy.service
+Wants=network-online.target
+# A node that has not joined yet must not crash-loop. `yoal-agent join` writes this file
+# and then starts the unit.
+ConditionPathExists=/etc/yoal/agent.env
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=yoal
+Group=yoal
+# yoal-caddy is the supplementary group that grants:
+#   - read/write access to /run/yoal/agent.sock (created in a setgid dir)
+#   - connect access to Caddy's admin socket /run/yoal/caddy-admin.sock
+SupplementaryGroups=yoal-caddy
+UMask=0007
+WorkingDirectory=/opt/yoal/current/agent
+
+# The shared file carries the cookie secret and common settings. agent.env is written by
+# `yoal-agent join` and overrides YOAL_DATA_DIR with the agent's own cache directory.
+EnvironmentFile=/etc/yoal/yoal.env
+EnvironmentFile=-/etc/yoal/agent.env
+Environment=YOAL_DATA_DIR=/var/lib/yoal/agent
+Environment=YOAL_AGENT_SOCKET=/run/yoal/agent.sock
+Environment=YOAL_CADDY_ADMIN_SOCKET=/run/yoal/caddy-admin.sock
+
+ExecStart=/opt/yoal/current/agent/yoal-agent
+
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=20
+KillSignal=SIGTERM
+LimitNOFILE=65535
+TasksMax=128
+MemoryMax=192M
+
+# The agent reads /proc for node metrics and Caddy's access logs, but writes only its
+# release cache and the runtime socket. It never needs root (D26).
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service io_uring_setup io_uring_enter io_uring_register
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+ReadWritePaths=/var/lib/yoal /srv/yoal /run/yoal
+
+[Install]
+WantedBy=multi-user.target

@@ -7,8 +7,8 @@
 	import ListTreeIcon from '@lucide/svelte/icons/list-tree';
 	import PlayIcon from '@lucide/svelte/icons/play';
 	import SquareIcon from '@lucide/svelte/icons/square';
-	import type { ExplainResult } from '@skiff/studio/protocol';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import type { ExplainResult } from '@yoal/studio/protocol';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';

@@ -8,9 +8,9 @@
  *
  * Opt-in, because it needs a container engine and a few seconds per image:
  *
- *   SKIFF_E2E_STUDIO=1 SKIFF_E2E_ENGINE=docker bun test tests/e2e/studio/postgres.e2e.test.ts
+ *   YOAL_E2E_STUDIO=1 YOAL_E2E_ENGINE=docker bun test tests/e2e/studio/postgres.e2e.test.ts
  *
- * `SKIFF_E2E_STUDIO_PG=17,16` picks the images (default both). Needs Bun ≥ 1.4.4.
+ * `YOAL_E2E_STUDIO_PG=17,16` picks the images (default both). Needs Bun ≥ 1.4.4.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -27,13 +27,13 @@ import { ContainerRuntime, detectEngine, freePort, postgresHealthProbe, waitFor 
 const ROW_COUNT = 250;
 const SUPER_PASSWORD = 'studio-super';
 const OWNER = { user: 'app_owner', password: 'owner-pw' };
-const READER = { user: 'skiff_studio_ro', password: 'reader-pw' };
+const READER = { user: 'yoal_studio_ro', password: 'reader-pw' };
 const ITEMS: ObjectRef = { path: ['public', 'studio_items'], kind: 'table' };
 
-if (process.env.SKIFF_E2E_STUDIO !== '1') {
-	test.skip('postgres studio e2e (set SKIFF_E2E_STUDIO=1 to run)', () => {});
+if (process.env.YOAL_E2E_STUDIO !== '1') {
+	test.skip('postgres studio e2e (set YOAL_E2E_STUDIO=1 to run)', () => {});
 } else {
-	const versions = (process.env.SKIFF_E2E_STUDIO_PG ?? '17,16')
+	const versions = (process.env.YOAL_E2E_STUDIO_PG ?? '17,16')
 		.split(',')
 		.map((v) => v.trim())
 		.filter(Boolean);
@@ -43,7 +43,7 @@ if (process.env.SKIFF_E2E_STUDIO !== '1') {
 
 	beforeAll(async () => {
 		const engine = await detectEngine();
-		if (!engine) throw new Error('No container engine (set SKIFF_E2E_ENGINE=docker or podman).');
+		if (!engine) throw new Error('No container engine (set YOAL_E2E_ENGINE=docker or podman).');
 		tempDir = await mkdtemp(join(tmpdir(), 'studio-pg-'));
 		runtime = new ContainerRuntime(engine, tempDir);
 		const rt = runtime;

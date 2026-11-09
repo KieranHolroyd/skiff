@@ -1,4 +1,4 @@
-import type { ObservabilitySchema, QueryColumn, QueryResult } from '@skiff/contracts';
+import type { ObservabilitySchema, QueryColumn, QueryResult } from '@yoal/contracts';
 
 /**
  * Turns a `QueryResult` into what the panels draw.

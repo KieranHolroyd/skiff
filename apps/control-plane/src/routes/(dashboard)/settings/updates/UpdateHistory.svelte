@@ -8,9 +8,9 @@
 	import PinIcon from '@lucide/svelte/icons/pin';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import DatabaseIcon from '@lucide/svelte/icons/database';
-	import type { SelfUpdateStatus } from '@skiff/contracts';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import type { SelfUpdateStatus } from '@yoal/contracts';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import Panel from '../../_lib/Panel.svelte';
 	import { formatDateTime, formatRelative, plural } from '../../_lib/format.js';
 	import { formatElapsed, methodOption, outcomes, toneTile } from './update-ui.js';
@@ -48,7 +48,7 @@
 		lastRun && finishedAt ? Date.parse(finishedAt) - Date.parse(lastRun.startedAt) : NaN
 	);
 	const visible = $derived(snapshots.slice(0, 4));
-	const rollbackCommand = 'sudo skiff-update-self rollback';
+	const rollbackCommand = 'sudo yoal-update-self rollback';
 </script>
 
 <Panel title="History" icon={ClockIcon}>
@@ -159,7 +159,7 @@
 	{#snippet footer()}
 		<div class="flex w-full flex-wrap items-center justify-between gap-x-4 gap-y-2">
 			<span class="text-pretty">
-				Skiff rolls back on its own if health checks fail. To go back by hand, run on the server:
+				Yoal rolls back on its own if health checks fail. To go back by hand, run on the server:
 			</span>
 			<span class="flex items-center gap-1.5">
 				<code

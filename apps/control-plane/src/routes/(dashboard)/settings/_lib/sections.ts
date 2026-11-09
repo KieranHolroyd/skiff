@@ -29,12 +29,12 @@ import PlugIcon from '@lucide/svelte/icons/plug';
 import PackageIcon from '@lucide/svelte/icons/package';
 import WaypointsIcon from '@lucide/svelte/icons/waypoints';
 import WrenchIcon from '@lucide/svelte/icons/wrench';
-import type { Permission } from '@skiff/contracts';
+import type { Permission } from '@yoal/contracts';
 
 /**
  * Every Settings section, grouped by what it is about rather than only by scope, so no group grows
  * past five or six entries. The order still runs from you, through the organisation you are signed
- * in to, to this Skiff install:
+ * in to, to this Yoal install:
  *
  * - you: your own account and credentials;
  * - organisation: the org itself, its people and what it uses;
@@ -96,7 +96,7 @@ export type SectionGroup =
 
 /**
  * The settings navigation passes each href to SvelteKit's `resolve()`, whose generic is distributed
- * over the route-id union; TypeScript stops inferring past 25 members. SSO, Skiff Access, User
+ * over the route-id union; TypeScript stops inferring past 25 members. SSO, Yoal Access, User
  * pools, Server errors and Config export are the newest sections, so they are left out of this type and asserted
  * at their entries below. All are real routes (`svelte-kit sync` lists them in `$app/types`); every other entry is literal-checked.
  */
@@ -264,9 +264,9 @@ export const SECTIONS: Section[] = [
 	{
 		id: 'access-policies',
 		group: 'security',
-		label: 'Skiff Access',
+		label: 'Yoal Access',
 		summary:
-			'Skiff Access: ordered allow and deny rules for sites and app environments, enforced at the edge.',
+			'Yoal Access: ordered allow and deny rules for sites and app environments, enforced at the edge.',
 		// See `SectionHref`: `resolve()` cannot infer past its 25-member union.
 		href: '/(dashboard)/settings/access-policies' as unknown as SectionHref,
 		path: '/settings/access-policies',
@@ -290,7 +290,7 @@ export const SECTIONS: Section[] = [
 		group: 'integrations',
 		label: 'GitHub',
 		summary:
-			'Skiff’s GitHub App: private clones, push and pull request events, commit statuses and runners without tokens or webhooks.',
+			'Yoal’s GitHub App: private clones, push and pull request events, commit statuses and runners without tokens or webhooks.',
 		href: '/(dashboard)/settings/github',
 		path: '/settings/github',
 		icon: GitBranchIcon,
@@ -301,7 +301,7 @@ export const SECTIONS: Section[] = [
 		group: 'integrations',
 		label: 'Git providers',
 		summary:
-			'GitLab, Gitea and Forgejo: repository pickers, webhooks Skiff creates, private clones and commit statuses, like the GitHub App.',
+			'GitLab, Gitea and Forgejo: repository pickers, webhooks Yoal creates, private clones and commit statuses, like the GitHub App.',
 		// See `SectionHref`: the route is real, but `resolve()` cannot infer past 25 members.
 		href: '/(dashboard)/settings/git' as unknown as SectionHref,
 		path: '/settings/git',
@@ -386,7 +386,7 @@ export const SECTIONS: Section[] = [
 		group: 'platform',
 		label: 'Notifications',
 		summary:
-			'Set up the channels Skiff sends through: email, SMS, chat, push and the alert recipients.',
+			'Set up the channels Yoal sends through: email, SMS, chat, push and the alert recipients.',
 		href: '/(dashboard)/settings/notifications',
 		path: '/settings/notifications',
 		icon: BellRingIcon,
@@ -469,7 +469,7 @@ export const SECTIONS: Section[] = [
 		id: 'updates',
 		group: 'operations',
 		label: 'Updates',
-		summary: 'The Skiff version running here, and safe one-click upgrades with automatic rollback.',
+		summary: 'The Yoal version running here, and safe one-click upgrades with automatic rollback.',
 		href: '/(dashboard)/settings/updates',
 		path: '/settings/updates',
 		icon: CircleArrowUpIcon,

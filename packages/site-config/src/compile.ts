@@ -1,5 +1,5 @@
 import { compilePattern, compileTarget, type HeaderRule, type Redirect, type SiteConfig } from './parse.ts';
-import type { AccessMode } from '@skiff/contracts';
+import type { AccessMode } from '@yoal/contracts';
 import { errorPageHandler } from './error-pages.ts';
 
 /** Structural Caddy JSON — intentionally loose; the agent validates with Caddy itself. */
@@ -60,12 +60,12 @@ function authRoute(agentSocket: string): CaddyRoute {
 			{
 				handler: 'reverse_proxy',
 				upstreams: [{ dial: `unix/${agentSocket}` }],
-				rewrite: { method: 'GET', uri: '/_skiff/verify' },
+				rewrite: { method: 'GET', uri: '/_yoal/verify' },
 				headers: {
 					request: {
 						set: {
 							'X-Forwarded-Uri': ['{http.request.uri}'],
-							'X-Skiff-Project': ['{http.request.host}'],
+							'X-Yoal-Project': ['{http.request.host}'],
 						},
 					},
 				},
@@ -82,7 +82,7 @@ function redirectRoute(redirect: Redirect): CaddyRoute {
 	const target = compileTarget(redirect.to);
 	const hasPattern = compiled.groups.length > 0;
 	const match = hasPattern
-		? [{ path_regexp: { name: 'skiff_redirect', pattern: compiled.regex } }]
+		? [{ path_regexp: { name: 'yoal_redirect', pattern: compiled.regex } }]
 		: [{ path: [redirect.from] }];
 	if (redirect.status === 200) {
 		return { match, handle: [{ handler: 'rewrite', uri: target }] };
@@ -120,7 +120,7 @@ function trailingSlashRoutes(site: SiteConfig): CaddyRoute[] {
 			{
 				match: [
 					{
-						path_regexp: { name: 'skiff_no_slash', pattern: '^(?P<path>.*[^/])$' },
+						path_regexp: { name: 'yoal_no_slash', pattern: '^(?P<path>.*[^/])$' },
 						not: [{ path_regexp: { pattern: '\\.[a-zA-Z0-9]{1,8}$' } }],
 					},
 				],
@@ -137,11 +137,11 @@ function trailingSlashRoutes(site: SiteConfig): CaddyRoute[] {
 	}
 	return [
 		{
-			match: [{ path_regexp: { name: 'skiff_slash', pattern: '^(?P<path>.+)/$' } }],
+			match: [{ path_regexp: { name: 'yoal_slash', pattern: '^(?P<path>.+)/$' } }],
 			handle: [
 				{
 					handler: 'redir',
-					to: '{http.regexp.skiff_slash.path}{http.request.uri.prefixed_query}',
+					to: '{http.regexp.yoal_slash.path}{http.request.uri.prefixed_query}',
 					status_code: 308,
 				},
 			],

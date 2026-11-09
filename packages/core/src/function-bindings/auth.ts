@@ -1,4 +1,4 @@
-import { USER_POOL_AUTH_BINDING } from '@skiff/contracts';
+import { USER_POOL_AUTH_BINDING } from '@yoal/contracts';
 import type { BindingResolver } from './types.ts';
 
 /**

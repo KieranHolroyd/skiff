@@ -10,8 +10,8 @@
 	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
-	import type { LogLevel, ServiceLogEvent, ServiceLogQueryResult } from '@skiff/contracts';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import type { LogLevel, ServiceLogEvent, ServiceLogQueryResult } from '@yoal/contracts';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as InputGroup from '#lib/components/ui/input-group/index.js';

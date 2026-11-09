@@ -833,7 +833,7 @@ function parseText(
 		});
 	}
 
-	// Prefix with a source name and timestamp inside brackets: [skiff-agent 2026-11-03T23:23:02Z] INFO ...
+	// Prefix with a source name and timestamp inside brackets: [yoal-agent 2026-11-03T23:23:02Z] INFO ...
 	match =
 		/^\[([^\]\s]+)\s+(\d{4}-\d{2}-\d{2}T\S+)\]\s+(TRACE|DEBUG|INFO|WARN|WARNING|ERROR|ERR|FATAL|CRITICAL|NOTICE|SEVERE)\s+([\s\S]*)$/.exec(
 			line,

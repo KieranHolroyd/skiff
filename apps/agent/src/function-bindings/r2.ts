@@ -9,7 +9,7 @@ export const R2_BINDING_FILE = 'binding-r2';
 const R2_ENV_SUFFIXES = ['ENDPOINT_URL', 'ACCESS_KEY_ID', 'SECRET_ACCESS_KEY', 'REGION', 'FORCE_PATH_STYLE'] as const;
 
 /**
- * Phase-2 R2: one Skiff-supplied Worker service per binding, backed by an attached RustFS instance
+ * Phase-2 R2: one Yoal-supplied Worker service per binding, backed by an attached RustFS instance
  * over the S3 API (docs/FUNCTIONS.md §4.5, D66, FN10).
  *
  * The main Worker only gets the `r2Bucket` capability binding. The service is the authority for

@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { eq } from 'drizzle-orm';
-import { DEFAULT_FEATURES, WORKERD_PINNED_VERSION, type FeatureFlags } from '@skiff/contracts';
-import { createDb, deployments, projects, workloads } from '@skiff/db';
+import { DEFAULT_FEATURES, WORKERD_PINNED_VERSION, type FeatureFlags } from '@yoal/contracts';
+import { createDb, deployments, projects, workloads } from '@yoal/db';
 import { createCore } from './index.ts';
 import { buildPrincipal } from './orgs.ts';
 import { LocalObjectStore } from './object-store.ts';
@@ -12,7 +12,7 @@ import { sha256Hex } from './util.ts';
 import { effectiveRuntime, storedRuntime } from './runtime-tier.ts';
 import type { Core } from './index.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-runtime-tier-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-runtime-tier-'));
 const opened = createDb({ path: ':memory:' });
 let clock = Date.now();
 
@@ -73,7 +73,7 @@ const functionBundle = () => [
 	file('index.js', moduleSource),
 	file('public/index.html', '<h1>fn</h1>'),
 	file(
-		'skiff-function.json',
+		'yoal-function.json',
 		JSON.stringify({
 			version: 1,
 			main: 'index.js',
@@ -160,7 +160,7 @@ describe('the fourth runtime tier, end to end', () => {
 				productionAccess: 'public',
 				previewAccess: 'platform',
 			}),
-		).rejects.toThrow('Functions are not enabled on this platform (SKIFF_FEATURE_FUNCTIONS).');
+		).rejects.toThrow('Functions are not enabled on this platform (YOAL_FEATURE_FUNCTIONS).');
 		expect(opened.db.select().from(projects).where(eq(projects.slug, 'fn-off')).get()).toBeUndefined();
 	});
 
@@ -180,9 +180,9 @@ describe('the fourth runtime tier, end to end', () => {
 	test('a function project without a manifest cannot plan a deploy', async () => {
 		const fn = core.projects.requireRow(principal, 'fn-app');
 		expect(() => core.workloads.defaultSpec(fn)).toThrow(
-			'Project "fn-app" needs a skiff-function.json bundle before it can deploy.',
+			'Project "fn-app" needs a yoal-function.json bundle before it can deploy.',
 		);
-		expect(() => core.workloads.plan(principal, fn)).toThrow(/needs a skiff-function\.json bundle/);
+		expect(() => core.workloads.plan(principal, fn)).toThrow(/needs a yoal-function\.json bundle/);
 	});
 
 	test('a plan refuses a node whose heartbeat did not advertise functions', async () => {
@@ -230,7 +230,7 @@ describe('the fourth runtime tier, end to end', () => {
 		// Phase 4: a function's socket is named after its workload id, not the project id.
 		const workloadId = core.workloads.view(fn)!.id;
 		expect(desired.id).toBe(workloadId);
-		expect(desired.upstream).toBe(`unix//run/skiff-workloads/${workloadId}.sock`);
+		expect(desired.upstream).toBe(`unix//run/yoal-workloads/${workloadId}.sock`);
 	});
 
 	test('the local route carries the function assets and the edge route does not', async () => {
@@ -238,7 +238,7 @@ describe('the fourth runtime tier, end to end', () => {
 		const local = await core.nodes.desiredState(edge.token);
 		const route = local.routes.find((item) => item.projectId === fn.id)!;
 		expect(route.function).toEqual({ assetsDirectory: 'public', runWorkerFirst: ['/api/*'] });
-		expect(route.upstream).toBe(`unix//run/skiff-workloads/${core.workloads.view(fn)!.id}.sock`);
+		expect(route.upstream).toBe(`unix//run/yoal-workloads/${core.workloads.view(fn)!.id}.sock`);
 
 		// A worker-placed function is proxied by the edge, which has no release to serve assets from.
 		await project('fn-remote', 'function', worker.nodeId);
@@ -280,12 +280,12 @@ describe('the fourth runtime tier, end to end', () => {
 		const desired = core.workloads.desiredForNode(edge.nodeId).find((item) => item.projectId === processProject.id)!;
 		expect(desired.runtime).toBe('process');
 		expect(desired.function).toBeUndefined();
-		expect(desired.upstream).toBe(`unix//run/skiff-workloads/${processProject.id}.sock`);
+		expect(desired.upstream).toBe(`unix//run/yoal-workloads/${processProject.id}.sock`);
 		const route = (await core.nodes.desiredState(edge.token)).routes.find(
 			(item) => item.projectId === processProject.id,
 		)!;
 		expect(route.function).toBeUndefined();
-		expect(route.upstream).toBe(`unix//run/skiff-workloads/${processProject.id}.sock`);
+		expect(route.upstream).toBe(`unix//run/yoal-workloads/${processProject.id}.sock`);
 	});
 
 	test('a process or container app on a worker is proxied by the edge to the worker Caddy', async () => {
@@ -315,7 +315,7 @@ describe('the fourth runtime tier, end to end', () => {
 		const workerProcess = (await core.nodes.desiredState(worker.token)).routes.find(
 			(item) => item.projectId === processRow.id,
 		)!;
-		expect(workerProcess.upstream).toBe(`unix//run/skiff-workloads/${processRow.id}.sock`);
+		expect(workerProcess.upstream).toBe(`unix//run/yoal-workloads/${processRow.id}.sock`);
 
 		const containerProject = await project('container-remote', 'container', worker.nodeId);
 		const containerRow = core.projects.requireRow(principal, 'container-remote');
@@ -367,9 +367,9 @@ describe('the fourth runtime tier, end to end', () => {
 		expect(copies.map((item) => item.id)).toEqual([workloadId, `${workloadId}-r1`, `${workloadId}-r2`]);
 		expect(copies.map((item) => item.replica?.index)).toEqual([0, 1, 2]);
 		expect(copies.map((item) => item.upstream)).toEqual([
-			`unix//run/skiff-workloads/${workloadId}.sock`,
-			`unix//run/skiff-workloads/${workloadId}-r1.sock`,
-			`unix//run/skiff-workloads/${workloadId}-r2.sock`,
+			`unix//run/yoal-workloads/${workloadId}.sock`,
+			`unix//run/yoal-workloads/${workloadId}-r1.sock`,
+			`unix//run/yoal-workloads/${workloadId}-r2.sock`,
 		]);
 		// Every copy renders the same function; only its socket and replica index differ.
 		expect(copies.every((item) => item.function?.main === 'index.js')).toBe(true);
@@ -391,7 +391,7 @@ describe('the fourth runtime tier, end to end', () => {
 		const route = state.routes.find((item) => item.projectId === fn.id)!;
 		expect(route.function?.upstreams).toEqual(copies.map((item) => item.upstream));
 		// `upstream` stays the primary target (replica 0) for an older agent and for the edge.
-		expect(route.upstream).toBe(`unix//run/skiff-workloads/${workloadId}.sock`);
+		expect(route.upstream).toBe(`unix//run/yoal-workloads/${workloadId}.sock`);
 	});
 
 	test('a stateful function cannot scale: the spec is refused with the phase-4 message', () => {

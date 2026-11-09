@@ -3,8 +3,8 @@ import {
 	STUDIO_SESSION_HEADER,
 	STUDIO_TOKEN_HEADER,
 	type DatabaseStudioActivation,
-} from '@skiff/contracts';
-import { decodeEvents, StudioError, type StudioEvent } from '@skiff/studio/protocol';
+} from '@yoal/contracts';
+import { decodeEvents, StudioError, type StudioEvent } from '@yoal/studio/protocol';
 import { controlPlaneActivationFetcher, StudioFront, type StudioFrontOptions } from './front.ts';
 import { runStudioProcess, type StudioProcess } from './process.ts';
 import { tempSocket, testActivation, trackedFake } from './test-support.ts';

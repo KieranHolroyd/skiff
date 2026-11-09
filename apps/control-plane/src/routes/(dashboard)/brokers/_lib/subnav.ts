@@ -5,7 +5,7 @@ import ListOrderedIcon from '@lucide/svelte/icons/list-ordered';
 import LayoutDashboardIcon from '@lucide/svelte/icons/layout-dashboard';
 import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
 import Settings2Icon from '@lucide/svelte/icons/settings-2';
-import type { BrokerView } from '@skiff/contracts';
+import type { BrokerView } from '@yoal/contracts';
 import type { Subnav, RouteUrl } from '#lib/nav/subnav.js';
 import { readTab, tabHref } from '../../_lib/service/sections.js';
 import { BROKER_DEFAULT_TAB, BROKER_TABS } from './broker-tabs.js';

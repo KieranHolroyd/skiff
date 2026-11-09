@@ -56,7 +56,7 @@ describe('TwilioSmsTransport', () => {
 
 	test('verify reads the account without sending anything', async () => {
 		const { fetch, calls } = stubFetch(() => json({ friendly_name: 'Ops', status: 'active' }));
-		const transport = new TwilioSmsTransport({ accountSid: SID, authToken: TOKEN, from: 'Skiff', fetch });
+		const transport = new TwilioSmsTransport({ accountSid: SID, authToken: TOKEN, from: 'Yoal', fetch });
 		expect(await transport.verify()).toEqual({ friendlyName: 'Ops', status: 'active' });
 		expect(calls[0]!.url).toBe(`https://api.twilio.com/2010-04-01/Accounts/${SID}.json`);
 		expect(calls[0]!.init.method).toBeUndefined();
@@ -64,7 +64,7 @@ describe('TwilioSmsTransport', () => {
 
 	test('verify rejects a suspended account', async () => {
 		const { fetch } = stubFetch(() => json({ status: 'suspended' }));
-		const transport = new TwilioSmsTransport({ accountSid: SID, authToken: TOKEN, from: 'Skiff', fetch });
+		const transport = new TwilioSmsTransport({ accountSid: SID, authToken: TOKEN, from: 'Yoal', fetch });
 		await expect(transport.verify()).rejects.toThrow('the Twilio account is suspended');
 	});
 });
@@ -72,7 +72,7 @@ describe('TwilioSmsTransport', () => {
 describe('smsBody', () => {
 	test('keeps messages GSM-7 by folding typographic punctuation', () => {
 		const body = smsBody({ severity: 'warning', title: 'Disk 85% full', detail: 'Node “edge-1” — it’s at 86%…' });
-		expect(body).toBe('Skiff warning: Disk 85% full\nNode "edge-1" - it\'s at 86%...');
+		expect(body).toBe('Yoal warning: Disk 85% full\nNode "edge-1" - it\'s at 86%...');
 	});
 
 	test('caps the length at two segments', () => {
@@ -118,7 +118,7 @@ describe('WebhookNotifier', () => {
 		await new WebhookNotifier('https://hooks.test/in', { fetch }).notify(alert);
 		const body = JSON.parse(String(calls[0]!.init.body));
 		expect(body).toEqual({
-			title: 'Skiff: Site down',
+			title: 'Yoal: Site down',
 			message: 'shop.example.com: 62.5% 5xx',
 			severity: 'critical',
 			key: 'alert_rule:r1',
@@ -127,7 +127,7 @@ describe('WebhookNotifier', () => {
 			labels: { host: 'shop.example.com' },
 		});
 		// Unsigned without a secret.
-		expect((calls[0]!.init.headers as Record<string, string>)['x-skiff-signature']).toBeUndefined();
+		expect((calls[0]!.init.headers as Record<string, string>)['x-yoal-signature']).toBeUndefined();
 	});
 
 	test('defaults: firing, no url, no labels', async () => {
@@ -144,7 +144,7 @@ describe('WebhookNotifier', () => {
 		const now = 1_790_000_000_000;
 		await new WebhookNotifier('https://hooks.test/in', { fetch, secret: 'whsec_test_0123456789', now: () => now }).notify({ ...alert, status: 'resolved', severity: 'info' });
 		const body = String(calls[0]!.init.body);
-		const header = (calls[0]!.init.headers as Record<string, string>)['x-skiff-signature'];
+		const header = (calls[0]!.init.headers as Record<string, string>)['x-yoal-signature'];
 		expect(header).toBe(signWebhookBody('whsec_test_0123456789', body, now / 1000));
 		expect(verifyWebhookSignature('whsec_test_0123456789', body, header, { nowMs: now })).toBe(true);
 		expect(verifyWebhookSignature('wrong-secret-0123456789', body, header, { nowMs: now })).toBe(false);
@@ -156,7 +156,7 @@ describe('WebhookNotifier', () => {
 	test('webhookNotifierFor passes the secret to the generic notifier only', async () => {
 		const { fetch, calls } = stubFetch(() => new Response('ok'));
 		await webhookNotifierFor('https://hooks.test/in', { secret: 'whsec_test_0123456789', fetch }).notify(alert);
-		expect((calls[0]!.init.headers as Record<string, string>)['x-skiff-signature']).toMatch(/^t=\d+,v1=[0-9a-f]{64}$/);
+		expect((calls[0]!.init.headers as Record<string, string>)['x-yoal-signature']).toMatch(/^t=\d+,v1=[0-9a-f]{64}$/);
 	});
 
 	test('a non-2xx answer is an error', async () => {

@@ -1,5 +1,5 @@
 import { getContext, setContext } from 'svelte';
-import type { TreeNode, TreeNodeKind } from '@skiff/studio/protocol';
+import type { TreeNode, TreeNodeKind } from '@yoal/studio/protocol';
 
 /** A structure edit the shell reacts to: the tree refreshes and tabs follow the object. */
 export type StructureEvent =

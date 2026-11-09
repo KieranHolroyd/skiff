@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { CellKind, Column } from '@skiff/studio/protocol';
+import type { CellKind, Column } from '@yoal/studio/protocol';
 import { buildFilter, filterOpsFor, nextSort, selectStatement } from './browse.ts';
 
 const col = (name: string, kind: CellKind): Column => ({ name, nativeType: kind, kind });

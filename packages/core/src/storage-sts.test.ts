@@ -2,19 +2,19 @@ import { afterAll, afterEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
+import { createDb } from '@yoal/db';
 import {
 	DEFAULT_FEATURES,
 	nodeCapabilities,
 	storageGatewayHost,
 	storagePolicyName,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import type { Core } from './index.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-storage-sts-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-storage-sts-'));
 const opened = createDb({ path: ':memory:' });
 let clock = Date.parse('2026-11-09T10:00:00Z');
 
@@ -140,14 +140,14 @@ describe('storage STS for workloads', () => {
 			RUSTFS_IDENTITY_OPENID_ENABLE: 'on',
 			RUSTFS_IDENTITY_OPENID_CONFIG_URL: 'https://control.test/.well-known/openid-configuration',
 			RUSTFS_IDENTITY_OPENID_ISSUER: 'https://control.test',
-			RUSTFS_IDENTITY_OPENID_CLIENT_ID: 'skiff',
+			RUSTFS_IDENTITY_OPENID_CLIENT_ID: 'yoal',
 		});
 
 		expect(storage.capabilities.sts).toBe(true);
 		expect(storage.sts).toMatchObject({
 			enabled: true,
 			issuer: 'https://control.test',
-			audience: 'skiff',
+			audience: 'yoal',
 			claim: 'groups',
 			rolePolicy: null,
 		});
@@ -186,7 +186,7 @@ describe('storage STS for workloads', () => {
 			iss: string;
 			groups: string[];
 		};
-		expect(claims.aud).toBe('skiff');
+		expect(claims.aud).toBe('yoal');
 		expect(claims.iss).toBe('https://control.test');
 		expect(claims.groups).toEqual([storagePolicyName(attachmentKeyId)]);
 

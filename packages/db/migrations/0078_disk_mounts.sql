@@ -1,7 +1,7 @@
 -- Partition mounts (docs/VOLUMES.md §3.1). Additive only.
 -- Settings → Storage lists every partition a node reports; "Add as volume" on an unmounted
 -- ext4/xfs/btrfs/f2fs filesystem asks the node's helper to mount it by filesystem UUID at
--- /mnt/skiff-disks/<name>. Once the node's inventory shows it there it is adopted as a node volume
+-- /mnt/yoal-disks/<name>. Once the node's inventory shows it there it is adopted as a node volume
 -- (`volume_id`) and, when `pool_id` is set, put in that pool. Nothing is ever formatted.
 
 CREATE TABLE IF NOT EXISTS disk_mounts (

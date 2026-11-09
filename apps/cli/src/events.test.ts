@@ -20,7 +20,7 @@ function rule(overrides: Partial<EventRuleView> = {}): EventRuleView {
 	};
 }
 
-describe('skif events formatting', () => {
+describe('yoal events formatting', () => {
 	test('each source says what it watches', () => {
 		expect(watching(rule())).toBe('media/uploads incoming/*.jpg');
 		expect(watching(rule({ filter: { storage: 'media', bucket: 'uploads' } }))).toBe('media/uploads');

@@ -73,7 +73,7 @@
 </script>
 
 <svelte:head>
-	<title>Domains · Settings · Skiff</title>
+	<title>Domains · Settings · Yoal</title>
 </svelte:head>
 
 <SettingsHeader id="domains" />
@@ -91,7 +91,7 @@
 	{#if result?.newOrigin}
 		<Alert.Root variant="info">
 			<InfoIcon />
-			<Alert.Title>Skiff is moving to {result.newOrigin}</Alert.Title>
+			<Alert.Title>Yoal is moving to {result.newOrigin}</Alert.Title>
 			<Alert.Description>
 				{#if result.hostChanges}
 					This page stops responding once the move finishes (about a minute, longer while an HTTPS
@@ -153,7 +153,7 @@
 			<Card.Title>Change domains</Card.Title>
 			<Card.Description>
 				Create the DNS records first{data.serverAddress ? `, pointing at ${data.serverAddress}` : ''}.
-				Check them here, then apply. Skiff restarts on the new address and puts the old one back if
+				Check them here, then apply. Yoal restarts on the new address and puts the old one back if
 				the new one doesn’t answer.
 			</Card.Description>
 		</Card.Header>
@@ -312,7 +312,7 @@
 								<li>Everyone signs in again there, with their password (or a sign-in link).</li>
 								<li>Passkeys stop working: they belong to the old address. Add new ones afterwards.</li>
 								<li>
-									The CLI and MCP clients need <span class="font-mono">skif login --url {nextOrigin}</span> or
+									The CLI and MCP clients need <span class="font-mono">yoal login --url {nextOrigin}</span> or
 									re-authorising. API keys keep working at the new address.
 								</li>
 								<li>Worker nodes keep their old control URL; update their agent.env (docs/OPS.md §3.7).</li>

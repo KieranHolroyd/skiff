@@ -1,6 +1,6 @@
 import { createServer, connect, type Server, type Socket } from 'node:net';
 import { createServer as createTlsServer, connect as connectTls, type TLSSocket } from 'node:tls';
-import type { ServiceEndpoint, ServiceProvider } from '@skiff/contracts';
+import type { ServiceEndpoint, ServiceProvider } from '@yoal/contracts';
 
 /**
  * Cross-node service forwarding (docs/CLUSTERING.md §4.3, phase C2, Bun fallback).

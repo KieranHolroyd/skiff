@@ -1,4 +1,4 @@
-import { ValidationError, parseAuditTime, type AuditEntry } from '@skiff/core';
+import { ValidationError, parseAuditTime, type AuditEntry } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import type { PageServerLoad } from './$types';
 

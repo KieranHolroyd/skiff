@@ -1,34 +1,34 @@
 ---
 title: CLI reference
-description: Install the skif CLI, sign in, manage profiles, and use every command group with its flags, environment variables and exit codes.
+description: Install the yoal CLI, sign in, manage profiles, and use every command group with its flags, environment variables and exit codes.
 ---
 
-The `skif` command is the terminal client for a Skiff control plane. This page covers installation, signing in, profiles and settings, global options, and then every command group with its subcommands and flags. Each group links to the feature page that explains the concepts behind it.
+The `yoal` command is the terminal client for a Yoal control plane. This page covers installation, signing in, profiles and settings, global options, and then every command group with its subcommands and flags. Each group links to the feature page that explains the concepts behind it.
 
 ## Install
 
 ```sh
-npm install -g @skiffy/skiff
+npm install -g @yoal/cli
 ```
 
-Bun works too: `bun add -g @skiffy/skiff`. To run it without installing, use `npx --package @skiffy/skiff skif --help`. The CLI needs Node.js 20 or later.
+Bun works too: `bun add -g @yoal/cli`. To run it without installing, use `npx --package @yoal/cli yoal --help`. The CLI needs Node.js 20 or later.
 
-The package installs two identical commands, `skif` and `skiff`. This page uses `skif`.
+The package installs the `yoal` command. This page uses `yoal`.
 
 ```sh
-skif --version
-skif --help
+yoal --version
+yoal --help
 ```
 
 ## Sign in
 
 ### Browser login
 
-`skif login` opens your dashboard so you can approve the CLI. Once you approve, the CLI stores a new API key in the selected profile and waits up to five minutes for approval.
+`yoal login` opens your dashboard so you can approve the CLI. Once you approve, the CLI stores a new API key in the selected profile and waits up to five minutes for approval.
 
 ```sh
-skif login --url https://control.example.com
-skif login --url https://control.example.com --no-browser   # print the URL instead of opening it
+yoal login --url https://control.example.com
+yoal login --url https://control.example.com --no-browser   # print the URL instead of opening it
 ```
 
 Use `--no-browser` on a machine without a browser, such as over SSH. Accounts, two-factor sign-in and key management are covered in [sign-in and 2FA](/accounts/sign-in-and-2fa) and [API keys and tokens](/accounts/api-keys-and-tokens).
@@ -38,48 +38,48 @@ Use `--no-browser` on a machine without a browser, such as over SSH. Accounts, t
 Create a key in the dashboard, then store it directly with `--token`. The CLI checks the key with the server before saving it.
 
 ```sh
-skif login --url https://control.example.com --token skif_...
+yoal login --url https://control.example.com --token yoal_...
 ```
 
 ### In CI and scripts
 
-Set `SKIFF_URL` and `SKIFF_TOKEN` in the environment. No login and no config file are needed.
+Set `YOAL_URL` and `YOAL_TOKEN` in the environment. No login and no config file are needed.
 
 ```sh
-export SKIFF_URL=https://control.example.com
-export SKIFF_TOKEN=skif_...
-skif deploy ./dist --project my-site --json
+export YOAL_URL=https://control.example.com
+export YOAL_TOKEN=yoal_...
+yoal deploy ./dist --project my-site --json
 ```
 
-When `SKIFF_TOKEN` is set, `skif login` stores that key rather than opening the browser. Add `--web` or `--no-browser` to force browser sign-in instead.
+When `YOAL_TOKEN` is set, `yoal login` stores that key rather than opening the browser. Add `--web` or `--no-browser` to force browser sign-in instead.
 
 ### Signing out
 
-`skif logout` removes the API key from the selected profile and keeps its URL and content domain, so the next `skif login` remembers them. `skif logout --all` deletes the whole config file.
+`yoal logout` removes the API key from the selected profile and keeps its URL and content domain, so the next `yoal login` remembers them. `yoal logout --all` deletes the whole config file.
 
 ## Profiles and settings
 
-The CLI stores settings and credentials in `~/.config/skiff/config.json`, with file mode `0600`. Set `SKIFF_CONFIG_DIR` to use a different directory, or `XDG_CONFIG_HOME` to change the base directory (the file is then `$XDG_CONFIG_HOME/skiff/config.json`).
+The CLI stores settings and credentials in `~/.config/yoal/config.json`, with file mode `0600`. Set `YOAL_CONFIG_DIR` to use a different directory, or `XDG_CONFIG_HOME` to change the base directory (the file is then `$XDG_CONFIG_HOME/yoal/config.json`).
 
-Each profile holds one deployment: its control-plane URL, API key and content domain. Use a profile per Skiff installation, for example production and a local development server:
+Each profile holds one deployment: its control-plane URL, API key and content domain. Use a profile per Yoal installation, for example production and a local development server:
 
 ```sh
-skif login --profile prod --url https://control.example.com
-skif login --profile dev  --url http://localhost:5173
+yoal login --profile prod --url https://control.example.com
+yoal login --profile dev  --url http://localhost:5173
 
-skif profile use dev            # make dev the default
-skif --profile prod status      # one command against prod
-SKIFF_PROFILE=prod skif deploy ./dist
+yoal profile use dev            # make dev the default
+yoal --profile prod status      # one command against prod
+YOAL_PROFILE=prod yoal deploy ./dist
 ```
 
 A command picks its profile in this order:
 
 1. `--profile <name>` on the command line.
-2. `SKIFF_PROFILE`.
-3. The active profile set by `skif profile use`.
+2. `YOAL_PROFILE`.
+3. The active profile set by `yoal profile use`.
 4. The only profile, if you have exactly one.
 
-If you have several profiles and none is active, the command stops and asks you to choose. When `SKIFF_URL` and `SKIFF_TOKEN` are both set, the CLI uses them and does not need a profile.
+If you have several profiles and none is active, the command stops and asks you to choose. When `YOAL_URL` and `YOAL_TOKEN` are both set, the CLI uses them and does not need a profile.
 
 Profiles written by older CLI versions are read as a profile named `default` and upgraded the next time they are written.
 
@@ -87,18 +87,18 @@ Profiles written by older CLI versions are read as a profile named `default` and
 
 | Setting | Environment variable | What it is |
 | --- | --- | --- |
-| `url` | `SKIFF_URL` | Control-plane URL, for example `https://control.example.com` |
-| `contentDomain` | `SKIFF_CONTENT_DOMAIN` | Domain that deployed sites are served from, used to build preview URLs |
-| `token` | `SKIFF_TOKEN` | API key |
+| `url` | `YOAL_URL` | Control-plane URL, for example `https://control.example.com` |
+| `contentDomain` | `YOAL_CONTENT_DOMAIN` | Domain that deployed sites are served from, used to build preview URLs |
+| `token` | `YOAL_TOKEN` | API key |
 
-`skif config` accepts a few aliases, such as `platform` and `control` for `url`, `content-domain` for `contentDomain`, and `api-key` for `token`. A URL without a scheme gets `https://`, or `http://` for `localhost`.
+`yoal config` accepts a few aliases, such as `platform` and `control` for `url`, `content-domain` for `contentDomain`, and `api-key` for `token`. A URL without a scheme gets `https://`, or `http://` for `localhost`.
 
 ```sh
-skif config list                                  # effective values and where each one comes from
-skif config set url https://control.example.com
-skif config get url                              # prints the value only, so it works in scripts
-skif config unset token                          # same as skif logout
-skif config path
+yoal config list                                  # effective values and where each one comes from
+yoal config set url https://control.example.com
+yoal config get url                              # prints the value only, so it works in scripts
+yoal config unset token                          # same as yoal logout
+yoal config path
 ```
 
 Environment variables override the stored settings for that process only.
@@ -108,7 +108,7 @@ Environment variables override the stored settings for that process only.
 | Option | Meaning |
 | --- | --- |
 | `--profile <name>` | Use a saved profile. Accepted before or after the command. |
-| `-h`, `--help` | Show help for the CLI or for one command. `skif help <command>` also works. |
+| `-h`, `--help` | Show help for the CLI or for one command. `yoal help <command>` also works. |
 | `-v`, `--version` | Print the CLI version. |
 | `--json` | Print the server response as JSON. Most commands accept it. Bulk, prune and `watch` runs print NDJSON events, one per line. |
 
@@ -126,19 +126,19 @@ Errors go to stderr, with suggestions on the lines after the message. With `--js
 }
 ```
 
-Failed API calls also include `status` and `requestId`, which are useful when you report a problem. Set `SKIFF_DEBUG=1` to print the full error object, including the stack trace.
+Failed API calls also include `status` and `requestId`, which are useful when you report a problem. Set `YOAL_DEBUG=1` to print the full error object, including the stack trace.
 
 ## Environment variables
 
 | Variable | Effect |
 | --- | --- |
-| `SKIFF_URL` | Control-plane URL. Overrides the profile's URL. |
-| `SKIFF_TOKEN` | API key. Overrides the profile's key. Also makes `skif login` store this key without opening the browser. |
-| `SKIFF_CONTENT_DOMAIN` | Content domain. Overrides the profile's value. |
-| `SKIFF_PROFILE` | Profile to use when `--profile` is not given. |
-| `SKIFF_CONFIG_DIR` | Directory that holds `config.json`. Takes precedence over `XDG_CONFIG_HOME`. |
-| `XDG_CONFIG_HOME` | Base directory. The config file is `$XDG_CONFIG_HOME/skiff/config.json`. |
-| `SKIFF_DEBUG` | Set to `1` to print full error details. |
+| `YOAL_URL` | Control-plane URL. Overrides the profile's URL. |
+| `YOAL_TOKEN` | API key. Overrides the profile's key. Also makes `yoal login` store this key without opening the browser. |
+| `YOAL_CONTENT_DOMAIN` | Content domain. Overrides the profile's value. |
+| `YOAL_PROFILE` | Profile to use when `--profile` is not given. |
+| `YOAL_CONFIG_DIR` | Directory that holds `config.json`. Takes precedence over `XDG_CONFIG_HOME`. |
+| `XDG_CONFIG_HOME` | Base directory. The config file is `$XDG_CONFIG_HOME/yoal/config.json`. |
+| `YOAL_DEBUG` | Set to `1` to print full error details. |
 
 ## Exit codes
 
@@ -149,7 +149,7 @@ Failed API calls also include `status` and `requestId`, which are useful when yo
 | `3` | A bulk, prune, `blueprint apply` or `operations watch` run finished partially: some items succeeded and some failed. |
 | `130` | You pressed Ctrl-C while following an operation. The CLI detached, and the operation keeps running on the server. |
 
-`skif function` exits `1` when the function answers with an error. `skif run`, `skif jobs run` and `skif jobs logs -f` exit with the command's own status, `124` when it timed out and `130` when it was cancelled. `skif wrangler` returns the exit code of the Wrangler process it ran.
+`yoal function` exits `1` when the function answers with an error. `yoal run`, `yoal jobs run` and `yoal jobs logs -f` exit with the command's own status, `124` when it timed out and `130` when it was cancelled. `yoal wrangler` returns the exit code of the Wrangler process it ran.
 
 ## Command reference
 
@@ -158,15 +158,15 @@ Arguments in angle brackets are required. Arguments in square brackets are optio
 ### login
 
 ```sh
-skif login [--url <platform>] [--profile <name>] [--token <key>] [--no-browser]
+yoal login [--url <platform>] [--profile <name>] [--token <key>] [--no-browser]
 ```
 
 | Flag | Description |
 | --- | --- |
-| `-u`, `--url <platform>` | Control-plane URL. Defaults to the profile's saved URL, then `SKIFF_URL`, then a prompt. |
+| `-u`, `--url <platform>` | Control-plane URL. Defaults to the profile's saved URL, then `YOAL_URL`, then a prompt. |
 | `--profile <name>` | Profile to save into. Created if it does not exist. |
 | `-t`, `--token <key>` | Store this API key instead of signing in with the browser. |
-| `--web` | Force browser sign-in, even when `SKIFF_TOKEN` is set. |
+| `--web` | Force browser sign-in, even when `YOAL_TOKEN` is set. |
 | `--no-browser` | Print the approval URL instead of opening a browser. |
 | `--json` | Print the signed-in user, organisation and permissions as JSON. |
 
@@ -175,7 +175,7 @@ skif login [--url <platform>] [--profile <name>] [--token <key>] [--no-browser]
 ### logout
 
 ```sh
-skif logout [--profile <name>] [--all]
+yoal logout [--profile <name>] [--all]
 ```
 
 | Flag | Description |
@@ -186,7 +186,7 @@ skif logout [--profile <name>] [--all]
 ### config
 
 ```sh
-skif config <list|get|set|unset|path> [options]
+yoal config <list|get|set|unset|path> [options]
 ```
 
 | Subcommand | Arguments | Description |
@@ -194,7 +194,7 @@ skif config <list|get|set|unset|path> [options]
 | `list` | none | Show each setting, its value (the token is masked) and its source. The default. |
 | `get` | `<key>` | Print one value. Prints nothing when the value is unset. |
 | `set` | `<key> <value>` | Save a value. Setting `token` stores the key without checking it. |
-| `unset` | `<key>` | Remove a value. `unset token` is the same as `skif logout`. |
+| `unset` | `<key>` | Remove a value. `unset token` is the same as `yoal logout`. |
 | `path` | none | Print the config file path. |
 
 Keys are `url`, `contentDomain` and `token`. `--json` works with every subcommand.
@@ -202,7 +202,7 @@ Keys are `url`, `contentDomain` and `token`. `--json` works with every subcomman
 ### profile
 
 ```sh
-skif profile <list|add|use|remove|show|current> [options]
+yoal profile <list|add|use|remove|show|current> [options]
 ```
 
 | Subcommand | Arguments and flags | Description |
@@ -215,15 +215,15 @@ skif profile <list|add|use|remove|show|current> [options]
 | `current` | none | Print the profile that commands use. |
 
 ```sh
-skif profile add staging --url https://staging.example.com --content-domain sites.staging.example.com --use
+yoal profile add staging --url https://staging.example.com --content-domain sites.staging.example.com --use
 ```
 
-A profile added without `--token` has no key yet. Run `skif login --profile <name>` to sign it in.
+A profile added without `--token` has no key yet. Run `yoal login --profile <name>` to sign it in.
 
 ### deploy
 
 ```sh
-skif deploy [dir] [options]
+yoal deploy [dir] [options]
 ```
 
 Zips a directory, uploads it and creates a deployment. `dir` defaults to the current directory.
@@ -234,17 +234,17 @@ Zips a directory, uploads it and creates a deployment. `dir` defaults to the cur
 | `-n`, `--name <name>` | Name given to a project this deploy creates. Also used to derive the slug when `--project` is not set. |
 | `--no-promote` | Create a preview only. Production does not move. |
 | `-m`, `--message <text>` | Message stored with the deployment. |
-| `--spa` | Set `"spa": true` in the deployed `skiff.json`. Static sites only. |
+| `--spa` | Set `"spa": true` in the deployed `yoal.json`. Static sites only. |
 | `--no-create` | Fail if the project does not exist, rather than creating it. |
 | `--wrangler <path>` | Use this Wrangler config instead of looking for one. |
 | `--no-wrangler` | Deploy the directory as-is, even if a Wrangler config is present. |
 | `--json` | Print the server response as JSON. |
 
-If the directory has a `wrangler.jsonc` or `wrangler.json`, the deploy is treated as a Functions project. The Worker named by `main` is bundled with Skiff's own bundler, so Wrangler is not needed. Otherwise the directory is deployed as a static site. Each step prints a progress line to stderr, and the result shows the project, deployment, preview and production URLs.
+If the directory has a `wrangler.jsonc` or `wrangler.json`, the deploy is treated as a Functions project. The Worker named by `main` is bundled with Yoal's own bundler, so Wrangler is not needed. Otherwise the directory is deployed as a static site. Each step prints a progress line to stderr, and the result shows the project, deployment, preview and production URLs.
 
 ```sh
-skif deploy ./dist --project my-site -m "Spring menu"
-skif deploy . --project api --no-promote
+yoal deploy ./dist --project my-site -m "Spring menu"
+yoal deploy . --project api --no-promote
 ```
 
 See [static sites](/deploying/static-sites), [git builds](/deploying/git-builds) and [functions](/compute/functions).
@@ -252,7 +252,7 @@ See [static sites](/deploying/static-sites), [git builds](/deploying/git-builds)
 ### status
 
 ```sh
-skif status [project] [--json]
+yoal status [project] [--json]
 ```
 
 Without a project, shows platform health, project and deployment counts, node status, and storage use. With a project, also shows its URL, access modes, production deployment and recent deployments.
@@ -260,7 +260,7 @@ Without a project, shows platform health, project and deployment counts, node st
 ### usage
 
 ```sh
-skif usage [project] [--json]
+yoal usage [project] [--json]
 ```
 
 Shows current usage against each quota, with percentages. With a project, shows only that project's resources. Counts are current. Database and storage bytes are the latest samples. Egress is an estimate over the last 30 days.
@@ -268,7 +268,7 @@ Shows current usage against each quota, with percentages. With a project, shows 
 ### projects
 
 ```sh
-skif projects [list|delete|restore|purge|trash] [options]
+yoal projects [list|delete|restore|purge|trash] [options]
 ```
 
 | Subcommand | Arguments and flags | Description |
@@ -293,16 +293,16 @@ Selectors combine with AND, and named slugs are added to the result. A run cover
 Bulk actions show the server's plan first, then ask you to confirm. The plan lists each project as `ok`, `skip` or `blocked`. Purging more than 10 projects asks you to type the count. Off a terminal, the CLI does not prompt, so pass `-y, --yes` or the plan is cancelled. Bulk runs are operations; see [operations](#operations).
 
 ```sh
-skif projects delete blog old-demo
-skif projects delete --match 'test-*' --not-deployed --yes
-skif projects trash
-skif projects restore --match 'test-*'
+yoal projects delete blog old-demo
+yoal projects delete --match 'test-*' --not-deployed --yes
+yoal projects trash
+yoal projects restore --match 'test-*'
 ```
 
 ### deployments
 
 ```sh
-skif deployments <project> [--json]
+yoal deployments <project> [--json]
 ```
 
 Lists a project's deployments, newest first. The current production deployment is marked with `*`. Deployment IDs from this list are what `promote` takes.
@@ -310,7 +310,7 @@ Lists a project's deployments, newest first. The current production deployment i
 ### promote
 
 ```sh
-skif promote <project> <deploymentId> [--json]
+yoal promote <project> <deploymentId> [--json]
 ```
 
 Moves production to an existing deployment. Use it to point a preview you have tested at production.
@@ -318,7 +318,7 @@ Moves production to an existing deployment. Use it to point a preview you have t
 ### rollback
 
 ```sh
-skif rollback <project> [--json]
+yoal rollback <project> [--json]
 ```
 
 Moves production back to the previous deployment.
@@ -328,7 +328,7 @@ See [static sites](/deploying/static-sites) and [domains and environments](/depl
 ### logs
 
 ```sh
-skif logs <project> [-n, --lines <n>] [--json]
+yoal logs <project> [-n, --lines <n>] [--json]
 ```
 
 Shows recent runtime logs for a project. `--lines` takes an integer from 1 to 10,000 and defaults to 200. Each line is prefixed with its time and level when the server provides them.
@@ -336,29 +336,29 @@ Shows recent runtime logs for a project. `--lines` takes an integer from 1 to 10
 ### container
 
 ```sh
-skif container [inspect] <project> [-r, --replica <n>] [--json]
-skif container ls <project> [path] [--json]
-skif container cat <project> <path>
-skif container cp <project>:<path> [dest]
-skif container restart <project> [-y, --yes]
-skif shell <project> [--shell auto|/bin/bash|/bin/sh|/bin/ash] [--root] [-r, --replica <n>]
+yoal container [inspect] <project> [-r, --replica <n>] [--json]
+yoal container ls <project> [path] [--json]
+yoal container cat <project> <path>
+yoal container cp <project>:<path> [dest]
+yoal container restart <project> [-y, --yes]
+yoal shell <project> [--shell auto|/bin/bash|/bin/sh|/bin/ash] [--root] [-r, --replica <n>]
 ```
 
 The [container console](/compute/apps-and-containers#container-console) for container projects. `ctr` is an alias of `container`.
 
 - `inspect` (the default) prints the container's state, image, node, restarts and last exit, memory, CPU time, network and disk counters, command, environment variable names, ports, mounts and its processes.
 - `ls` lists a directory inside the running container. Symlinks resolve inside the container; secret files and `tmpfs` mounts such as `/tmp` are refused.
-- `cat` writes a file's bytes to stdout unchanged, so `skif container cat my-api /data/app.db > app.db` works for binary files too.
+- `cat` writes a file's bytes to stdout unchanged, so `yoal container cat my-api /data/app.db > app.db` works for binary files too.
 - `cp` downloads a file. `dest` defaults to the file's name in the current directory; a directory there gets the file inside it.
 - `restart` restarts every replica from the same image and configuration, after a prompt (`--yes` skips it).
-- `shell` (also `skif container shell`) opens an interactive terminal in the container. The terminal size follows yours; Ctrl-C goes to the remote shell. Leave with `exit` or Ctrl-D, and `skif` exits with the shell's exit code. A dropped connection resumes where it left off. `--root` runs as root inside the container; capabilities stay dropped and the root filesystem read-only.
+- `shell` (also `yoal container shell`) opens an interactive terminal in the container. The terminal size follows yours; Ctrl-C goes to the remote shell. Leave with `exit` or Ctrl-D, and `yoal` exits with the shell's exit code. A dropped connection resumes where it left off. `--root` runs as root inside the container; capabilities stay dropped and the root filesystem read-only.
 
 `--replica` picks one copy of a multi-replica workload; the default is the first. The key needs `container:inspect`, `container:files` (`ls`, `cat`, `cp`) or `container:exec` (`shell`); `restart` needs `project:update`. Shell opens and file reads are audited; keystrokes and file contents are not.
 
 ### open
 
 ```sh
-skif open <project> [--preview] [--json]
+yoal open <project> [--preview] [--json]
 ```
 
 Opens the production site in your browser. With `--preview`, opens the most recent preview. If no browser can be launched, the URL is printed instead.
@@ -366,7 +366,7 @@ Opens the production site in your browser. With `--preview`, opens the most rece
 ### prune
 
 ```sh
-skif prune [--apply] [--plan <op_id>] [--scope org|platform] [--only <categories>] [-y, --yes] [--json]
+yoal prune [--apply] [--plan <op_id>] [--scope org|platform] [--only <categories>] [-y, --yes] [--json]
 ```
 
 Finds and removes data that no live project references, such as leftover rows from deleted projects, orphaned domains, abandoned uploads and old deleted deployments. Without `--apply` it is a dry run: it scans, prints what it found by category, and prints the command that applies exactly that plan.
@@ -381,18 +381,18 @@ Finds and removes data that no live project references, such as leftover rows fr
 | `--json` | Print NDJSON progress events. |
 
 ```sh
-skif prune
-skif prune --apply --plan op_...
-skif prune --apply --only releases,deployments
+yoal prune
+yoal prune --apply --plan op_...
+yoal prune --apply --only releases,deployments
 ```
 
 ### blueprint
 
 ```sh
-skif blueprint <validate|plan|apply> [file] [--prune] [--plan <hash>] [--confirm <stack>] [--all] [-y, --yes] [--json]
+yoal blueprint <validate|plan|apply> [file] [--prune] [--plan <hash>] [--confirm <stack>] [--all] [-y, --yes] [--json]
 ```
 
-Plans and applies a blueprint: one file that declares a stack of projects, databases, storage, brokers and attachments. With no file, the first of `skiff.blueprint.yaml`, `skiff.blueprint.yml` and `skiff.blueprint.json` in the current directory is used; `-` reads stdin. The server needs the `BLUEPRINTS` feature flag. See [blueprints](/compute/apps-and-containers#blueprints).
+Plans and applies a blueprint: one file that declares a stack of projects, databases, storage, brokers and attachments. With no file, the first of `yoal.blueprint.yaml`, `yoal.blueprint.yml` and `yoal.blueprint.json` in the current directory is used; `-` reads stdin. The server needs the `BLUEPRINTS` feature flag. See [blueprints](/compute/apps-and-containers#blueprints).
 
 | Subcommand | Description |
 | --- | --- |
@@ -412,16 +412,16 @@ Plans and applies a blueprint: one file that declares a stack of projects, datab
 `apply` exits `0` when everything applied or nothing needed to change, `3` when a step failed and the run stopped partway, and `1` when it failed or you declined.
 
 ```sh
-skif blueprint validate
-skif blueprint plan stack.yaml
-skif blueprint apply --yes
-skif blueprint apply --prune
+yoal blueprint validate
+yoal blueprint plan stack.yaml
+yoal blueprint apply --yes
+yoal blueprint apply --prune
 ```
 
 ### operations
 
 ```sh
-skif operations [list|show|watch|cancel] [options]
+yoal operations [list|show|watch|cancel] [options]
 ```
 
 Bulk actions, prune runs and blueprint applies are server-side operations. These commands inspect them.
@@ -436,15 +436,15 @@ Bulk actions, prune runs and blueprint applies are server-side operations. These
 `--status` takes `queued`, `planning`, `planned`, `applying`, `succeeded`, `partial`, `failed`, `cancelled` or `expired`. `watch` exits `0` on success, `3` on partial, and `1` on failure or cancellation.
 
 ```sh
-skif operations
-skif operations show op_...
-skif operations watch op_...
+yoal operations
+yoal operations show op_...
+yoal operations watch op_...
 ```
 
 ### db
 
 ```sh
-skif db <command> [options]
+yoal db <command> [options]
 ```
 
 Manages databases: PostgreSQL by default, and also MySQL, MariaDB, MongoDB, Valkey, Redis and ClickHouse. Databases run on one node. Attached projects receive connection variables named with a prefix, such as `DATABASE_URL`. See [databases](/data/databases) and [backups and point-in-time recovery](/data/backups-and-pitr).
@@ -486,10 +486,10 @@ Manages databases: PostgreSQL by default, and also MySQL, MariaDB, MongoDB, Valk
 Every command also takes `--json`. Reading credentials needs the `database:credentials` permission and is audited.
 
 ```sh
-skif db create main --project api
-skif db create cache --engine valkey --project api
-skif db info main
-psql "$(skif db credentials main)"
+yoal db create main --project api
+yoal db create cache --engine valkey --project api
+yoal db info main
+psql "$(yoal db credentials main)"
 ```
 
 The connection URL points at `127.0.0.1` on the database's node. Run the client on that node, or tunnel to it first with `ssh -L <port>:127.0.0.1:<port> <node>`.
@@ -497,7 +497,7 @@ The connection URL points at `127.0.0.1` on the database's node. Run the client 
 ### storage
 
 ```sh
-skif storage <command> [options]
+yoal storage <command> [options]
 ```
 
 Manages S3-compatible object storage instances. Each instance runs on one node and holds buckets. Attached projects receive a scoped key. See [object storage](/data/object-storage).
@@ -554,13 +554,13 @@ Manages S3-compatible object storage instances. Each instance runs on one node a
 | `share <storage>` | `-k, --key <key>`, `--expires` (default `1h`, maximum `7d`), `--downloads <n>`. Creates a signed link. |
 
 ```sh
-skif storage create media --bucket uploads --project api --prefix AWS
-skif storage buckets create media avatars --access public-read
-skif storage attach media --project worker --bucket uploads:read
-skif storage objects put media -b uploads -k photos/a.jpg -f ./a.jpg
-set -a; eval "$(skif storage credentials media)"; set +a
-skif storage keys create media backup-tool --bucket uploads:read --expires 90d
-skif storage rotate-root media --yes
+yoal storage create media --bucket uploads --project api --prefix AWS
+yoal storage buckets create media avatars --access public-read
+yoal storage attach media --project worker --bucket uploads:read
+yoal storage objects put media -b uploads -k photos/a.jpg -f ./a.jpg
+set -a; eval "$(yoal storage credentials media)"; set +a
+yoal storage keys create media backup-tool --bucket uploads:read --expires 90d
+yoal storage rotate-root media --yes
 ```
 
 Attached apps must use path-style addressing. A private instance serves apps on its own node only, and its endpoint is `127.0.0.1` on that node.
@@ -568,7 +568,7 @@ Attached apps must use path-style addressing. A private instance serves apps on 
 ### volume
 
 ```sh
-skif volume <command> [options]
+yoal volume <command> [options]
 ```
 
 Manages persistent volumes mounted into a project's workload. See [volumes](/compute/volumes).
@@ -587,16 +587,16 @@ Manages persistent volumes mounted into a project's workload. See [volumes](/com
 | `snapshot-delete <name> <snapshot-id>` | `-p, --project` (required), `-y, --yes`. Deletes the snapshot and its archive. |
 
 ```sh
-skif volume create app-data --project api --size 2G
-skif volume attach app-data --project api --mount /var/lib/app
-skif volume snapshot app-data --project api --label "before v2 migration"
-skif volume restore app-data avs_… --project api --to app-data-restored
+yoal volume create app-data --project api --size 2G
+yoal volume attach app-data --project api --mount /var/lib/app
+yoal volume snapshot app-data --project api --label "before v2 migration"
+yoal volume restore app-data avs_… --project api --to app-data-restored
 ```
 
 ### broker
 
 ```sh
-skif broker <command> [options]
+yoal broker <command> [options]
 ```
 
 Manages NATS brokers with JetStream. Queue commands also work on function queues. See [brokers and events](/data/brokers-and-events). Also available as `queue`.
@@ -626,16 +626,16 @@ Manages NATS brokers with JetStream. Queue commands also work on function queues
 `peek`, `queue-purge`, `queue-rm` and `message-rm` accept `--stream <stream>` in place of `<queue>` for a stream your app created itself.
 
 ```sh
-skif broker create jobs --project api
-skif broker send jobs emails '{"to":"a@example.com"}' --count 5
-skif broker peek jobs emails-dlq
-skif broker redrive jobs emails-dlq --to emails
+yoal broker create jobs --project api
+yoal broker send jobs emails '{"to":"a@example.com"}' --count 5
+yoal broker peek jobs emails-dlq
+yoal broker redrive jobs emails-dlq --to emails
 ```
 
 ### events
 
 ```sh
-skif events <command> [options]
+yoal events <command> [options]
 ```
 
 Publishes platform events, such as uploads, alerts, deployments and backups, to a queue on a broker. The function that consumes the queue receives each event. Also available as `event`. See [brokers and events](/data/brokers-and-events).
@@ -660,21 +660,21 @@ Source-specific flags for `create`:
 | `database-backups` | `--database <name>` | `completed`, `failed` |
 
 ```sh
-skif events create storage --storage media --bucket uploads --suffix .jpg \
+yoal events create storage --storage media --bucket uploads --suffix .jpg \
   --event object-create --broker jobs --queue images
-skif events create deployments --project shop --broker jobs --queue deploys
-skif events test evr_...
+yoal events create deployments --project shop --broker jobs --queue deploys
+yoal events test evr_...
 ```
 
-Attach the broker to the function project before the function can consume the queue: `skif broker attach <broker> -p <function-project>`.
+Attach the broker to the function project before the function can consume the queue: `yoal broker attach <broker> -p <function-project>`.
 
 ### email
 
 ```sh
-skif email <command> [options]
+yoal email <command> [options]
 ```
 
-Sends email from your own domains through Skiff's built-in mail service. Also available as `mail`. See [email](/data/email).
+Sends email from your own domains through Yoal's built-in mail service. Also available as `mail`. See [email](/data/email).
 
 | Command | Arguments and flags |
 | --- | --- |
@@ -703,17 +703,17 @@ Sends email from your own domains through Skiff's built-in mail service. Also av
 New organisations start in the sandbox. They can only send to their own verified domains and to sandbox recipients whose owners confirmed a link, up to 200 messages a day. Use `request-access` to leave it.
 
 ```sh
-skif email domains add example.com
-skif email domains check example.com
-skif email send --from hi@example.com --to you@example.com --subject Hello --text "It works"
-skif email attach --project api
-skif email log --follow
+yoal email domains add example.com
+yoal email domains check example.com
+yoal email send --from hi@example.com --to you@example.com --subject Hello --text "It works"
+yoal email attach --project api
+yoal email log --follow
 ```
 
 ### backup-target
 
 ```sh
-skif backup-target <command> [options]
+yoal backup-target <command> [options]
 ```
 
 Configures where platform backups are written. Also available as `backupTargets`. See [platform backups](/self-hosting/platform-backups).
@@ -721,21 +721,21 @@ Configures where platform backups are written. Also available as `backupTargets`
 | Command | Arguments and flags |
 | --- | --- |
 | `list` | none. The default. |
-| `add <name>` | `--kind local` or `s3` (default `s3`). For `local`: `--path <dir>`. For `s3`: `--endpoint <url>` (omit for AWS), `--bucket`, `--region` (default `us-east-1`), `--prefix` (default `skiff/backups`), `--access-key`, `--secret-key`, `--write-only`, `--object-lock`. `--platform` creates the platform default and needs a platform admin. |
+| `add <name>` | `--kind local` or `s3` (default `s3`). For `local`: `--path <dir>`. For `s3`: `--endpoint <url>` (omit for AWS), `--bucket`, `--region` (default `us-east-1`), `--prefix` (default `yoal/backups`), `--access-key`, `--secret-key`, `--write-only`, `--object-lock`. `--platform` creates the platform default and needs a platform admin. |
 | `test <id>` | none. Probes the target and shows the result. |
 | `remove <id>` | `-y, --yes`, `--force`. Deletes the target. Refused while database backups are still stored on it. `--force` deletes it anyway and leaves those backups listed as unavailable. Objects are never deleted. Also `rm` and `delete`. |
 
 Secrets are sealed with the organisation key. `add` prints them once, and `list` and `test` never return them. A new target is used by the next backup once it is the target that applies. Existing backups stay where they were written: each one records its target, and restores and retention read from that target. See [backup targets](/data/backups-and-pitr#backup-targets).
 
 ```sh
-skif backup-target add local --kind local --path /var/lib/skiff/backups
-skif backup-target test bt_abc123
+yoal backup-target add local --kind local --path /var/lib/yoal/backups
+yoal backup-target test bt_abc123
 ```
 
 ### log-drain
 
 ```sh
-skif log-drain <command> [options]
+yoal log-drain <command> [options]
 ```
 
 Forwards the organisation's logs to a webhook or an OpenTelemetry (OTLP) receiver. Organisation owners and admins manage drains. Also available as `log-drains`. See [log drains](/observe/dashboards-and-logs#log-drains).
@@ -750,16 +750,16 @@ Forwards the organisation's logs to a webhook or an OpenTelemetry (OTLP) receive
 | `delete <id>` | `-y, --yes`. Forwarding stops at once. Also `rm`. |
 
 ```sh
-skif log-drain create archive --url https://logs.example.com/skiff -H "Authorization: Bearer …"
-skif log-drain create shop-errors -p shop --source runtime --min-level error --url https://hooks.example.com/in
-skif log-drain test ldr_…
-skif log-drain update ldr_… --disable
+yoal log-drain create archive --url https://logs.example.com/yoal -H "Authorization: Bearer …"
+yoal log-drain create shop-errors -p shop --source runtime --min-level error --url https://hooks.example.com/in
+yoal log-drain test ldr_…
+yoal log-drain update ldr_… --disable
 ```
 
 ### audit
 
 ```sh
-skif audit [options]
+yoal audit [options]
 ```
 
 Prints the organisation's audit log, newest first. See [the audit log](/observe/dashboards-and-logs#audit-log).
@@ -774,41 +774,41 @@ Prints the organisation's audit log, newest first. See [the audit log](/observe/
 | `--all` | Follow every page, up to 10,000 entries. |
 
 ```sh
-skif audit --from 2026-11-01 --to 2026-11-07
-skif audit --resource log_drain --all --json
+yoal audit --from 2026-11-01 --to 2026-11-07
+yoal audit --resource log_drain --all --json
 ```
 
 ### export
 
 ```sh
-skif export [options]
+yoal export [options]
 ```
 
 Writes your organisation's configuration to one file. The file covers every project's settings, environments, domains, workload spec, jobs, volumes and attachments. It also covers the managed databases, storage and brokers, IAM, service accounts, access keys, federation, access policies, user pools and their clients, log drains, backup targets, event and alert rules, email, pipelines, registry logins, forges, shares and templates.
 
-The file holds configuration only. It has no deployments, database rows, objects, logs or pool users. Secrets appear by name and never by value. Each section is read with your own permissions. A section you cannot read, or whose feature is off, is listed under `skipped` and does not fail the export. You can download the same file from **Settings → Config export** in the dashboard. To recreate the configuration on another instance, use [`skif import`](#import). The export is not a backup: to recover the whole platform with its data, see [platform backups](/self-hosting/platform-backups).
+The file holds configuration only. It has no deployments, database rows, objects, logs or pool users. Secrets appear by name and never by value. Each section is read with your own permissions. A section you cannot read, or whose feature is off, is listed under `skipped` and does not fail the export. You can download the same file from **Settings → Config export** in the dashboard. To recreate the configuration on another instance, use [`yoal import`](#import). The export is not a backup: to recover the whole platform with its data, see [platform backups](/self-hosting/platform-backups).
 
 | Flag | Meaning |
 | --- | --- |
-| `-o`, `--out <file>` | Where to write. The default is `skiff-config-<org>-<date>.yaml` in the current directory, and `-` writes to stdout. The file is created with mode 0600. |
+| `-o`, `--out <file>` | Where to write. The default is `yoal-config-<org>-<date>.yaml` in the current directory, and `-` writes to stdout. The file is created with mode 0600. |
 | `--format <yaml\|json>` | The output format. The default is YAML, or JSON when `--out` ends in `.json`. |
 | `-p`, `--project <slug>` | Only these projects, repeated or comma-separated. Org-level configuration is still exported. |
 | `--force` | Overwrite an existing file. |
 
 ```sh
-skif export
-skif export --out skiff-config.json
-skif export --project shop-web,shop-api --out -
+yoal export
+yoal export --out yoal-config.json
+yoal export --project shop-web,shop-api --out -
 ```
 
 
 ### import
 
 ```sh
-skif import <file> [options]
+yoal import <file> [options]
 ```
 
-Recreates the configuration in a `skif export` file on the platform you are signed in to, for example when you move to a new server. Without `--apply` it only shows the plan.
+Recreates the configuration in a `yoal export` file on the platform you are signed in to, for example when you move to a new server. Without `--apply` it only shows the plan.
 
 Import only creates. Each resource is matched by its name: the project slug, the database, role or group name, the hostname, and so on. A resource that already exists is left exactly as it is, and nothing is updated or deleted. Running the import again only creates what is still missing, so you can fix a problem and run it again.
 
@@ -827,13 +827,13 @@ The export holds no secret values and no data. Pass the values with `--secrets`,
 The command exits with code 3 when any step failed. The steps that depend on a failed step are skipped, and everything else is created.
 
 ```sh
-skif import skiff-config-acme-2026-11-09.yaml
-skif import skiff-config-acme-2026-11-09.yaml --secrets secrets.env --apply
+yoal import yoal-config-acme-2026-11-09.yaml
+yoal import yoal-config-acme-2026-11-09.yaml --secrets secrets.env --apply
 ```
 ### function
 
 ```sh
-skif function <command> [options]
+yoal function <command> [options]
 ```
 
 Sends a test request to a function, or runs its `scheduled()` handler now. Both go straight to the function's node, bypassing domains, the proxy and access rules. An idle function starts for the request, shown as a cold start. Also available as `functions` and `fn`. See [functions](/compute/functions).
@@ -846,56 +846,56 @@ Sends a test request to a function, or runs its `scheduled()` handler now. Both 
 The response body goes to stdout, and a summary (status, time and cold start) goes to stderr. With `--json`, the task is printed with its raw result.
 
 ```sh
-skif function invoke api /health
-skif fn invoke api /users -X POST -H 'content-type: application/json' -d '{"name":"Ada"}'
-skif fn cron api '*/5 * * * *'
+yoal function invoke api /health
+yoal fn invoke api /users -X POST -H 'content-type: application/json' -d '{"name":"Ada"}'
+yoal fn cron api '*/5 * * * *'
 ```
 
 ### jobs
 
 ```sh
-skif jobs <command> [options]
+yoal jobs <command> [options]
 ```
 
 Cron jobs and manual commands on a process or container app. Each run uses the app's current release, environment, secrets and volumes on the app's node. The command goes after `--` and is passed as an argument list, never through a shell. Also available as `job`. See [app jobs](/compute/scheduled-jobs#app-jobs).
 
 | Command | Arguments and flags |
 | --- | --- |
-| `list <project>` | none. `skif jobs <project>` does the same. |
+| `list <project>` | none. `yoal jobs <project>` does the same. |
 | `show <project> <job>` | none. |
 | `create <project> <job> -- <command…>` | `-s, --schedule '<cron>'` (five fields, UTC; omit for a manual-only job), `-t, --timeout <duration>` (`90s`, `15m`, `2h`; default 10 minutes), `--concurrency forbid\|allow\|replace` (default `forbid`), `--retries <n>` (0–10), `--paused`. |
 | `update <project> <job> [-- <command…>]` | The create flags, plus `--no-schedule` to make the job manual only. A command after `--` replaces the old one. |
 | `run <project> <job>` | `-d, --detach`. Runs the job now and streams its output. |
-| `runs <project> [job]` | `--one-off` (only `skif run` commands), `-n, --limit <n>` (default 20, up to 200). |
+| `runs <project> [job]` | `--one-off` (only `yoal run` commands), `-n, --limit <n>` (default 20, up to 200). |
 | `logs <project> <run id>` | `-f, --follow` (keep printing until the run finishes). |
 | `cancel <project> <run id>` | none. A running command gets `SIGTERM`, then `SIGKILL` after 30 seconds. |
 | `pause <project> <job>`, `resume <project> <job>` | none. |
 | `delete <project> <job>` | `-y, --yes`. Removes the job, its history and output. |
 
 ```sh
-skif jobs create shop tidy --schedule '0 3 * * *' -- bun scripts/tidy.ts --days 30
-skif jobs run shop tidy
-skif jobs runs shop tidy
-skif jobs update shop tidy --timeout 30m --retries 2
+yoal jobs create shop tidy --schedule '0 3 * * *' -- bun scripts/tidy.ts --days 30
+yoal jobs run shop tidy
+yoal jobs runs shop tidy
+yoal jobs update shop tidy --timeout 30m --retries 2
 ```
 
 ### run
 
 ```sh
-skif run <project> [options] -- <command…>
+yoal run <project> [options] -- <command…>
 ```
 
 Runs one command once against the app's current release, in the app's sandbox with its environment, secrets and volumes, and streams its output: stdout to stdout, stderr to stderr. The command is not saved as a job. The CLI exits with the command's status (`124` for a timeout, `130` when cancelled). Options: `-t, --timeout <duration>` (default 10 minutes), `-d, --detach` (print the run id and return), `--json` (print the finished run instead of streaming). See [app jobs](/compute/scheduled-jobs#run-a-one-off-command).
 
 ```sh
-skif run shop -- bun run migrate
-skif run shop --timeout 1h -- bun scripts/backfill.ts --since 2026-01-01
+yoal run shop -- bun run migrate
+yoal run shop --timeout 1h -- bun scripts/backfill.ts --since 2026-01-01
 ```
 
 ### ha
 
 ```sh
-skif ha status [--events <n>] [--json]
+yoal ha status [--events <n>] [--json]
 ```
 
 Shows the failover controller, for platform admins: whether automatic failover is on, which control plane holds the lease and at which epoch, how long each node has been silent and when its replica copies would move, the ingress record set, databases whose primary is lost with the replica a promotion would use, and the most recent failover events (10 by default, at most 50). It only reads. See [automatic failover](/self-hosting/clustering#automatic-failover).
@@ -903,10 +903,10 @@ Shows the failover controller, for platform admins: whether automatic failover i
 ### upgrade
 
 ```sh
-skif upgrade <plan|apply|rollback> [options]
+yoal upgrade <plan|apply|rollback> [options]
 ```
 
-Checks, installs and rolls back the Skiff platform on a self-hosted installation. See [upgrades](/self-hosting/upgrades).
+Checks, installs and rolls back the Yoal platform on a self-hosted installation. See [upgrades](/self-hosting/upgrades).
 
 | Subcommand | Flags | Description |
 | --- | --- | --- |
@@ -914,12 +914,12 @@ Checks, installs and rolls back the Skiff platform on a self-hosted installation
 | `apply` | `--version <v>`, `--repo`, `--ref`, `--force`, `--with-agent`, `-y, --yes` | Install the new version, with a snapshot and a health-check rollback. |
 | `rollback` | `--restore-db`, `--keep-db`, `--with-agent`, `-y, --yes` | Switch back to the previous release. `--restore-db` also restores the control database snapshot, which loses later writes. |
 
-`apply` and `rollback` run on the Skiff host, as root. The CLI hands the work to the host's `skiff-update-self` command. An API key cannot perform a platform change.
+`apply` and `rollback` run on the Yoal host, as root. The CLI hands the work to the host's `yoal-update-self` command. An API key cannot perform a platform change.
 
 ### wrangler
 
 ```sh
-skif wrangler [args…]
+yoal wrangler [args…]
 ```
 
-Runs Wrangler, passing every argument through unchanged. If Wrangler is not installed, it is installed first. Use it for local development of a Functions project, for example `skif wrangler dev`. Deployment does not need it, because `skif deploy` bundles the Worker itself.
+Runs Wrangler, passing every argument through unchanged. If Wrangler is not installed, it is installed first. Use it for local development of a Functions project, for example `yoal wrangler dev`. Deployment does not need it, because `yoal deploy` bundles the Worker itself.

@@ -30,7 +30,7 @@ TLS, named credentials, rotation, encryption at rest, and auditable reveals.
 
 ## Current state
 
-- Every container joins the global `skiff-workloads` network (`apps/helper/src/units.ts`
+- Every container joins the global `yoal-workloads` network (`apps/helper/src/units.ts`
   `WORKLOAD_NETWORK`); every tenant shares L2/DNS on a node.
 - Databases publish only `127.0.0.1:<port>:5432` (good), but any container on the node can reach
   any database by alias.
@@ -45,8 +45,8 @@ TLS, named credentials, rotation, encryption at rest, and auditable reveals.
 ### Per-org network
 
 - Add `networkName` to `WorkloadDesired` (or derive from `orgId`); the helper renders
-  `skiff-org-<orgId>.network` and attaches only that org's workloads.
-- Migration: existing workloads stay on `skiff-workloads` until their next activation; the helper
+  `yoal-org-<orgId>.network` and attaches only that org's workloads.
+- Migration: existing workloads stay on `yoal-workloads` until their next activation; the helper
   creates the org network and re-attaches on reconcile. Do not delete the old network until no
   workload references it.
 - Network aliases remain `db-<id>` / `s3-<id>`; uniqueness is per org network, so two orgs can have
@@ -82,7 +82,7 @@ Add `database_credentials` and `storage_keys` (see 02):
 ### Encryption at rest
 
 - RustFS: enable SSE-S3 if the pinned build supports it; otherwise document the host-disk
-  encryption requirement and add a `skiff doctor --data` check for LUKS/dm-crypt on the backing
+  encryption requirement and add a `yoal doctor --data` check for LUKS/dm-crypt on the backing
   volume.
 - Postgres: data dir on a disk the OS unlocked with LUKS is the supported path (D72, D169); document
   that an unencrypted ext4 disk is a known gap.
@@ -124,7 +124,7 @@ Add data-access events (not every query):
       the new one.
 - [ ] A storage key can be named, scoped to buckets, and revoked independently of attachments.
 - [ ] Existing single-org installs migrate without downtime beyond the normal activation restart.
-- [ ] `skiff doctor --data` reports the encryption status of every data volume.
+- [ ] `yoal doctor --data` reports the encryption status of every data volume.
 
 ## Tests
 
@@ -145,7 +145,7 @@ Add data-access events (not every query):
 
 ## Rollout
 
-`SKIFF_FEATURE_ORG_NETWORKS` off by default. New installs get per-org networks; existing installs
+`YOAL_FEATURE_ORG_NETWORKS` off by default. New installs get per-org networks; existing installs
 opt in after a migration test. Credential rotation is opt-in per resource until stable.
 
 ## Open questions

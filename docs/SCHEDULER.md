@@ -58,7 +58,7 @@ Backups keep their existing `next_backup_at` sweep in this change. Migrating the
 
 ## Jobs
 
-Status: **implemented, 2026-11-07** (plan 09), behind `SKIFF_FEATURE_JOBS` (on by default; set `0`
+Status: **implemented, 2026-11-07** (plan 09), behind `YOAL_FEATURE_JOBS` (on by default; set `0`
 to stop the scheduler). App cron jobs and one-off commands
 for process and container projects. They do **not** use `scheduled_tasks`: a job run must execute
 on one specific node and report an exit code, so it has its own run table and a node lease, like
@@ -122,20 +122,20 @@ The helper validates the run id (`jr_<32 hex>`), the argv (1–64 arguments, 1�
 control characters; a relative `argv[0]` cannot start with `-` or contain `=`), the timeout and the
 workload/activation with the same parser as `POST /v1/workloads`; only app workloads (not managed
 services or runners) are accepted. It writes the env file and file secrets 0400 under
-`<runtimeDir>/jobs/<run id>/` and starts `skiff-job-<run id>.service` with `systemd-run --no-block`
+`<runtimeDir>/jobs/<run id>/` and starts `yoal-job-<run id>.service` with `systemd-run --no-block`
 (no daemon-reload): `Type=exec`, `RemainAfterExit=yes` (so the exit status stays readable),
 `Restart=no`, `RuntimeMaxSec=<timeout>`, `TimeoutStopSec=30`, the workload slice, `MemoryMax` and
 `CPUQuota` of the app.
 
 - **Process apps**: the same sandbox directives as the app unit (a test keeps them identical),
-  `DynamicUser=yes` with `User=skiff-workload-<id>` and `StateDirectory=skiff-workloads/<id>` so the
+  `DynamicUser=yes` with `User=yoal-workload-<id>` and `StateDirectory=yoal-workloads/<id>` so the
   run shares the app's dynamic uid and state directory, the release as working directory, the
   run's env file, file secrets as `LoadCredential=` with `<NAME>_FILE=/run/credentials/<unit>/<NAME>`,
   and the app's volumes as `BindPaths`/`BindReadOnlyPaths`. A bare `argv[0]` runs through
   `/usr/bin/env` inside the sandbox, so `PATH` (node and bun directories first) and the release
   directory apply. No `PORT`/`HOST`.
 - **Container apps**: `podman run --rm --cgroups=split --log-driver=passthrough --pull=missing`
-  of the app's image with `--userns=container:skiff-workload-<id>` (the run joins the running app
+  of the app's image with `--userns=container:yoal-workload-<id>` (the run joins the running app
   container's user namespace, so `/data` and volumes are mounted without `U` or a private SELinux
   relabel and are never re-chowned under the app), the app's network, env file, `/data`, volumes,
   the run's own secrets (`:ro,U`), `--cap-drop=all`, `no-new-privileges`, read-only root and a
@@ -155,7 +155,7 @@ REST `api/v1/projects/:slug/jobs` (`GET`/`POST`), `…/jobs/:name` (`GET`/`PATCH
 one-off), `…/runs/:id` (`?wait=`), `…/runs/:id/cancel`, `…/runs/:id/logs`. MCP `list_jobs`,
 `create_job`, `update_job`, `pause_job`, `run_job`, `run_command`, `get_job_runs`, `get_job_run`,
 `cancel_job_run`, `delete_job` (confirmed); the assistant also confirms `run_job` and
-`run_command`. CLI `skif jobs …` and `skif run <project> -- <argv…>` (exits with the command's
+`run_command`. CLI `yoal jobs …` and `yoal run <project> -- <argv…>` (exits with the command's
 status, 124 on timeout, 130 when cancelled). Dashboard: the project's **Jobs** tab.
 
 ### Not built

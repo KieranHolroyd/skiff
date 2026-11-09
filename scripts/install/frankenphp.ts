@@ -6,7 +6,7 @@
  * scale to zero like a function. The static Linux build is about 175 MB, over the 25 MB per-file
  * release limit, so it lives on the node like workerd (FN1), never in a release.
  *
- * It is opt-in (`--with-php`, or `SKIFF_INSTALL_PHP=1`), because most nodes never run PHP and the
+ * It is opt-in (`--with-php`, or `YOAL_INSTALL_PHP=1`), because most nodes never run PHP and the
  * download is large for an edge VPS. Run this file directly to add it to an installed node:
  *
  *   sudo bun scripts/install/frankenphp.ts
@@ -28,7 +28,7 @@ export const FRANKENPHP_DIGESTS: Record<FrankenphpArch, string> = {
 	arm64: '58905a0734eff332f446b3af5059f6c4b27567bf4ead0deab920a33fce6bc60c',
 };
 
-export const FRANKENPHP_DEST = '/usr/lib/skiff/frankenphp';
+export const FRANKENPHP_DEST = '/usr/lib/yoal/frankenphp';
 /** On the default PATH every process unit gets, so an app's command is just `frankenphp …`. */
 export const FRANKENPHP_LINK = '/usr/local/bin/frankenphp';
 
@@ -54,7 +54,7 @@ export interface EnsureFrankenphpOptions {
 	version?: string;
 	/** Expected SHA-256 of the asset; defaults to the pinned digest for `arch`. */
 	sha256?: string;
-	/** Defaults to `/usr/lib/skiff/frankenphp`. */
+	/** Defaults to `/usr/lib/yoal/frankenphp`. */
 	destDir?: string;
 	/** Defaults to `/usr/local/bin/frankenphp`; null skips the link. */
 	linkPath?: string | null;
@@ -122,7 +122,7 @@ export async function ensureFrankenphp(options: EnsureFrankenphpOptions): Promis
 function link(target: string, linkPath: string | null): void {
 	if (!linkPath) return;
 	mkdirSync(dirname(linkPath), { recursive: true });
-	const temporary = `${linkPath}.skiff-new`;
+	const temporary = `${linkPath}.yoal-new`;
 	rmSync(temporary, { force: true });
 	symlinkSync(target, temporary);
 	renameSync(temporary, linkPath);

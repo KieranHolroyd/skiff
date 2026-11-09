@@ -1,30 +1,30 @@
 <p align="center">
-  <img src="apps/control-plane/src/lib/assets/favicon.svg" width="112" height="112" alt="Skiff logo: an orange sail above a white hull on a navy tile">
+  <img src="apps/control-plane/src/lib/assets/favicon.svg" width="112" height="112" alt="Yoal logo: an orange sail above a white hull on a navy tile">
 </p>
 
-<h1 align="center">Skiff</h1>
+<h1 align="center">Yoal</h1>
 
 <p align="center">
   <b>Your own little cloud. Ship sites to your domain from a CLI, a dashboard, or your AI agent.</b>
 </p>
 
 <p align="center">
-  Skiff is a lightweight, self-hosted deploy platform for one VPS and a few nodes. Deploy static sites,
+  Yoal is a lightweight, self-hosted deploy platform for one VPS and a few nodes. Deploy static sites,
   get a preview URL for every deployment, then promote or roll back instantly. It comes with an
   operations dashboard, and AI agents can drive it as a first-class client over MCP.
 </p>
 
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-f0743a?style=flat-square"></a>
-  <a href="https://github.com/KieranHolroyd/skiff/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/KieranHolroyd/skiff/ci.yml?branch=main&style=flat-square&label=CI"></a>
-  <a href="https://www.npmjs.com/package/@skiffy/skiff"><img alt="npm: @skiffy/skiff" src="https://img.shields.io/npm/v/@skiffy/skiff?style=flat-square&label=skif%20CLI&color=1b2235"></a>
+  <a href="https://github.com/KieranHolroyd/yoal/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/KieranHolroyd/yoal/ci.yml?branch=main&style=flat-square&label=CI"></a>
+  <a href="https://www.npmjs.com/package/@yoal/cli"><img alt="npm: @yoal/cli" src="https://img.shields.io/npm/v/@yoal/cli?style=flat-square&label=yoal%20CLI&color=1b2235"></a>
   <img alt="Built with Bun" src="https://img.shields.io/badge/built%20with-Bun-1b2235?style=flat-square&logo=bun&logoColor=white">
   <img alt="Agent-drivable over MCP" src="https://img.shields.io/badge/agents-MCP%20%2B%20OAuth%202.1-f0743a?style=flat-square">
   <img alt="Status: early development" src="https://img.shields.io/badge/status-early%20development-1b2235?style=flat-square">
 </p>
 
 <p align="center">
-  <a href="#why-skiff">Why Skiff</a> ·
+  <a href="#why-yoal">Why Yoal</a> ·
   <a href="#what-works-today">What works</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#for-agents-mcp">For agents</a> ·
@@ -43,12 +43,12 @@
 > expires on Friday, and an audit-log entry recording who did it and how.
 
 > [!NOTE]
-> **Skiff is newly open source and still early.** The v1 static platform is feature-complete apart from
+> **Yoal is newly open source and still early.** The v1 static platform is feature-complete apart from
 > a few release items. v2 (process apps, containers, git builds, custom domains, named
 > environments) has its backend in place, and installer and release wiring are still in progress.
 > Expect rough edges and breaking changes before 1.0. Issues and PRs are welcome.
 
-## Why Skiff
+## Why Yoal
 
 - **Yours.** One Debian/Ubuntu VPS, your domain, your object store. No per-seat pricing, no
   vendor lock-in, and if the control plane goes down, your sites keep serving.
@@ -61,7 +61,7 @@
   subsets, scope step-up) and human confirmation before destructive actions. Your agent can do
   exactly what its token allows and nothing more.
 - **One brain, five surfaces.** The dashboard, optional in-dashboard assistant, REST API, MCP
-  server and `skif` CLI all call the same service layer, so no surface can do more than another
+  server and `yoal` CLI all call the same service layer, so no surface can do more than another
   and every action is audited the same way.
 - **Operable.** Prometheus metrics, traffic and error telemetry, alerts (email, webhook, chat, SMS
   and push),
@@ -72,15 +72,15 @@
 
 | | |
 |---|---|
-| **Deploy** | Inline uploads (≤ 5 MB) or presigned R2 uploads; `_redirects`, `_headers` and `skiff.json` compiled to Caddy routes; precompressed `br`/`gzip`; SPA mode; preview URLs; promote, rollback and retention GC |
+| **Deploy** | Inline uploads (≤ 5 MB) or presigned R2 uploads; `_redirects`, `_headers` and `yoal.json` compiled to Caddy routes; precompressed `br`/`gzip`; SPA mode; preview URLs; promote, rollback and retention GC |
 | **Access** | Public, password-protected or platform-login sites via `forward_auth`; share links with limits and instant revocation |
 | **Accounts** | Email + password, passkeys, GitHub, magic links, TOTP 2FA (owners must prove a passkey or TOTP each session), first-run setup wizard, orgs, member invites, roles, API keys |
 | **Fleet** | Node agents with desired-state reconciliation, an on-disk release cache and heartbeats; wildcard TLS via DNS-01; a branded 503 with `Retry-After` when a node is down |
 | **Observe** | Dashboard for fleet, projects, deployments, traffic, errors, logs and the audit log; `/metrics` on the control plane and agents; optional ClickHouse telemetry with custom dashboards; alerts for offline nodes, disk, certs, backups and 5xx spikes after a promote, plus metric alert rules, sent by email, webhook, Discord, Slack, Telegram, ntfy, SMS or Web Push |
 | **Recover** | Litestream → R2, scripted restore, monthly drill, age-encrypted recovery kit, atomic release switch with automatic rollback |
 | **Managed services** | Postgres 16–18 databases (MySQL, MariaDB, MongoDB, Valkey, Redis and ClickHouse too, with lifecycle, credential rotation and the studio) and RustFS S3-compatible object storage as tier-3 containers: attachments with scoped credentials, Railway-style env suggestions from `.env`/code, one-click linking, usage charts, soft delete and restore, human-only credential reveal, scheduled/verified backups and restore-to-new, PgBouncer pooling, an extension allowlist with slow queries, a native database studio with a data grid and query editor for every engine (read-only by default, write mode with `database:update`), and staged credential rotation ([DATABASES.md](./docs/DATABASES.md), [OBJECT-STORAGE.md](./docs/OBJECT-STORAGE.md)) |
-| **Functions** | Workers-compatible functions on a pinned workerd runtime, bundled by Skiff (no Wrangler needed), with cron triggers and `skif wrangler dev` for local runs ([FUNCTIONS.md](./docs/FUNCTIONS.md)) |
-| **Queues & email** | Managed NATS JetStream brokers with queues, peek/send/redrive/purge and event rules ([BROKERS.md](./docs/BROKERS.md)); outbound email from verified domains through Skiff's own MTA, with DKIM, suppressions and activity ([EMAIL.md](./docs/EMAIL.md)) |
+| **Functions** | Workers-compatible functions on a pinned workerd runtime, bundled by Yoal (no Wrangler needed), with cron triggers and `yoal wrangler dev` for local runs ([FUNCTIONS.md](./docs/FUNCTIONS.md)) |
+| **Queues & email** | Managed NATS JetStream brokers with queues, peek/send/redrive/purge and event rules ([BROKERS.md](./docs/BROKERS.md)); outbound email from verified domains through Yoal's own MTA, with DKIM, suppressions and activity ([EMAIL.md](./docs/EMAIL.md)) |
 | **Assistant** | Optional in-dashboard chat over the same MCP tools, one agent with every tool, click-to-confirm destructive actions, and a guided tour that navigates and spotlights elements ([ASSISTANT.md](./docs/ASSISTANT.md)) |
 | **v2 preview** | Sandboxed systemd process apps, Podman Quadlet containers, git builds on a builder node, custom domains with TXT verification, named environments, per-node workload budgets |
 
@@ -91,17 +91,17 @@
 On Debian or Ubuntu with Caddy installed:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/skiff/main/install.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/yoal/main/install.sh | sudo sh
 ```
 
 That installs the newest stable release, and the server then updates only to promoted stable
 releases. To run the latest build instead, install from canary, which gets every release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/skiff/main/install.sh | sudo sh -s -- --canary
+curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/yoal/main/install.sh | sudo sh -s -- --canary
 ```
 
-You can switch later with `sudo skiff-update-self channel stable|canary`.
+You can switch later with `sudo yoal-update-self channel stable|canary`.
 
 `install.sh` only fetches Bun and the repository. Everything else is in
 [`scripts/install/main.ts`](scripts/install/main.ts): preflight checks, users and directories,
@@ -115,18 +115,18 @@ The full runbook (host layout, environment, backups, restore, key rotation) is i
 ### 2. Deploy from your terminal
 
 ```sh
-npm install -g @skiffy/skiff                    # or: bun add -g / npx @skiffy/skiff
+npm install -g @yoal/cli                    # or: bun add -g / npx @yoal/cli
 
-skif login --url https://control.example.com    # approve the CLI in your browser
-skif deploy ./dist                              # zip, upload, promote
-# Functions: a project with wrangler.jsonc is bundled by Skiff's own pinned bundler
-skif deploy .                                   # no Wrangler install needed to deploy
-skif wrangler dev                               # local Workers runtime, same as production
-skif status my-site
-skif rollback my-site                           # production back one deployment
+yoal login --url https://control.example.com    # approve the CLI in your browser
+yoal deploy ./dist                              # zip, upload, promote
+# Functions: a project with wrangler.jsonc is bundled by Yoal's own pinned bundler
+yoal deploy .                                   # no Wrangler install needed to deploy
+yoal wrangler dev                               # local Workers runtime, same as production
+yoal status my-site
+yoal rollback my-site                           # production back one deployment
 ```
 
-For CI, skip the browser and use an API key: `SKIFF_URL=… SKIFF_TOKEN=skif_… skif deploy ./dist --json`.
+For CI, skip the browser and use an API key: `YOAL_URL=… YOAL_TOKEN=yoal_… yoal deploy ./dist --json`.
 See the [CLI README](apps/cli/README.md) for every command, profiles and JSON output.
 
 ### 3. Connect your agent
@@ -135,7 +135,7 @@ Point any MCP client that supports remote servers at `https://control.example.co
 in Claude Code:
 
 ```sh
-claude mcp add --transport http skiff https://control.example.com/mcp
+claude mcp add --transport http yoal https://control.example.com/mcp
 ```
 
 The client finds the authorization server on its own, so you approve it on a consent screen and
@@ -176,7 +176,7 @@ as `mcp.<tool>`, including calls denied for missing scope.
 
 ### In-dashboard assistant (optional)
 
-If you want help *inside* the dashboard, an owner can point Skiff at an OpenAI-compatible endpoint
+If you want help *inside* the dashboard, an owner can point Yoal at an OpenAI-compatible endpoint
 (OpenAI, OpenRouter, vLLM, LM Studio or a local Ollama; OpenRouter gets a searchable, tool-capable model picker) in **Settings → Assistant**. The chat panel
 uses the same MCP tool catalog, so it can answer questions about the current page and the whole
 platform in one pass. Its `guide_user` tool
@@ -208,23 +208,23 @@ A worker-placed site or app is proxied twice. The edge Caddy forwards the reques
 the worker's Caddy on `:8080`, and that Caddy serves the release's files itself for a static site
 or proxies a process/container app to its socket or `127.0.0.1:<port>`.
 
-Skiff is a Bun monorepo:
+Yoal is a Bun monorepo:
 
 | Package | What it is |
 |---|---|
 | [`apps/control-plane`](apps/control-plane) | SvelteKit app: dashboard, REST API, MCP server, auth, SQLite + ClickHouse |
 | [`apps/agent`](apps/agent) | Node agent: desired-state reconciliation, Caddy admin API, release cache, `forward_auth` |
-| [`apps/cli`](apps/cli) | `skif` / `skiff`: login, deploy, status, promote, rollback, logs ([npm](https://www.npmjs.com/package/@skiffy/skiff)) |
+| [`apps/cli`](apps/cli) | `yoal`: login, deploy, status, promote, rollback, logs ([npm](https://www.npmjs.com/package/@yoal/cli)) |
 | [`apps/helper`](apps/helper) | Privileged runtime helper: renders systemd units and drives workloads over a root-only socket |
 | [`apps/builder`](apps/builder) | Git build worker: runs builds in a transient `systemd-run` unit and uploads the artifact |
 | [`packages/contracts`](packages/contracts) | Zod schemas, RBAC permissions, slugs, the REST and agent protocols |
 | [`packages/core`](packages/core) | The single service layer every surface calls: RBAC, deploys, access, audit |
 | [`packages/db`](packages/db) | Drizzle schema and forward-only SQL migrations, embedded at build time |
-| [`packages/site-config`](packages/site-config) | `_redirects` / `_headers` / `skiff.json` parsing and Caddy route compilation |
+| [`packages/site-config`](packages/site-config) | `_redirects` / `_headers` / `yoal.json` parsing and Caddy route compilation |
 | [`packages/docs`](packages/docs) | User documentation (Markdown), its renderer and the agents' search index; shown in the dashboard at `/docs` |
-| [`apps/docs`](apps/docs) | The same docs as a standalone static site, deployable anywhere (including Skiff) |
+| [`apps/docs`](apps/docs) | The same docs as a standalone static site, deployable anywhere (including Yoal) |
 
-User documentation (how to use and run Skiff) lives in [`packages/docs/content`](packages/docs/content): read it in the dashboard under **Docs**, run `bun run docs:dev`, or ask your agent, which can search it with `search_docs`.
+User documentation (how to use and run Yoal) lives in [`packages/docs/content`](packages/docs/content): read it in the dashboard under **Docs**, run `bun run docs:dev`, or ask your agent, which can search it with `search_docs`.
 
 The design docs are the source of truth. Start with [`docs/DESIGN.md`](docs/DESIGN.md), then the
 numbered decision log in [`docs/DECISIONS.md`](docs/DECISIONS.md).
@@ -242,11 +242,11 @@ numbered decision log in [`docs/DECISIONS.md`](docs/DECISIONS.md).
 - **Least privilege.** Caddy's admin API listens only on a unix socket, and the control plane and
   agent run unprivileged. Secrets use envelope encryption under a master key sealed with
   `systemd-creds` (TPM2 plus the host key where available), so it only opens on its own machine;
-  an offline recovery kit is the way back, `skiff-rotate-master-key` replaces it in place, and
+  an offline recovery kit is the way back, `yoal-rotate-master-key` replaces it in place, and
   secrets can't be read back through the API.
 
 Found a vulnerability? Please report it privately through
-[GitHub security advisories](https://github.com/KieranHolroyd/skiff/security/advisories/new)
+[GitHub security advisories](https://github.com/KieranHolroyd/yoal/security/advisories/new)
 rather than in a public issue.
 
 ## Configuration
@@ -254,17 +254,17 @@ rather than in a public issue.
 The full environment reference is in [`docs/OPS.md`](docs/OPS.md). The control plane needs at least:
 
 ```sh
-SKIFF_PLATFORM_ORIGIN=https://control.example.com
-SKIFF_CONTENT_DOMAIN=example.com
+YOAL_PLATFORM_ORIGIN=https://control.example.com
+YOAL_CONTENT_DOMAIN=example.com
 BETTER_AUTH_SECRET=<32+ random bytes>
-SKIFF_DATA_DIR=/var/lib/skiff/data
-SKIFF_MASTER_KEY=<base64 32 bytes, or SKIFF_MASTER_KEY_FILE>
-SKIFF_OBJECT_STORE=local|r2          # R2_* credentials when r2
+YOAL_DATA_DIR=/var/lib/yoal/data
+YOAL_MASTER_KEY=<base64 32 bytes, or YOAL_MASTER_KEY_FILE>
+YOAL_OBJECT_STORE=local|r2          # R2_* credentials when r2
 
 # Optional: the in-dashboard assistant (Settings → Assistant does the same thing)
-SKIFF_ASSISTANT_BASE_URL=https://api.openai.com/v1
-SKIFF_ASSISTANT_MODEL=gpt-4.1-mini
-SKIFF_ASSISTANT_API_KEY=sk-...
+YOAL_ASSISTANT_BASE_URL=https://api.openai.com/v1
+YOAL_ASSISTANT_MODEL=gpt-4.1-mini
+YOAL_ASSISTANT_API_KEY=sk-...
 ```
 
 ## Development
@@ -282,15 +282,15 @@ bun run dev:clickhouse --background
 # control plane, with dev password sign-in (without the flag, a fresh .data opens the
 # setup wizard: the server logs the /setup?token=… link on start)
 cd apps/control-plane
-SKIFF_DEV_PASSWORD_LOGIN=1 SKIFF_DATA_DIR=.data bun run dev
+YOAL_DEV_PASSWORD_LOGIN=1 YOAL_DATA_DIR=.data bun run dev
 
 # CLI, pointed at the dev server
-SKIFF_URL=http://localhost:5173 SKIFF_TOKEN=skif_... bun apps/cli/src/main.ts status
+YOAL_URL=http://localhost:5173 YOAL_TOKEN=yoal_... bun apps/cli/src/main.ts status
 
 # agent (needs a Caddy admin socket)
-SKIFF_CONTROL_URL=http://localhost:5173 \
-SKIFF_NODE_ID=nod_... SKIFF_NODE_TOKEN=... \
-SKIFF_DATA_DIR=/tmp/skiff-agent bun apps/agent/src/main.ts
+YOAL_CONTROL_URL=http://localhost:5173 \
+YOAL_NODE_ID=nod_... YOAL_NODE_TOKEN=... \
+YOAL_DATA_DIR=/tmp/yoal-agent bun apps/agent/src/main.ts
 ```
 
 Create an API key in the dashboard (Settings → API keys). In development you don't need Caddy to
@@ -314,8 +314,8 @@ End-to-end, against a running dev server with a fresh data dir:
 
 ```sh
 cd apps/control-plane
-SKIFF_BASE=http://localhost:5173 bun tests/rest.e2e.ts       # auth, deploys, promote/rollback, nodes, share links, audit
-SKIFF_BASE=http://localhost:5173 bun tests/mcp-oauth.e2e.ts  # CIMD/DCR, PKCE, consent, scope step-up, elicitation
+YOAL_BASE=http://localhost:5173 bun tests/rest.e2e.ts       # auth, deploys, promote/rollback, nodes, share links, audit
+YOAL_BASE=http://localhost:5173 bun tests/mcp-oauth.e2e.ts  # CIMD/DCR, PKCE, consent, scope step-up, elicitation
 ```
 
 [`examples/v2-stress`](examples/v2-stress) is a deployable v2 app plus scripts that stress-test a live
@@ -352,12 +352,12 @@ Competitive research and the proposed build order are in
 ## Contributing
 
 Bug reports, ideas and pull requests are welcome in
-[issues](https://github.com/KieranHolroyd/skiff/issues). Before you start on a larger change, read
+[issues](https://github.com/KieranHolroyd/yoal/issues). Before you start on a larger change, read
 [`docs/DESIGN.md`](docs/DESIGN.md) and [`docs/DECISIONS.md`](docs/DECISIONS.md) and open an issue
 first. Many trade-offs are already settled there, along with the options that were considered and
 rejected. Please make sure `bun test` and `bun run check` pass before you open a PR.
 
 ## License
 
-Skiff is released under the [MIT License](LICENSE).
+Yoal is released under the [MIT License](LICENSE).
 Copyright © 2026 Kieran Holroyd.

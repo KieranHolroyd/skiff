@@ -1,15 +1,15 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import type { DesiredState, RouteSpec } from '@skiff/contracts';
+import type { DesiredState, RouteSpec } from '@yoal/contracts';
 import {
-	handleSkiffAccessRequest,
+	handleYoalAccessRequest,
 	type AccessDecisionCache,
-} from './skiff-access.ts';
+} from './yoal-access.ts';
 
 /**
  * Stateless protected-site verification for Caddy's forward_auth (D20).
  *
  * The agent never touches the database or the control plane on the request path:
- * - the visitor cookie is `__skiff_s=<exp>.<hmac(host|exp)>` signed with the route's site key;
+ * - the visitor cookie is `__yoal_s=<exp>.<hmac(host|exp)>` signed with the route's site key;
  * - the login callback carries a one-time, 60 s token minted by the control plane, also signed
  *   with the site key, which the agent exchanges for the host-only cookie exactly once.
  *
@@ -23,7 +23,7 @@ export const MAX_CALLBACK_TOKEN_SECONDS = 120;
 
 /**
  * Remembers redeemed callback-token ids until they expire, so a leaked
- * `/_skiff/callback?token=…` URL cannot be replayed (DESIGN §6.4). Memory is bounded by the
+ * `/_yoal/callback?token=…` URL cannot be replayed (DESIGN §6.4). Memory is bounded by the
  * token lifetime: entries are dropped as soon as the token could no longer verify anyway.
  */
 export class UsedTokenCache {
@@ -62,9 +62,9 @@ export interface VerifyOptions {
 	nowSeconds?: () => number;
 	/** Redeemed callback tokens; one per agent process. */
 	usedTokens?: UsedTokenCache;
-	/** Cookie name for Skiff Access sessions (defaults to `__skiff_a`). */
+	/** Cookie name for Yoal Access sessions (defaults to `__yoal_a`). */
 	accessCookieName?: string;
-	/** HMAC secret for `Skiff-Access-Jwt`; the route's site key when absent. */
+	/** HMAC secret for `Yoal-Access-Jwt`; the route's site key when absent. */
 	accessJwtSecret?: string | null;
 	/** Brief cache of verified access decisions (IAM.md §11.1 S6). */
 	accessCache?: AccessDecisionCache;
@@ -85,10 +85,10 @@ interface AccessTokenClaims {
 
 const defaultUsedTokens = new UsedTokenCache();
 
-/** Adapt the shared verify options to the Skiff Access handler. */
+/** Adapt the shared verify options to the Yoal Access handler. */
 function accessOptions(options: VerifyOptions) {
 	return {
-		accessCookieName: options.accessCookieName ?? '__skiff_a',
+		accessCookieName: options.accessCookieName ?? '__yoal_a',
 		insecureHttp: options.insecureHttp,
 		nowSeconds: options.nowSeconds,
 		usedTokens: options.usedTokens ?? defaultUsedTokens,
@@ -170,29 +170,29 @@ export function handleSiteRequest(request: Request, options: VerifyOptions): Res
 	const forwardedUri = headerWithoutControls(request.headers.get('x-forwarded-uri'));
 	const host = normalizeHost(request.headers.get('x-forwarded-host') ?? request.headers.get('host'));
 
-	// Skiff Access has its own callback path; both it and normal requests reach forward_auth as
-	// `/_skiff/verify`, so the original URI is authoritative.
+	// Yoal Access has its own callback path; both it and normal requests reach forward_auth as
+	// `/_yoal/verify`, so the original URI is authoritative.
 	const accessPath = (forwardedUri ?? pathname).split('?')[0];
-	if (accessPath === '/_skiff/access/callback') {
+	if (accessPath === '/_yoal/access/callback') {
 		if (!host) return textResponse(404, 'Unknown host');
 		const route = findRoute(options.state, host);
 		if (!route) return textResponse(404, 'Unknown host');
-		return handleSkiffAccessRequest(request, accessOptions(options), route, host, forwardedUri, now);
+		return handleYoalAccessRequest(request, accessOptions(options), route, host, forwardedUri, now);
 	}
 
-	if (pathname === '/_skiff/callback' || forwardedUri?.startsWith('/_skiff/callback'))
+	if (pathname === '/_yoal/callback' || forwardedUri?.startsWith('/_yoal/callback'))
 		return handleCallback(request, options, host, pathname, forwardedUri, now);
 
-	if (pathname !== '/_skiff/verify' && !forwardedUri) return textResponse(404, 'Not found');
+	if (pathname !== '/_yoal/verify' && !forwardedUri) return textResponse(404, 'Not found');
 	if (!host) return textResponse(404, 'Unknown host');
 
 	const route = findRoute(options.state, host);
 	if (!route) return textResponse(404, 'Unknown host');
 
-	// Skiff Access (IAM.md I25): a policy already let this identity in on the platform; the agent
+	// Yoal Access (IAM.md I25): a policy already let this identity in on the platform; the agent
 	// verifies the host-bound session and mints the upstream headers.
 	if (route.accessMode === 'access')
-		return handleSkiffAccessRequest(request, accessOptions(options), route, host, forwardedUri, now);
+		return handleYoalAccessRequest(request, accessOptions(options), route, host, forwardedUri, now);
 
 	// Public routes never reach forward_auth, but answering 200 keeps a misconfiguration safe.
 	if (route.accessMode === 'public') return visitorResponse('public', route);
@@ -219,7 +219,7 @@ function handleCallback(
 ): Response {
 	const url = safeUrl(request.url);
 	const token =
-		pathname === '/_skiff/callback'
+		pathname === '/_yoal/callback'
 			? url?.searchParams.get('token') ?? null
 			: queryParam(forwardedUri, 'token');
 	if (!token) return textResponse(400, 'Missing token');
@@ -331,8 +331,8 @@ function visitorResponse(visitor: string, route: RouteSpec): Response {
 	return new Response(null, {
 		status: 200,
 		headers: {
-			'x-skiff-visitor': visitor,
-			'x-skiff-project': route.projectId,
+			'x-yoal-visitor': visitor,
+			'x-yoal-project': route.projectId,
 			'cache-control': 'no-store',
 		},
 	});

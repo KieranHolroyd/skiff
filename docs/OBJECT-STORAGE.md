@@ -1,4 +1,4 @@
-# Skiff — Managed object storage (RustFS)
+# Yoal — Managed object storage (RustFS)
 
 Status: **built 2026-11-05.** Storage reuses the managed-database runtime profile, sealed
 credentials, attachments, stats path and soft delete ([DATABASES.md](./DATABASES.md), D55–D61).
@@ -6,10 +6,10 @@ The decisions below are recorded as **D62–D71** in [DECISIONS.md](./DECISIONS.
 S2→D63, … S10→D71); the `S` labels are kept here because the code refers to them. The ROADMAP
 section tracks what is still open (notably the Debian 13 end-to-end run and backups).
 
-A **storage instance** is an org-owned [RustFS](https://github.com/rustfs/rustfs) server that Skiff
+A **storage instance** is an org-owned [RustFS](https://github.com/rustfs/rustfs) server that Yoal
 provisions, runs, observes and connects to apps. It serves an S3-compatible API and holds
 **buckets**. Like a database it is not a project: it has no releases or deployments. It runs as a
-tier-3 container on one node, inside `skiff-workloads.slice`, admitted against the node's memory
+tier-3 container on one node, inside `yoal-workloads.slice`, admitted against the node's memory
 budget (D41, D42).
 
 Why RustFS: Apache-2.0 (MinIO is AGPLv3 and has stripped its community edition), single static
@@ -51,13 +51,13 @@ image, user or mount from the wire:
 - Image: a pinned `docker.io/rustfs/rustfs:<version>` (by digest in the helper's copy of the
   registry; tags are not trusted).
 - Single-drive mode: `RUSTFS_VOLUMES=/data`, `RUSTFS_ADDRESS=:9000`, `RUSTFS_CONSOLE_ENABLE=false`.
-  The root key pair arrives as 0400 files under `/run/skiff-workloads/<id>/` (D43), not as env in
+  The root key pair arrives as 0400 files under `/run/yoal-workloads/<id>/` (D43), not as env in
   the unit.
 - Runs as the image's unprivileged user (uid confirmed in spike 1); the helper creates and `chown`s
   the data dir. `DropCapability=all`, `NoNewPrivileges`, `ReadOnly=true`, `Tmpfs=/tmp`.
-- `PublishPort=127.0.0.1:<hostPort>:9000` only. `Network=skiff-workloads.network` with
+- `PublishPort=127.0.0.1:<hostPort>:9000` only. `Network=yoal-workloads.network` with
   `NetworkAlias=s3-<id hex>`.
-- `MemoryMax`, `CPUQuota`, `Slice=skiff-workloads.slice`; counts toward admission (default 512 MB,
+- `MemoryMax`, `CPUQuota`, `Slice=yoal-workloads.slice`; counts toward admission (default 512 MB,
   minimum set by spike 1).
 - Health probe: HTTP `GET /health` on the loopback port (falls back to TCP connect if the endpoint
   differs by version).
@@ -66,7 +66,7 @@ Host ports per node come from `19000–19999`, lowest free first, including soft
 This range doesn't overlap the database range (`15432–16431`).
 
 **S2.** The built-in RustFS web console is **off**. Bucket and key management happens through
-Skiff (§4), so Skiff stays the source of truth and nothing else needs exposing. An on-demand
+Yoal (§4), so Yoal stays the source of truth and nothing else needs exposing. An on-demand
 console can follow the D60 pattern later if people ask for it.
 
 ## 3. Access: private by default, public per instance (S3)
@@ -74,7 +74,7 @@ console can follow the D60 pattern later if people ask for it.
 Each instance has a **`public` toggle**, off by default.
 
 **Private (default).** Same rules as databases (D56): listens only on `127.0.0.1` and the
-`skiff-workloads` network. Attached projects are placed on the instance's node.
+`yoal-workloads` network. Attached projects are placed on the instance's node.
 
 **Public.** The control plane adds a route `<name>--s3.<contentDomain>` (covered by the existing
 wildcard certificate, D44). Edge Caddy serves it; for worker-placed instances it forwards over
@@ -109,7 +109,7 @@ audited, and presigned links are offered only for public instances.
 
 ## 4. Buckets, keys and attachments
 
-**Buckets are desired state.** Creating a bucket in Skiff writes a row; the instance's desired
+**Buckets are desired state.** Creating a bucket in Yoal writes a row; the instance's desired
 entry lists its buckets (name + anonymous policy). The agent converges them over the loopback port
 with the root key: `CreateBucket`, `PutBucketPolicy` for `public-read`, and removal (only when the
 bucket is empty, unless it's a purge). The root key is fetched at activation and **kept in agent
@@ -191,14 +191,14 @@ retention.
 RustFS container output is drained from the unit journal by the agent like every other workload
 and stored in `service_log_events` (7-day retention), with lifecycle breadcrumbs such as a
 requested restart in the same stream. The dashboard has a live tail at `/storage/:name/logs`; the
-REST endpoint is `GET /storage/:name/logs` and the CLI `skif storage logs <name> --follow`.
+REST endpoint is `GET /storage/:name/logs` and the CLI `yoal storage logs <name> --follow`.
 
 Per-bucket size and object count (from RustFS's data-usage info, spike 3) are sampled
 every five minutes into `storage_buckets` as a latest-only snapshot, like the database table
 snapshot.
 
 Surfaces: `GET /api/v1/storage/:name/metrics`, dashboard charts and a bucket list,
-`skiff_storage_*` on `/metrics`, and a live log tail (`GET /api/v1/storage/:name/logs`). One alert: disk above 85% of the storage budget.
+`yoal_storage_*` on `/metrics`, and a live log tail (`GET /api/v1/storage/:name/logs`). One alert: disk above 85% of the storage budget.
 
 ## 7. Lifecycle (S8)
 
@@ -222,7 +222,7 @@ Mirrors databases (D59):
 **Data location.** An instance goes on the storage target its create request names (`storage`:
 `system`, `fast`, `bulk` or a disk name; CLI `--disk`), else the `object-storage` default in
 Settings → Storage, else the system disk, where the data dir lives under the helper's state root.
-On a disk its data lives at `<mount>/skiff/<id>` (D169, D78). The node verifies the mount before
+On a disk its data lives at `<mount>/yoal/<id>` (D169, D78). The node verifies the mount before
 every start and refuses to run if it is gone (D76). See [STORAGE.md](./STORAGE.md).
 
 ## 8. Surfaces
@@ -232,7 +232,7 @@ every start and refuses to run if it is gone (D76). See [STORAGE.md](./STORAGE.m
 | Permissions | New `storage` resource: `create`, `read`, `update`, `delete`, `credentials`. Deployer gets everything except `delete`; viewer gets `read`; agents get the deployer set minus `credentials`. |
 | REST | `GET/POST /api/v1/storage`, `GET/PATCH/DELETE /api/v1/storage/:name`, `POST …/:name/restore`, `GET …/:name/credentials`, `POST/DELETE …/:name/rotate-root`, `GET/POST …/:name/keys`, `DELETE …/:name/keys/:id`, `POST …/:name/keys/:id/reveal`, `POST …/:name/move`, `GET/POST …/:name/replicas`, `DELETE …/:name/replicas/:id`, `GET …/:name/metrics`, `GET/POST …/:name/buckets`, `PATCH/DELETE …/:name/buckets/:bucket`, `GET/PATCH …/:name/buckets/:bucket/config`, `POST …/:name/buckets/:bucket/sign`, `GET/POST /api/v1/projects/:slug/storage`, `PATCH/DELETE …/storage/:name`; object endpoints under `…/:name/objects` (list, item GET/HEAD/PUT/DELETE, bulk delete, folder, presign) |
 | MCP | `list_storage`, `get_storage`, `create_storage`, `create_bucket`, `get_bucket_config`, `update_bucket_config`, `attach_storage`, `detach_storage`, `delete_storage` (confirmed, soft), `list_objects`, `presign_object`, `create_object_folder`, `restart_storage`, `get_storage_logs`, `list_storage_keys`, `create_storage_key`, `revoke_storage_key` (confirmed). No bucket force-delete, object delete, key reveal, root rotation or purge. |
-| CLI | `skif storage list\|create\|info\|update\|restart\|delete\|restore\|credentials\|rotate-root [--cancel]\|move --node`, `skif storage keys list\|create\|reveal\|revoke`, `skif storage bucket list\|create\|config\|update\|delete`, `skif storage attach\|detach`, `skif storage objects ls\|get\|put\|rm\|mkdir\|presign\|share` |
+| CLI | `yoal storage list\|create\|info\|update\|restart\|delete\|restore\|credentials\|rotate-root [--cancel]\|move --node`, `yoal storage keys list\|create\|reveal\|revoke`, `yoal storage bucket list\|create\|config\|update\|delete`, `yoal storage attach\|detach`, `yoal storage objects ls\|get\|put\|rm\|mkdir\|presign\|share` |
 | Dashboard | Storage list + create, detail (status, endpoint, public toggle, buckets, per-bucket settings, attached projects, charts), attach from a project with bucket grants, and an object browser (folder navigation, upload, download, delete, signed share links) |
 
 ### Bucket configuration
@@ -262,9 +262,9 @@ every change; the node's agent converges it over the S3 and RustFS admin APIs an
   stored; a key is never returned. All creation and configuration changes are audited.
   Presigning a PUT URL needs `storage:update`, the same permission as minting a PUT share link.
 
-New bucket-configuration and share mutations are gated by `SKIFF_FEATURE_OBJECT_BROWSER`.
+New bucket-configuration and share mutations are gated by `YOAL_FEATURE_OBJECT_BROWSER`.
 
-**Restart and bulk actions.** `POST /storage/:name/restart` (and `skif storage restart <name>`)
+**Restart and bulk actions.** `POST /storage/:name/restart` (and `yoal storage restart <name>`)
 bumps the instance's restart generation; the node re-applies the unit and RustFS restarts with its
 data, buckets and keys intact. The per-row **Restart** action on the Storage list uses the same
 call. The Storage page also has **Restart all services** (storage and
@@ -290,7 +290,7 @@ and report per-item skips.
 
 - **Backups (S9)**: bucket replication or a scheduled sync to the platform `ObjectStore` (R2),
   with retention, sharing the scheduler planned for database `pg_dump` backups.
-- **Skiff's own `ObjectStore` on RustFS (S10)**: an `S3ObjectStore` (generalising the R2 client to
+- **Yoal's own `ObjectStore` on RustFS (S10)**: an `S3ObjectStore` (generalising the R2 client to
   any endpoint) can point at a managed instance. It's allowed as a **replication target only**:
   canonical platform artifacts can't live on a workload whose own deploys need those artifacts.
   This covers part of the roadmap's "Garage/MinIO" item.
@@ -312,7 +312,7 @@ Revealing a key needs `storage:credentials`, an interactive user session (MCP/AP
 secrets) and writes `storage.key.reveal` to the audit log. Key create/revoke are audited as
 `storage.key.create` / `storage.key.revoke`.
 
-With `SKIFF_FEATURE_ORG_NETWORKS` on, the storage container joins `skiff-org-<orgId>.network` and is
+With `YOAL_FEATURE_ORG_NETWORKS` on, the storage container joins `yoal-org-<orgId>.network` and is
 not resolvable from another org. Caddy keeps using the loopback endpoint, so public routes and the
 internal gateway are unchanged.
 

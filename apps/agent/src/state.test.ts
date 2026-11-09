@@ -2,13 +2,13 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { desiredStateSchema, type DesiredState } from '@skiff/contracts';
+import { desiredStateSchema, type DesiredState } from '@yoal/contracts';
 import { atomicWriteFile, DesiredStateStore, desiredStateEtag, desiredStateRequest } from './state.ts';
 
 const directories: string[] = [];
 
 async function tempDir(): Promise<string> {
-	const dir = await fs.mkdtemp(join(tmpdir(), 'skiff-agent-state-'));
+	const dir = await fs.mkdtemp(join(tmpdir(), 'yoal-agent-state-'));
 	directories.push(dir);
 	return dir;
 }

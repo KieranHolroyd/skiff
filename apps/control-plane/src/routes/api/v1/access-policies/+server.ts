@@ -1,10 +1,10 @@
 import type { RequestHandler } from './$types';
-import { accessPolicyCreateSchema } from '@skiff/contracts';
+import { accessPolicyCreateSchema } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { json, readJson, route } from '#lib/server/api.js';
 import { requirePrincipal } from '#lib/server/principal.js';
 
-/** Skiff Access policies (IAM.md I25, §11.1). The service checks `accessPolicy:*` at the scope. */
+/** Yoal Access policies (IAM.md I25, §11.1). The service checks `accessPolicy:*` at the scope. */
 export const GET: RequestHandler = (event) =>
 	route(() => {
 		const principal = requirePrincipal(event);

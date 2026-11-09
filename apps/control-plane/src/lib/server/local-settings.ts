@@ -4,13 +4,13 @@ import {
 	PLATFORM_CONFIG_SECTIONS,
 	applyPlatformConfig,
 	type PlatformConfigRequest
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 
 /**
  * Settings → Backups / Notifications on a local dev server (no installed release, no root helper).
- * Saved values go to `<SKIFF_DATA_DIR>/platform-settings.json` (gitignored `.data/`), which
+ * Saved values go to `<YOAL_DATA_DIR>/platform-settings.json` (gitignored `.data/`), which
  * `config.ts` loads into the environment at startup, so a dev-server restart applies them. Never
- * used in production, where `/etc/skiff/skiff.env` and `skiff-platform-config` are the only path.
+ * used in production, where `/etc/yoal/yoal.env` and `yoal-platform-config` are the only path.
  */
 
 export const localSettingsEnabled = process.env.NODE_ENV !== 'production';
@@ -21,7 +21,7 @@ const ALLOWED: ReadonlySet<string> = new Set(Object.values(PLATFORM_CONFIG_SECTI
 const startedAt = Date.now();
 
 export function localSettingsPath(env: Record<string, string | undefined> = process.env): string {
-	return join(env.SKIFF_DATA_DIR ?? '.data', 'platform-settings.json');
+	return join(env.YOAL_DATA_DIR ?? '.data', 'platform-settings.json');
 }
 
 /** `null` = explicitly removed (overrides the shell environment). */

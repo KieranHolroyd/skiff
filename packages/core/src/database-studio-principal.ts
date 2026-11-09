@@ -1,5 +1,5 @@
 import { and, eq, gt, isNotNull, isNull } from 'drizzle-orm';
-import { databases, nodes } from '@skiff/db';
+import { databases, nodes } from '@yoal/db';
 import {
 	DATABASE_STUDIO_READONLY_ENV,
 	DATABASE_STUDIO_READONLY_USER,
@@ -11,7 +11,7 @@ import {
 	type DatabaseStudioPrincipalState,
 	type DatabaseStudioPrincipalTask,
 	type NodeCapability,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
 import type { DatabaseRow } from './databases.ts';
@@ -27,7 +27,7 @@ export interface StudioPrincipalStatus {
 }
 
 /**
- * The read-only studio principal (plan 22, track G): one `skiff_studio_ro` engine account per
+ * The read-only studio principal (plan 22, track G): one `yoal_studio_ro` engine account per
  * database, created on the node by the helper's fixed `studio-principal` verb.
  *
  * It follows the named-credential pattern (plan 04b). Desired state lists `{ databaseId,
@@ -52,7 +52,7 @@ export class DatabaseStudioPrincipals {
 		if (unsupported)
 			return {
 				state: 'failed',
-				error: `${unsupported} runs an older Skiff agent that cannot create read-only accounts. Update the node, then try again.`,
+				error: `${unsupported} runs an older Yoal agent that cannot create read-only accounts. Update the node, then try again.`,
 			};
 		return { state: 'preparing', error: null };
 	}

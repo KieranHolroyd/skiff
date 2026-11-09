@@ -1,10 +1,10 @@
 import { error, fail } from '@sveltejs/kit';
-import { CoreError, featureEnabled } from '@skiff/core';
+import { CoreError, featureEnabled } from '@yoal/core';
 import {
 	databaseStudioOpenSchema,
 	type DatabaseStudioView,
 	type DatabaseView
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { failStatus, formString, toFormFailure } from '../../../_lib/errors.js';
 import { databaseCan, fieldErrorsFrom } from '../../_lib/forms.server.js';

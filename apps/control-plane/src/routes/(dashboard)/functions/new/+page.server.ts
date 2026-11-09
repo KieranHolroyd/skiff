@@ -1,6 +1,6 @@
 import { error, fail, redirect } from '@sveltejs/kit';
-import { CoreError, entriesFromZip } from '@skiff/core';
-import { accessModes, hasPermission, type NodeCapacityView } from '@skiff/contracts';
+import { CoreError, entriesFromZip } from '@yoal/core';
+import { accessModes, hasPermission, type NodeCapacityView } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { features } from '#lib/server/config.js';
 import { failStatus, formRawString, formString, toFormFailure } from '../../_lib/errors.js';

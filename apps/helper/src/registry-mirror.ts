@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto';
 
 export const MIRROR_UPSTREAMS = ['docker.io', 'ghcr.io', 'quay.io'] as const;
 export type MirrorUpstream = (typeof MIRROR_UPSTREAMS)[number];
-export const MIRROR_CONF_NAME = '50-skiff-mirror.conf';
+export const MIRROR_CONF_NAME = '50-yoal-mirror.conf';
 
 export interface MirrorRequest {
 	host: string;
@@ -50,7 +50,7 @@ export function renderMirrorConf(host: string, upstreams: readonly MirrorUpstrea
 		(upstream) =>
 			`[[registry]]\nprefix = "${upstream}"\nlocation = "${upstream}"\n\n[[registry.mirror]]\nlocation = "${host}/${upstream}"\n`,
 	);
-	return `# Written by the Skiff helper (docs/REGISTRY.md G4). Do not edit.\n\n${blocks.join('\n')}`;
+	return `# Written by the Yoal helper (docs/REGISTRY.md G4). Do not edit.\n\n${blocks.join('\n')}`;
 }
 
 async function writeAtomic(path: string, content: string, mode: number): Promise<void> {

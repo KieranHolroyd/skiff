@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { DesiredState } from '@skiff/contracts';
+import type { DesiredState } from '@yoal/contracts';
 import { NodeUpdateRunner } from './node-update.ts';
 
 let dir: string;
@@ -11,7 +11,7 @@ let calls: Array<{ version: string; repo: string }>;
 let fail: string | null;
 
 const state = (nodeUpdate: DesiredState['nodeUpdate']) => ({ nodeUpdate }) as DesiredState;
-const task = (generation = 1, version = '0.8.0') => ({ generation, version, repo: 'owner/skiff' });
+const task = (generation = 1, version = '0.8.0') => ({ generation, version, repo: 'owner/yoal' });
 
 function runner(currentVersion = '0.7.15') {
 	return new NodeUpdateRunner({
@@ -29,7 +29,7 @@ function runner(currentVersion = '0.7.15') {
 }
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), 'skiff-agent-node-update-'));
+	dir = mkdtempSync(join(tmpdir(), 'yoal-agent-node-update-'));
 	clock = 1_000_000;
 	calls = [];
 	fail = null;
@@ -42,7 +42,7 @@ describe('node update runner (D99)', () => {
 		const agent = runner();
 		await agent.runOnce(state(task()));
 		await agent.runOnce(state(task()));
-		expect(calls).toEqual([{ version: '0.8.0', repo: 'owner/skiff' }]);
+		expect(calls).toEqual([{ version: '0.8.0', repo: 'owner/yoal' }]);
 		expect(agent.pendingResult()).toBeNull();
 	});
 

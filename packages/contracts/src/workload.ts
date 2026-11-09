@@ -43,7 +43,7 @@ export const MAX_WORKLOAD_REPLICAS = 20;
 export type WorkloadRuntime = (typeof workloadRuntimes)[number];
 
 /**
- * The JavaScript runtime a process app runs on (D125). `bun` is Skiff's own and the default;
+ * The JavaScript runtime a process app runs on (D125). `bun` is Yoal's own and the default;
  * `node` is the pinned Node.js LTS the installer puts on every node. Absent means `bun`, so a spec
  * saved before engines existed hashes (and restarts) exactly as it did.
  */
@@ -100,7 +100,7 @@ export function processIdleStopIssue(spec: {
 			path: 'idleStopSeconds',
 			message:
 				spec.runtime === 'function'
-					? 'Functions set idle stop in their manifest (skiff.idleStopSeconds in wrangler.jsonc).'
+					? 'Functions set idle stop in their manifest (yoal.idleStopSeconds in wrangler.jsonc).'
 					: 'Idle stop is for process apps; containers are always on.',
 		};
 	if (spec.ingress !== 'http')
@@ -154,7 +154,7 @@ export const workloadSpecSchema = z
 		/** Container: OCI image reference. Mutually exclusive with `command`. */
 		image: z.string().min(1).max(512).optional(),
 		/**
-		 * Container, set by Skiff only (R1, docs/REGISTRY.md): the digest `image` resolved to when
+		 * Container, set by Yoal only (R1, docs/REGISTRY.md): the digest `image` resolved to when
 		 * the deployment was created. The node runs `<repository>@<digest>`, so a deployment and its
 		 * rollback always start the same bytes. Inputs drop it (`setSpec`, REST, MCP).
 		 */
@@ -365,8 +365,8 @@ export const workloadStatuses = ['pending', 'starting', 'running', 'failed', 'st
 export type WorkloadStatus = (typeof workloadStatuses)[number];
 
 /** The pre-isolation network every container joined; kept as the fallback for old desired state. */
-export const DEFAULT_WORKLOAD_NETWORK = 'skiff-workloads';
-export const ORG_NETWORK_PREFIX = 'skiff-org-';
+export const DEFAULT_WORKLOAD_NETWORK = 'yoal-workloads';
+export const ORG_NETWORK_PREFIX = 'yoal-org-';
 
 /**
  * Derive an org's private Podman network name. The name is not stored: it is a pure function of
@@ -568,7 +568,7 @@ export const workloadDesiredSchema = z.object({
 	runner: z.object({ provider: z.literal('github') }).optional(),
 	/**
 	 * Workload identity is enabled for this app (IAM.md I18). The helper mounts
-	 * `/run/skiff/identity/<id>/token` at `/var/run/skiff/token` and exports `SKIFF_TOKEN_FILE`.
+	 * `/run/yoal/identity/<id>/token` at `/var/run/yoal/token` and exports `YOAL_TOKEN_FILE`.
 	 * Only a marker travels here; the token itself arrives through activation.
 	 */
 	identity: z.literal(true).optional(),
@@ -624,7 +624,7 @@ export const workloadActivationSchema = z.object({
 	 */
 	registryAuth: z.array(registryAuthEntrySchema).max(MAX_REGISTRY_AUTH_ENTRIES).optional(),
 	/**
-	 * Process and container apps only: a short-lived workload JWT for Skiff's API. The agent hands
+	 * Process and container apps only: a short-lived workload JWT for Yoal's API. The agent hands
 	 * it to the helper, which writes the 0400 file; it never reaches desired state, logs or audit.
 	 */
 	identity: workloadIdentityActivationSchema.optional(),

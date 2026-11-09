@@ -21,7 +21,7 @@ import {
 	type WorkloadActivation,
 	type WorkloadDesired,
 	type WorkloadStatus,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import {
 	NatsConnection,
 	QUEUE_HEADERS,
@@ -44,7 +44,7 @@ import type { BrokerConnector } from './function-queues.ts';
  * - `broker.*`: JetStream API calls over the broker's own client connection (the D123 sampler's
  *   pattern), with the user and password from the broker's activation.
  * - `function.invoke`: one HTTP request to the host socket, exactly as Caddy would send it, minus
- *   Skiff's internal header. Socket activation starts an idle-stopped host.
+ *   Yoal's internal header. Socket activation starts an idle-stopped host.
  * - `function.scheduled`: the cron route the function scheduler uses, for one cron, now.
  *
  * The lease long-polls, so a dashboard click runs within about a second. Nodes that run neither
@@ -383,10 +383,10 @@ export class NodeTaskRunner {
 		if (cached && cached.activationVersion === broker.activationVersion) return cached.connection;
 		this.drop(broker.id);
 		const activation = await this.fetchActivation(broker.id, signal);
-		const user = activation.env.SKIFF_BROKER_USER;
-		const pass = activation.env.SKIFF_BROKER_PASSWORD;
+		const user = activation.env.YOAL_BROKER_USER;
+		const pass = activation.env.YOAL_BROKER_PASSWORD;
 		if (!user || !pass) throw new Error(`Broker ${broker.id} has no credentials in its activation`);
-		const connection = await this.connect({ host: '127.0.0.1', port: broker.port, user, pass, name: 'skiff-tasks' });
+		const connection = await this.connect({ host: '127.0.0.1', port: broker.port, user, pass, name: 'yoal-tasks' });
 		this.brokers.set(broker.id, { activationVersion: broker.activationVersion, connection });
 		return connection;
 	}
@@ -413,7 +413,7 @@ export class NodeTaskRunner {
 			if (name.toLowerCase() === FUNCTION_INTERNAL_HEADER) continue;
 			headers.set(name, value);
 		}
-		if (!headers.has('user-agent')) headers.set('user-agent', 'skiff-test-request');
+		if (!headers.has('user-agent')) headers.set('user-agent', 'yoal-test-request');
 		const coldStart = await this.isCold(workload);
 		this.noteActivity(workload.projectId);
 		const started = performance.now();
@@ -447,13 +447,13 @@ export class NodeTaskRunner {
 		const coldStart = await this.isCold(workload);
 		this.noteActivity(workload.projectId);
 		const started = performance.now();
-		const response = await this.doFetch('http://localhost/__skiff/scheduled', {
+		const response = await this.doFetch('http://localhost/__yoal/scheduled', {
 			method: 'POST',
 			unix: this.socketPath(workload),
 			headers: {
 				[FUNCTION_INTERNAL_HEADER]: FUNCTION_INTERNAL_VALUE,
-				'x-skiff-cron': task.input.cron,
-				'x-skiff-scheduled-time': String(this.now()),
+				'x-yoal-cron': task.input.cron,
+				'x-yoal-scheduled-time': String(this.now()),
 			},
 			signal: AbortSignal.any([signal, AbortSignal.timeout(SCHEDULED_TIMEOUT_MS)]),
 		} as RequestInit);

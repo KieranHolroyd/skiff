@@ -14,10 +14,10 @@
 	import UserRoundIcon from '@lucide/svelte/icons/user-round';
 	import UsersIcon from '@lucide/svelte/icons/users';
 	import XIcon from '@lucide/svelte/icons/x';
-	import type { Decision, GrantEvaluation, Permission, ScopeRef } from '@skiff/contracts';
+	import type { Decision, GrantEvaluation, Permission, ScopeRef } from '@yoal/contracts';
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import { notify } from '#lib/actions.js';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
 	import { Badge, type BadgeVariant } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
@@ -31,7 +31,7 @@
 	import EmptyState from '../../_lib/EmptyState.svelte';
 	import Panel from '../../_lib/Panel.svelte';
 	import RowMenu from '../../_lib/RowMenu.svelte';
-	import SecretDialog from '#lib/components/skiff/SecretDialog.svelte';
+	import SecretDialog from '#lib/components/yoal/SecretDialog.svelte';
 	import { formatDateTime } from '../../_lib/format.js';
 	import SettingsHeader from '../_lib/SettingsHeader.svelte';
 	import type { PageProps } from './$types';
@@ -462,7 +462,7 @@
 	}
 </script>
 
-<svelte:head><title>Access · Settings · Skiff</title></svelte:head>
+<svelte:head><title>Access · Settings · Yoal</title></svelte:head>
 
 <SettingsHeader id="access" />
 
@@ -1339,7 +1339,7 @@
 						icon={NetworkIcon}
 						compact
 						title="No federation trusts"
-						description="Add one for GitHub Actions, GitLab, Kubernetes or another Skiff platform. It maps the issuer's tokens to a service account."
+						description="Add one for GitHub Actions, GitLab, Kubernetes or another Yoal platform. It maps the issuer's tokens to a service account."
 					/>
 				</div>
 			{:else}
@@ -2101,7 +2101,7 @@
 		bind:open={federationOpen}
 		icon={NetworkIcon}
 		title="Add a federation trust"
-		description="Map an OIDC issuer to one service account. A token whose issuer, audience and subject match is exchanged for a short-lived Skiff token for that account."
+		description="Map an OIDC issuer to one service account. A token whose issuer, audience and subject match is exchanged for a short-lived Yoal token for that account."
 		action="?/createFederationTrust"
 		submitLabel="Add trust"
 		size="lg"
@@ -2281,7 +2281,7 @@
 		bind:open={keyOpen}
 		icon={KeyRoundIcon}
 		title="New service account key"
-		description="A long-lived skif_ key for a machine. The secret is shown once; revoke it to rotate."
+		description="A long-lived yoal_ key for a machine. The secret is shown once; revoke it to rotate."
 		action="?/createServiceAccountKey"
 		submitLabel="Create key"
 	>

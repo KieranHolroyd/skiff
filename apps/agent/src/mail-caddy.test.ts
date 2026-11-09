@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { desiredStateSchema, mailHostnames } from '@skiff/contracts';
+import { desiredStateSchema, mailHostnames } from '@yoal/contracts';
 import { buildCaddyConfig } from './caddy-config.ts';
 
 type Json = Record<string, unknown>;
@@ -20,7 +20,7 @@ function compile(mail: boolean) {
 		state,
 		listen: [':443'],
 		dataDir: '/data',
-		agentSocket: '/run/skiff-agent/agent.sock',
+		agentSocket: '/run/yoal-agent/agent.sock',
 		caddyAdminSocket: '/var/lib/caddy/admin.sock',
 		tls: { email: 'ops@example.com', cloudflareApiToken: 'cf-token', subjects: ['*.example.com', 'example.com'] },
 	});

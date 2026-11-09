@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm';
-import { configSnapshots, releases } from '@skiff/db';
-import { parseSiteConfig, SiteConfigError, type ParsedConfig } from '@skiff/site-config';
-import type { Principal } from '@skiff/contracts';
+import { configSnapshots, releases } from '@yoal/db';
+import { parseSiteConfig, SiteConfigError, type ParsedConfig } from '@yoal/site-config';
+import type { Principal } from '@yoal/contracts';
 import { buildArtifact, entryMap, type FileEntry, type ReleaseArtifact } from './artifact.ts';
 import type { CoreContext } from './context.ts';
 import { NotFoundError, ValidationError } from './errors.ts';

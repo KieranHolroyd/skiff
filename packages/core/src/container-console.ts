@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm';
-import { nodes, projects, workloadReplicas, workloads } from '@skiff/db';
+import { nodes, projects, workloadReplicas, workloads } from '@yoal/db';
 import {
 	CONTAINER_CONSOLE_CAPABILITY,
 	CONTAINER_CONSOLE_DEFAULT_PORT,
@@ -14,7 +14,7 @@ import {
 	type ContainerTarget,
 	type NodeContainerConsoleDesired,
 	type Principal,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, CoreError, NotFoundError } from './errors.ts';
@@ -94,7 +94,7 @@ export class ContainerConsoleService {
 		if (!scopeAllowed(principal, scope))
 			throw new CoreError(
 				'forbidden',
-				'MCP clients cannot open container shells. Use the dashboard or `skif container shell`.',
+				'MCP clients cannot open container shells. Use the dashboard or `yoal container shell`.',
 				403,
 			);
 		const targets = this.targetsOf(project);

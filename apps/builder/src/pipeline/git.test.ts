@@ -6,7 +6,7 @@ import { BuildValidationError } from '../command.ts';
 import { gitRepo } from './git-fixture.ts';
 import { cloneAtSha, cloneRef, commitInfo, gitEnv, validateSha, type GitCredentials } from './git.ts';
 
-const root = mkdtempSync(join(tmpdir(), 'skiff-git-'));
+const root = mkdtempSync(join(tmpdir(), 'yoal-git-'));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 const credentials: GitCredentials = { gitToken: null, gitTokenHosts: ['github.com'], gitSshKey: null, gitSshKnownHosts: null, buildDir: root };
 

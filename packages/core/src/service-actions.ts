@@ -5,7 +5,7 @@ import {
 	type ServiceActionSkip,
 	type ServiceRestart,
 	type ServiceRestartResult,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 
 /**

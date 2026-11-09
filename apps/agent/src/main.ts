@@ -17,8 +17,8 @@ import {
 	type VolumeInventory,
 	type WireguardStatus,
 	type WorkloadActivation,
-} from '@skiff/contracts';
-import type { TlsOptions } from '@skiff/site-config';
+} from '@yoal/contracts';
+import type { TlsOptions } from '@yoal/site-config';
 import { startAnalyticsSink, type AnalyticsSink } from './analytics-sink.ts';
 import { CaddyAdmin } from './caddy.ts';
 import { CertProbe, certProbeTargets, tlsCertReader } from './certs.ts';
@@ -63,7 +63,7 @@ import { BROKER_STATS_INTERVAL_MS, BrokerStatsSampler } from './broker-stats.ts'
 import { DesiredStateStore, desiredStateEtag, desiredStateRequest } from './state.ts';
 import { postTelemetryBatch, TelemetryClient } from './telemetry.ts';
 import { handleSiteRequest, normalizeHost, UsedTokenCache } from './verify.ts';
-import { AccessDecisionCache } from './skiff-access.ts';
+import { AccessDecisionCache } from './yoal-access.ts';
 import type { StudioFront } from './studio/front.ts';
 import { ConsoleFront, controlPlaneConsoleActivationFetcher } from './console-front.ts';
 import { WorkloadIdentityBroker, parseIdentityResponse } from './workload-identity.ts';
@@ -117,9 +117,9 @@ class AgentRuntime {
 	private wireguardStatusAt = 0;
 	private readonly certs: CertProbe | null;
 	private readonly helper: HelperClient;
-	/** Email (docs/EMAIL.md): runs and feeds skiff-mail when this node is the mail node. */
+	/** Email (docs/EMAIL.md): runs and feeds yoal-mail when this node is the mail node. */
 	private readonly mail: MailBridge;
-	/** User pools (IAM.md §11.2): runs skiff-identity when this node is the identity node. */
+	/** User pools (IAM.md §11.2): runs yoal-identity when this node is the identity node. */
 	private readonly poolIdentity: IdentityBridge;
 	private readonly workloads: WorkloadRuntime;
 	/** Workload JWT delivery and the loopback metadata endpoint (IAM.md I18). */
@@ -130,7 +130,7 @@ class AgentRuntime {
 	private readonly databaseBackups: DatabaseBackupRunner;
 	/** App-volume usage, purges, snapshots and restores (docs/VOLUMES.md). */
 	private readonly appVolumes: AppVolumeRunner;
-	/** Network share mounts under /mnt/skiff-shares (docs/STORAGE.md §3, D143). */
+	/** Network share mounts under /mnt/yoal-shares (docs/STORAGE.md §3, D143). */
 	private readonly shareMounts: ShareMountRunner;
 	private readonly diskMounts: DiskMountRunner;
 	/** Disk benchmarks (docs/STORAGE.md §5.1). */
@@ -164,7 +164,7 @@ class AgentRuntime {
 	private actualStateVersion = 0;
 	private projectByHost = new Map<string, string>();
 	private readonly usedTokens = new UsedTokenCache();
-	/** Brief cache of verified Skiff Access decisions (IAM.md §11.1, S6). */
+	/** Brief cache of verified Yoal Access decisions (IAM.md §11.1, S6). */
 	private readonly accessCache: AccessDecisionCache;
 
 	private caddyOk = false;
@@ -238,12 +238,12 @@ class AgentRuntime {
 		this.mail = new MailBridge({
 			controlUrl: config.controlUrl,
 			nodeToken: config.nodeToken,
-			socketPath: process.env.SKIFF_MAIL_SOCKET?.trim() || '/run/skiff/mail.sock',
+			socketPath: process.env.YOAL_MAIL_SOCKET?.trim() || '/run/yoal/mail.sock',
 			helper: this.helper,
 			log,
 		});
 		this.poolIdentity = new IdentityBridge({
-			socketPath: process.env.SKIFF_IDENTITY_SOCKET?.trim() || '/run/skiff/identity.sock',
+			socketPath: process.env.YOAL_IDENTITY_SOCKET?.trim() || '/run/yoal/identity.sock',
 			helper: this.helper,
 			controlUrl: config.controlUrl,
 			nodeToken: config.nodeToken,
@@ -320,7 +320,7 @@ class AgentRuntime {
 			runtime: this.workloads,
 			log,
 		});
-		// Must equal the helper's SKIFF_HELPER_REPLICATION_DIR (the installer uses /var/lib/skiff/agent).
+		// Must equal the helper's YOAL_HELPER_REPLICATION_DIR (the installer uses /var/lib/yoal/agent).
 		this.replicaLinks = new ReplicaLinkForwarder({
 			root: join(config.dataDir, 'replication'),
 			log: (level, message) => log(level, message),
@@ -1259,7 +1259,7 @@ class AgentRuntime {
 		await this.storage
 			.reconcile(this.desired?.storage, storage)
 			.then((requested) => {
-				if (requested) log('info', 'Requested a storage move from skiff-storage.service');
+				if (requested) log('info', 'Requested a storage move from yoal-storage.service');
 			})
 			.catch((error: unknown) => log('warn', `Could not request a storage move: ${errorText(error)}`));
 		const body: Heartbeat = {
@@ -1374,7 +1374,7 @@ class AgentRuntime {
 		if (this.convergedVersion === null) return;
 		try {
 			if (!(await this.caddy.hasId(CONVERGED_SENTINEL_ID, this.shutdownController.signal))) {
-				log('warn', 'Caddy lost the Skiff config (restart?); re-applying routes');
+				log('warn', 'Caddy lost the Yoal config (restart?); re-applying routes');
 				this.convergedVersion = null;
 			}
 		} catch {
@@ -1533,84 +1533,84 @@ class AgentRuntime {
 		const telemetry = this.telemetry?.stats;
 		const workloadReports = this.workloads.currentReports();
 		const measurements: Array<[string, string, 'counter' | 'gauge', number]> = [
-			['skiff_agent_caddy_up', 'Whether the Caddy admin API is reachable.', 'gauge', this.caddyOk ? 1 : 0],
-			['skiff_agent_routes', 'Routes in the current desired state.', 'gauge', this.desired?.routes.length ?? 0],
-			['skiff_agent_releases', 'Verified releases on disk.', 'gauge', this.releases.listReleases().length],
+			['yoal_agent_caddy_up', 'Whether the Caddy admin API is reachable.', 'gauge', this.caddyOk ? 1 : 0],
+			['yoal_agent_routes', 'Routes in the current desired state.', 'gauge', this.desired?.routes.length ?? 0],
+			['yoal_agent_releases', 'Verified releases on disk.', 'gauge', this.releases.listReleases().length],
 			[
-				'skiff_agent_workloads_total',
+				'yoal_agent_workloads_total',
 				'Workloads reported by this node.',
 				'gauge',
 				workloadReports.length,
 			],
 			[
-				'skiff_agent_workloads_running',
+				'yoal_agent_workloads_running',
 				'Workloads currently running.',
 				'gauge',
 				workloadReports.filter((report) => report.status === 'running').length,
 			],
 			[
-				'skiff_agent_desired_state_version',
+				'yoal_agent_desired_state_version',
 				'Version of the last pulled desired state.',
 				'gauge',
 				this.desired?.version ?? 0,
 			],
-			['skiff_agent_actual_state_version', 'Version this agent has converged to.', 'gauge', this.actualStateVersion],
+			['yoal_agent_actual_state_version', 'Version this agent has converged to.', 'gauge', this.actualStateVersion],
 			[
-				'skiff_agent_reconcile_last_attempt_timestamp_seconds',
+				'yoal_agent_reconcile_last_attempt_timestamp_seconds',
 				'Unix time of the last reconcile attempt.',
 				'gauge',
 				this.lastReconcileAttemptAt / 1000,
 			],
 			[
-				'skiff_agent_reconcile_last_success_timestamp_seconds',
+				'yoal_agent_reconcile_last_success_timestamp_seconds',
 				'Unix time of the last successful reconcile.',
 				'gauge',
 				this.lastReconcileSuccessAt / 1000,
 			],
 			[
-				'skiff_agent_reconcile_failures_total',
+				'yoal_agent_reconcile_failures_total',
 				'Desired-state pulls or converges that failed.',
 				'counter',
 				this.reconcileFailures,
 			],
 			[
-				'skiff_agent_heartbeat_failures_total',
+				'yoal_agent_heartbeat_failures_total',
 				'Heartbeats that could not be delivered.',
 				'counter',
 				this.heartbeatFailures,
 			],
 			[
-				'skiff_agent_telemetry_flush_failures_total',
+				'yoal_agent_telemetry_flush_failures_total',
 				'Telemetry batches that could not be delivered.',
 				'counter',
 				telemetry?.flushFailures ?? 0,
 			],
 			[
-				'skiff_agent_telemetry_batches_sent_total',
+				'yoal_agent_telemetry_batches_sent_total',
 				'Telemetry batches delivered to the control plane.',
 				'counter',
 				telemetry?.batchesSent ?? 0,
 			],
 			[
-				'skiff_agent_telemetry_buckets_dropped_total',
+				'yoal_agent_telemetry_buckets_dropped_total',
 				'Telemetry buckets dropped to keep memory bounded.',
 				'counter',
 				telemetry?.dropped ?? 0,
 			],
 			[
-				'skiff_agent_database_samples_dropped_total',
+				'yoal_agent_database_samples_dropped_total',
 				'Database samples and snapshots dropped to keep memory bounded.',
 				'counter',
 				this.databaseStats.dropped,
 			],
 			[
-				'skiff_agent_storage_samples_dropped_total',
+				'yoal_agent_storage_samples_dropped_total',
 				'Storage samples and snapshots dropped to keep memory bounded.',
 				'counter',
 				this.storageStats.dropped,
 			],
 			[
-				'skiff_agent_broker_samples_dropped_total',
+				'yoal_agent_broker_samples_dropped_total',
 				'Broker samples and stream listings dropped to keep memory bounded.',
 				'counter',
 				this.brokerStats.dropped,
@@ -1623,9 +1623,9 @@ class AgentRuntime {
 			lines.push(`# TYPE ${name} ${type}`);
 			lines.push(`${name} ${formatMetric(value)}`);
 		}
-		lines.push('# HELP skiff_agent_build_info Agent build metadata.');
-		lines.push('# TYPE skiff_agent_build_info gauge');
-		lines.push(`skiff_agent_build_info{version="${escapeLabel(this.config.agentVersion)}"} 1`);
+		lines.push('# HELP yoal_agent_build_info Agent build metadata.');
+		lines.push('# TYPE yoal_agent_build_info gauge');
+		lines.push(`yoal_agent_build_info{version="${escapeLabel(this.config.agentVersion)}"} 1`);
 		return `${lines.join('\n')}\n`;
 	}
 }
@@ -1678,7 +1678,7 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 function log(level: 'info' | 'warn' | 'error', message: string): void {
-	const line = `[skiff-agent ${new Date().toISOString()}] ${level.toUpperCase()} ${message}`;
+	const line = `[yoal-agent ${new Date().toISOString()}] ${level.toUpperCase()} ${message}`;
 	if (level === 'error') console.error(line);
 	else if (level === 'warn') console.warn(line);
 	else console.log(line);
@@ -1690,14 +1690,14 @@ async function runJoinCli(args: string[]): Promise<void> {
 		return;
 	}
 	const options = parseJoinArgs(args);
-	if (options.networkMode === 'skiff' && !options.wireguardPublicKey) {
+	if (options.networkMode === 'yoal' && !options.wireguardPublicKey) {
 		// The private key stays on the node: the helper generates it and returns only the public key.
-		const helper = new HelperClient(process.env.SKIFF_HELPER_SOCKET?.trim() || '/run/skiff-helper/helper.sock');
+		const helper = new HelperClient(process.env.YOAL_HELPER_SOCKET?.trim() || '/run/yoal-helper/helper.sock');
 		options.wireguardPublicKey = (await helper.wireguardKeygen()).publicKey;
 	}
 	const joined = await joinNode(options);
 	process.stdout.write(formatEnv(joined));
-	// Keep stdout machine-readable for `> /etc/skiff/agent.env`.
+	// Keep stdout machine-readable for `> /etc/yoal/agent.env`.
 	console.error(`Wrote ${nodeFilePath(options.dataDir)}`);
 }
 
@@ -1715,58 +1715,58 @@ if (import.meta.main) {
 	const joinIndex = subcommand('join');
 	const storageIndex = subcommand('storage');
 	if (subcommand('mail') >= 0) {
-		// Email's MTA (docs/EMAIL.md), run by skiff-mail.service in its own cgroup. It reads no agent
-		// config and never sees the node token: the agent feeds it over /run/skiff/mail.sock.
-		const { runMailProcess } = await import('@skiff/mail/process');
+		// Email's MTA (docs/EMAIL.md), run by yoal-mail.service in its own cgroup. It reads no agent
+		// config and never sees the node token: the agent feeds it over /run/yoal/mail.sock.
+		const { runMailProcess } = await import('@yoal/mail/process');
 		await runMailProcess().catch((error: unknown) => {
-			console.error(`[skiff-agent mail] fatal: ${errorText(error)}`);
+			console.error(`[yoal-agent mail] fatal: ${errorText(error)}`);
 			process.exit(1);
 		});
 	} else if (subcommand('identity') >= 0) {
-		// The separate user-pool identity process (docs/IAM.md §11.2), run by skiff-identity.service
-		// in its own cgroup. Same signed binary as skiff-mail; no agent config or node token.
-		const { runIdentityProcess } = await import('@skiff/identity/process');
+		// The separate user-pool identity process (docs/IAM.md §11.2), run by yoal-identity.service
+		// in its own cgroup. Same signed binary as yoal-mail; no agent config or node token.
+		const { runIdentityProcess } = await import('@yoal/identity/process');
 		await runIdentityProcess().catch((error: unknown) => {
-			console.error(`[skiff-agent identity] fatal: ${errorText(error)}`);
+			console.error(`[yoal-agent identity] fatal: ${errorText(error)}`);
 			process.exit(1);
 		});
 	} else if (subcommand('studio') >= 0) {
-		// The native database studio process (plan 22), run by skiff-studio.service in its own
+		// The native database studio process (plan 22), run by yoal-studio.service in its own
 		// cgroup. It reads no agent config and never sees the node token.
 		const { runStudioProcess } = await import('./studio/process.ts');
 		await runStudioProcess().catch((error: unknown) => {
-			console.error(`[skiff-agent studio] fatal: ${errorText(error)}`);
+			console.error(`[yoal-agent studio] fatal: ${errorText(error)}`);
 			process.exit(1);
 		});
 	} else if (storageIndex >= 0) {
-		// Root-only node storage moves (D48), run by skiff-storage.service.
+		// Root-only node storage moves (D48), run by yoal-storage.service.
 		const { runStorageCli } = await import('./storage-apply.ts');
 		process.exitCode = await runStorageCli(process.argv.slice(storageIndex + 1));
 	} else if (subcommand('pipeline-step') >= 0) {
 		// The in-job Pipelines step runner (docs/PIPELINES.md W5), started by the Builder inside a job
 		// container or sandbox unit. It reads no agent config: only job.json and the job token.
-		const { runPipelineStep } = await import('@skiff/builder');
+		const { runPipelineStep } = await import('@yoal/builder');
 		const code = await runPipelineStep(process.argv[subcommand('pipeline-step') + 1]).catch((error: unknown) => {
-			console.error(`[skiff-agent pipeline-step] fatal: ${errorText(error)}`);
+			console.error(`[yoal-agent pipeline-step] fatal: ${errorText(error)}`);
 			return 1;
 		});
 		process.exit(code);
 	} else if (subcommand('builder') >= 0) {
 		// The git Builder ships inside the agent binary so every node can build (D47). It runs as its
-		// own unit (`skiff-builder.service`), never inside the agent's sandbox or memory budget.
-		const { runBuilder } = await import('@skiff/builder');
+		// own unit (`yoal-builder.service`), never inside the agent's sandbox or memory budget.
+		const { runBuilder } = await import('@yoal/builder');
 		await runBuilder().catch((error: unknown) => {
-			console.error(`[skiff-agent builder] fatal: ${errorText(error)}`);
+			console.error(`[yoal-agent builder] fatal: ${errorText(error)}`);
 			process.exitCode = 1;
 		});
 	} else if (joinIndex >= 0) {
 		await runJoinCli(process.argv.slice(joinIndex + 1)).catch((error: unknown) => {
-			console.error(`skiff-agent join: ${errorText(error)}`);
+			console.error(`yoal-agent join: ${errorText(error)}`);
 			process.exitCode = 1;
 		});
 	} else {
 		main().catch((error: unknown) => {
-			console.error(`[skiff-agent] fatal: ${errorText(error)}`);
+			console.error(`[yoal-agent] fatal: ${errorText(error)}`);
 			process.exitCode = 1;
 		});
 	}
@@ -1778,8 +1778,8 @@ if (import.meta.main) {
  * without restarting the agent.
  */
 export function advertisedCapabilities(
-	pyodideDir: string = process.env.SKIFF_PYODIDE_CACHE_DIR ?? `${WORKERD_INSTALL_DIR}/${WORKERD_PINNED_VERSION}/pyodide`,
-	nodeBinary: string = process.env.SKIFF_NODE_PATH ?? '/usr/local/bin/node',
+	pyodideDir: string = process.env.YOAL_PYODIDE_CACHE_DIR ?? `${WORKERD_INSTALL_DIR}/${WORKERD_PINNED_VERSION}/pyodide`,
+	nodeBinary: string = process.env.YOAL_NODE_PATH ?? '/usr/local/bin/node',
 ): string[] {
 	let python = false;
 	try {

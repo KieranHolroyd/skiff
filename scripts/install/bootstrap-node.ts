@@ -4,7 +4,7 @@
  * machine as the edge node. It talks to the same service layer as the API, but uses a system
  * principal because the first admin does not exist yet.
  *
- * Writes /etc/skiff/agent.env with the node identity and the Caddy/agent settings.
+ * Writes /etc/yoal/agent.env with the node identity and the Caddy/agent settings.
  */
 import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -22,24 +22,24 @@ function required(name: string): string {
 	return value;
 }
 
-const dataDir = required('SKIFF_DATA_DIR');
-const platformOrigin = required('SKIFF_PLATFORM_ORIGIN');
-const contentDomain = required('SKIFF_CONTENT_DOMAIN');
-const siteCookieSecret = required('SKIFF_SITE_COOKIE_SECRET');
-const objectStoreSecret = required('SKIFF_OBJECT_STORE_SECRET');
+const dataDir = required('YOAL_DATA_DIR');
+const platformOrigin = required('YOAL_PLATFORM_ORIGIN');
+const contentDomain = required('YOAL_CONTENT_DOMAIN');
+const siteCookieSecret = required('YOAL_SITE_COOKIE_SECRET');
+const objectStoreSecret = required('YOAL_OBJECT_STORE_SECRET');
 // The installer passes the key itself when it is sealed with systemd-creds (no plaintext file).
-const masterKeyValue = env.SKIFF_MASTER_KEY || readFileSync(required('SKIFF_MASTER_KEY_FILE'), 'utf8');
-const agentEnvFile = required('SKIFF_AGENT_ENV_FILE');
-const platformHost = required('SKIFF_PLATFORM_HOST');
-const platformUpstream = required('SKIFF_PLATFORM_UPSTREAM');
-const acmeEmail = env.SKIFF_ACME_EMAIL ?? '';
-const cloudflareTokenFile = env.SKIFF_CLOUDFLARE_API_TOKEN_FILE ?? '';
-const caddyAdminSocket = env.SKIFF_CADDY_ADMIN_SOCKET ?? '/var/lib/caddy/admin.sock';
+const masterKeyValue = env.YOAL_MASTER_KEY || readFileSync(required('YOAL_MASTER_KEY_FILE'), 'utf8');
+const agentEnvFile = required('YOAL_AGENT_ENV_FILE');
+const platformHost = required('YOAL_PLATFORM_HOST');
+const platformUpstream = required('YOAL_PLATFORM_UPSTREAM');
+const acmeEmail = env.YOAL_ACME_EMAIL ?? '';
+const cloudflareTokenFile = env.YOAL_CLOUDFLARE_API_TOKEN_FILE ?? '';
+const caddyAdminSocket = env.YOAL_CADDY_ADMIN_SOCKET ?? '/var/lib/caddy/admin.sock';
 /** D105: the edge agent reaches the control plane on its socket instead of through Caddy. */
-const controlSocket = env.SKIFF_CONTROL_SOCKET ?? '';
+const controlSocket = env.YOAL_CONTROL_SOCKET ?? '';
 
 mkdirSync(dirname(agentEnvFile), { recursive: true });
-const { db, sqlite } = createDb({ path: `${dataDir}/skiff.db` });
+const { db, sqlite } = createDb({ path: `${dataDir}/yoal.db` });
 const core = createCore({
 	db,
 	sqlite,
@@ -83,18 +83,18 @@ if (existing) {
 }
 
 const agentEnv = [
-	`SKIFF_CONTROL_URL=${platformOrigin}`,
-	...(controlSocket ? [`SKIFF_CONTROL_SOCKET=${controlSocket}`] : []),
-	`SKIFF_NODE_ID=${nodeId}`,
-	`SKIFF_NODE_TOKEN=${token}`,
-	`SKIFF_NODE_MODE=${mode}`,
-	`SKIFF_DATA_DIR=/var/lib/skiff/agent`,
-	`SKIFF_CONTENT_DOMAIN=${contentDomain}`,
-	`SKIFF_PLATFORM_HOST=${platformHost}`,
-	`SKIFF_PLATFORM_UPSTREAM=${platformUpstream}`,
-	`SKIFF_CADDY_ADMIN_SOCKET=${caddyAdminSocket}`,
-	...(acmeEmail ? [`SKIFF_ACME_EMAIL=${acmeEmail}`, 'SKIFF_TLS=1'] : ['SKIFF_TLS=0']),
-	...(cloudflareTokenFile ? [`SKIFF_CLOUDFLARE_API_TOKEN_FILE=${cloudflareTokenFile}`] : []),
+	`YOAL_CONTROL_URL=${platformOrigin}`,
+	...(controlSocket ? [`YOAL_CONTROL_SOCKET=${controlSocket}`] : []),
+	`YOAL_NODE_ID=${nodeId}`,
+	`YOAL_NODE_TOKEN=${token}`,
+	`YOAL_NODE_MODE=${mode}`,
+	`YOAL_DATA_DIR=/var/lib/yoal/agent`,
+	`YOAL_CONTENT_DOMAIN=${contentDomain}`,
+	`YOAL_PLATFORM_HOST=${platformHost}`,
+	`YOAL_PLATFORM_UPSTREAM=${platformUpstream}`,
+	`YOAL_CADDY_ADMIN_SOCKET=${caddyAdminSocket}`,
+	...(acmeEmail ? [`YOAL_ACME_EMAIL=${acmeEmail}`, 'YOAL_TLS=1'] : ['YOAL_TLS=0']),
+	...(cloudflareTokenFile ? [`YOAL_CLOUDFLARE_API_TOKEN_FILE=${cloudflareTokenFile}`] : []),
 	'',
 ].join('\n');
 writeFileSync(`${agentEnvFile}.tmp`, agentEnv, { mode: 0o640 });

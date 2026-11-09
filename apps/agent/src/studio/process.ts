@@ -1,5 +1,5 @@
 /**
- * The `skiff-agent studio` entrypoint (plan 22): the on-demand studio process that runs engine
+ * The `yoal-agent studio` entrypoint (plan 22): the on-demand studio process that runs engine
  * plugins. It listens only on a unix socket that the agent front reaches, holds the session
  * table (activations arrive by `PUT /sessions/:id`), enforces the session limits on every result
  * stream, and exits cleanly once it has had no sessions for a while so systemd leaves it stopped.
@@ -15,7 +15,7 @@ import {
 	STUDIO_SESSION_HEADER,
 	type DatabaseEngine,
 	type DatabaseStudioActivation,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import {
 	encodeEvent,
 	limitEvents,
@@ -33,19 +33,19 @@ import {
 	type StudioRequest,
 	type StudioSession,
 	type StudioTarget,
-} from '@skiff/studio';
+} from '@yoal/studio';
 
-export const DEFAULT_STUDIO_SOCKET = '/run/skiff/studio.sock';
+export const DEFAULT_STUDIO_SOCKET = '/run/yoal/studio.sock';
 
 export interface StudioProcessOptions {
-	/** Defaults to `SKIFF_STUDIO_SOCKET`, then `/run/skiff/studio.sock`. */
+	/** Defaults to `YOAL_STUDIO_SOCKET`, then `/run/yoal/studio.sock`. */
 	socketPath?: string;
 	/** Exit after this long with no sessions. */
 	idleExitMs?: number;
 	/** Close a session's plugin connection after this long unused; it reconnects lazily. */
 	sessionIdleMs?: number;
 	maxSessions?: number;
-	/** Engine → plugin loaders; defaults to the registry (or the fake with `SKIFF_STUDIO_FAKE=1`). */
+	/** Engine → plugin loaders; defaults to the registry (or the fake with `YOAL_STUDIO_FAKE=1`). */
 	loaders?: Partial<Record<DatabaseEngine, PluginLoader>>;
 	/** Called after an idle shutdown; defaults to `process.exit(0)` (a clean exit systemd won't restart). */
 	exit?: () => void;
@@ -76,13 +76,13 @@ const NDJSON_HEADERS = { 'content-type': NDJSON_CONTENT_TYPE, 'cache-control': '
 const encoder = new TextEncoder();
 
 export async function runStudioProcess(options: StudioProcessOptions = {}): Promise<StudioProcess> {
-	const socketPath = options.socketPath ?? process.env.SKIFF_STUDIO_SOCKET ?? DEFAULT_STUDIO_SOCKET;
+	const socketPath = options.socketPath ?? process.env.YOAL_STUDIO_SOCKET ?? DEFAULT_STUDIO_SOCKET;
 	const idleExitMs = options.idleExitMs ?? 300_000;
 	const sessionIdleMs = options.sessionIdleMs ?? 300_000;
 	const maxSessions = options.maxSessions ?? 8;
 	const now = options.now ?? Date.now;
 	const log = options.log ?? defaultLog;
-	const loaders = options.loaders ?? (process.env.SKIFF_STUDIO_FAKE === '1' ? fakeLoaders() : undefined);
+	const loaders = options.loaders ?? (process.env.YOAL_STUDIO_FAKE === '1' ? fakeLoaders() : undefined);
 	const bootId = crypto.randomUUID();
 
 	const sessions = new Map<string, SessionEntry>();
@@ -468,12 +468,12 @@ export function toStudioError(error: unknown): StudioError {
 }
 
 function fakeLoaders(): Partial<Record<DatabaseEngine, PluginLoader>> {
-	const load: PluginLoader = () => import('@skiff/studio/fake').then((module) => module.fakePlugin);
+	const load: PluginLoader = () => import('@yoal/studio/fake').then((module) => module.fakePlugin);
 	return Object.fromEntries(databaseEngines.map((engine) => [engine, load]));
 }
 
 function defaultLog(level: 'info' | 'warn' | 'error', message: string): void {
-	const line = `[skiff-studio ${new Date().toISOString()}] ${level.toUpperCase()} ${message}`;
+	const line = `[yoal-studio ${new Date().toISOString()}] ${level.toUpperCase()} ${message}`;
 	if (level === 'error') console.error(line);
 	else if (level === 'warn') console.warn(line);
 	else console.log(line);

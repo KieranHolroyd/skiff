@@ -1,14 +1,14 @@
 /**
- * Blueprint helpers for `skif blueprint` (plan 11): finding the file and rendering plans and
+ * Blueprint helpers for `yoal blueprint` (plan 11): finding the file and rendering plans and
  * runs. The server parses and validates the document (YAML or JSON), so the CLI only reads the
- * text and sends it; these shapes mirror `@skiff/contracts`' blueprint views.
+ * text and sends it; these shapes mirror `@yoal/contracts`' blueprint views.
  */
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { renderTable, truncate } from './output.ts';
 
-/** Mirrors `BLUEPRINT_FILE_NAMES` in @skiff/contracts: looked for in order when no path is given. */
-export const BLUEPRINT_FILE_NAMES = ['skiff.blueprint.yaml', 'skiff.blueprint.yml', 'skiff.blueprint.json'] as const;
+/** Mirrors `BLUEPRINT_FILE_NAMES` in @yoal/contracts: looked for in order when no path is given. */
+export const BLUEPRINT_FILE_NAMES = ['yoal.blueprint.yaml', 'yoal.blueprint.yml', 'yoal.blueprint.json'] as const;
 
 /** Mirrors `BLUEPRINT_MAX_BYTES`. The server enforces it; this only fails faster. */
 export const BLUEPRINT_MAX_BYTES = 512 * 1024;

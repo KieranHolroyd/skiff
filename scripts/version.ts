@@ -11,7 +11,7 @@
  * `auto` only ever bumps the patch number, and only once per release: if VERSION is already
  * ahead of origin/main (an earlier commit, or a manual minor/major bump), it leaves it alone.
  * Commits that only touch docs, tests, CI or the separately versioned CLI never bump.
- * Skip it with `git commit --no-verify` or SKIFF_NO_VERSION_BUMP=1.
+ * Skip it with `git commit --no-verify` or YOAL_NO_VERSION_BUMP=1.
  */
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -141,7 +141,7 @@ const short = (ref: string | null) => (ref ?? 'origin/main').replace(/^refs\/rem
 // ------------------------------------------------------------------------- CLI
 
 function auto(root: string): number {
-	if (process.env.SKIFF_NO_VERSION_BUMP === '1') return 0;
+	if (process.env.YOAL_NO_VERSION_BUMP === '1') return 0;
 	const staged = git(['diff', '--cached', '--name-only', '--diff-filter=ACMRD'], root);
 	if (!staged.ok) return 0;
 	const released = releasedVersion(root);

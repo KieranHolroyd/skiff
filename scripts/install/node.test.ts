@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { NODE_DIGESTS, NODE_PINNED_VERSION, ensureNode, hasSkiffNode, nodeArch, nodeTarballUrl } from './node.ts';
+import { NODE_DIGESTS, NODE_PINNED_VERSION, ensureNode, hasYoalNode, nodeArch, nodeTarballUrl } from './node.ts';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -11,7 +11,7 @@ afterEach(() => {
 });
 
 function temp(): string {
-	const dir = mkdtempSync(join(tmpdir(), 'skiff-node-install-'));
+	const dir = mkdtempSync(join(tmpdir(), 'yoal-node-install-'));
 	dirs.push(dir);
 	return dir;
 }
@@ -72,7 +72,7 @@ describe('Node.js installer (D125)', () => {
 		// The tarball has no npx here, so nothing is linked for it.
 		expect(existsSync(join(dir, 'bin', 'npx'))).toBe(false);
 		expect(existsSync(join(dir, 'lib', '.9.9.9.partial'))).toBe(false);
-		expect(hasSkiffNode(join(dir, 'bin'), join(dir, 'lib'))).toBe(true);
+		expect(hasYoalNode(join(dir, 'bin'), join(dir, 'lib'))).toBe(true);
 
 		// Second run: present, no download.
 		const again = await ensureNode({
@@ -100,8 +100,8 @@ describe('Node.js installer (D125)', () => {
 			log: (message) => logs.push(message),
 		});
 		expect(readFileSync(join(dir, 'bin', 'node'), 'utf8')).toContain('mine');
-		expect(logs.some((line) => line.includes("not Skiff's Node.js link"))).toBe(true);
-		expect(hasSkiffNode(join(dir, 'bin'), join(dir, 'lib'))).toBe(false);
+		expect(logs.some((line) => line.includes("not Yoal's Node.js link"))).toBe(true);
+		expect(hasYoalNode(join(dir, 'bin'), join(dir, 'lib'))).toBe(false);
 	});
 
 	test('refuses a download whose digest does not match and installs nothing', async () => {

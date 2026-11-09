@@ -2,12 +2,12 @@
 -- Additive only.
 --
 -- Better Auth's SSO plugin (`@better-auth/sso`, spike S2) is not a dependency yet, so it has not
--- created its boot-migrated `ssoProvider` table. Until it is added, Skiff keeps the provider in
+-- created its boot-migrated `ssoProvider` table. Until it is added, Yoal keeps the provider in
 -- `sso_providers`; the columns mirror that plugin's model (issuer, client id/secret, OIDC config,
 -- organisation id, domain) so adopting the plugin is a copy, not a rewrite. The client secret is
 -- sealed with the organisation data key (`SecretService.seal`); the raw value is never returned.
 --
--- `sso_domains` is exactly IAM.md §4. A TXT record `skiff-verify=<token>` on the domain proves
+-- `sso_domains` is exactly IAM.md §4. A TXT record `yoal-verify=<token>` on the domain proves
 -- ownership. A domain is globally unique: two organisations can never route the same address, and
 -- `/login` can resolve an email to exactly one provider. `last_checked_at` is the day-long
 -- re-check the settings page performs; `verified_at` is the current state, cleared when the record

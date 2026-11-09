@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { ContainerTarget } from '@skiff/contracts';
+	import type { ContainerTarget } from '@yoal/contracts';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
 
 	/** Pick one replica of a multi-copy container; hidden when there is only one. */

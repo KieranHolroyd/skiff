@@ -1,9 +1,9 @@
 {
-	"name": "@skiff/identity",
+	"name": "@yoal/identity",
 	"private": true,
 	"version": "0.1.0",
 	"type": "module",
-	"description": "Skiff's standalone user-pool identity process (skiff-identity).",
+	"description": "Yoal's standalone user-pool identity process (yoal-identity).",
 	"exports": {
 		".": "./src/index.ts",
 		"./process": "./src/process.ts"
@@ -14,9 +14,9 @@
 		"test": "bun test"
 	},
 	"dependencies": {
-		"@skiff/contracts": "workspace:*",
-		"@skiff/core": "workspace:*",
-		"@skiff/db": "workspace:*",
+		"@yoal/contracts": "workspace:*",
+		"@yoal/core": "workspace:*",
+		"@yoal/db": "workspace:*",
 		"zod": "^4.6.7"
 	},
 	"engines": {

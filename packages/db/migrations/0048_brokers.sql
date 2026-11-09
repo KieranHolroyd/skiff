@@ -3,7 +3,7 @@
 -- on one node, like a managed database. The owner password is sealed with the org data key (D18);
 -- placement and the host port are resolved once at create time.
 --
--- `engine` has no CHECK: the engine registry in @skiff/contracts validates it, so adding RabbitMQ
+-- `engine` has no CHECK: the engine registry in @yoal/contracts validates it, so adding RabbitMQ
 -- is a data change and never a table rebuild (the lesson of 0028).
 
 CREATE TABLE IF NOT EXISTS brokers (

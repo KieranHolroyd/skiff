@@ -1,7 +1,7 @@
 import { unzipSync, zipSync } from 'fflate';
 import { promisify } from 'node:util';
 import { constants as zlibConstants, brotliCompress, gzip } from 'node:zlib';
-import { limits } from '@skiff/contracts';
+import { limits } from '@yoal/contracts';
 import { ValidationError } from './errors.ts';
 import { sha256Hex } from './util.ts';
 

@@ -1,5 +1,5 @@
 /**
- * Skiff KV binding service (docs/FUNCTIONS.md §4.5, FN10).
+ * Yoal KV binding service (docs/FUNCTIONS.md §4.5, FN10).
  *
  * A Worker that implements the workerd KV binding protocol on top of one Durable Object's
  * key/value storage. The user Worker gets a `kvNamespace` binding pointing at this service; workerd

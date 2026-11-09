@@ -9,7 +9,7 @@ const flags: FlagSpec = {
 	help: { type: 'boolean', short: 'h' },
 };
 
-const usage = 'Usage: skif logs <project> [--lines <n>] [--json]\n\nShow recent runtime logs for a project.';
+const usage = 'Usage: yoal logs <project> [--lines <n>] [--json]\n\nShow recent runtime logs for a project.';
 
 export async function logsCommand(argv: string[]): Promise<void> {
 	const args = parseArgs(argv, flags);

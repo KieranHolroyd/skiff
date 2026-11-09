@@ -46,7 +46,7 @@ size quota, attach/detach, single-writer enforcement, disk admission, and versio
 | `app_volume_attachments` | id, volumeId, workloadId, environment, mountPath, readOnly, createdAt |
 | `app_volume_snapshots` | id, volumeId, targetId, objectKey, sizeBytes, checksum, createdAt, expiresAt, restoreVerifiedAt |
 
-- Backing path: `<nodeVolume.mountPath>/skiff/apps/<projectId>/<volumeId>` or
+- Backing path: `<nodeVolume.mountPath>/yoal/apps/<projectId>/<volumeId>` or
   `<helperStateDir>/apps/<projectId>/<volumeId>`. Only that subtree is created/chowned.
 - Names follow slug rules and are unique per project.
 - A volume pins the project to a node, like a managed instance. Moving a volume is a later
@@ -99,7 +99,7 @@ volumes?: Array<{ id: string; mountPath: string; readOnly: boolean }>;
   `/volumes/:name/snapshots`, `/snapshots/:id/restore`.
 - MCP: `list_volumes`, `create_volume`, `attach_volume`, `snapshot_volume`, `restore_volume`
   (confirmed). No host path or device.
-- CLI: `skif volume create|list|attach|detach|snapshot|restore`.
+- CLI: `yoal volume create|list|attach|detach|snapshot|restore`.
 - Dashboard: project Volumes tab, create wizard (name, size, backing), attach to a workload,
   usage, snapshots, restore.
 - Permissions: `project:update` or a new `volume:*`; platform admin for backing node volumes.
@@ -143,7 +143,7 @@ volumes?: Array<{ id: string; mountPath: string; readOnly: boolean }>;
 
 ## Rollout
 
-`SKIFF_FEATURE_APP_VOLUMES` off by default. Enable for new projects; existing `data` continues to
+`YOAL_FEATURE_APP_VOLUMES` off by default. Enable for new projects; existing `data` continues to
 work. Snapshots ship after 01/05 are stable.
 
 ## Open questions

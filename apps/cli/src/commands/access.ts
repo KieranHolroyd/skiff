@@ -16,10 +16,10 @@ import {
 /**
  * Just-in-time access (docs/IAM.md I22, §9.4, §12). Anyone in the org may request a role at a
  * scope for a duration; someone else with `iam:manage-bindings` at that scope approves or denies.
- * This is the `skif access` client over `/api/v1/iam/access-requests`.
+ * This is the `yoal access` client over `/api/v1/iam/access-requests`.
  */
 
-const usage = `Usage: skif access <command> [options]
+const usage = `Usage: yoal access <command> [options]
 
 Commands:
   request                      Ask for a role at a scope for a few hours
@@ -40,9 +40,9 @@ Options:
 Approving creates a binding that expires on its own. The approver must differ from the requester.
 
 Examples:
-  skif access request --role deployer --scope project:prj_shop --duration 2h --reason "release"
-  skif access approve req_abc123
-  skif access deny req_abc123`;
+  yoal access request --role deployer --scope project:prj_shop --duration 2h --reason "release"
+  yoal access approve req_abc123
+  yoal access deny req_abc123`;
 
 export interface AccessRequestView {
 	id: string;
@@ -73,7 +73,7 @@ const requestFlags: FlagSpec = {
 	'change-ref': { type: 'string' },
 };
 
-/** The server's own cap (`MAX_DURATION_SECONDS` in @skiff/core). */
+/** The server's own cap (`MAX_DURATION_SECONDS` in @yoal/core). */
 const MAX_DURATION_SECONDS = 8 * 60 * 60;
 
 export async function accessCommand(argv: string[]): Promise<void> {
@@ -102,7 +102,7 @@ async function requestAccess(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif access request --role <role> --reason <text> [options]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal access request --role <role> --reason <text> [options]');
 	const roleValue = args.string('role');
 	if (!roleValue) throw new UsageError('Say which role you need with --role <name|id>.');
 	const reason = args.string('reason')?.trim();
@@ -136,7 +136,7 @@ async function requestAccess(argv: string[]): Promise<void> {
 	console.log(
 		`Requested ${role.name} at ${formatScope(scope)} for ${formatDuration(request.durationSeconds)} (${request.id}).`,
 	);
-	console.log('A different approver must decide it. Check with `skif access approve|deny <id>`.');
+	console.log('A different approver must decide it. Check with `yoal access approve|deny <id>`.');
 }
 
 async function decideAccess(argv: string[], action: 'approve' | 'deny'): Promise<void> {
@@ -145,7 +145,7 @@ async function decideAccess(argv: string[], action: 'approve' | 'deny'): Promise
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, `Usage: skif access ${action} <id>`);
+	rejectExtraPositionals(args, 1, `Usage: yoal access ${action} <id>`);
 	const id = requirePositional(args, 0, `access request id.\n\n${usage}`);
 	const client = await authenticatedClient();
 	const raw = await requestJson(
@@ -209,7 +209,7 @@ async function resolveRole(
 		return id && name ? [{ id, name }] : [];
 	});
 	const role = roles.find((entry) => entry.id === value) ?? roles.find((entry) => entry.name === value);
-	if (!role) throw new UsageError(`Unknown role "${value}". Run \`skif iam roles\` to see them.`);
+	if (!role) throw new UsageError(`Unknown role "${value}". Run \`yoal iam roles\` to see them.`);
 	return role;
 }
 

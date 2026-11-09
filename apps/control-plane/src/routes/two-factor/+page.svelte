@@ -7,8 +7,8 @@
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import SmartphoneIcon from '@lucide/svelte/icons/smartphone';
 	import { authClient } from '#lib/auth-client.js';
-	import AuthSplitShell from '#lib/components/skiff/AuthSplitShell.svelte';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
+	import AuthSplitShell from '#lib/components/yoal/AuthSplitShell.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';

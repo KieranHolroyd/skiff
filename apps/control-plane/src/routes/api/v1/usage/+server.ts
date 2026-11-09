@@ -20,7 +20,7 @@ export const GET: RequestHandler = (event) =>
 			return new Response(core.usage.csv(view), {
 				headers: {
 					'content-type': 'text/csv; charset=utf-8',
-					'content-disposition': `attachment; filename="skiff-usage${scope}-${view.at.slice(0, 10)}.csv"`,
+					'content-disposition': `attachment; filename="yoal-usage${scope}-${view.at.slice(0, 10)}.csv"`,
 					'cache-control': 'no-store',
 				},
 			});

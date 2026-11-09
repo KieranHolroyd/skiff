@@ -11,7 +11,7 @@
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import SquareIcon from '@lucide/svelte/icons/square';
 	import XIcon from '@lucide/svelte/icons/x';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Spinner } from '#lib/components/ui/spinner/index.js';
@@ -108,7 +108,7 @@
 </script>
 
 <svelte:head>
-	<title>{run.title} #{run.number} · {data.repo} · Skiff</title>
+	<title>{run.title} #{run.number} · {data.repo} · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">

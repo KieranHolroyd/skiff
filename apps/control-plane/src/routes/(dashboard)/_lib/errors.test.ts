@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { StepUpRequiredError } from '@skiff/contracts';
+import { StepUpRequiredError } from '@yoal/contracts';
 import { failStatus, toFormFailure } from './errors';
 
 describe('step-up form failures', () => {

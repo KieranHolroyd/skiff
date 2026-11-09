@@ -10,8 +10,8 @@ import {
 	observabilityQueryRequestSchema,
 	type MetricBucket,
 	type ObservabilityQueryRequest,
-} from '@skiff/contracts';
-import { createDb } from '@skiff/db';
+} from '@yoal/contracts';
+import { createDb } from '@yoal/db';
 import { createCore, type Core } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import { autoInterval, compileBuilder, expandSqlMacros, type CompileContext } from './observability-query.ts';
@@ -23,7 +23,7 @@ const HOUR = 3_600_000;
 const NOW = Date.parse('2026-11-06T12:00:00Z');
 
 const ctx = (overrides: Partial<CompileContext> = {}): CompileContext => ({
-	database: 'skiff',
+	database: 'yoal',
 	fromMs: NOW - HOUR,
 	toMs: NOW,
 	maxDataPoints: 60,
@@ -85,7 +85,7 @@ describe('builder compilation', () => {
 		const compiled = compileBuilder(spec, ctx({ fromMs: NOW - 7 * 24 * HOUR }));
 		expect(compiled.resolution).toBe('1h');
 		expect(compiled.intervalSeconds).toBe(3_600);
-		expect(compiled.sql).toContain('skiff.traffic_hourly');
+		expect(compiled.sql).toContain('yoal.traffic_hourly');
 		expect(compiled.notice).toContain('hourly');
 	});
 
@@ -123,7 +123,7 @@ describe('builder compilation', () => {
 });
 
 describe.skipIf(!hasClickHouse)('observability service', () => {
-	const dir = mkdtempSync(join(tmpdir(), 'skiff-observability-'));
+	const dir = mkdtempSync(join(tmpdir(), 'yoal-observability-'));
 	const opened = createDb({ path: ':memory:' });
 	const clock = NOW;
 	const core: Core = createCore({

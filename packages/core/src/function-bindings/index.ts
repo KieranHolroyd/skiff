@@ -1,4 +1,4 @@
-import type { FunctionBindingType } from '@skiff/contracts';
+import type { FunctionBindingType } from '@yoal/contracts';
 import { resolveDurableObject } from './durable-object.ts';
 import { resolveHyperdrive } from './hyperdrive.ts';
 import { resolveKvBinding } from './kv.ts';

@@ -11,7 +11,7 @@ import {
 } from './identity.ts';
 
 describe('parseAudience', () => {
-	test('defaults to skiff and trims a supplied audience', () => {
+	test('defaults to yoal and trims a supplied audience', () => {
 		expect(parseAudience(undefined)).toBe(WORKLOAD_IDENTITY_AUDIENCE);
 		expect(parseAudience('  sts.amazonaws.com  ')).toBe('sts.amazonaws.com');
 		expect(parseAudience('api://AzureADTokenExchange')).toBe('api://AzureADTokenExchange');
@@ -27,16 +27,16 @@ describe('parseAudience', () => {
 describe('identityTokenPath', () => {
 	test('flag wins over the environment and the mount default', () => {
 		expect(
-			identityTokenPath('  /tmp/token  ', { SKIFF_TOKEN_FILE: '/run/skiff/token' }),
+			identityTokenPath('  /tmp/token  ', { YOAL_TOKEN_FILE: '/run/yoal/token' }),
 		).toBe('/tmp/token');
 	});
 
-	test('falls back to SKIFF_TOKEN_FILE, then the fixed mount path', () => {
-		expect(identityTokenPath(undefined, { SKIFF_TOKEN_FILE: '  /tmp/env-token  ' })).toBe(
+	test('falls back to YOAL_TOKEN_FILE, then the fixed mount path', () => {
+		expect(identityTokenPath(undefined, { YOAL_TOKEN_FILE: '  /tmp/env-token  ' })).toBe(
 			'/tmp/env-token',
 		);
 		expect(identityTokenPath(undefined, {})).toBe(WORKLOAD_IDENTITY_TOKEN_FILE);
-		expect(identityTokenPath('   ', { SKIFF_TOKEN_FILE: '/tmp/env-token' })).toBe(
+		expect(identityTokenPath('   ', { YOAL_TOKEN_FILE: '/tmp/env-token' })).toBe(
 			'/tmp/env-token',
 		);
 	});
@@ -46,13 +46,13 @@ describe('identityMetadataUrl', () => {
 	test('flag wins over the environment and the loopback default', () => {
 		expect(
 			identityMetadataUrl('  http://127.0.0.1:9999/  ', {
-				SKIFF_IDENTITY_URL: 'http://10.0.2.2:8086',
+				YOAL_IDENTITY_URL: 'http://10.0.2.2:8086',
 			}),
 		).toBe('http://127.0.0.1:9999');
 	});
 
-	test('falls back to SKIFF_IDENTITY_URL, then loopback', () => {
-		expect(identityMetadataUrl(undefined, { SKIFF_IDENTITY_URL: 'http://10.0.2.2:8086/' })).toBe(
+	test('falls back to YOAL_IDENTITY_URL, then loopback', () => {
+		expect(identityMetadataUrl(undefined, { YOAL_IDENTITY_URL: 'http://10.0.2.2:8086/' })).toBe(
 			'http://10.0.2.2:8086',
 		);
 		expect(identityMetadataUrl(undefined, {})).toBe(WORKLOAD_IDENTITY_URL);

@@ -37,7 +37,7 @@ describe('isExemptBeforeSecondFactor', () => {
 	});
 
 	test('dashboard, REST, consent and CLI approval are gated', () => {
-		for (const path of ['/overview', '/settings', '/settings/account', '/api/v1/projects', '/consent', '/cli/login', '/two-factorx', '/setupx', '/_skiff/site-login'])
+		for (const path of ['/overview', '/settings', '/settings/account', '/api/v1/projects', '/consent', '/cli/login', '/two-factorx', '/setupx', '/_yoal/site-login'])
 			expect(isExemptBeforeSecondFactor(path)).toBe(false);
 	});
 

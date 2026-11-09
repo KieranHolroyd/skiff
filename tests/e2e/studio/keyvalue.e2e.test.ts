@@ -1,13 +1,13 @@
 /**
  * Key-value studio plugin end-to-end (plan 22, Phase 2 track D): the shared conformance suite
  * plus key-value checks, against disposable `valkey/valkey:9.1` and the newest Redis 8.x image
- * available (8.10 preferred). Mirrors Skiff's server config: the `default` user is off and the
+ * available (8.10 preferred). Mirrors Yoal's server config: the `default` user is off and the
  * owner is an ACL user with `~* &* +@all`; the Phase 3 read-only principal is
  * `+@read -@write -@admin -@dangerous ~*`.
  *
- *   SKIFF_E2E_STUDIO=1 SKIFF_E2E_ENGINE=docker bun test tests/e2e/studio/keyvalue.e2e.test.ts
+ *   YOAL_E2E_STUDIO=1 YOAL_E2E_ENGINE=docker bun test tests/e2e/studio/keyvalue.e2e.test.ts
  *
- * Without `SKIFF_E2E_STUDIO=1` it registers one skipped test, so the root `bun test` stays fast.
+ * Without `YOAL_E2E_STUDIO=1` it registers one skipped test, so the root `bun test` stays fast.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { RedisClient } from 'bun';
@@ -22,9 +22,9 @@ import { StudioError, type Cell, type ObjectRef, type StudioEvent } from '../../
 import { ContainerRuntime, detectEngine, freePort, waitFor } from '../lib/containers.ts';
 
 const ROW_COUNT = 250;
-// Skiff's owner is named after the database; the password exercises URL encoding.
+// Yoal's owner is named after the database; the password exercises URL encoding.
 const OWNER = { user: 'app_cache', password: 'ownerP@ss:w/rd?%' };
-const READER = { user: 'skiff_studio_ro', password: 'reader-pw-0123456789' };
+const READER = { user: 'yoal_studio_ro', password: 'reader-pw-0123456789' };
 const BIG_LIST = 300_000;
 const BINARY = new Uint8Array([0xff, 0x00, 0xfe, 0x41]);
 const LARGE = 'x'.repeat(10_000);
@@ -37,11 +37,11 @@ interface Server {
 	name: string;
 }
 
-const enabled = process.env.SKIFF_E2E_STUDIO === '1';
+const enabled = process.env.YOAL_E2E_STUDIO === '1';
 const engine = enabled ? await detectEngine() : null;
 
 if (!enabled || !engine) {
-	test.skip('keyvalue studio e2e (set SKIFF_E2E_STUDIO=1 and have Docker or Podman)', () => {});
+	test.skip('keyvalue studio e2e (set YOAL_E2E_STUDIO=1 and have Docker or Podman)', () => {});
 } else {
 	const tempDir = await mkdtemp(join(tmpdir(), 'studio-kv-'));
 	const runtime = new ContainerRuntime(engine, tempDir);
@@ -705,12 +705,12 @@ async function seedCollections(server: Server): Promise<void> {
 	});
 }
 
-/** Connection ids named `skiff-studio`, from CLIENT LIST. */
+/** Connection ids named `yoal-studio`, from CLIENT LIST. */
 async function studioClients(client: RedisClient): Promise<string[]> {
 	const list = String(await client.send('CLIENT', ['LIST']));
 	return list
 		.split('\n')
-		.filter((line) => /\bname=skiff-studio\b/.test(line))
+		.filter((line) => /\bname=yoal-studio\b/.test(line))
 		.map((line) => /\bid=(\d+)/.exec(line)?.[1] ?? '')
 		.filter(Boolean);
 }

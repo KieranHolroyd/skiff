@@ -5,7 +5,7 @@ import {
 	type DetectedEnvName,
 	type StorageAttachmentView,
 	type UserPoolAttachmentView
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { json, route } from '#lib/server/api.js';
 import { core } from '#lib/server/core.js';
 import { requirePrincipal } from '#lib/server/principal.js';

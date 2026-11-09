@@ -1,5 +1,5 @@
 import { redirect } from '@sveltejs/kit';
-import { defaultAgentScopes, destructivePermissions, isPermission } from '@skiff/contracts';
+import { defaultAgentScopes, destructivePermissions, isPermission } from '@yoal/contracts';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = ({ locals, url }) => {

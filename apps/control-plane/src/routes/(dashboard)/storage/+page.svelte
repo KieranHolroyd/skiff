@@ -1,5 +1,5 @@
 <script lang="ts">
-	import StorageSelect from '#lib/components/skiff/StorageSelect.svelte';
+	import StorageSelect from '#lib/components/yoal/StorageSelect.svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -18,10 +18,10 @@
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
 	import TrashIcon from '@lucide/svelte/icons/trash';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
-	import { storageEnvNames } from '@skiff/contracts';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import { storageEnvNames } from '@yoal/contracts';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
@@ -30,7 +30,7 @@
 	import * as InputGroup from '#lib/components/ui/input-group/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
 	import { Switch } from '#lib/components/ui/switch/index.js';
-	import DataTable, { type DataColumn } from '#lib/components/skiff/DataTable.svelte';
+	import DataTable, { type DataColumn } from '#lib/components/yoal/DataTable.svelte';
 	import * as Tabs from '#lib/components/ui/tabs/index.js';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
@@ -236,7 +236,7 @@
 </script>
 
 <svelte:head>
-	<title>{trashView ? 'Storage trash' : 'Storage'} · Skiff</title>
+	<title>{trashView ? 'Storage trash' : 'Storage'} · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">

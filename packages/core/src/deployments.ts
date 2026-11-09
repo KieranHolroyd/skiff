@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray, isNotNull, isNull, lte, ne } from 'drizzle-orm';
-import { builds, configSnapshots, deployments, environments, nodes, projects, releases } from '@skiff/db';
+import { builds, configSnapshots, deployments, environments, nodes, projects, releases } from '@yoal/db';
 import {
 	checkSlug,
 	contentUrl,
@@ -9,7 +9,7 @@ import {
 	type Principal,
 	type WorkloadIngress,
 	type WorkloadSpec,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { entriesFromFiles, type FileEntry } from './artifact.ts';
 import { assertComposeSupported, parseComposeDocument } from './compose.ts';
 import type { CoreContext } from './context.ts';
@@ -18,7 +18,7 @@ import { resolveImageDigest } from './oci-client.ts';
 import type { PreparedRelease } from './releases.ts';
 import { effectiveRuntime, storedRuntime } from './runtime-tier.ts';
 import { newId, parseJson, shortId } from './util.ts';
-import type { ParsedConfig } from '@skiff/site-config';
+import type { ParsedConfig } from '@yoal/site-config';
 import type { ProjectRow } from './projects.ts';
 import type { EnvironmentRow } from './environments.ts';
 
@@ -114,9 +114,9 @@ type DeploymentOptions = {
 type EnvironmentLike = Pick<EnvironmentRow, 'slug' | 'isProduction' | 'name'>;
 
 /** The one file of an image deploy's release: names the image, for the deployment record. */
-export const IMAGE_MARKER_PATH = 'skiff-image.json';
+export const IMAGE_MARKER_PATH = 'yoal-image.json';
 /** The one file of a compose deploy's release: the normalised stack, for the deployment record. */
-export const COMPOSE_MARKER_PATH = 'skiff-compose.json';
+export const COMPOSE_MARKER_PATH = 'yoal-compose.json';
 
 /** Release + config snapshot; immutable, preview URL always, production pointer moved explicitly (D13, D17). */
 export class DeploymentService {
@@ -281,7 +281,7 @@ export class DeploymentService {
 			const stillThere = this.ctx.db.select({ id: releases.id }).from(releases).where(eq(releases.id, prepared.release.id)).get();
 			if (stillThere) {
 				const view = this.create(principal, project, prepared, options);
-				// Keep the pinned digest in Skiff's own registry while this deployment exists (R11).
+				// Keep the pinned digest in Yoal's own registry while this deployment exists (R11).
 				if (options.imageDigest)
 					await this.ctx.registry.pinDeployment(this.ctx.workloads.projectSpec(project)?.image, options.imageDigest, view.id);
 				return view;

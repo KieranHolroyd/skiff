@@ -1,5 +1,5 @@
 import { and, eq } from 'drizzle-orm';
-import { storageBuckets, storageInstances, storageShareLinks } from '@skiff/db';
+import { storageBuckets, storageInstances, storageShareLinks } from '@yoal/db';
 import {
 	STORAGE_REGION,
 	storageFolderSchema,
@@ -12,7 +12,7 @@ import {
 	type StoragePresign,
 	type StorageShareLink,
 	type StorageShareLinkRequest,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, CoreError, NotFoundError } from './errors.ts';

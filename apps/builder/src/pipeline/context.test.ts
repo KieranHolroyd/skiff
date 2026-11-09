@@ -14,7 +14,7 @@ import {
 	type JobContext,
 } from './context.ts';
 
-const root = mkdtempSync(join(tmpdir(), 'skiff-context-'));
+const root = mkdtempSync(join(tmpdir(), 'yoal-context-'));
 const workspace = join(root, 'workspace');
 mkdirSync(join(workspace, 'apps', 'web'), { recursive: true });
 mkdirSync(join(root, 'outside'));
@@ -26,7 +26,7 @@ writeFileSync(join(workspace, 'apps', 'web', 'notes.txt'), 'n');
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 const context: JobContext = {
-	skiff: { ref: 'refs/heads/main', sha: 'abc' },
+	yoal: { ref: 'refs/heads/main', sha: 'abc' },
 	github: { ref: 'refs/heads/main', sha: 'abc' },
 	secrets: { TOKEN: 's3cret' },
 	matrix: { node: '24' },
@@ -45,7 +45,7 @@ describe('env layering', () => {
 		expect(env).toEqual({ A: 'job', B: 'wf-wf', REF: 'refs/heads/main', C: 'job/wf-wf/24', SECRET: 's3cret' });
 	});
 
-	test('step env beats $SKIFF_ENV beats job env; PATH additions are prepended, newest first', () => {
+	test('step env beats $YOAL_ENV beats job env; PATH additions are prepended, newest first', () => {
 		const env = stepProcessEnv({
 			inherited: { PATH: '/usr/bin', HOME: '/h' },
 			runner: { CI: 'true' },
@@ -58,7 +58,7 @@ describe('env layering', () => {
 	});
 
 	test('only allowlisted variables are inherited; the job token never is', () => {
-		const env = inheritedEnv({ PATH: '/bin', HOME: '/h', SKIFF_JOB_TOKEN: 'tok', SKIFF_NODE_TOKEN: 'node', AWS_SECRET: 'x' });
+		const env = inheritedEnv({ PATH: '/bin', HOME: '/h', YOAL_JOB_TOKEN: 'tok', YOAL_NODE_TOKEN: 'node', AWS_SECRET: 'x' });
 		expect(env).toEqual({ PATH: '/bin', HOME: '/h' });
 	});
 });

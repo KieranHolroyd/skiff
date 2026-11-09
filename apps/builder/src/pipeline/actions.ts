@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { userInfo } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import type { PipelineBuiltinAction, PipelineJobClaim } from '@skiff/contracts';
+import type { PipelineBuiltinAction, PipelineJobClaim } from '@yoal/contracts';
 import { zipDirectory } from '../zip.ts';
 import { PipelineApiError, type JobApi } from './client.ts';
 import { inputLines, resolveUserPath, truthyInput } from './context.ts';
@@ -23,7 +23,7 @@ import { RegistryClient, createImageIndex, parseImageReference } from './image-r
 import type { Masker } from './masker.ts';
 
 /**
- * Built-in actions (W13): `skiff/*` and their `actions/*` aliases, implemented in the step runner
+ * Built-in actions (W13): `yoal/*` and their `actions/*` aliases, implemented in the step runner
  * against the job API instead of GitHub's Twirp services. Each returns an outcome and outputs and
  * logs through the host, so masking and cancellation apply as for `run:` steps.
  */
@@ -63,21 +63,21 @@ export class ActionError extends Error {
 export async function runAction(action: PipelineBuiltinAction, inputs: Record<string, string>, host: ActionHost): Promise<ActionResult> {
 	try {
 		switch (action) {
-			case 'skiff/checkout':
+			case 'yoal/checkout':
 				return checkout(inputs, host);
-			case 'skiff/cache':
+			case 'yoal/cache':
 				return await cache(inputs, host);
-			case 'skiff/upload-artifact':
+			case 'yoal/upload-artifact':
 				return await uploadArtifact(inputs, host);
-			case 'skiff/download-artifact':
+			case 'yoal/download-artifact':
 				return await downloadArtifact(inputs, host);
-			case 'skiff/deploy':
+			case 'yoal/deploy':
 				return await deploy(inputs, host);
-			case 'skiff/build-image':
+			case 'yoal/build-image':
 				return await buildImage(inputs, host);
-			case 'skiff/image-index':
+			case 'yoal/image-index':
 				return await imageIndex(inputs, host);
-			case 'skiff/oidc-token':
+			case 'yoal/oidc-token':
 				return await oidcToken(inputs, host);
 		}
 		throw new ActionError(`Unknown built-in action ${String(action)}`);
@@ -202,7 +202,7 @@ function checkout(inputs: Record<string, string>, host: ActionHost): ActionResul
 		return { outcome: 'failure', outputs: {} };
 	}
 	for (const ignored of ['submodules', 'lfs'])
-		if (truthyInput(inputs[ignored])) host.log(`Warning: ${ignored} is not supported by skiff/checkout and was ignored.`, 'stderr');
+		if (truthyInput(inputs[ignored])) host.log(`Warning: ${ignored} is not supported by yoal/checkout and was ignored.`, 'stderr');
 	host.log(`The workspace is already checked out at ${claim.checkout.sha} (${claim.checkout.ref}).`);
 	return { outcome: 'success', outputs: { ref: claim.checkout.ref, commit: claim.checkout.sha } };
 }
@@ -374,7 +374,7 @@ async function deploy(inputs: Record<string, string>, host: ActionHost): Promise
 // --- oidc-token (W9) -----------------------------------------------------------------------
 
 /**
- * `skiff/oidc-token`: mint an OIDC ID token for cloud federation with the job token. The token is
+ * `yoal/oidc-token`: mint an OIDC ID token for cloud federation with the job token. The token is
  * masked before it becomes the step output `token`; it never enters any step's environment.
  */
 async function oidcToken(inputs: Record<string, string>, host: ActionHost): Promise<ActionResult> {
@@ -415,7 +415,7 @@ function registryHost(reference: string): string {
  */
 export function expandRegistryTag(tag: string, registry: PipelineJobClaim['registry']): string {
 	if (!tag.startsWith('registry/')) return tag;
-	if (!registry) throw new ActionError(`"${tag}" names Skiff's registry, but the platform registry is off on this install`);
+	if (!registry) throw new ActionError(`"${tag}" names Yoal's registry, but the platform registry is off on this install`);
 	const rest = tag.slice('registry/'.length);
 	const path = rest.split(/[:@]/, 1)[0]!;
 	return path.includes('/') ? `${registry.host}/${rest}` : `${registry.namespace}/${rest}`;
@@ -425,7 +425,7 @@ type ImageBuilder = 'buildkit' | 'buildah' | 'podman' | 'docker';
 
 /**
  * The environment builders are looked up in: the step's, plus the W6 sidecar's `buildctl`
- * (`/skiff/bin`) and `BUILDKIT_HOST`, which the runner sets on the job container but the step
+ * (`/yoal/bin`) and `BUILDKIT_HOST`, which the runner sets on the job container but the step
  * runner does not pass through to steps.
  */
 export function builderEnv(host: Pick<ActionHost, 'env' | 'claim'>, processEnv: Record<string, string | undefined> = process.env): Record<string, string> {
@@ -499,7 +499,7 @@ async function buildImage(inputs: Record<string, string>, host: ActionHost): Pro
 	const registry = registryHost(tags[0]!);
 	let username = inputs.username?.trim();
 	let password = inputs.password ?? '';
-	// Skiff's own registry: log in as this job with its token (docs/PIPELINES.md W9), no secret needed.
+	// Yoal's own registry: log in as this job with its token (docs/PIPELINES.md W9), no secret needed.
 	const own = host.claim.registry && registry === host.claim.registry.host;
 	if (own && push && !host.claim.registry!.push) throw new ActionError('Untrusted runs (pull requests from forks) cannot push images');
 	if (own && !username) {
@@ -745,8 +745,8 @@ async function buildWithEngine(
 // --- image-index (WP5) --------------------------------------------------------------------
 
 /**
- * `skiff/image-index`: one OCI image index at `tag` from per-architecture `sources` (refs or
- * digests in the target repository), e.g. the `digest` outputs of a `skiff/build-image` matrix.
+ * `yoal/image-index`: one OCI image index at `tag` from per-architecture `sources` (refs or
+ * digests in the target repository), e.g. the `digest` outputs of a `yoal/build-image` matrix.
  * Sources elsewhere (another repository or registry) are copied into the target first, so the
  * same action mirrors a multi-arch image to GHCR. The platform registry logs in as this job.
  */

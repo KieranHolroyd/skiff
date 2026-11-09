@@ -1,5 +1,5 @@
 {
-	"name": "@skiff/agent",
+	"name": "@yoal/agent",
 	"private": true,
 	"version": "0.1.0",
 	"type": "module",
@@ -7,15 +7,15 @@
 		"dev": "bun --watch src/main.ts",
 		"check": "tsc -p . --noEmit",
 		"test": "bun test",
-		"build": "bun build --compile --outfile dist/skiff-agent src/main.ts"
+		"build": "bun build --compile --outfile dist/yoal-agent src/main.ts"
 	},
 	"dependencies": {
-		"@skiff/builder": "workspace:*",
-		"@skiff/contracts": "workspace:*",
-		"@skiff/identity": "workspace:*",
-		"@skiff/mail": "workspace:*",
-		"@skiff/site-config": "workspace:*",
-		"@skiff/studio": "workspace:*",
+		"@yoal/builder": "workspace:*",
+		"@yoal/contracts": "workspace:*",
+		"@yoal/identity": "workspace:*",
+		"@yoal/mail": "workspace:*",
+		"@yoal/site-config": "workspace:*",
+		"@yoal/studio": "workspace:*",
 		"aws4fetch": "^1.0.20"
 	},
 	"engines": {

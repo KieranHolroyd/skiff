@@ -1,6 +1,6 @@
 import type { RequestHandler } from './$types';
-import { emailAccessRequestStatuses, type EmailAccessRequestStatus } from '@skiff/contracts';
-import { ValidationError } from '@skiff/core';
+import { emailAccessRequestStatuses, type EmailAccessRequestStatus } from '@yoal/contracts';
+import { ValidationError } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import { route } from '#lib/server/api.js';
 import { requirePrincipal } from '#lib/server/principal.js';

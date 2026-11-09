@@ -1,5 +1,5 @@
 import type { RequestHandler } from './$types';
-import { USER_POOL_SESSION_TTL_SECONDS, userPoolSessionCookieName } from '@skiff/core';
+import { USER_POOL_SESSION_TTL_SECONDS, userPoolSessionCookieName } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import { platformOrigin } from '#lib/server/config.js';
 

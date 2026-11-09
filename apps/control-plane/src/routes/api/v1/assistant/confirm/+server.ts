@@ -1,5 +1,5 @@
 import * as z from 'zod';
-import { hasPermission } from '@skiff/contracts';
+import { hasPermission } from '@yoal/contracts';
 import { json, readJson, route } from '#lib/server/api.js';
 import { runConfirmed } from '#lib/server/assistant/orchestrator.js';
 import type { RequestHandler } from './$types';

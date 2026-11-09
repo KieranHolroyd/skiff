@@ -1,7 +1,7 @@
 /**
  * The permission catalog (IAM.md I1, DESIGN §6.2).
  *
- * This is the single source of truth for Skiff's permissions. Everything that used to restate the
+ * This is the single source of truth for Yoal's permissions. Everything that used to restate the
  * same facts is derived from here:
  *  - `statements`, for Better Auth's organization access control and the OAuth consent screen;
  *  - the built-in roles in `permissions.ts`;
@@ -72,7 +72,7 @@ export interface PermissionMeta {
  * pipelines, alerts, log drains, dashboards, volumes and Part B's user pools and access policies.
  *
  * `member` keeps its Better Auth actions in `apps/control-plane/src/lib/server/auth.ts`; this table
- * is the Skiff subset the API, MCP and CLI use.
+ * is the Yoal subset the API, MCP and CLI use.
  */
 export const statements = {
 	org: ['read', 'update', 'delete', 'transfer'],

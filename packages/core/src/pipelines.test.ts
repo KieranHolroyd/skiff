@@ -3,8 +3,8 @@ import { createHmac } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import type { PipelineClaimRequestInput, PipelineJobClaim, PipelineResolveClaim, Principal } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import type { PipelineClaimRequestInput, PipelineJobClaim, PipelineResolveClaim, Principal } from '@yoal/contracts';
 import { zipSync } from 'fflate';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
@@ -12,7 +12,7 @@ import { LocalObjectStore } from './object-store.ts';
 import { PIPELINE_LEASE_MS, labelsSatisfied } from './pipeline-engine.ts';
 import type { Core } from './index.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-pipelines-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-pipelines-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 let clock = Date.now();
@@ -116,7 +116,7 @@ jobs:
       version: \${{ steps.v.outputs.version }}
     steps:
       - id: v
-        run: echo "version=1.2.3" >> "$SKIFF_OUTPUT"
+        run: echo "version=1.2.3" >> "$YOAL_OUTPUT"
   deploy:
     needs: build
     runs-on: [self-hosted, linux]
@@ -135,7 +135,7 @@ jobs:
 
 		const build = (await claimJob())!;
 		expect(build.job.key).toBe('build');
-		expect(build.context.skiff.sha).toBe('a'.repeat(40));
+		expect(build.context.yoal.sha).toBe('a'.repeat(40));
 		expect(await claimJob()).toBeNull(); // deploy waits for build
 		engine.appendLogs(engine.authenticateJob(build.token), { lines: [{ step: 0, stream: 'stdout', text: 'hello' }] });
 		engine.reportStep(engine.authenticateJob(build.token), 0, { status: 'completed', conclusion: 'success' });
@@ -387,14 +387,14 @@ describe('webhooks', () => {
 		const runIds = engine.resolveTrigger(engine.authenticateTrigger(claim.token), {
 			sha: 'b'.repeat(40),
 			files: [
-				{ path: '.skiff/workflows/ci.yml', content: 'on: { push: { paths: ["src/**"] } }\njobs:\n  a: { runs-on: linux, steps: [{ run: echo }] }\n' },
-				{ path: '.skiff/workflows/docs.yml', content: 'on: { push: { paths: ["docs/**"] } }\njobs:\n  a: { runs-on: linux, steps: [{ run: echo }] }\n' },
-				{ path: '.skiff/workflows/nightly.yml', content: 'on: { schedule: [{ cron: "0 3 * * *" }] }\njobs:\n  a: { runs-on: linux, steps: [{ run: echo }] }\n' },
+				{ path: '.yoal/workflows/ci.yml', content: 'on: { push: { paths: ["src/**"] } }\njobs:\n  a: { runs-on: linux, steps: [{ run: echo }] }\n' },
+				{ path: '.yoal/workflows/docs.yml', content: 'on: { push: { paths: ["docs/**"] } }\njobs:\n  a: { runs-on: linux, steps: [{ run: echo }] }\n' },
+				{ path: '.yoal/workflows/nightly.yml', content: 'on: { schedule: [{ cron: "0 3 * * *" }] }\njobs:\n  a: { runs-on: linux, steps: [{ run: echo }] }\n' },
 			],
 		});
 		expect(runIds).toHaveLength(1);
 		const runs = core.pipelines.listRuns(owner, r.name);
-		expect(runs[0]!.workflowPath).toBe('.skiff/workflows/ci.yml');
+		expect(runs[0]!.workflowPath).toBe('.yoal/workflows/ci.yml');
 		expect(runs[0]!.actor).toBe('kieran');
 
 		// The nightly cron was remembered from the default branch and fires once at 03:00 UTC.
@@ -421,7 +421,7 @@ describe('webhooks', () => {
 		expect(claim.ref).toBe('refs/pull/7/head');
 		engine.resolveTrigger(engine.authenticateTrigger(claim.token), {
 			sha: 'c'.repeat(40),
-			files: [{ path: '.skiff/workflows/ci.yml', content: 'on: pull_request\njobs:\n  a: { runs-on: linux, steps: [{ run: echo }] }\n' }],
+			files: [{ path: '.yoal/workflows/ci.yml', content: 'on: pull_request\njobs:\n  a: { runs-on: linux, steps: [{ run: echo }] }\n' }],
 		});
 		const job = (await claimJob())!;
 		expect(job.trust).toBe('untrusted');
@@ -476,7 +476,7 @@ describe('isolation tiers (W14)', () => {
 		const r = repo();
 		await dispatchInline(
 			r.name,
-			'on: workflow_dispatch\njobs:\n  img: { runs-on: linux, steps: [{ uses: skiff/build-image@v1, with: { tags: "x/y:z" } }] }\n',
+			'on: workflow_dispatch\njobs:\n  img: { runs-on: linux, steps: [{ uses: yoal/build-image@v1, with: { tags: "x/y:z" } }] }\n',
 		);
 		const job = (await claimJob())!;
 		expect(job.buildkit).toBe(true);
@@ -527,7 +527,7 @@ describe('commit statuses', () => {
 			await Bun.sleep(10);
 			expect(posted.map((p) => p.body.state)).toEqual(['pending', 'pending', 'success']);
 			expect(posted[0]!.url).toBe(`https://api.github.com/repos/acme/app/statuses/${'a'.repeat(40)}`);
-			expect(posted[0]!.body.context).toBe('skiff/ci');
+			expect(posted[0]!.body.context).toBe('yoal/ci');
 			expect(posted[2]!.body.target_url).toContain(`/pipelines/${r.name}/runs/1`);
 		} finally {
 			engine.statusFetch = (url, init) => fetch(url, init);
@@ -614,7 +614,7 @@ describe('OIDC ID tokens (W9)', () => {
 	});
 });
 
-describe('skiff_event triggers', () => {
+describe('yoal_event triggers', () => {
 	test('a default-branch workflow subscribed to deployments.failed starts on that event', async () => {
 		const r = repo();
 		const body = JSON.stringify({ ref: 'refs/heads/main', after: 'f'.repeat(40), commits: [] });
@@ -625,8 +625,8 @@ describe('skiff_event triggers', () => {
 			sha: 'f'.repeat(40),
 			files: [
 				{
-					path: '.skiff/workflows/on-fail.yml',
-					content: 'on: { skiff_event: { types: [deployments.failed] } }\njobs:\n  a: { runs-on: linux, steps: [{ run: echo }] }\n',
+					path: '.yoal/workflows/on-fail.yml',
+					content: 'on: { yoal_event: { types: [deployments.failed] } }\njobs:\n  a: { runs-on: linux, steps: [{ run: echo }] }\n',
 				},
 			],
 		});
@@ -638,14 +638,14 @@ describe('skiff_event triggers', () => {
 			sha: 'f'.repeat(40),
 			files: [
 				{
-					path: '.skiff/workflows/on-fail.yml',
-					content: 'on: { skiff_event: { types: [deployments.failed] } }\njobs:\n  a: { runs-on: linux, steps: [{ run: echo }] }\n',
+					path: '.yoal/workflows/on-fail.yml',
+					content: 'on: { yoal_event: { types: [deployments.failed] } }\njobs:\n  a: { runs-on: linux, steps: [{ run: echo }] }\n',
 				},
 			],
 		});
 		expect(runIds).toHaveLength(1);
 		const run = await core.pipelines.getRun(owner, r.name, runIds[0]!);
-		expect(run.event).toBe('skiff_event');
+		expect(run.event).toBe('yoal_event');
 	});
 });
 
@@ -660,7 +660,7 @@ jobs:
   prep: { runs-on: linux, outputs: { v: "\${{ steps.x.outputs.v }}" }, steps: [{ id: x, run: echo }] }
   ship:
     needs: prep
-    uses: ./.skiff/workflows/deploy.yml
+    uses: ./.yoal/workflows/deploy.yml
     with: { version: "\${{ needs.prep.outputs.v }}", dry: true }
     secrets: { KEY: "\${{ secrets.DEPLOY_KEY }}" }
   after: { needs: ship, runs-on: linux, steps: [{ run: echo }] }
@@ -682,8 +682,8 @@ jobs:
 		const runIds = engine.resolveTrigger(engine.authenticateTrigger(resolve.token), {
 			sha: 'a'.repeat(40),
 			files: [
-				{ path: '.skiff/workflows/ci.yml', content: caller },
-				{ path: '.skiff/workflows/deploy.yml', content: callee },
+				{ path: '.yoal/workflows/ci.yml', content: caller },
+				{ path: '.yoal/workflows/deploy.yml', content: callee },
 			],
 		});
 		expect(runIds).toHaveLength(1);

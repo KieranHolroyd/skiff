@@ -1,4 +1,4 @@
-import type { DashboardVariable, QueryVariables } from '@skiff/contracts';
+import type { DashboardVariable, QueryVariables } from '@yoal/contracts';
 import type { TimeRange } from './time.js';
 
 /** The "All" selection, as stored in `current`. */

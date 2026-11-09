@@ -48,11 +48,11 @@ describe('DiscordNotifier', () => {
 			...alert,
 			severity: 'info',
 			status: 'resolved',
-			url: 'https://skiff.example.com/alerts/1',
+			url: 'https://yoal.example.com/alerts/1',
 		} as Parameters<DiscordNotifier['notify']>[0]);
 		const [embed] = calls[0]!.body.embeds as Array<Record<string, unknown>>;
 		expect(embed!.color).toBe(0x16a34a);
-		expect(embed!.url).toBe('https://skiff.example.com/alerts/1');
+		expect(embed!.url).toBe('https://yoal.example.com/alerts/1');
 	});
 
 	test('errors never include the webhook URL (it is the credential)', async () => {
@@ -105,10 +105,10 @@ describe('TelegramNotifier', () => {
 describe('NtfyNotifier', () => {
 	test('publishes JSON to the server root with priority and token', async () => {
 		const { fetch, calls } = stubFetch(() => new Response('{}'));
-		await new NtfyNotifier('https://ntfy.example.com/sub/skiff-alerts', 'tk_abc', { fetch }).notify(alert);
+		await new NtfyNotifier('https://ntfy.example.com/sub/yoal-alerts', 'tk_abc', { fetch }).notify(alert);
 		const { url, body, init } = calls[0]!;
 		expect(url).toBe('https://ntfy.example.com/sub');
-		expect(body.topic).toBe('skiff-alerts');
+		expect(body.topic).toBe('yoal-alerts');
 		expect(body.priority).toBe(5);
 		expect(body.tags).toEqual(['rotating_light']);
 		expect((init.headers as Record<string, string>).authorization).toBe('Bearer tk_abc');
@@ -135,10 +135,10 @@ describe('factories', () => {
 
 	test('builds only the configured channels, with stable names', () => {
 		const notifiers = chatNotifiersFromEnv({
-			SKIFF_ALERT_DISCORD_WEBHOOK: DISCORD,
-			SKIFF_ALERT_TELEGRAM_BOT_TOKEN: '123:token',
+			YOAL_ALERT_DISCORD_WEBHOOK: DISCORD,
+			YOAL_ALERT_TELEGRAM_BOT_TOKEN: '123:token',
 			// Telegram needs both; without a chat id it is skipped.
-			SKIFF_ALERT_NTFY_URL: 'https://ntfy.sh/skiff',
+			YOAL_ALERT_NTFY_URL: 'https://ntfy.sh/yoal',
 		});
 		expect(notifiers.map((n) => n.name)).toEqual(['discord', 'ntfy']);
 	});

@@ -7,7 +7,7 @@
 </script>
 
 <svelte:head>
-	<title>Logs · {data.storage.name} · Skiff</title>
+	<title>Logs · {data.storage.name} · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">

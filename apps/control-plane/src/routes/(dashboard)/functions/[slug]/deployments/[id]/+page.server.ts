@@ -1,6 +1,6 @@
 import { error, fail, redirect } from '@sveltejs/kit';
-import { CoreError, isFunctionTier } from '@skiff/core';
-import { hasPermission, type WorkloadView } from '@skiff/contracts';
+import { CoreError, isFunctionTier } from '@yoal/core';
+import { hasPermission, type WorkloadView } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { features } from '#lib/server/config.js';
 import { failStatus, formString, toFormFailure } from '../../../../_lib/errors.js';

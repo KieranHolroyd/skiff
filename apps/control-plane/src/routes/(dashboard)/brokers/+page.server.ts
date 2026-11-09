@@ -5,7 +5,7 @@ import {
 	hasPermission,
 	type BrokerView,
 	type NodeCapacityView
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { features } from '#lib/server/config.js';
 import { failStatus, formString, toFormFailure } from '../_lib/errors.js';

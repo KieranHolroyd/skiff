@@ -3,7 +3,7 @@ import { handleContainerConsole } from '#lib/server/container-console.js';
 import { containerConsoleDeps } from '#lib/server/container-console-deps.js';
 
 /**
- * Container console over REST (D127), for `skif container …` and scripts: the same calls as the
+ * Container console over REST (D127), for `yoal container …` and scripts: the same calls as the
  * dashboard, authenticated by an API key or the session cookie.
  *
  *   GET    targets | inspect                        container:inspect

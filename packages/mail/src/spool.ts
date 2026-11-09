@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite';
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { emailEventSchema, type EmailEvent, type EmailEventInput } from '@skiff/contracts';
+import { emailEventSchema, type EmailEvent, type EmailEventInput } from '@yoal/contracts';
 
 /**
  * The durable spool (EMAIL.md §3.2). One SQLite database in WAL mode holds message and

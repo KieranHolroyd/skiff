@@ -1,5 +1,5 @@
 import { fail } from '@sveltejs/kit';
-import { CoreError } from '@skiff/core';
+import { CoreError } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import type { Actions, PageServerLoad } from './$types';
 

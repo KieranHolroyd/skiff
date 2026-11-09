@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { WorkloadActivation } from '@skiff/contracts';
+import type { WorkloadActivation } from '@yoal/contracts';
 import { BrokerStatsSampler, readStatz, type BrokerStatsTarget } from './broker-stats.ts';
 
 /**
@@ -64,7 +64,7 @@ function fakeBroker() {
 						offset: 0,
 						limit: 256,
 						streams: state.streams.map((s) => ({
-							config: { name: s.name, subjects: [`skiff.q.${s.name}`], retention: s.retention ?? 'workqueue', max_bytes: -1, storage: 'file' },
+							config: { name: s.name, subjects: [`yoal.q.${s.name}`], retention: s.retention ?? 'workqueue', max_bytes: -1, storage: 'file' },
 							created: s.created ?? '2026-11-01T00:00:00Z',
 							state: {
 								messages: s.messages,
@@ -131,7 +131,7 @@ function sampler(broker: ReturnType<typeof fakeBroker>, targets: () => BrokerSta
 		source: { brokerTargets: targets },
 		fetchActivation: async (id) => {
 			activations.push(id);
-			return { env: { SKIFF_BROKER_USER: 'jobs', SKIFF_BROKER_PASSWORD: 'secret-password-123' } } as unknown as WorkloadActivation;
+			return { env: { YOAL_BROKER_USER: 'jobs', YOAL_BROKER_PASSWORD: 'secret-password-123' } } as unknown as WorkloadActivation;
 		},
 		connect: broker.connect,
 		now: () => clock.now,
@@ -144,16 +144,16 @@ describe('BrokerStatsSampler', () => {
 		const broker = fakeBroker();
 		broker.state.store = 4_096;
 		broker.state.streams = [
-			{ name: 'SKIFF_Q_jobs', messages: 7, lastSeq: 40, firstTs: '2026-11-07T11:55:30Z', consumers: [{ name: 'skiff-consumer', pending: 5, ackPending: 2, redelivered: 1 }] },
+			{ name: 'YOAL_Q_jobs', messages: 7, lastSeq: 40, firstTs: '2026-11-07T11:55:30Z', consumers: [{ name: 'yoal-consumer', pending: 5, ackPending: 2, redelivered: 1 }] },
 			// A parked dead-letter queue with no consumer: held, but not lagging.
-			{ name: 'SKIFF_Q_jobs-dlq', messages: 3, lastSeq: 3, firstTs: '2026-11-06T00:00:00Z' },
+			{ name: 'YOAL_Q_jobs-dlq', messages: 3, lastSeq: 3, firstTs: '2026-11-06T00:00:00Z' },
 			// An app's own log stream keeps messages on purpose.
 			{ name: 'audit', retention: 'limits', messages: 100, lastSeq: 100, firstTs: '2026-10-01T00:00:00Z', consumers: [{ name: 'reader', pending: 0 }] },
 		];
 		const { instance, activations } = sampler(broker, () => [target()]);
 
 		expect(await instance.sample()).toBe(1);
-		expect(broker.connects).toEqual([{ host: '127.0.0.1', port: 14222, user: 'jobs', name: 'skiff-stats' }]);
+		expect(broker.connects).toEqual([{ host: '127.0.0.1', port: 14222, user: 'jobs', name: 'yoal-stats' }]);
 		expect(activations).toEqual(['mq_a']);
 
 		const { brokers, brokerQueues } = instance.pending();
@@ -171,7 +171,7 @@ describe('BrokerStatsSampler', () => {
 			pending: 5,
 			ackPending: 2,
 			redelivered: 1,
-			oldestAgeSeconds: 300, // only SKIFF_Q_jobs counts
+			oldestAgeSeconds: 300, // only YOAL_Q_jobs counts
 			published: 0, // no previous reading yet
 			messagesIn: 0,
 			memoryBytes: 40_000_000,
@@ -181,8 +181,8 @@ describe('BrokerStatsSampler', () => {
 		const streams = brokerQueues[0]!.streams;
 		expect(streams.map((s) => [s.stream, s.queue])).toEqual([
 			['audit', null],
-			['SKIFF_Q_jobs', 'jobs'],
-			['SKIFF_Q_jobs-dlq', 'jobs-dlq'],
+			['YOAL_Q_jobs', 'jobs'],
+			['YOAL_Q_jobs-dlq', 'jobs-dlq'],
 		]);
 		expect(streams[1]).toMatchObject({
 			messages: 7,
@@ -191,18 +191,18 @@ describe('BrokerStatsSampler', () => {
 			ackPending: 2,
 			redelivered: 1,
 			firstAt: '2026-11-07T11:55:30.000Z',
-			consumers: [{ name: 'skiff-consumer', pending: 5, ackPending: 2, redelivered: 1, waiting: 1, lastDeliveredAt: '2026-11-07T11:59:00.000Z' }],
+			consumers: [{ name: 'yoal-consumer', pending: 5, ackPending: 2, redelivered: 1, waiting: 1, lastDeliveredAt: '2026-11-07T11:59:00.000Z' }],
 		});
 		// Streams without consumers are not asked for them.
 		expect(broker.subjects.filter((s) => s.startsWith('$JS.API.CONSUMER.LIST'))).toEqual([
 			'$JS.API.CONSUMER.LIST.audit',
-			'$JS.API.CONSUMER.LIST.SKIFF_Q_jobs',
+			'$JS.API.CONSUMER.LIST.YOAL_Q_jobs',
 		]);
 	});
 
 	test('rates are deltas against the previous reading, without the sampler’s own traffic', async () => {
 		const broker = fakeBroker();
-		broker.state.streams = [{ name: 'SKIFF_Q_jobs', messages: 0, lastSeq: 10, consumers: [{ name: 'skiff-consumer', pending: 0 }] }];
+		broker.state.streams = [{ name: 'YOAL_Q_jobs', messages: 0, lastSeq: 10, consumers: [{ name: 'yoal-consumer', pending: 0 }] }];
 		broker.state.account = { conns: 3, inMsgs: 1_000, outMsgs: 2_000, inBytes: 10_000, outBytes: 20_000, slow: 1 };
 		const { instance, clock } = sampler(broker, () => [target()]);
 		await instance.sample();
@@ -211,8 +211,8 @@ describe('BrokerStatsSampler', () => {
 		// counters moved by the apps' traffic plus this round's 4 requests (INFO, LIST, CONSUMER.LIST, STATZ).
 		clock.now = T0 + MINUTE;
 		broker.state.streams = [
-			{ name: 'SKIFF_Q_jobs', messages: 25, lastSeq: 35, firstTs: '2026-11-07T12:01:00Z', consumers: [{ name: 'skiff-consumer', pending: 25 }] },
-			{ name: 'SKIFF_Q_new', messages: 4, lastSeq: 4, created: '2026-11-07T12:00:45Z' },
+			{ name: 'YOAL_Q_jobs', messages: 25, lastSeq: 35, firstTs: '2026-11-07T12:01:00Z', consumers: [{ name: 'yoal-consumer', pending: 25 }] },
+			{ name: 'YOAL_Q_new', messages: 4, lastSeq: 4, created: '2026-11-07T12:00:45Z' },
 		];
 		broker.state.account = { conns: 3, inMsgs: 1_000 + 30 + 4, outMsgs: 2_000 + 50 + 4, inBytes: 12_500, outBytes: 25_000, slow: 3 };
 		await instance.sample();
@@ -233,13 +233,13 @@ describe('BrokerStatsSampler', () => {
 
 	test('a server restart resets its counters instead of producing negative rates', async () => {
 		const broker = fakeBroker();
-		broker.state.streams = [{ name: 'SKIFF_Q_jobs', messages: 0, lastSeq: 500 }];
+		broker.state.streams = [{ name: 'YOAL_Q_jobs', messages: 0, lastSeq: 500 }];
 		broker.state.account = { conns: 2, inMsgs: 9_000, outMsgs: 9_000 };
 		const { instance, clock } = sampler(broker, () => [target()]);
 		await instance.sample();
 
 		clock.now = T0 + MINUTE;
-		broker.state.streams = [{ name: 'SKIFF_Q_jobs', messages: 0, lastSeq: 12 }];
+		broker.state.streams = [{ name: 'YOAL_Q_jobs', messages: 0, lastSeq: 12 }];
 		broker.state.account = { conns: 2, inMsgs: 40, outMsgs: 10 };
 		await instance.sample();
 
@@ -287,7 +287,7 @@ describe('BrokerStatsSampler', () => {
 	test('without STATZ the JetStream numbers still count', async () => {
 		const broker = fakeBroker();
 		broker.state.account = null;
-		broker.state.streams = [{ name: 'SKIFF_Q_jobs', messages: 2, lastSeq: 2 }];
+		broker.state.streams = [{ name: 'YOAL_Q_jobs', messages: 2, lastSeq: 2 }];
 		const { instance } = sampler(broker, () => [target()]);
 		await instance.sample();
 		expect(instance.pending().brokers[0]).toMatchObject({ up: true, connections: 0, messages: 2, messagesIn: 0 });

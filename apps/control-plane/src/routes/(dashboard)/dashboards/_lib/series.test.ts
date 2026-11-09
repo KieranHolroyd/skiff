@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { QueryColumn, QueryResult } from '@skiff/contracts';
+import type { QueryColumn, QueryResult } from '@yoal/contracts';
 import { reduce, toCsv, toFrame, toItems } from './series.ts';
 
 const time: QueryColumn = { name: 'time', type: "DateTime('UTC')", kind: 'time' };

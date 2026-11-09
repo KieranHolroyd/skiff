@@ -4,10 +4,10 @@
 	import TerminalIcon from '@lucide/svelte/icons/terminal';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import SecretDialog from '#lib/components/skiff/SecretDialog.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import SecretDialog from '#lib/components/yoal/SecretDialog.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
@@ -145,12 +145,12 @@
 	}
 
 	const curl = $derived(
-		`curl -H "Authorization: Bearer $SKIFF_TOKEN" ${data.platform.origin}/api/v1/projects`
+		`curl -H "Authorization: Bearer $YOAL_TOKEN" ${data.platform.origin}/api/v1/projects`
 	);
 </script>
 
 <svelte:head>
-	<title>API keys · Settings · Skiff</title>
+	<title>API keys · Settings · Yoal</title>
 </svelte:head>
 
 <SettingsHeader id="api-keys">
@@ -286,11 +286,11 @@
 				class="flex items-center gap-2 rounded-lg border bg-muted/40 py-1.5 pr-1.5 pl-3 font-mono text-xs"
 			>
 				<span class="text-muted-foreground select-none">$</span>
-				<span class="min-w-0 flex-1 truncate">skif login --token $SKIFF_TOKEN</span>
-				<CopyButton value="skif login --token $SKIFF_TOKEN" label="Copy command" iconOnly />
+				<span class="min-w-0 flex-1 truncate">yoal login --token $YOAL_TOKEN</span>
+				<CopyButton value="yoal login --token $YOAL_TOKEN" label="Copy command" iconOnly />
 			</div>
 			<p class="text-xs text-muted-foreground">
-				Or run <code>skif login</code> on a machine with a browser; it creates a key for you.
+				Or run <code>yoal login</code> on a machine with a browser; it creates a key for you.
 			</p>
 		</div>
 		<div class="space-y-2">
@@ -428,7 +428,7 @@
 	<SecretDialog
 		bind:open={keyOpen}
 		title="{result.createdKeyName ?? 'API key'} created"
-		description="Use it as a Bearer token or with skif login --token."
+		description="Use it as a Bearer token or with yoal login --token."
 		value={result.createdKey}
 	>
 		{#if result.createdKeyScopes?.length}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { githubRunnerTemplate } from '@skiff/contracts';
+import { githubRunnerTemplate } from '@yoal/contracts';
 import {
 	apiSnippet,
 	collectValues,
@@ -127,7 +127,7 @@ describe('template form', () => {
 	});
 
 	it('keeps credentials out of the API snippet', () => {
-		const snippet = apiSnippet(template, filled(), 'https://skiff.example.com');
+		const snippet = apiSnippet(template, filled(), 'https://yoal.example.com');
 		expect(snippet).toContain('/api/v1/templates/github-actions-runner');
 		expect(snippet).toContain('"replicas":2');
 		expect(snippet).not.toContain('github_pat_secret');

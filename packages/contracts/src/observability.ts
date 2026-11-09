@@ -5,7 +5,7 @@ import * as z from 'zod';
  *
  * A panel runs one query. Builder queries are structured: the control plane turns them into SQL
  * and adds the caller's tenancy filter, so anyone with `metrics:read` can use them. SQL queries
- * run as written, as ClickHouse's read-only `skiff_reader` user with resource limits, and only
+ * run as written, as ClickHouse's read-only `yoal_reader` user with resource limits, and only
  * for platform admins (the reader sees every org's rows).
  *
  * Shared by the REST API (`/api/v1/observability/*`), the dashboard UI and the service layer.

@@ -6,10 +6,10 @@
 	import LockIcon from '@lucide/svelte/icons/lock';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import TrashIcon from '@lucide/svelte/icons/trash';
-	import type { StorageView } from '@skiff/contracts';
+	import type { StorageView } from '@yoal/contracts';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';

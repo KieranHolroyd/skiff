@@ -5,7 +5,7 @@ import {
 	type ItemFlag,
 	type Permission,
 	type Principal,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { ForbiddenError } from '../errors.ts';
 import type { ProjectRow } from '../projects.ts';
 import type { ActionDefinition, ItemResult, PlannedItem, RunContext, StoredItem } from './types.ts';

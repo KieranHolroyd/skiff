@@ -7,7 +7,7 @@ Every project is reachable on a hostname under your server's content domain as s
 
 ## Default hostnames
 
-Skiff serves every project under the content domain (for example `sites.example.com`). The name is built from the project slug and, for other environments, the environment slug:
+Yoal serves every project under the content domain (for example `sites.example.com`). The name is built from the project slug and, for other environments, the environment slug:
 
 | Host | Example | Serves |
 | --- | --- | --- |
@@ -17,7 +17,7 @@ Skiff serves every project under the content domain (for example `sites.example.
 
 The `--` separator is reserved for these hosts, so an environment can never take the name of a preview. Environment slugs are 1 to 30 lowercase letters, digits and hyphens, cannot contain `--`, and `production` is reserved for the built-in environment.
 
-The content domain needs a wildcard DNS record (`*.sites.example.com`) that points at your Skiff server. Your operator sets this up; see [configuration](/self-hosting/configuration) and the **Settings → Domains** section below.
+The content domain needs a wildcard DNS record (`*.sites.example.com`) that points at your Yoal server. Your operator sets this up; see [configuration](/self-hosting/configuration) and the **Settings → Domains** section below.
 
 The diagram shows where each kind of hostname ends up. Every environment and preview host points at one deployment, and a custom domain serves the production deployment.
 
@@ -49,17 +49,17 @@ The CLI and the MCP server have no domain commands, so attaching and removing do
 
 ### Prove you control the name
 
-Skiff does not serve a domain until a TXT record proves control. Create this record, using the exact name and value shown on the domain:
+Yoal does not serve a domain until a TXT record proves control. Create this record, using the exact name and value shown on the domain:
 
 ```text
 Type:   TXT
-Name:   _skiff.www.example.com
-Value:  skiff-verify=<token>
+Name:   _yoal.www.example.com
+Value:  yoal-verify=<token>
 ```
 
-The token is random for each domain, so copy it from Skiff rather than reusing one from another domain.
+The token is random for each domain, so copy it from Yoal rather than reusing one from another domain.
 
-### Point traffic at Skiff
+### Point traffic at Yoal
 
 Once the TXT record is in place, point the hostname at the project's production host with a CNAME:
 
@@ -71,16 +71,16 @@ Value:  my-site.sites.example.com
 
 If `redirectWww` is set, create the same CNAME for `www.example.com`. If your content domain is an IP address rather than a name, the record is an A record to that address instead.
 
-For the bare domain (`example.com`), a CNAME is not allowed at the zone apex on many DNS providers. Use your provider's ALIAS or ANAME record, or CNAME flattening, instead. Skiff accepts the apex when it resolves to the same addresses as the target.
+For the bare domain (`example.com`), a CNAME is not allowed at the zone apex on many DNS providers. Use your provider's ALIAS or ANAME record, or CNAME flattening, instead. Yoal accepts the apex when it resolves to the same addresses as the target.
 
 > [!NOTE]
-> If your operator has connected a Cloudflare account to Skiff, the CNAME or A record is created for you when you attach the domain, as a DNS-only record. Skiff updates it on each check and deletes it when you remove the domain. It never overwrites a non-address record (such as an existing TXT or MX) on the same name; it reports the conflict instead.
+> If your operator has connected a Cloudflare account to Yoal, the CNAME or A record is created for you when you attach the domain, as a DNS-only record. Yoal updates it on each check and deletes it when you remove the domain. It never overwrites a non-address record (such as an existing TXT or MX) on the same name; it reports the conflict instead.
 
 ### Check status
 
 A new domain starts as **pending**. Select **Check DNS** on the domain, or send `POST /api/v1/domains/{id}/check`. A successful check changes the status to **verified**. The response includes a `detail` message and the list of `records` still expected, so a failed check tells you what to fix.
 
-Skiff also re-checks DNS on its own: a pending domain about every 10 minutes. You can still run a check yourself straight after you change records.
+Yoal also re-checks DNS on its own: a pending domain about every 10 minutes. You can still run a check yourself straight after you change records.
 
 | Status | Meaning | Serves traffic |
 |---|---|---|
@@ -107,13 +107,13 @@ stateDiagram-v2
 
 ### TLS certificates
 
-You do not upload certificates. After a domain verifies, the first HTTPS request for it makes Skiff's proxy obtain a certificate from Let's Encrypt. This usually takes about a minute. Only verified and active hostnames are eligible, so a pending or failed name never triggers issuance. Each edge node checks a newly verified domain's certificate every 2 minutes for its first half hour, so the status shows **active** soon after the certificate is issued.
+You do not upload certificates. After a domain verifies, the first HTTPS request for it makes Yoal's proxy obtain a certificate from Let's Encrypt. This usually takes about a minute. Only verified and active hostnames are eligible, so a pending or failed name never triggers issuance. Each edge node checks a newly verified domain's certificate every 2 minutes for its first half hour, so the status shows **active** soon after the certificate is issued.
 
-Skiff's records are DNS only. If you proxy the name through Cloudflare yourself, the certificate needs your operator's Cloudflare DNS token, which is set in **Settings → Domains**.
+Yoal's records are DNS only. If you proxy the name through Cloudflare yourself, the certificate needs your operator's Cloudflare DNS token, which is set in **Settings → Domains**.
 
 ### Remove a domain
 
-Select **Remove** on the domain, or send `DELETE /api/v1/domains/{id}`. The hostname stops serving straight away, and any records Skiff created are deleted. Existing certificates are left to expire.
+Select **Remove** on the domain, or send `DELETE /api/v1/domains/{id}`. The hostname stops serving straight away, and any records Yoal created are deleted. Existing certificates are left to expire.
 
 ## Platform domains
 
@@ -125,7 +125,7 @@ Select **Remove** on the domain, or send `DELETE /api/v1/domains/{id}`. The host
 
 If you have no domains, the dashboard is served at `http://<server-ip>` and projects at a temporary wildcard address, such as `my-site.1-2-3-4.sslip.io`. That address works over HTTP only.
 
-Before saving, Skiff looks up the names in public DNS. A dashboard address that does not resolve is refused, because nobody could reach the dashboard afterwards. A content-domain wildcard that does not point at the server produces a warning, and you can confirm to continue. Saving applies the change to the server and reverts it if the new address does not answer.
+Before saving, Yoal looks up the names in public DNS. A dashboard address that does not resolve is refused, because nobody could reach the dashboard afterwards. A content-domain wildcard that does not point at the server produces a warning, and you can confirm to continue. Saving applies the change to the server and reverts it if the new address does not answer.
 
 > [!WARNING]
 > Changing the content domain changes the default host of every project, every environment and every existing preview URL. Custom domains are not affected. Changing the dashboard address also moves the sign-in page, and passkeys only work on the address they were created on. Owners must set up an authenticator app before changing it.
@@ -140,7 +140,7 @@ Open **Projects → my-site → Environments** and select **New environment**. T
 
 ```sh
 curl -X POST https://control.example.com/api/v1/projects/my-site/environments \
-  -H "Authorization: Bearer skif_..." \
+  -H "Authorization: Bearer yoal_..." \
   -H "Content-Type: application/json" \
   -d '{"name": "Staging", "slug": "staging", "access": "password", "password": "correct-horse-battery"}'
 ```
@@ -155,7 +155,7 @@ Use the `environment` option, which defaults to `production`:
 
 - **MCP**: call `deploy_to_environment` with `project`, `environment` and either inline `files` or a finalized `uploadId`. Only that environment's pointer moves.
 - **REST**: send inline files to `POST /api/v1/projects/my-site/deploy` with `"environment": "staging"`. This route accepts inline files only; uploads are finalized without an environment.
-- **CLI**: `skif deploy` has no environment option. It deploys to production, or to a preview with `--no-promote`.
+- **CLI**: `yoal deploy` has no environment option. It deploys to production, or to a preview with `--no-promote`.
 
 Set `promote` to `false` to create the deployment without moving the environment's pointer. To move an existing deployment into an environment, send `POST /api/v1/projects/my-site/environments/staging/promote` with `{"deploymentId": "..."}`. To roll an environment back, use the **Rollback** action on the environment or the `rollback` MCP tool with an `environment` argument.
 

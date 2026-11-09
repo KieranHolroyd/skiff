@@ -3,7 +3,7 @@ title: Databases
 description: Create managed PostgreSQL, MySQL, MariaDB, MongoDB, Valkey, Redis or ClickHouse databases, connect them to projects, and manage credentials, pooling and lifecycle.
 ---
 
-A managed database is an organisation-owned database that Skiff runs on one of your nodes. Skiff starts and restarts it, samples its size and activity, backs it up on a schedule, and injects connection details into the projects you attach it to. A database is not a project: it has no deployments or routes. This page covers creating and connecting databases, and managing their credentials, pooling and lifecycle. The [database studio](/data/database-studio) and [backups and point-in-time recovery](/data/backups-and-pitr) have their own pages.
+A managed database is an organisation-owned database that Yoal runs on one of your nodes. Yoal starts and restarts it, samples its size and activity, backs it up on a schedule, and injects connection details into the projects you attach it to. A database is not a project: it has no deployments or routes. This page covers creating and connecting databases, and managing their credentials, pooling and lifecycle. The [database studio](/data/database-studio) and [backups and point-in-time recovery](/data/backups-and-pitr) have their own pages.
 
 ## Engines and versions
 
@@ -33,17 +33,17 @@ Not every feature applies to every engine. PostgreSQL has the full set. The othe
 | Studio | yes | yes | yes | yes | no |
 | Owner password rotation | yes | yes | yes | yes | yes |
 
-Changing a version is only possible in place for some engines. A PostgreSQL major version goes through `skif db upgrade` (see [changing the version](#changing-the-version-and-moving-nodes)). MySQL, MariaDB, Valkey, Redis and ClickHouse can move forward to a newer listed version in place with `skif db update --version`. MongoDB must be backed up and restored into a new database to change version.
+Changing a version is only possible in place for some engines. A PostgreSQL major version goes through `yoal db upgrade` (see [changing the version](#changing-the-version-and-moving-nodes)). MySQL, MariaDB, Valkey, Redis and ClickHouse can move forward to a newer listed version in place with `yoal db update --version`. MongoDB must be backed up and restored into a new database to change version.
 
 ## Create a database
 
 In the dashboard, open **Databases → New database**, choose an engine and fill in the form. From the terminal:
 
 ```sh
-skif db create main --project api
+yoal db create main --project api
 ```
 
-This creates a PostgreSQL 17 database called `main` and attaches it to the `api` project. The `skiff` command is an alias for `skif`.
+This creates a PostgreSQL 17 database called `main` and attaches it to the `api` project. The `yoal` command is an alias for `yoal`.
 
 | Flag | Meaning |
 |---|---|
@@ -64,28 +64,28 @@ This creates a PostgreSQL 17 database called `main` and attaches it to the `api`
 
 Names are 3 to 40 characters of lowercase letters, digits and single hyphens, starting and ending with a letter or digit. MySQL names can be at most 32 characters. A name is unique within your organisation, including databases in the trash. On PostgreSQL, names cannot start with `pg-`, and the reserved names `postgres`, `template0` and `template1` are refused. Each engine also reserves a few names of its own, which the dashboard and API reject.
 
-With `--placement auto`, Skiff picks the node with the most free memory budget. If no node has room for the requested memory, creation fails rather than overcommitting. With `--disk fast` or `--disk bulk`, only nodes with a ready disk of that tier and room for the storage budget are considered, and Skiff never falls back to the other tier. A disk name places the database on that disk's node.
+With `--placement auto`, Yoal picks the node with the most free memory budget. If no node has room for the requested memory, creation fails rather than overcommitting. With `--disk fast` or `--disk bulk`, only nodes with a ready disk of that tier and room for the storage budget are considered, and Yoal never falls back to the other tier. A disk name places the database on that disk's node.
 
 ## Sizing
 
 - **Memory** is a hard limit enforced when the node runs the container. It must be at least the engine's minimum and at most 16 GB. Memory is counted against the node's budget when you create or grow a database.
 - **CPUs** can be fractional, up to 8.
-- **Storage** is a budget between 256 MB and 1 TB, with a 10 GB default. Skiff uses it for the storage gauge and the storage alert. When the database's data directory sits on a disk, Skiff also checks that the disk has room for the budget and keeps 10% of it free.
+- **Storage** is a budget between 256 MB and 1 TB, with a 10 GB default. Yoal uses it for the storage gauge and the storage alert. When the database's data directory sits on a disk, Yoal also checks that the disk has room for the budget and keeps 10% of it free.
 
-To change any of these, open the database's **Settings** tab and use **Resources → Resize**, run `skif db update main --memory 1G --cpus 2 --storage 20G`, or send a `PATCH` to the API. Limits take effect when the node next restarts the container, so run `skif db restart main` to apply them now.
+To change any of these, open the database's **Settings** tab and use **Resources → Resize**, run `yoal db update main --memory 1G --cpus 2 --storage 20G`, or send a `PATCH` to the API. Limits take effect when the node next restarts the container, so run `yoal db restart main` to apply them now.
 
 ## Attach to a project
 
 Attaching links a database to a project under an env prefix. The project receives the connection details as environment variables the next time it starts. Use the CLI, the dashboard (from the database's **Overview** or the project), or the API:
 
 ```sh
-skif db attach main --project api --prefix DATABASE
-skif db detach main --project api
+yoal db attach main --project api --prefix DATABASE
+yoal db detach main --project api
 ```
 
 ```sh
 curl -X POST https://control.example.com/api/v1/projects/api/databases \
-  -H "Authorization: Bearer skif_…" \
+  -H "Authorization: Bearer yoal_…" \
   -H "Content-Type: application/json" \
   -d '{"database": "main", "envPrefix": "DATABASE"}'
 ```
@@ -103,7 +103,7 @@ The path from attaching to a running connection is shown below. The app receives
 
 ```mermaid
 flowchart LR
-  A["skif db attach"] --> B["Attachment recorded, owner credential linked"]
+  A["yoal db attach"] --> B["Attachment recorded, owner credential linked"]
   B --> C["Project restarts on the database's node"]
   C --> D["Variables injected for the env prefix"]
   D --> E["App queries via PREFIX_POOL_URL"]
@@ -131,7 +131,7 @@ Process projects connect to `127.0.0.1` on the database's host port. Container p
 
 Pick the URL that suits each query path. A common pattern is to use `DATABASE_POOL_URL` for the application's queries and `DATABASE_URL` for migrations, because migrations need a direct session.
 
-When you open a project's variables, Skiff scans the names your code and `.env` files use, and offers to link a matching database under the usual prefix. Only names are read, never values.
+When you open a project's variables, Yoal scans the names your code and `.env` files use, and offers to link a matching database under the usual prefix. Only names are read, never values.
 
 ## Connections and TLS
 
@@ -139,12 +139,12 @@ Databases listen only on the loopback interface of their node. Each one is publi
 
 ```sh
 ssh -L 15432:127.0.0.1:15432 <node>
-psql "$(skif db credentials main)"
+psql "$(yoal db credentials main)"
 ```
 
-If you expose the database through your own TCP proxy or tunnel, store the public `postgres://…` URL in the database's **Overview → Connection → Public database URL**. Skiff keeps it encrypted and shows it only when you reveal it. The public URL never appears in desired state, logs or MCP output.
+If you expose the database through your own TCP proxy or tunnel, store the public `postgres://…` URL in the database's **Overview → Connection → Public database URL**. Yoal keeps it encrypted and shows it only when you reveal it. The public URL never appears in desired state, logs or MCP output.
 
-TLS is on by default. An operator can turn it off with `SKIFF_FEATURE_DB_TLS=0` (see [configuration](/self-hosting/configuration)). With TLS on, PostgreSQL uses a per-database certificate, connection strings carry `sslmode=require`, and the public CA certificate is available from the credentials response. For full hostname verification, use `sslmode=verify-full` with the CA. If certificate generation fails, the database starts without TLS and the dashboard shows a warning.
+TLS is on by default. An operator can turn it off with `YOAL_FEATURE_DB_TLS=0` (see [configuration](/self-hosting/configuration)). With TLS on, PostgreSQL uses a per-database certificate, connection strings carry `sslmode=require`, and the public CA certificate is available from the credentials response. For full hostname verification, use `sslmode=verify-full` with the CA. If certificate generation fails, the database starts without TLS and the dashboard shows a warning.
 
 ## Connection pooling
 
@@ -159,16 +159,16 @@ Transaction pooling does not suit everything. Use the direct URL for:
 - `SET` settings and temporary tables used across statements
 - prepared statements, and cursors held across transactions
 
-To turn the pooler off, create the database with `--no-pooler`, or change **Settings → Connection pooler** (or send `"pooler": false` in a `PATCH`). Restart the pooler on its own with `skif db restart main --pooler`. Postgres connections are not affected. An alert fires when pool saturation goes above 90%.
+To turn the pooler off, create the database with `--no-pooler`, or change **Settings → Connection pooler** (or send `"pooler": false` in a `PATCH`). Restart the pooler on its own with `yoal db restart main --pooler`. Postgres connections are not affected. An alert fires when pool saturation goes above 90%.
 
 ## Credentials
 
-Skiff generates an owner password and a monitor password when you create a database. Both are encrypted with your organisation's key. The owner password is the one apps use.
+Yoal generates an owner password and a monitor password when you create a database. Both are encrypted with your organisation's key. The owner password is the one apps use.
 
 To reveal the connection details, use one of these:
 
 - **Overview → Connection → Reveal credentials** in the dashboard.
-- `skif db credentials main` prints the connection URL. Add `--json` for the full object, including the password.
+- `yoal db credentials main` prints the connection URL. Add `--json` for the full object, including the password.
 - `GET /api/v1/databases/main/credentials` returns the URL, the password, the TLS mode, the CA certificate and copy-paste snippets. The response is never cached.
 
 Revealing credentials needs `database:credentials`. The owner, admin and deployer roles have it, and viewers do not. It is not in the default scopes for agents, and the MCP server has no reveal tool. Every reveal is recorded in the audit log.
@@ -177,9 +177,9 @@ The dashboard snippets cover psql, node-postgres, Drizzle, Prisma, Kysely, Djang
 
 ### Rotating the owner password
 
-Rotation replaces a password without losing the data. Rotate from the database's actions menu (**Rotate owner password**), with `skif db rotate main`, or with `POST /api/v1/databases/main/rotate` and `{"role": "owner"}`. Rotating the monitor role uses `--monitor`, and is PostgreSQL only. Rotation needs both `database:credentials` and `database:update`, and only one rotation per role can run at a time.
+Rotation replaces a password without losing the data. Rotate from the database's actions menu (**Rotate owner password**), with `yoal db rotate main`, or with `POST /api/v1/databases/main/rotate` and `{"role": "owner"}`. Rotating the monitor role uses `--monitor`, and is PostgreSQL only. Rotation needs both `database:credentials` and `database:update`, and only one rotation per role can run at a time.
 
-Rotation happens in stages. The new password is prepared and stored separately. The node sets it on the database and checks a fresh connection. Only then does Skiff switch to the new password. If the node reports a failure, the old password stays in place and the error appears on the database. Once the new password is live, Skiff restarts the projects attached with it so they pick it up. Nothing else needs restarting.
+Rotation happens in stages. The new password is prepared and stored separately. The node sets it on the database and checks a fresh connection. Only then does Yoal switch to the new password. If the node reports a failure, the old password stays in place and the error appears on the database. Once the new password is live, Yoal restarts the projects attached with it so they pick it up. Nothing else needs restarting.
 
 The steps, and the point at which the live password changes, are shown below:
 
@@ -213,11 +213,11 @@ The overview shows storage, connections, cache hit ratio and the last backup. Th
 - cache hit ratio
 - rows written per minute
 
-Skiff samples each running database once a minute. The API at `GET /api/v1/databases/:name/metrics` accepts `from`, `to` and `interval` (`1m` or `1h`). One-minute buckets cover up to 48 hours, and hourly buckets cover up to 92 days.
+Yoal samples each running database once a minute. The API at `GET /api/v1/databases/:name/metrics` accepts `from`, `to` and `interval` (`1m` or `1h`). One-minute buckets cover up to 48 hours, and hourly buckets cover up to 92 days.
 
 The **Insights** tab shows the 50 largest tables, with row estimates, scan counts and the last autovacuum and autoanalyze times. It also shows slow queries: the top 50 normalised statements from `pg_stat_statements`, refreshed every five minutes. Slow queries need the `pg_stat_statements` extension, which is not enabled by default. Enable it with `--extension pg_stat_statements` or in **Settings → Extensions**.
 
-Skiff raises alerts when a database uses more than its storage budget threshold (85% by default), its connection limit threshold (90% by default) or its pool saturation threshold (90% by default). The operator sets the thresholds. See [alerts](/observe/alerts) for where alerts appear, and [dashboards and logs](/observe/dashboards-and-logs) for logs. `skif db logs main --follow` tails a database's log.
+Yoal raises alerts when a database uses more than its storage budget threshold (85% by default), its connection limit threshold (90% by default) or its pool saturation threshold (90% by default). The operator sets the thresholds. See [alerts](/observe/alerts) for where alerts appear, and [dashboards and logs](/observe/dashboards-and-logs) for logs. `yoal db logs main --follow` tails a database's log.
 
 ## Extensions
 
@@ -246,8 +246,8 @@ A PostgreSQL 18 database can be created on one of three images:
 | `pg_cron` | `pg_cron`, plus `pgvector` | Scheduled SQL jobs inside the database. |
 
 ```sh
-skif db create places --version 18 --variant postgis
-skif db create jobs --version 18 --variant pg_cron
+yoal db create places --version 18 --variant postgis
+yoal db create jobs --version 18 --variant pg_cron
 ```
 
 In the dashboard, choose PostgreSQL 18 and then the **Image**. The variant's extension is enabled for you. You choose the variant when you create the database and cannot change it later. Variants do not combine: one database cannot have both PostGIS and pg_cron. A restore keeps the source's variant.
@@ -265,31 +265,31 @@ Extensions that reach outside the database, run untrusted procedural code or can
 
 ## Restart, delete, restore and purge
 
-Restarting restarts the database and its pooler together. From the terminal, use `skif db restart main`, `skif db restart main --pooler` to restart only the pooler, or `skif db restart --all` to restart every database. The dashboard has a **Restart** button in the database header. Attached projects reconnect when the database is back.
+Restarting restarts the database and its pooler together. From the terminal, use `yoal db restart main`, `yoal db restart main --pooler` to restart only the pooler, or `yoal db restart --all` to restart every database. The dashboard has a **Restart** button in the database header. Attached projects reconnect when the database is back.
 
 Deleting moves a database to the trash. Its container stops, and its data stays on the node.
 
 ```sh
-skif db delete main
-skif db restore main
-skif db purge main
+yoal db delete main
+yoal db restore main
+yoal db purge main
 ```
 
 - **Delete** is refused while the database is attached. Detach it first. It also cancels any backups that are queued but have not run.
 - **Restore** brings the database back on the same node with its data. Its memory is admitted again, so restoring can fail if the node is full. Attachments are not restored. Re-attach the projects that need the database.
 - **Purge** permanently deletes a database that is in the trash, along with its data. The CLI asks you to type the name to confirm, and `-y` skips that prompt. Purge is available through `DELETE /api/v1/databases/main?purge=1`.
 
-Trashed databases are kept for 7 days by default. The operator can change this from 1 to 90 days. After that, Skiff purges them automatically. Until then, the name stays taken.
+Trashed databases are kept for 7 days by default. The operator can change this from 1 to 90 days. After that, Yoal purges them automatically. Until then, the name stays taken.
 
 ## Changing the version and moving nodes
 
-For PostgreSQL, a major version change always goes through the upgrade planner. `skif db upgrade main --to 17` shows a plan, with any blockers and warnings. Add `--apply` to queue a pinned backup and get the manual runbook. Skiff never switches a PostgreSQL major version by itself.
+For PostgreSQL, a major version change always goes through the upgrade planner. `yoal db upgrade main --to 17` shows a plan, with any blockers and warnings. Add `--apply` to queue a pinned backup and get the manual runbook. Yoal never switches a PostgreSQL major version by itself.
 
-Asking the planner for the major the database already runs is refused, because there is nothing to plan. Skiff runs one image per PostgreSQL major and has no separate minor-update step.
+Asking the planner for the major the database already runs is refused, because there is nothing to plan. Yoal runs one image per PostgreSQL major and has no separate minor-update step.
 
-For MySQL, MariaDB, Valkey, Redis and ClickHouse, change the version with `skif db update main --version <version>`, the `update_database` MCP tool, or `PATCH /api/v1/databases/main` with `{"version": "…"}`. The CLI asks you to confirm, and `-y` skips the prompt. The database restarts on the new image with its data. The dashboard does not change versions. Only forward moves within the listed versions are accepted, and downgrades are refused.
+For MySQL, MariaDB, Valkey, Redis and ClickHouse, change the version with `yoal db update main --version <version>`, the `update_database` MCP tool, or `PATCH /api/v1/databases/main` with `{"version": "…"}`. The CLI asks you to confirm, and `-y` skips the prompt. The database restarts on the new image with its data. The dashboard does not change versions. Only forward moves within the listed versions are accepted, and downgrades are refused.
 
-To move a database to another node, open **Settings** and choose **Move to another node**, or send `POST /api/v1/databases/main/move`. A move copies the data with a backup, so it works for every engine. Attached projects are stopped while Skiff takes a final backup and restores it on the new node. Downtime is roughly one backup plus one restore. The data lands on a disk of the same tier on the new node, or its system disk if the database is on one; add `storage` to the request body to choose another target. Projects that use app volumes or a persistent data directory block the move.
+To move a database to another node, open **Settings** and choose **Move to another node**, or send `POST /api/v1/databases/main/move`. A move copies the data with a backup, so it works for every engine. Attached projects are stopped while Yoal takes a final backup and restores it on the new node. Downtime is roughly one backup plus one restore. The data lands on a disk of the same tier on the new node, or its system disk if the database is on one; add `storage` to the request body to choose another target. Projects that use app volumes or a persistent data directory block the move.
 
 A database with read replicas cannot move, and its PostgreSQL major cannot be upgraded. Remove the replicas first, or add a replica on the target node and promote it.
 
@@ -306,12 +306,12 @@ A named credential is a separate PostgreSQL role with its own generated password
 The owner and monitor credentials always exist and appear in the same list. Manage named credentials from **Overview → Credentials** in the dashboard, or with the CLI:
 
 ```sh
-skif db credentials create main --role readonly --purpose "Metabase" --expires 2027-01-01
-skif db credentials list main
-skif db attach main --project reports --credential readonly
-skif db credentials reveal main dbc_…
-skif db credentials rotate main dbc_…
-skif db credentials revoke main dbc_…
+yoal db credentials create main --role readonly --purpose "Metabase" --expires 2027-01-01
+yoal db credentials list main
+yoal db attach main --project reports --credential readonly
+yoal db credentials reveal main dbc_…
+yoal db credentials rotate main dbc_…
+yoal db credentials revoke main dbc_…
 ```
 
 A new credential is **pending** until the node creates the role, then **ready**. You can only attach or reveal a ready credential. `--credential` takes the credential's id, or its role when exactly one ready credential has that role.
@@ -327,9 +327,9 @@ Creating, rotating and revoking need `database:credentials` and `database:update
 A PostgreSQL database can have asynchronous streaming read replicas. A replica on another node keeps a copy of the data there, so you can promote it if the primary's node is lost. A replica on the primary's own node only adds read capacity.
 
 ```sh
-skif db replica add main --node worker-2
-skif db replica list main
-skif db replica remove main dbr_…
+yoal db replica add main --node worker-2
+yoal db replica list main
+yoal db replica remove main dbr_…
 ```
 
 The same actions are in the **Replicas** section of the database's **Overview**, the `list_database_replicas`, `create_database_replica` and `delete_database_replica` MCP tools, and `GET`, `POST /api/v1/databases/main/replicas` and `DELETE /api/v1/databases/main/replicas/{id}`.
@@ -348,54 +348,54 @@ While a replica the app can reach is streaming or lagging, attached apps get fou
 | `<PREFIX>_READ_URLS` | Every reachable replica, comma-separated |
 | `<PREFIX>_READ_HOST`, `<PREFIX>_READ_PORT` | Host and port of the first one |
 
-An app reaches a replica on its own node directly. A process app reaches one on another node only when cross-node service endpoints are on (`SKIFF_FEATURE_SERVICE_ENDPOINTS`). The variables appear and disappear as replicas start and stop streaming, and the app restarts each time. Reads can trail the primary by the replica's lag, so use `<PREFIX>_URL` when a read must see a write the app just made.
+An app reaches a replica on its own node directly. A process app reaches one on another node only when cross-node service endpoints are on (`YOAL_FEATURE_SERVICE_ENDPOINTS`). The variables appear and disappear as replicas start and stop streaming, and the app restarts each time. Reads can trail the primary by the replica's lag, so use `<PREFIX>_URL` when a read must see a write the app just made.
 
 ### Promote a replica
 
 Promotion makes a replica the primary. It is a manual action from the dashboard (you type the database name), the CLI or REST. It is never available over MCP.
 
 ```sh
-skif db replica promote main dbr_…
-skif db replica promote main dbr_… --accept-data-loss
+yoal db replica promote main dbr_…
+yoal db replica promote main dbr_… --accept-data-loss
 ```
 
-Skiff first stops the current primary. When its node is online, Skiff waits until the node confirms the primary has stopped, and gives up after 10 minutes. Then the replica's node runs `pg_ctl promote` and the database moves to that node with the replica's data. Attached apps restart with the new address, and their open connections drop once. The old primary's node deletes its copy when it next checks in. The other replicas are rebuilt from the new primary.
+Yoal first stops the current primary. When its node is online, Yoal waits until the node confirms the primary has stopped, and gives up after 10 minutes. Then the replica's node runs `pg_ctl promote` and the database moves to that node with the replica's data. Attached apps restart with the new address, and their open connections drop once. The old primary's node deletes its copy when it next checks in. The other replicas are rebuilt from the new primary.
 
 The promotion is refused unless the replica is streaming, within 64 MB and 60 seconds of the primary, and reported its lag in the last 2 minutes, and the primary's node is online. Otherwise `--accept-data-loss` (`acceptDataLoss: true`) promotes anyway, and commits the replica had not replayed are lost. A replica that never streamed, or is `failed` or `lost`, cannot be promoted, and neither can one on the primary's own node.
 
 Over REST, send `POST /api/v1/databases/main/replicas/{id}/promote` with `{"confirm": true}` and the `If-Match` header set to the database's `primaryGeneration` from `GET …/replicas`. A different generation returns 412. The response describes the promotion, which goes from `fencing` to `promoting`, `repointing` and `completed`, or `failed`.
 
 > [!WARNING]
-> Promote with `--accept-data-loss` only once you are sure the old primary is down. Skiff cannot stop a primary on a node it cannot reach, and an app on that node keeps writing to it until the node checks in again.
+> Promote with `--accept-data-loss` only once you are sure the old primary is down. Yoal cannot stop a primary on a node it cannot reach, and an app on that node keeps writing to it until the node checks in again.
 
 ## Command reference
 
 | Command | What it does |
 |---|---|
-| `skif db list` (`ls`) | List databases. `--all` includes the trash. |
-| `skif db create <name>` | Create a database. See the flags above. |
-| `skif db info <name>` (`show`) | Show status, node, size against budget, attached projects and top tables. |
-| `skif db update <name>` | Change `--memory`, `--cpus` or `--storage`, turn the pooler on or off with `--pooler` or `--no-pooler`, add extensions with `--extension`, or move forward in place with `--version`. |
-| `skif db attach <name> -p <project>` | Attach a database to a project. `--prefix` sets the env prefix, and `--credential` connects as a named credential. |
-| `skif db detach <name> -p <project>` | Detach a database from a project. |
-| `skif db delete <name>` (`rm`) | Move a database to the trash. |
-| `skif db restore <name>` | Bring a trashed database back. |
-| `skif db purge <name>` | Permanently delete a trashed database and its data. |
-| `skif db credentials <name>` (`creds`) | Print the connection URL. `--json` returns the full object. |
-| `skif db credentials list\|create\|rotate\|revoke\|reveal <name>` | Manage [named credentials](#named-credentials). `create` takes `--role`, `--purpose` and `--expires`; the others take a credential id. |
-| `skif db logs <name>` | Show the database's log. `--follow`, `--limit`, `--level`, `--q` and `--after` filter it. |
-| `skif db restart <name>` or `--all` | Restart a database and its pooler. `--pooler` restarts only the pooler. |
-| `skif db upgrade <name> --to <major>` | Plan a PostgreSQL major upgrade. `--apply` queues the backup and runbook. |
-| `skif db rotate <name>` | Rotate the owner password. `--monitor` rotates the monitor role. |
-| `skif db backups <name>` | List backups and the last verified restore. |
-| `skif db backup <name>` or `--all` | Take a backup now. `--pin` keeps it past retention. |
-| `skif db backup-delete <name> <id>` | Delete one backup. |
-| `skif db restore-backup <name> <id> --as <new>` | Restore a backup into a new database. |
-| `skif db backup-policy <name>` | Show or change the schedule and retention. |
-| `skif db replica list <name>` | List [read replicas](#read-replicas) with status and lag, and recent promotions. |
-| `skif db replica add <name> --node <node>` | Add a read replica on a node. `--disk` picks where its data goes on that node. |
-| `skif db replica remove <name> <id>` | Remove a replica and delete its copy. |
-| `skif db replica promote <name> <id>` | [Promote a replica](#promote-a-replica) to primary. `--accept-data-loss` promotes a replica that is behind. |
+| `yoal db list` (`ls`) | List databases. `--all` includes the trash. |
+| `yoal db create <name>` | Create a database. See the flags above. |
+| `yoal db info <name>` (`show`) | Show status, node, size against budget, attached projects and top tables. |
+| `yoal db update <name>` | Change `--memory`, `--cpus` or `--storage`, turn the pooler on or off with `--pooler` or `--no-pooler`, add extensions with `--extension`, or move forward in place with `--version`. |
+| `yoal db attach <name> -p <project>` | Attach a database to a project. `--prefix` sets the env prefix, and `--credential` connects as a named credential. |
+| `yoal db detach <name> -p <project>` | Detach a database from a project. |
+| `yoal db delete <name>` (`rm`) | Move a database to the trash. |
+| `yoal db restore <name>` | Bring a trashed database back. |
+| `yoal db purge <name>` | Permanently delete a trashed database and its data. |
+| `yoal db credentials <name>` (`creds`) | Print the connection URL. `--json` returns the full object. |
+| `yoal db credentials list\|create\|rotate\|revoke\|reveal <name>` | Manage [named credentials](#named-credentials). `create` takes `--role`, `--purpose` and `--expires`; the others take a credential id. |
+| `yoal db logs <name>` | Show the database's log. `--follow`, `--limit`, `--level`, `--q` and `--after` filter it. |
+| `yoal db restart <name>` or `--all` | Restart a database and its pooler. `--pooler` restarts only the pooler. |
+| `yoal db upgrade <name> --to <major>` | Plan a PostgreSQL major upgrade. `--apply` queues the backup and runbook. |
+| `yoal db rotate <name>` | Rotate the owner password. `--monitor` rotates the monitor role. |
+| `yoal db backups <name>` | List backups and the last verified restore. |
+| `yoal db backup <name>` or `--all` | Take a backup now. `--pin` keeps it past retention. |
+| `yoal db backup-delete <name> <id>` | Delete one backup. |
+| `yoal db restore-backup <name> <id> --as <new>` | Restore a backup into a new database. |
+| `yoal db backup-policy <name>` | Show or change the schedule and retention. |
+| `yoal db replica list <name>` | List [read replicas](#read-replicas) with status and lag, and recent promotions. |
+| `yoal db replica add <name> --node <node>` | Add a read replica on a node. `--disk` picks where its data goes on that node. |
+| `yoal db replica remove <name> <id>` | Remove a replica and delete its copy. |
+| `yoal db replica promote <name> <id>` | [Promote a replica](#promote-a-replica) to primary. `--accept-data-loss` promotes a replica that is behind. |
 
 Every command accepts `--json` and `-h`. Delete, purge, `credentials revoke`, `update --version`, `upgrade --apply`, `replica remove` and `replica promote` ask for confirmation, and `-y` skips it. The backup commands are described in [backups and point-in-time recovery](/data/backups-and-pitr).
 

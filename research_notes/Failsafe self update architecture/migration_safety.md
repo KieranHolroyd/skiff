@@ -1,6 +1,6 @@
 # Migration safety for rollback-able blue/green updates (SQLite focus)
 
-Context: Skiff's control plane uses one SQLite DB. Numbered SQL migrations and Better Auth's `getMigrations().runMigrations()` both run at boot. Litestream replicates the DB. The updater snapshots before switching, a preflight refuses "destructive" migrations, and rollback restores the snapshot, which loses writes made after the switch.
+Context: Yoal's control plane uses one SQLite DB. Numbered SQL migrations and Better Auth's `getMigrations().runMigrations()` both run at boot. Litestream replicates the DB. The updater snapshots before switching, a preflight refuses "destructive" migrations, and rollback restores the snapshot, which loses writes made after the switch.
 
 Research done 2026-11-05. Primary sources fetched: GitLab dev docs (avoiding downtime, multi-version compatibility, post-deployment migrations, upgrade paths), sqlite.org (ALTER TABLE, PRAGMA, prepare), strong_migrations README, Atlas analyzers, Squawk rules, Litestream restore reference, Stripe's online-migrations post, Sentry self-hosted releases, Mattermost downgrade docs, Better Auth database docs.
 
@@ -61,10 +61,10 @@ Every breaking schema change becomes three or more separately shipped steps: exp
 - It prescribes the same pattern for renaming a column or table, or changing a type: "create a new column, write to both, backfill, move reads, stop writing to the old column, then drop it." [strong_migrations](https://github.com/ankane/strong_migrations)
 
 ### Inferences
-- For Skiff, a release N migration set should contain only expand operations. Any contract operation for a change introduced in N must ship in N+1 or later, after N-1 can no longer be rolled back to. This is GitLab's "regular vs post-deploy" split mapped onto a single-node updater:
+- For Yoal, a release N migration set should contain only expand operations. Any contract operation for a change introduced in N must ship in N+1 or later, after N-1 can no longer be rolled back to. This is GitLab's "regular vs post-deploy" split mapped onto a single-node updater:
   - "Pre" migrations run before the new version starts and must be safe for N-1.
   - "Post" (contract) migrations run only after the new version is committed (health checks passed, rollback window closed), or in the next release.
-- GitLab's incident list maps directly onto the blue/green window, where old and new processes share one DB. The NOT NULL and trigger incidents are the most likely Skiff equivalents.
+- GitLab's incident list maps directly onto the blue/green window, where old and new processes share one DB. The NOT NULL and trigger incidents are the most likely Yoal equivalents.
 - Stripe's "hard error on old field access" generalises to TypeScript. Remove the column from the typed query layer one release before dropping it, which is the equivalent of `ignore_column`.
 
 ### Gaps
@@ -81,7 +81,7 @@ All the tools agree on the same core classes that break old code against a new s
 - add NOT NULL, a CHECK, a UNIQUE or a FK to existing data (data-dependent and write-restrictive)
 - add a required column without a default
 
-Atlas is the only one of these tools with SQLite support and an explicit "backward-incompatible" analyzer. Squawk is Postgres-only. strong_migrations covers Postgres, MySQL and MariaDB (Rails only). For Skiff, a small custom SQL linter in the updater preflight that copies Atlas's BC/DS/MF classes is cheap and enforceable.
+Atlas is the only one of these tools with SQLite support and an explicit "backward-incompatible" analyzer. Squawk is Postgres-only. strong_migrations covers Postgres, MySQL and MariaDB (Rails only). For Yoal, a small custom SQL linter in the updater preflight that copies Atlas's BC/DS/MF classes is cheap and enforceable.
 
 ### Cited Findings
 **Atlas `migrate lint`**
@@ -132,7 +132,7 @@ Atlas is the only one of these tools with SQLite support and an explicit "backwa
   - Table renames need downtime. [GitLab avoiding downtime](https://docs.gitlab.com/development/database/avoiding_downtime_in_migrations/)
 
 ### Inferences
-Proposed Skiff migration classification, which the updater preflight can enforce by parsing SQL. It combines Atlas BC/DS/MF with GitLab's phases and SQLite specifics.
+Proposed Yoal migration classification, which the updater preflight can enforce by parsing SQL. It combines Atlas BC/DS/MF with GitLab's phases and SQLite specifics.
 
 - **Safe for N-1 (allowed in "pre" migrations):**
   - `CREATE TABLE`, `CREATE INDEX` (non-unique)
@@ -226,16 +226,16 @@ SQLite ALTER TABLE supports only RENAME TABLE, RENAME COLUMN, ADD COLUMN, DROP C
 - **Transactional DDL.** SQLite DDL is transactional. The 12-step procedure itself wraps CREATE/INSERT/DROP/RENAME in one BEGIN…COMMIT. So each numbered migration file should run in a single transaction, together with the bookkeeping row or `user_version` bump, which makes a crash mid-migration atomic. The exception is that the `foreign_keys` pragma must be toggled outside the transaction. The migration runner needs a per-file "requires FK off" flag, plus a `foreign_key_check` before COMMIT.
 - **`user_version` vs a migrations table.** `user_version` is a single integer in the header: cheap, atomic with the transaction, and readable without parsing tables. It cannot record which named migrations ran, their checksums, or out-of-order application. A `schema_migrations(id, name, checksum, applied_at, app_version)` table can, and the updater can query it to compute exactly which migrations N+1 would add.
   - Recommended: use both. Set `user_version` as a fast "schema generation" guard, and keep the table for audit and checksums.
-  - Optionally set `application_id` so tooling can identify a Skiff DB.
+  - Optionally set `application_id` so tooling can identify a Yoal DB.
 - **Downgrade guard.** Once a rollback window closes, an older binary started on a newer DB should refuse to start. Forgejo/Gitea do this. Within the rollback window, N-1 must accept a schema one step newer. So the guard should be "refuse if DB schema > my_max_tolerated", where each release declares the schema generations it tolerates, rather than "refuse if DB schema ≠ mine".
-- **Better Auth.** Per its docs, `getMigrations()` only reports `toBeCreated` tables and `toBeAdded` columns. It appears additive-only, which is N-1-safe in principle, but it bypasses Skiff's numbered-migration linter and is not recorded in Skiff's migrations table. [Better Auth database docs](https://www.better-auth.com/docs/concepts/database)
+- **Better Auth.** Per its docs, `getMigrations()` only reports `toBeCreated` tables and `toBeAdded` columns. It appears additive-only, which is N-1-safe in principle, but it bypasses Yoal's numbered-migration linter and is not recorded in Yoal's migrations table. [Better Auth database docs](https://www.better-auth.com/docs/concepts/database)
   - The updater should run Better Auth's diff in preflight on the snapshot copy and treat any non-empty plan as a migration subject to the same rules.
   - Better still, generate Better Auth SQL into numbered migration files (`npx @better-auth/cli generate`) so a single runner owns the schema.
 
 ### Gaps
 - I found no sqlite.org statement on the default `SQLITE_MAX_SCHEMA_RETRY` value.
 - I did not verify Bun's `bun:sqlite` prepare and re-prepare behaviour. It presumably uses `prepare_v3`, but this is unverified.
-- I did not verify which SQLite version Bun bundles, so whether 3.53 `ALTER COLUMN` is available to Skiff is unknown.
+- I did not verify which SQLite version Bun bundles, so whether 3.53 `ALTER COLUMN` is available to Yoal is unknown.
 - Better Auth docs don't say whether it ever alters or drops columns, or whether it records migrations anywhere.
 
 ## 4. Rollback strategies compared, and what mature self-hosted products do
@@ -259,10 +259,10 @@ For lossless rollback, the most robust approach is "release N-1 must tolerate sc
 - **Stripe dual-write** keeps old and new stores consistent through every intermediate step. This is the general technique for making a data-model change reversible until the final "remove old data" step. [Stripe](https://stripe.com/blog/online-migrations)
 
 ### Inferences
-| Strategy | Data loss on rollback | Fit for Skiff |
+| Strategy | Data loss on rollback | Fit for Yoal |
 |---|---|---|
 | Down migrations (Mattermost style) | Loses data in new columns/tables; fails if N wrote data N-1 can't represent | Possible, but must be authored and tested per migration; must run from the *new* binary, or from a saved plan |
-| Forward-only + snapshot restore (current Skiff) | Loses every write since the switch | Fine as a last resort for a broken migration; unacceptable as the normal rollback |
+| Forward-only + snapshot restore (current Yoal) | Loses every write since the switch | Fine as a last resort for a broken migration; unacceptable as the normal rollback |
 | Litestream PITR | Same as snapshot, with finer-grained choice of point; still loses post-switch writes | Better for disaster recovery than for rollback |
 | N-1 tolerates schema N (expand-only pre-migrations, GitLab model) | None. Old binary runs on the current DB; data in new columns sits ignored | Best default. Requires the lint rules in section 2 and the N-1 CI test in section 5 |
 | Dual-write (Stripe) | None during the transition | Only for model changes (rename, split table); costs code |
@@ -284,7 +284,7 @@ For lossless rollback, the most robust approach is "release N-1 must tolerate sc
 ## 5. Testing migrations before cutover (prod-copy runs and N-1 compatibility in CI)
 
 ### Takeaway
-The pieces exist: SQLite copies are cheap (VACUUM INTO, or the backup API), Litestream can restore to a new path, and Atlas has CI lint. I found no product that documents a formal "run the old binary against the new schema" CI gate. That is an inferred best practice, implied by GitLab's multi-version rules. For Skiff it is straightforward because both binaries and the DB are local files.
+The pieces exist: SQLite copies are cheap (VACUUM INTO, or the backup API), Litestream can restore to a new path, and Atlas has CI lint. I found no product that documents a formal "run the old binary against the new schema" CI gate. That is an inferred best practice, implied by GitLab's multi-version rules. For Yoal it is straightforward because both binaries and the DB are local files.
 
 ### Cited Findings
 - Restore needs a fresh output path and refuses existing files without `-force`, which suits restoring a production copy to a scratch path for testing. `-integrity-check` is available from v0.5.10. [Litestream restore](https://litestream.io/reference/restore/)
@@ -328,7 +328,7 @@ Products with long-lived self-hosted installs publish required "upgrade stops":
 - Sentry: hard stops
 - Gitea/Forgejo: intermediate versions for very old DBs
 
-Stops exist so that post-deploy and background migrations finish, and so that migration code and compatibility shims can be deleted. For Skiff, the updater should enforce a declared minimum "upgrade-from" version per release and walk through intermediate stops.
+Stops exist so that post-deploy and background migrations finish, and so that migration code and compatibility shims can be deleted. For Yoal, the updater should enforce a declared minimum "upgrade-from" version per release and walk through intermediate stops.
 
 ### Cited Findings
 - **GitLab**
@@ -344,7 +344,7 @@ Stops exist so that post-deploy and background migrations finish, and so that mi
 - **Mattermost** advises not downgrading more than one major version. [Mattermost](https://docs.mattermost.com/administration-guide/upgrade/downgrading-mattermost-server.html)
 
 ### Inferences
-- Each Skiff release manifest should declare:
+- Each Yoal release manifest should declare:
   - `min_upgrade_from` (the oldest version whose DB this release's migrations can migrate safely)
   - `rollback_target` (normally the immediately previous installed version)
   - `schema_tolerance` (the range of schema generations this binary can run on)

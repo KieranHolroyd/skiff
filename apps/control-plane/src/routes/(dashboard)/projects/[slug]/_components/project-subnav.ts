@@ -35,7 +35,7 @@ export interface ProjectSubnavData {
 	storageAttachments: unknown[];
 	workloadSpec: { env: Record<string, unknown>; secrets: unknown[] } | null;
 	shareLinks: Parameters<typeof shareState>[0][];
-	/** SKIFF_FEATURE_JOBS (plan 09). */
+	/** YOAL_FEATURE_JOBS (plan 09). */
 	jobsEnabled?: boolean;
 	/** Container console permissions (D127); absent means none. */
 	can?: { inspectContainer?: boolean; containerFiles?: boolean; containerExec?: boolean };

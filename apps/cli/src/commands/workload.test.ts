@@ -13,7 +13,7 @@ interface Seen {
 }
 
 beforeEach(async () => {
-	dir = await mkdtemp(join(tmpdir(), 'skiff-cli-workload-'));
+	dir = await mkdtemp(join(tmpdir(), 'yoal-cli-workload-'));
 });
 
 afterEach(async () => {
@@ -84,11 +84,11 @@ async function cli(...args: string[]) {
 		cwd: join(import.meta.dir, '../..'),
 		env: {
 			...process.env,
-			SKIFF_CONFIG_DIR: dir,
-			SKIFF_URL: `http://127.0.0.1:${server!.port}`,
-			SKIFF_TOKEN: 'skif_test',
-			SKIFF_CONTENT_DOMAIN: '',
-			SKIFF_PROFILE: '',
+			YOAL_CONFIG_DIR: dir,
+			YOAL_URL: `http://127.0.0.1:${server!.port}`,
+			YOAL_TOKEN: 'yoal_test',
+			YOAL_CONTENT_DOMAIN: '',
+			YOAL_PROFILE: '',
 		},
 		stdin: 'ignore',
 		stdout: 'pipe',
@@ -98,7 +98,7 @@ async function cli(...args: string[]) {
 	return { code, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
 }
 
-describe('skif workload', () => {
+describe('yoal workload', () => {
 	test('show prints the saved spec and the running workload', async () => {
 		serve({
 			'GET /api/v1/projects/shop': project(),

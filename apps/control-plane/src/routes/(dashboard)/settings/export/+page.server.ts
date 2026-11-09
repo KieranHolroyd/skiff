@@ -1,5 +1,5 @@
 import { error } from '@sveltejs/kit';
-import { hasPermission } from '@skiff/contracts';
+import { hasPermission } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import type { PageServerLoad } from './$types';
 

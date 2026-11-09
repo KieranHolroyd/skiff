@@ -4,8 +4,8 @@
 	import favicon from '#lib/assets/favicon.svg';
 	import { Toaster } from '#lib/components/ui/sonner/index.js';
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
-	import ConfirmHost from '#lib/components/skiff/ConfirmHost.svelte';
-	import VerifyDialog from '#lib/components/skiff/VerifyDialog.svelte';
+	import ConfirmHost from '#lib/components/yoal/ConfirmHost.svelte';
+	import VerifyDialog from '#lib/components/yoal/VerifyDialog.svelte';
 	import type { LayoutProps } from './$types';
 
 	let { children }: LayoutProps = $props();
@@ -16,7 +16,7 @@
 	<!-- Installable app (manifest + src/service-worker) for Web Push alerts, D108. -->
 	<link rel="manifest" href="/manifest.webmanifest" />
 	<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
-	<meta name="apple-mobile-web-app-title" content="Skiff" />
+	<meta name="apple-mobile-web-app-title" content="Yoal" />
 	<meta name="mobile-web-app-capable" content="yes" />
 	<meta name="apple-mobile-web-app-capable" content="yes" />
 </svelte:head>

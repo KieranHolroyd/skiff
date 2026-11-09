@@ -9,12 +9,12 @@
 		type FunctionInvokeResult,
 		type FunctionScheduledResult,
 		type FunctionView
-	} from '@skiff/contracts';
+	} from '@yoal/contracts';
 	import { runAction } from '#lib/actions.js';
 	import { runNodeTask } from '#lib/node-tasks.js';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
@@ -137,7 +137,7 @@
 								<NativeSelect.Option value={item}>{item}</NativeSelect.Option>
 							{/each}
 						</NativeSelect.Root>
-						<Input bind:value={path} aria-label="Path" placeholder="/api/hello?name=skiff" spellcheck="false" class="flex-1 font-mono text-sm" required />
+						<Input bind:value={path} aria-label="Path" placeholder="/api/hello?name=yoal" spellcheck="false" class="flex-1 font-mono text-sm" required />
 						<Button type="submit" disabled={sending}>
 							{#if sending}<Spinner />{:else}<SendIcon />{/if}
 							Send

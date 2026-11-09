@@ -68,7 +68,7 @@ export function newEmailCode(): string {
 
 /** Email codes are only stored hashed. The code is short, so this is an equality check, not a KDF. */
 export function hashEmailCode(code: string): string {
-	return createHash('sha256').update(`skiff-step-up:${code.trim()}`).digest('hex');
+	return createHash('sha256').update(`yoal-step-up:${code.trim()}`).digest('hex');
 }
 
 export function emailCodeMatches(expectedHash: string, code: string): boolean {

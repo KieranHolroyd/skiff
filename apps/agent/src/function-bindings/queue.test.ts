@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { FunctionRuntimeBinding, WorkloadDesired } from '@skiff/contracts';
+import type { FunctionRuntimeBinding, WorkloadDesired } from '@yoal/contracts';
 import { NATS_BINDING_FILE, QUEUE_BINDING_FILE, renderQueueBinding } from './queue.ts';
 
 /** Queue producer service on the managed broker (D112). */

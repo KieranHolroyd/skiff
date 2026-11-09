@@ -12,8 +12,8 @@ import type {
 	PipelineStepContext,
 	PipelineStepReport,
 	PipelineStepSpec,
-} from '@skiff/contracts';
-import { evaluateCondition, interpolate, interpolateValue, parsePipelineActionRef, PIPELINE_DEFAULT_IMAGE } from '@skiff/contracts';
+} from '@yoal/contracts';
+import { evaluateCondition, interpolate, interpolateValue, parsePipelineActionRef, PIPELINE_DEFAULT_IMAGE } from '@yoal/contracts';
 import { runAction, type ActionHost } from './actions.ts';
 import type { JobApi } from './client.ts';
 import { PROTECTED_ENV_NAMES, WorkflowCommandProcessor, parseKeyValueFile, parsePathFile } from './commands.ts';
@@ -45,7 +45,7 @@ import {
 } from './remote-actions.ts';
 
 /**
- * The in-job step runner (`skiff-step`, W5). It runs inside the job container (or the sandbox
+ * The in-job step runner (`yoal-step`, W5). It runs inside the job container (or the sandbox
  * unit) as the job's own user, talks to the control plane with the job token only, and runs the
  * steps one after another as child processes so the workspace, `$PATH` additions and files carry
  * between steps exactly as on a GitHub runner.
@@ -170,7 +170,7 @@ export class StepRunner {
 
 	private context!: JobContext;
 	private jobEnv: Record<string, string> = {};
-	/** `$SKIFF_ENV` additions, carried to later steps. */
+	/** `$YOAL_ENV` additions, carried to later steps. */
 	private fileEnv: Record<string, string> = {};
 	private pathAdditions: string[] = [];
 	private failed = false;
@@ -190,7 +190,7 @@ export class StepRunner {
 		this.api = options.api;
 		this.paths = options.paths;
 		this.killGraceMs = options.killGraceMs ?? 7_500;
-		this.diagnostics = options.diagnostics ?? ((message) => console.log(`[skiff-step] ${message}`));
+		this.diagnostics = options.diagnostics ?? ((message) => console.log(`[yoal-step] ${message}`));
 		this.inherited = inheritedEnv(options.baseEnv ?? process.env);
 		this.inherited.HOME = options.paths.home;
 		this.runner = {
@@ -445,7 +445,7 @@ export class StepRunner {
 	}
 
 	private async execute(scope: Scope, spec: PipelineStepSpec): Promise<StepResult> {
-		// Step env sees the job env, $SKIFF_ENV additions and an enclosing composite step's env.
+		// Step env sees the job env, $YOAL_ENV additions and an enclosing composite step's env.
 		const base = { ...this.jobEnv, ...this.fileEnv, ...scope.outerEnv };
 		const stepEnv = { ...scope.outerEnv, ...this.stepEnv(spec, scope, base) };
 		// The env context during this step, for `run:` and `with:` templates.
@@ -484,7 +484,7 @@ export class StepRunner {
 			Object.assign(outputs, parseKeyValueFile(await readFile(files.output, 'utf8')));
 			for (const [name, value] of Object.entries(parseKeyValueFile(await readFile(files.env, 'utf8')))) {
 				if (PROTECTED_ENV_NAMES.has(name)) {
-					this.logs.system(scope.index, `Warning: ${name} cannot be set through $SKIFF_ENV; ignored.`);
+					this.logs.system(scope.index, `Warning: ${name} cannot be set through $YOAL_ENV; ignored.`);
 					continue;
 				}
 				this.fileEnv[name] = value;
@@ -637,7 +637,7 @@ export class StepRunner {
 				this.logs.push(
 					scope.index,
 					'stderr',
-					`Error: ${uses} is a Docker container action, which Skiff Pipelines cannot run; use a run: step or the GitHub runner pool (docs/RUNNERS.md).`,
+					`Error: ${uses} is a Docker container action, which Yoal Pipelines cannot run; use a run: step or the GitHub runner pool (docs/RUNNERS.md).`,
 				);
 				return 'failure';
 			case 'composite':
@@ -656,8 +656,8 @@ export class StepRunner {
 		identity: Record<string, string>,
 		outputs: Record<string, string>,
 	): Promise<Outcome> {
-		const skiff = {
-			...scope.context.skiff,
+		const yoal = {
+			...scope.context.yoal,
 			action: identity.GITHUB_ACTION,
 			action_path: action.dir,
 			action_repository: identity.GITHUB_ACTION_REPOSITORY,
@@ -666,7 +666,7 @@ export class StepRunner {
 		let failed = false;
 		const nested: Scope = {
 			index: scope.index,
-			context: { ...scope.context, skiff, github: skiff, inputs, steps: {}, env: { ...this.jobEnv, ...this.fileEnv, ...stepEnv } },
+			context: { ...scope.context, yoal, github: yoal, inputs, steps: {}, env: { ...this.jobEnv, ...this.fileEnv, ...stepEnv } },
 			status: () => ({ failed, cancelled: this.cancelled || this.timedOut }),
 			markFailed: () => {
 				failed = true;
@@ -712,7 +712,7 @@ export class StepRunner {
 		const stateFile = join(this.paths.temp, '_commands', `state_${index}_${randomUUID()}`);
 		await writeFile(stateFile, '', { mode: 0o644 });
 		const inputEnv = Object.fromEntries(Object.entries(inputs).map(([name, value]) => [inputEnvName(name), value]));
-		const baseEnv = { ...env, ...identity, ...inputEnv, GITHUB_STATE: stateFile, SKIFF_STATE: stateFile };
+		const baseEnv = { ...env, ...identity, ...inputEnv, GITHUB_STATE: stateFile, YOAL_STATE: stateFile };
 		const state: Record<string, string> = {};
 		const phase = async (file: string, phaseOutputs: Record<string, string>): Promise<number> => {
 			const script = await actionFile(action, file);

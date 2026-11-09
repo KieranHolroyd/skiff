@@ -3,8 +3,8 @@
  *
  * A caller presents a subject token. It may be:
  *
- *   - a Skiff token signed by the signing-key ring (`sts`, `workload` or `oidc` purpose),
- *   - a Skiff pipeline OIDC token (the legacy `<platform>/api/pipeline/oidc` issuer, kept until
+ *   - a Yoal token signed by the signing-key ring (`sts`, `workload` or `oidc` purpose),
+ *   - a Yoal pipeline OIDC token (the legacy `<platform>/api/pipeline/oidc` issuer, kept until
  *     the registry realm and pipeline OIDC move onto the ring),
  *   - a GitHub Actions OIDC token, or
  *   - any OIDC token whose `iss` matches an enabled `federation_trusts` row.
@@ -19,7 +19,7 @@
  * those tokens through the ring alone. The registry realm should then also accept an STS token.
  */
 import type { Database } from 'bun:sqlite';
-import { isPermission } from '@skiff/contracts';
+import { isPermission } from '@yoal/contracts';
 import type { CoreContext } from '../context.ts';
 import { PipelineOidc } from '../pipeline-oidc.ts';
 import { parseJson } from '../util.ts';
@@ -283,14 +283,14 @@ export class TokenService {
 		return this.#sqlite.query<TrustRow, string[]>(sql).all(...params);
 	}
 
-	/** Verify the JWT against the issuer's keys. Skiff's own tokens use the ring. */
+	/** Verify the JWT against the issuer's keys. Yoal's own tokens use the ring. */
 	private async verifySubject(
 		token: string,
 		parsed: ParsedJwt,
 		issuer: string,
 	): Promise<Record<string, unknown>> {
 		if (issuer === this.ctx.config.platformOrigin) {
-			// Skiff workload, STS or future ring-issued OIDC token. The ring verifies the signature,
+			// Yoal workload, STS or future ring-issued OIDC token. The ring verifies the signature,
 			// issuer and expiry; the trust supplies the audience and subject policy.
 			for (const purpose of ['sts', 'workload', 'oidc']) {
 				try {
@@ -300,7 +300,7 @@ export class TokenService {
 					// Try the next purpose; the kid only exists under one of them.
 				}
 			}
-			throw new StsError('invalid_grant', 'The subject token is not a valid Skiff token.');
+			throw new StsError('invalid_grant', 'The subject token is not a valid Yoal token.');
 		}
 
 		if (issuer === this.pipelineIssuer()) {

@@ -7,7 +7,7 @@ const flags: FlagSpec = {
 	help: { type: 'boolean', short: 'h' },
 };
 
-const usage = 'Usage: skif rollback <project> [--json]\n\nMove production back to the previous deployment.';
+const usage = 'Usage: yoal rollback <project> [--json]\n\nMove production back to the previous deployment.';
 
 export async function rollbackCommand(argv: string[]): Promise<void> {
 	const args = parseArgs(argv, flags);

@@ -5,18 +5,18 @@ import {
 	storageNeedsApply,
 	type NodeStorage,
 	type NodeStorageStatus,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 
 /**
  * Agent side of node storage moves (D48). The agent cannot move its own data: its sandbox only
- * writes the current directories. It reads what the root `skiff-storage.service` last did from
- * `/etc/skiff/storage.json` (relayed in heartbeats) and, while desired state asks for something
- * else, drops `/run/skiff/storage.request` to trigger that service. The request carries no
+ * writes the current directories. It reads what the root `yoal-storage.service` last did from
+ * `/etc/yoal/storage.json` (relayed in heartbeats) and, while desired state asks for something
+ * else, drops `/run/yoal/storage.request` to trigger that service. The request carries no
  * authority: the service fetches the paths from the control plane itself.
  */
 
-export const STORAGE_STATE_FILE = '/etc/skiff/storage.json';
-export const STORAGE_REQUEST_FILE = '/run/skiff/storage.request';
+export const STORAGE_STATE_FILE = '/etc/yoal/storage.json';
+export const STORAGE_REQUEST_FILE = '/run/yoal/storage.request';
 /** A pending move (waiting on a build) is retried at most this often. */
 const REQUEST_EVERY_MS = 60_000;
 

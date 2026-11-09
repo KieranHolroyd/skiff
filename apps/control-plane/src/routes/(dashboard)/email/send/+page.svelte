@@ -3,7 +3,7 @@
 	import { resolve } from '$app/paths';
 	import GlobeIcon from '@lucide/svelte/icons/globe';
 	import SendIcon from '@lucide/svelte/icons/send';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
@@ -36,11 +36,11 @@
 
 	const sandbox = $derived(data.org?.state === 'sandbox');
 	const paused = $derived(data.org?.state === 'paused' || area.paused);
-	const defaultBody = 'This is a test message from Skiff.\n\nIf it reached your inbox, DKIM, SPF and the mail node are working.';
+	const defaultBody = 'This is a test message from Yoal.\n\nIf it reached your inbox, DKIM, SPF and the mail node are working.';
 </script>
 
 <svelte:head>
-	<title>Send a test · Email · Skiff</title>
+	<title>Send a test · Email · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">
@@ -118,7 +118,7 @@
 					</Field.Field>
 					<Field.Field>
 						<Field.Label for="subject">Subject</Field.Label>
-						<Input id="subject" name="subject" required maxlength={998} value={previous.subject ?? 'Skiff test message'} />
+						<Input id="subject" name="subject" required maxlength={998} value={previous.subject ?? 'Yoal test message'} />
 					</Field.Field>
 					<Field.Field>
 						<div class="flex items-center justify-between gap-3">
@@ -133,7 +133,7 @@
 							name="body"
 							required
 							rows={10}
-							value={previous.body ?? (format === 'html' ? '<p>This is a test message from <strong>Skiff</strong>.</p>' : defaultBody)}
+							value={previous.body ?? (format === 'html' ? '<p>This is a test message from <strong>Yoal</strong>.</p>' : defaultBody)}
 							class={format === 'html' ? 'font-mono text-xs' : ''}
 						/>
 					</Field.Field>

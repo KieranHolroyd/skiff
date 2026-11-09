@@ -37,14 +37,14 @@
 		type StorageKeyReveal,
 		type StorageKeyView,
 		type StorageReplicationView
-	} from '@skiff/contracts';
+	} from '@yoal/contracts';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import MetricChart from '#lib/components/skiff/MetricChart.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import DetailList from '#lib/components/yoal/DetailList.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import MetricChart from '#lib/components/yoal/MetricChart.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
@@ -468,7 +468,7 @@
 </script>
 
 <svelte:head>
-	<title>{st.name} · Storage · Skiff</title>
+	<title>{st.name} · Storage · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">
@@ -748,7 +748,7 @@
 							{:else if st.public}
 								S3 clients must use path-style addressing (<code class="font-mono"
 									>{st.publicUrl}/&lt;bucket&gt;/&lt;key&gt;</code
-								>) and any region; Skiff sends <code class="font-mono">{st.region}</code>.
+								>) and any region; Yoal sends <code class="font-mono">{st.region}</code>.
 							{:else}
 								Private: from elsewhere, tunnel with
 								<code class="font-mono">ssh -L {hostPort}:127.0.0.1:{hostPort} &lt;node&gt;</code>
@@ -863,7 +863,7 @@
 			title="Access keys"
 			icon={KeyRoundIcon}
 			count={liveKeys.length}
-			description="Named keys for people and outside services, scoped to the buckets you choose. Apps on Skiff get their own key when attached."
+			description="Named keys for people and outside services, scoped to the buckets you choose. Apps on Yoal get their own key when attached."
 			flush
 		>
 			{#snippet actions()}
@@ -1346,7 +1346,7 @@
 		bind:open={bucketOpen}
 		icon={ArchiveIcon}
 		title="New bucket"
-		description="Skiff records the bucket and the node creates it on {st.name}. Re-creating a bucket whose delete was blocked cancels that delete."
+		description="Yoal records the bucket and the node creates it on {st.name}. Re-creating a bucket whose delete was blocked cancels that delete."
 		action="?/createBucket"
 		submitLabel="Create bucket"
 	>
@@ -1467,7 +1467,7 @@
 				{#if bucketSettings.objectLock}
 					<Notice tone="warning" title="Object lock is irreversible">
 						{bucketSettings.objectLock.mode} retention of {bucketSettings.objectLock.retainDays} days.
-						It was enabled at creation and cannot be disabled from Skiff.
+						It was enabled at creation and cannot be disabled from Yoal.
 					</Notice>
 				{/if}
 				<div class="flex items-center gap-2 text-xs text-muted-foreground">

@@ -1,4 +1,4 @@
-# Skiff — Managed queue brokers
+# Yoal — Managed queue brokers
 
 Status: **implemented, 2026-11-07** (not yet exercised on a real Debian/Podman node; the unit,
 config, validation, probe and control-plane flow are covered by unit tests; the metrics sampler
@@ -6,7 +6,7 @@ was checked against a real `nats:2.12-alpine`). The decisions are D111, D123 (me
 queue-tools D124 (node tasks, §5.1) in
 [DECISIONS.md](./DECISIONS.md).
 
-A managed broker is an org-owned message broker that Skiff provisions, runs and connects to apps:
+A managed broker is an org-owned message broker that Yoal provisions, runs and connects to apps:
 background jobs, events and fan-out without hand-rolling a container. **NATS with JetStream** is
 the first engine; RabbitMQ is the next registry entry. A broker is not a project and not a
 database: it has its own table, permissions (`broker:*`) and surfaces, and reuses the managed-
@@ -45,20 +45,20 @@ The control plane sends a broker to its node as a container `WorkloadDesired` wi
 `broker: { engine, version, storageMb }`. The helper keeps its **own** registry (as D61) and never
 takes an image, user, mount or config from the wire:
 
-- Image from engine + version; `Exec=nats-server --config /etc/skiff/broker.conf`.
+- Image from engine + version; `Exec=nats-server --config /etc/yoal/broker.conf`.
 - `User=4222:4222` (NATS is a static binary, so the uid is the helper's choice); the data dir and
   config are chowned to it. `DropCapability=all`, `NoNewPrivileges`, `ReadOnly=true`, `/tmp` tmpfs.
 - `PublishPort=127.0.0.1:<hostPort>:4222` only (host ports 14222–14721), org network alias
   `mq-<hex>`. Nothing listens on a public or WireGuard address.
-- `MemoryMax`, `CPUQuota`, `Slice=skiff-workloads.slice`; brokers count toward node admission (D42)
+- `MemoryMax`, `CPUQuota`, `Slice=yoal-workloads.slice`; brokers count toward node admission (D42)
   and the org memory quota.
-- **Config.** The activation carries `SKIFF_BROKER_USER`/`SKIFF_BROKER_PASSWORD`; the helper takes
+- **Config.** The activation carries `YOAL_BROKER_USER`/`YOAL_BROKER_PASSWORD`; the helper takes
   them out of the container env and writes a 0600 `broker.conf` beside the env file: one ACL user
   (no anonymous access), JetStream with `store_dir: /data`, `max_memory_store` at 25% of
   `MemoryMax` and `max_file_store` at the broker's store cap, so a full broker refuses publishes
   instead of filling the disk or being OOM-killed. Values are validated before they reach the file.
 - **Env.** Only `GOMEMLIMIT` (80% of `MemoryMax`), so Go collects before the cgroup kills it.
-- Data under `<stateDir>/<id>`, or `<disk>/skiff/<id>` on a disk (D169, D76). The create body's
+- Data under `<stateDir>/<id>`, or `<disk>/yoal/<id>` on a disk (D169, D76). The create body's
   `storage` (`system`, `fast`, `bulk` or a disk name) picks it; the default is the `brokers` kind in
   Settings → Storage (docs/STORAGE.md). `purge` accepts `mq_` ids and removes only that directory.
 
@@ -104,9 +104,9 @@ At activation the app receives `<P>_URL`, `<P>_HOST`, `<P>_PORT`, `<P>_USER`, `<
   `peek_queue_messages`, `redrive_queue` and `get_node_task` (§5.1). Credentials, delete and
   purge, and the stream purge/delete tools, are not on MCP; agents never receive the password
   (D58). The dashboard assistant asks before `send_queue_message` and `redrive_queue`.
-- **CLI:** `skif broker list|create|info|update|attach|detach|restart|delete|restore|purge|logs|credentials|metrics|queues`
+- **CLI:** `yoal broker list|create|info|update|attach|detach|restart|delete|restore|purge|logs|credentials|metrics|queues`
   and the queue tools `queue-create|send|peek|redrive|queue-purge|queue-rm|message-rm`
-  (aliases `skif brokers`, `skif queue`).
+  (aliases `yoal brokers`, `yoal queue`).
 - **Dashboard:** Queues list (live + trash, create dialog), detail (connection with audited
   reveal and client snippets, resources, attachments, version upgrade, danger zone), Queues
   (streams and consumers, §7, with New queue, Send message and a per-stream menu: peek, send,
@@ -121,8 +121,8 @@ answers `202` with a task to poll (`GET /api/v1/node-tasks/:id`).
 
 | Tool | What it does | Permission |
 |---|---|---|
-| Create queue | Creates `SKIFF_Q_<queue>` with the function-queue settings (§6) now instead of on first use. | `broker:update` |
-| Send message | Publishes a body (`json` or `text`) to `skiff.q.<queue>` as a queue binding would, with an optional delay and up to 100 copies. The task id is the `Nats-Msg-Id`, so a retried lease does not double it. | `broker:update` |
+| Create queue | Creates `YOAL_Q_<queue>` with the function-queue settings (§6) now instead of on first use. | `broker:update` |
+| Send message | Publishes a body (`json` or `text`) to `yoal.q.<queue>` as a queue binding would, with an optional delay and up to 100 copies. The task id is the `Nats-Msg-Id`, so a retried lease does not double it. | `broker:update` |
 | Peek | Reads up to 50 messages from any stream by sequence (`STREAM.MSG.GET`), without consuming them; bodies over 16 KiB are cut and binary bodies come back as base64. | `broker:update` |
 | Redrive | Moves up to 1,000 messages from a queue (usually a dead-letter queue) into another: body, id and content type are kept, the attempt count starts again, then the message is deleted from the source. | `broker:update` |
 | Purge | Removes every message; the stream and its consumers stay. | `broker:delete` |
@@ -133,13 +133,13 @@ Peek counts as an operator action, not a read, because message bodies are applic
 After a change the stream's new totals are written into the stored listing, so the Queues tab
 does not wait for the next minute's sample. Only agents that advertise `node-tasks` get tasks;
 on an older agent the dashboard says to update the node.
-- **Flag:** `SKIFF_FEATURE_BROKERS` (default on). Off hides the nav entry and refuses new brokers
+- **Flag:** `YOAL_FEATURE_BROKERS` (default on). Off hides the nav entry and refuses new brokers
   and restores; existing brokers keep running.
 
 ## 6. Function queues (D112)
 
 Functions use brokers for Cloudflare-style queues ([FUNCTIONS.md §4.10](./FUNCTIONS.md)). Attach the
-broker to the function project (`skif broker attach jobs --project my-fn`), declare producers and
+broker to the function project (`yoal broker attach jobs --project my-fn`), declare producers and
 consumers in `wrangler.jsonc` as on Cloudflare, and name the broker per queue when the project has
 more than one:
 
@@ -149,16 +149,16 @@ more than one:
     "producers": [{ "binding": "JOBS", "queue": "jobs" }],
     "consumers": [{ "queue": "jobs", "max_batch_size": 20, "max_retries": 5, "dead_letter_queue": "jobs-dlq" }]
   },
-  "skiff": { "brokers": { "jobs": "events", "jobs-dlq": "events" } }
+  "yoal": { "brokers": { "jobs": "events", "jobs-dlq": "events" } }
 }
 ```
 
-- Each queue is a JetStream stream `SKIFF_Q_<queue>` on the broker (subject `skiff.q.<queue>`,
+- Each queue is a JetStream stream `YOAL_Q_<queue>` on the broker (subject `yoal.q.<queue>`,
   work-queue retention, file store, 128 KiB messages) with one durable pull consumer
-  `skiff-consumer`. Any app attached to the broker can publish to `skiff.q.<queue>` with a NATS
-  client too; set `Skiff-Content-Type: json|text` so the consumer decodes the body.
+  `yoal-consumer`. Any app attached to the broker can publish to `yoal.q.<queue>` with a NATS
+  client too; set `Yoal-Content-Type: json|text` so the consumer decodes the body.
 - A queue has one consumer per broker; a second deploy that consumes it is refused (409).
-- Streams are created on first use and stay until removed with `nats stream rm` (Skiff does not
+- Streams are created on first use and stay until removed with `nats stream rm` (Yoal does not
   delete them when a function goes away).
 - Event rules (D122, [EVENTS.md](./EVENTS.md)) publish platform events into a broker's queues; the
   broker's node agent does the publishing, with the broker's own credentials.

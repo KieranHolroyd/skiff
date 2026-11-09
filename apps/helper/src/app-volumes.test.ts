@@ -193,7 +193,7 @@ describe('AppVolumeData', () => {
 		});
 
 	beforeEach(async () => {
-		root = await mkdtemp(join(tmpdir(), 'skiff-app-volumes-'));
+		root = await mkdtemp(join(tmpdir(), 'yoal-app-volumes-'));
 		stateDir = join(root, 'state');
 		runner = new FakeRunner();
 		spawn = new FakeSpawn();
@@ -253,16 +253,16 @@ describe('AppVolumeData', () => {
 	});
 
 	test('reflink snapshot thaws before the archive streams and removes the clone after', async () => {
-		runner.active.add('skiff-workload-wl_a.service');
+		runner.active.add('yoal-workload-wl_a.service');
 		let verbsAtSpawn: string[] = [];
 		spawn.onSpawn = () => (verbsAtSpawn = runner.verbs());
 		const snapshot = await data().snapshot({ volume: ref, snapshotId: 'avs_1', quiesce: true, writers: ['wl_a'] });
 		expect(snapshot.method).toBe('reflink');
 		expect(verbsAtSpawn).toEqual([
 			'systemctl is-active',
-			'systemctl freeze skiff-workload-wl_a.service',
+			'systemctl freeze yoal-workload-wl_a.service',
 			'cp --archive',
-			'systemctl thaw skiff-workload-wl_a.service',
+			'systemctl thaw yoal-workload-wl_a.service',
 		]);
 		const stage = join(stateDir, 'apps', 'prj_1', '.snapshots', 'av_one', 'avs_1');
 		expect(spawn.calls[0]).toEqual(tarCreateArgv('/usr/bin/tar', stage));
@@ -271,18 +271,18 @@ describe('AppVolumeData', () => {
 	});
 
 	test('without reflink the writer stays frozen until the archive finished', async () => {
-		runner.active.add('skiff-workload-wl_a.service');
+		runner.active.add('yoal-workload-wl_a.service');
 		runner.reflink = false;
 		const snapshot = await data().snapshot({ volume: ref, snapshotId: 'avs_1', quiesce: true, writers: ['wl_a'] });
 		expect(snapshot.method).toBe('paused');
-		expect(runner.verbs()).not.toContain('systemctl thaw skiff-workload-wl_a.service');
+		expect(runner.verbs()).not.toContain('systemctl thaw yoal-workload-wl_a.service');
 		expect(spawn.calls[0]).toEqual(tarCreateArgv('/usr/bin/tar', volumeDir()));
 		await consume(snapshot.body);
-		expect(runner.verbs().at(-1)).toBe('systemctl thaw skiff-workload-wl_a.service');
+		expect(runner.verbs().at(-1)).toBe('systemctl thaw yoal-workload-wl_a.service');
 	});
 
 	test('quiesce off copies a running writer live', async () => {
-		runner.active.add('skiff-workload-wl_a.service');
+		runner.active.add('yoal-workload-wl_a.service');
 		const snapshot = await data().snapshot({ volume: ref, snapshotId: 'avs_1', quiesce: false, writers: ['wl_a'] });
 		expect(snapshot.method).toBe('live');
 		expect(runner.verbs().some((verb) => verb.includes('freeze'))).toBe(false);
@@ -290,23 +290,23 @@ describe('AppVolumeData', () => {
 	});
 
 	test('a failed freeze thaws what was frozen and fails the snapshot', async () => {
-		runner.active.add('skiff-workload-wl_a.service');
-		runner.active.add('skiff-workload-wl_b.service');
-		runner.freezeFails.add('skiff-workload-wl_b.service');
+		runner.active.add('yoal-workload-wl_a.service');
+		runner.active.add('yoal-workload-wl_b.service');
+		runner.freezeFails.add('yoal-workload-wl_b.service');
 		await expect(
 			data().snapshot({ volume: ref, snapshotId: 'avs_1', quiesce: true, writers: ['wl_a', 'wl_b'] }),
 		).rejects.toThrow('Could not pause wl_b');
-		expect(runner.verbs()).toContain('systemctl thaw skiff-workload-wl_a.service');
+		expect(runner.verbs()).toContain('systemctl thaw yoal-workload-wl_a.service');
 		expect(spawn.calls).toHaveLength(0);
 	});
 
 	test('a failing tar errors the stream and still thaws', async () => {
-		runner.active.add('skiff-workload-wl_a.service');
+		runner.active.add('yoal-workload-wl_a.service');
 		runner.reflink = false;
 		spawn.code = 2;
 		const snapshot = await data().snapshot({ volume: ref, snapshotId: 'avs_1', quiesce: true, writers: ['wl_a'] });
 		await expect(consume(snapshot.body)).rejects.toThrow('tar exited 2');
-		expect(runner.verbs().at(-1)).toBe('systemctl thaw skiff-workload-wl_a.service');
+		expect(runner.verbs().at(-1)).toBe('systemctl thaw yoal-workload-wl_a.service');
 	});
 
 	test('one snapshot or restore per volume at a time', async () => {
@@ -365,7 +365,7 @@ describe('helper routes', () => {
 		expect(await usage.json()).toEqual({ ok: true, usage: [{ id: 'av_one', usedBytes: 7 }] });
 		expect((await handler(post('/v1/app-volumes/purge', { volume: { ...ref, id: '../x' } }))).status).toBe(400);
 		const snapshot = await handler(post('/v1/app-volumes/snapshot', { volume: ref, snapshotId: 'avs_1', quiesce: true }));
-		expect(snapshot.headers.get('x-skiff-snapshot-method')).toBe('idle');
+		expect(snapshot.headers.get('x-yoal-snapshot-method')).toBe('idle');
 		expect(await snapshot.text()).toBe('gz');
 		const restore = await handler(
 			new Request('http://localhost/v1/app-volumes/restore?id=av_one&projectId=prj_1&backing=state_dir', { method: 'POST', body: 'x' }),

@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import assetsWorker from './assets.js';
 
 /**
- * Tests for the Skiff assets binding service. Everything runs against an in-process fake of the
+ * Tests for the Yoal assets binding service. Everything runs against an in-process fake of the
  * workerd `disk` service: a directory tree, byte-for-byte files and the DiskDirectory JSON listing
  * for directories. No network and no filesystem.
  */

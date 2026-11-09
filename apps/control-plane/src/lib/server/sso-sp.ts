@@ -13,7 +13,7 @@
  * key, until the overlap window ends so the IdP can be updated without a gap.
  *
  * The encryption key is deliberately separate from the signing key: an IdP imports the encryption
- * certificate to encrypt assertions to Skiff, and reusing a signing key for that would make one
+ * certificate to encrypt assertions to Yoal, and reusing a signing key for that would make one
  * compromise break both roles. The encryption certificate advertises RSA-OAEP (the IdP chooses the
  * key transport from the certificate copied from SP metadata).
  *
@@ -329,8 +329,8 @@ export class SsoSpKeyStore {
 
 	#commonName(providerId: string): string {
 		return this.#purpose === 'encryption'
-			? `Skiff SAML ${providerId} encryption`
-			: `Skiff SAML ${providerId}`;
+			? `Yoal SAML ${providerId} encryption`
+			: `Yoal SAML ${providerId}`;
 	}
 
 	#read(providerId: string): StoredSpKey | null {

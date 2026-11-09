@@ -12,15 +12,15 @@ const flags: FlagSpec = {
 export async function logoutCommand(argv: string[]): Promise<void> {
 	const args = parseArgs(argv, flags);
 	if (args.boolean('help')) {
-		console.log(`Usage: skif logout [--profile <name>] [--all]
+		console.log(`Usage: yoal logout [--profile <name>] [--all]
 
 Remove the selected profile's API key. Its control-plane URL and content domain
-are kept, so \`skif login\` remembers them. Use --all to delete the whole config
+are kept, so \`yoal login\` remembers them. Use --all to delete the whole config
 file, including every profile.`);
 		return;
 	}
 	if (args.positionals.length > 0)
-		throw new UsageError('Usage: skif logout [--profile <name>] [--all]');
+		throw new UsageError('Usage: yoal logout [--profile <name>] [--all]');
 
 	const path = configFile();
 	const all = args.boolean('all');

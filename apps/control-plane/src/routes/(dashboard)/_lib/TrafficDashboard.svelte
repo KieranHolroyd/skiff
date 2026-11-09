@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { TrafficReport } from '@skiff/core';
+	import type { TrafficReport } from '@yoal/core';
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
 	import ChartNoAxesCombinedIcon from '@lucide/svelte/icons/chart-no-axes-combined';
 	import GlobeIcon from '@lucide/svelte/icons/globe';

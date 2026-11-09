@@ -34,7 +34,7 @@ export function safeRelativeDir(value: string, label: string): string {
 /** systemd unit names are limited; build ids are already URL-safe. */
 export function unitName(buildId: string): string {
 	const safe = buildId.replace(/[^A-Za-z0-9_.-]/g, '-').slice(0, 200);
-	return `skiff-build-${safe || 'job'}`;
+	return `yoal-build-${safe || 'job'}`;
 }
 
 export interface SystemdLimits {
@@ -52,7 +52,7 @@ export interface SystemdLimits {
 	timeoutSeconds?: number;
 	/**
 	 * Unprivileged account the build runs as. When set, the unit is also sandboxed: it can write
-	 * only `workDir`, cannot see the node's Skiff state or secrets, and cannot gain privileges.
+	 * only `workDir`, cannot see the node's Yoal state or secrets, and cannot gain privileges.
 	 * This is what makes it safe for any node (the edge included) to be a Builder (D47).
 	 */
 	user?: string | null;
@@ -70,7 +70,7 @@ export interface SystemdLimits {
 }
 
 /** Paths a build must never read, whatever account it runs as. `-` tolerates a missing path. */
-export const BUILD_INACCESSIBLE_PATHS = ['/etc/skiff', '/var/lib/skiff', '/run/skiff', '/srv/skiff', '/run/skiff-workloads'];
+export const BUILD_INACCESSIBLE_PATHS = ['/etc/yoal', '/var/lib/yoal', '/run/yoal', '/srv/yoal', '/run/yoal-workloads'];
 
 /** Hardening applied to every sandboxed build unit. */
 function sandboxProperties(input: SystemdLimits): string[] {
@@ -111,7 +111,7 @@ export function systemdRunArgs(input: SystemdLimits): string[] {
 		'--collect',
 		'--pipe',
 		'--wait',
-		`--unit=${input.unit ?? 'skiff-build-job'}`,
+		`--unit=${input.unit ?? 'yoal-build-job'}`,
 		`--property=MemoryMax=${input.memoryMax ?? '2G'}`,
 		`--property=CPUQuota=${input.cpuQuota ?? '200%'}`,
 		`--property=TimeoutStartSec=${input.timeoutSeconds ?? 600}`,

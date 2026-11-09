@@ -3,17 +3,17 @@ import { nodeStorageSchema, storageNeedsApply, storagePathProblem, type NodeStor
 
 describe('storage paths', () => {
 	test('accepts directories on other disks', () => {
-		for (const path of ['/mnt/data/skiff', '/srv/skiff-cache', '/data/skiff/agent', '/var/lib/skiff/agent', '/var/lib/skiff-agent2'])
+		for (const path of ['/mnt/data/yoal', '/srv/yoal-cache', '/data/yoal/agent', '/var/lib/yoal/agent', '/var/lib/yoal-agent2'])
 			expect(storagePathProblem(path)).toBeNull();
 	});
 
-	test('rejects system trees, other Skiff state and broad mount roots', () => {
-		for (const path of ['/', '/etc/skiff', '/usr/local/x', '/home/kieran/skiff', '/tmp/x', '/run/skiff/x', '/opt/skiff/data', '/var/lib/skiff', '/var/lib/skiff/data/x', '/mnt', '/var/lib'])
+	test('rejects system trees, other Yoal state and broad mount roots', () => {
+		for (const path of ['/', '/etc/yoal', '/usr/local/x', '/home/kieran/yoal', '/tmp/x', '/run/yoal/x', '/opt/yoal/data', '/var/lib/yoal', '/var/lib/yoal/data/x', '/mnt', '/var/lib'])
 			expect(storagePathProblem(path)).not.toBeNull();
 	});
 
 	test('rejects relative, unnormalized and odd paths', () => {
-		for (const path of ['data/skiff', '/mnt/data/', '/mnt//data', '/mnt/./x', '/mnt/../etc', '/mnt/da ta', '/mnt/$x'])
+		for (const path of ['data/yoal', '/mnt/data/', '/mnt//data', '/mnt/./x', '/mnt/../etc', '/mnt/da ta', '/mnt/$x'])
 			expect(storagePathProblem(path)).not.toBeNull();
 	});
 
@@ -26,7 +26,7 @@ describe('storage paths', () => {
 		const status = (overrides: Partial<NodeStorageStatus>): NodeStorageStatus => ({
 			requested: { dataDir: '/mnt/a', buildDir: null },
 			dataDir: '/mnt/a',
-			buildDir: '/var/lib/skiff-builder',
+			buildDir: '/var/lib/yoal-builder',
 			status: 'applied',
 			message: null,
 			updatedAt: new Date().toISOString(),

@@ -10,7 +10,7 @@
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import TrashIcon from '@lucide/svelte/icons/trash';
 	import Undo2Icon from '@lucide/svelte/icons/undo-2';
-	import type { Cell, Column } from '@skiff/studio/protocol';
+	import type { Cell, Column } from '@yoal/studio/protocol';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Kbd } from '#lib/components/ui/kbd/index.js';
 	import { Spinner } from '#lib/components/ui/spinner/index.js';

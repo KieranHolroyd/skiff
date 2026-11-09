@@ -21,10 +21,10 @@ State at the end:
 
 | Feature | Flag | Why it stays off |
 |---|---|---|
-| App cron jobs and one-off jobs | `SKIFF_FEATURE_JOBS` | systemd/Podman sandbox not yet run on a real node |
-| PostgreSQL PITR | `SKIFF_FEATURE_PITR` | Publish the `skiff-postgres-pitr` image, pin its digest in `packages/contracts/src/database.ts` and `apps/helper/src/validate.ts`, then pass `scripts/pitr-drill.sh` on Linux |
-| Blueprints apply | `SKIFF_FEATURE_BLUEPRINTS` | New; needs a real-node apply |
-| Automatic replica promotion | `SKIFF_FEATURE_DB_AUTO_PROMOTE` | No self-fencing for a cut-off primary |
+| App cron jobs and one-off jobs | `YOAL_FEATURE_JOBS` | systemd/Podman sandbox not yet run on a real node |
+| PostgreSQL PITR | `YOAL_FEATURE_PITR` | Publish the `yoal-postgres-pitr` image, pin its digest in `packages/contracts/src/database.ts` and `apps/helper/src/validate.ts`, then pass `scripts/pitr-drill.sh` on Linux |
+| Blueprints apply | `YOAL_FEATURE_BLUEPRINTS` | New; needs a real-node apply |
+| Automatic replica promotion | `YOAL_FEATURE_DB_AUTO_PROMOTE` | No self-fencing for a cut-off primary |
 | Failover controller | `failover.enabled` (cluster config) | Off by default; drains still move copies |
 
 ## Needs a live check (could not run on the Mac)
@@ -47,7 +47,7 @@ State at the end:
 - **Failover:** a real node loss with `MULTI_NODE_REPLICAS`; lease handover between two control
   planes during an update; Caddy accepting a non-5 s health interval.
 - **Master key:** `systemd-creds encrypt --tpm2-pcrs=` (empty); empty `LoadCredential=` in a drop-in;
-  installer sealing an existing prod key; `skiff-rotate-master-key` end to end; `skiff-uninstall`.
+  installer sealing an existing prod key; `yoal-rotate-master-key` end to end; `yoal-uninstall`.
 - **Valkey/Redis/ClickHouse backups:** `--rdb` and `check-rdb` on valkey 8.1/9.1 and redis 8;
   loading the AOF-base layout; ClickHouse `BACKUP`/`RESTORE` and `allowed_path`.
 - **Email sandbox, password reset:** real SMTP delivery end to end; Better Auth's per-IP limits
@@ -57,10 +57,10 @@ State at the end:
 
 ## Small known items
 
-- The agent's built-in `SKIFF_DATA_DIR` default (`/var/lib/skiff-agent`) differs from the helper's
-  replication-dir default (`/var/lib/skiff/agent/replication`). Installed hosts set
-  `/var/lib/skiff/agent`, so they match; only hand-run agents would need
-  `SKIFF_HELPER_REPLICATION_DIR`.
+- The agent's built-in `YOAL_DATA_DIR` default (`/var/lib/yoal-agent`) differs from the helper's
+  replication-dir default (`/var/lib/yoal/agent/replication`). Installed hosts set
+  `/var/lib/yoal/agent`, so they match; only hand-run agents would need
+  `YOAL_HELPER_REPLICATION_DIR`.
 - Storage replication has no agent capability flag: an older agent silently ignores links and the
   rule stays `pending`.
 - `docs/build-plan/README.md` still says "Rootless Podman/Quadlet" (historical plan, untouched).

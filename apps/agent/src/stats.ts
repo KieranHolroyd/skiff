@@ -1,5 +1,5 @@
 import { promises as fs } from 'node:fs';
-import type { Heartbeat } from '@skiff/contracts';
+import type { Heartbeat } from '@yoal/contracts';
 
 /** Node-level stats for heartbeats. Linux `/proc` is used when present; other hosts get a subset. */
 export type HeartbeatStats = NonNullable<Heartbeat['stats']>;

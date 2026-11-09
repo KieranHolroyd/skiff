@@ -20,7 +20,7 @@
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import UsersIcon from '@lucide/svelte/icons/users';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
 	import * as Avatar from '#lib/components/ui/avatar/index.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
@@ -134,7 +134,7 @@
 </script>
 
 <svelte:head>
-	<title>General · Settings · Skiff</title>
+	<title>General · Settings · Yoal</title>
 </svelte:head>
 
 <SettingsHeader id="general" />
@@ -224,7 +224,7 @@
 						<span>You are {data.role === 'admin' || data.role === 'owner' ? 'an' : 'a'}</span>
 						<Badge variant={roleBadge(data.role)} class="capitalize">{data.role}</Badge>
 						{#if data.platformAdmin}
-							<Badge variant="outline" title="Manages nodes and installs Skiff updates"
+							<Badge variant="outline" title="Manages nodes and installs Yoal updates"
 								><ServerCogIcon />Platform admin</Badge
 							>
 						{/if}
@@ -416,7 +416,7 @@
 								</span>
 								<span class="min-w-0 flex-1">
 									<span class="text-sm font-medium"
-										>Skiff <span class="font-mono">{update.latest}</span> is available</span
+										>Yoal <span class="font-mono">{update.latest}</span> is available</span
 									>
 									<span class="block text-sm text-muted-foreground">
 										Running {update.current}. Upgrades snapshot first and roll back on failure.

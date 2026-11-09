@@ -1,7 +1,7 @@
 /*
  * Standalone docs site chrome. Tokens mirror the dashboard's theme (apps/control-plane
  * src/routes/layout.css) so pages look the same in both places; `.docs-prose` typography comes
- * from @skiff/docs/prose.css, concatenated ahead of this file at build time.
+ * from @yoal/docs/prose.css, concatenated ahead of this file at build time.
  */
 
 @font-face {

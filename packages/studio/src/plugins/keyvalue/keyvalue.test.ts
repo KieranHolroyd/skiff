@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { DEFAULT_STUDIO_LIMITS } from '@skiff/contracts';
+import { DEFAULT_STUDIO_LIMITS } from '@yoal/contracts';
 import { StudioError } from '../../protocol.ts';
 import type { StudioTarget } from '../../driver.ts';
 import { decodeCursor, encodeCursor, type BrowseCursor } from './cursor.ts';

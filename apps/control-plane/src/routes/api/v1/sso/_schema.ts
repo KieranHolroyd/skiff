@@ -64,7 +64,7 @@ export const domainCreateSchema = z.object({
 	domain: z.string().trim().min(1).max(253)
 });
 
-/** IAM.md I19: map one IdP group claim value to one Skiff group. */
+/** IAM.md I19: map one IdP group claim value to one Yoal group. */
 export const groupMappingSchema = z.object({
 	providerId: z.string().trim().min(1).max(128),
 	claimValue: z.string().trim().min(1).max(200),

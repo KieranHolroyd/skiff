@@ -45,7 +45,7 @@ function writeRepo(repoDir: string, migrations: string[]): void {
 	mkdirSync(join(repoDir, 'packages', 'db', 'migrations'), { recursive: true });
 	writeFileSync(join(repoDir, 'apps', 'control-plane', 'package.json'), '{"version":"0.2.0"}');
 	writeFileSync(join(repoDir, 'apps', 'control-plane', 'build', 'index.js'), '// app');
-	writeFileSync(join(repoDir, 'apps', 'agent', 'dist', 'skiff-agent'), '#!/bin/sh');
+	writeFileSync(join(repoDir, 'apps', 'agent', 'dist', 'yoal-agent'), '#!/bin/sh');
 	for (const id of migrations)
 		writeFileSync(join(repoDir, 'packages', 'db', 'migrations', id), `CREATE TABLE IF NOT EXISTS t_${id.split('_')[0]} (x);`);
 }
@@ -54,22 +54,22 @@ function makeRelease(name: string, commit: string, migrations = ['0001_init.sql'
 	const release = join(layout.releasesDir, name);
 	writeRepo(join(release, 'repo'), migrations);
 	assembleRelease(release, layout.bunBin);
-	writeFileSync(join(release, 'meta.json'), JSON.stringify({ commit, version, ref: 'main', repo: 'owner/skiff' }));
+	writeFileSync(join(release, 'meta.json'), JSON.stringify({ commit, version, ref: 'main', repo: 'owner/yoal' }));
 	return release;
 }
 
 /** What the control plane does on boot: apply the migrations its release ships. */
 function applyMigrations(release: string): void {
 	const db = new Database(layout.dbPath);
-	db.run('CREATE TABLE IF NOT EXISTS skiff_migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)');
+	db.run('CREATE TABLE IF NOT EXISTS yoal_migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)');
 	for (const id of readdirSync(join(release, 'repo', 'packages', 'db', 'migrations')))
-		db.run('INSERT OR IGNORE INTO skiff_migrations VALUES (?, ?)', [id, Date.now()]);
+		db.run('INSERT OR IGNORE INTO yoal_migrations VALUES (?, ?)', [id, Date.now()]);
 	db.close();
 }
 
 function migrationsInDb(): string[] {
 	const db = new Database(layout.dbPath, { readonly: true });
-	const rows = db.query<{ id: string }, []>('SELECT id FROM skiff_migrations ORDER BY id').all();
+	const rows = db.query<{ id: string }, []>('SELECT id FROM yoal_migrations ORDER BY id').all();
 	db.close();
 	return rows.map((row) => row.id);
 }
@@ -114,7 +114,7 @@ class FakeHost implements Host {
 	running: string | null = null;
 	publicUp = false;
 	canaryDbSeen = false;
-	/** Directories under the canary scratch dir that existed when it was chowned to skiff. */
+	/** Directories under the canary scratch dir that existed when it was chowned to yoal. */
 	canaryChowned: string[] = [];
 	critical = 0;
 	clock = Date.parse('2026-11-03T12:00:00Z');
@@ -156,17 +156,17 @@ class FakeHost implements Host {
 		const scratch = args[args.indexOf('--scratch') + 1]!;
 		const dbPath = args[args.indexOf('--db') + 1]!;
 		prepareScratch({ scratch, dbPath }, (cmd) => {
-			if (cmd[0] === 'chown') this.chownToSkiff(cmd[cmd.length - 1]!);
+			if (cmd[0] === 'chown') this.chownToYoal(cmd[cmd.length - 1]!);
 			return { code: 0, stdout: '', stderr: '' };
 		});
-		this.canaryDbSeen = existsSync(join(scratch, 'data', 'skiff.db'));
+		this.canaryDbSeen = existsSync(join(scratch, 'data', 'yoal.db'));
 		return this.canaryFails
 			? { kind: 'verdict', verdict: { protocol: 1, ok: false, step: 'health', reason: this.canaryReason, detail: 'journal…' } }
 			: { kind: 'verdict', verdict: { protocol: 1, ok: true, step: 'stability' } };
 	};
 	canary = async (_release: string, scratch: string) => {
 		this.calls.push('canary');
-		this.canaryDbSeen = existsSync(join(scratch, 'data', 'skiff.db'));
+		this.canaryDbSeen = existsSync(join(scratch, 'data', 'yoal.db'));
 		if (this.canaryFails) throw new Error(`${this.canaryReason}\nstack…`);
 	};
 	start = async (unit: string) => {
@@ -212,7 +212,7 @@ class FakeHost implements Host {
 	publicHealthy = async () => this.publicUp;
 	enrolled = false;
 	agentEnrolled = () => this.enrolled;
-	chownToSkiff = (path: string) => {
+	chownToYoal = (path: string) => {
 		if (!path.includes('update-canary')) return;
 		for (const dir of ['data', join('data', 'objects')]) if (existsSync(join(path, dir))) this.canaryChowned.push(dir);
 	};
@@ -234,13 +234,13 @@ let original: string;
 let older: string;
 
 beforeEach(() => {
-	root = realpathSync(mkdtempSync(join(tmpdir(), 'skiff-update-')));
+	root = realpathSync(mkdtempSync(join(tmpdir(), 'yoal-update-')));
 	layout = layoutFromEnv({
-		SKIFF_OPT_DIR: join(root, 'opt'),
-		SKIFF_VAR_DIR: join(root, 'var'),
-		SKIFF_SYSTEMD_DIR: join(root, 'systemd'),
-		SKIFF_BUN_BIN: join(root, 'opt', 'runtime', 'bin', 'bun'),
-		SKIFF_UPDATER_DIR: join(root, 'updater'),
+		YOAL_OPT_DIR: join(root, 'opt'),
+		YOAL_VAR_DIR: join(root, 'var'),
+		YOAL_SYSTEMD_DIR: join(root, 'systemd'),
+		YOAL_BUN_BIN: join(root, 'opt', 'runtime', 'bin', 'bun'),
+		YOAL_UPDATER_DIR: join(root, 'updater'),
 	});
 	mkdirSync(join(root, 'systemd'), { recursive: true });
 	mkdirSync(join(root, 'var', 'data'), { recursive: true });
@@ -313,7 +313,7 @@ describe('update', () => {
 	test('check reports what update would do without touching anything', async () => {
 		const updater = new Updater(layout, host);
 		expect(await updater.check()).toMatchObject({
-			repo: 'owner/skiff',
+			repo: 'owner/yoal',
 			ref: 'main',
 			commit: NEW,
 			version: '0.2.0',
@@ -333,7 +333,7 @@ describe('update', () => {
 		expect(readLink(layout.previousLink)).toBe(original);
 		expect(readdirSync(layout.releasesDir).sort()).toEqual([basename(current), basename(original)].sort());
 		expect(host.canaryDbSeen).toBe(true);
-		// The canary runs as skiff: its writable dirs must exist before the recursive chown.
+		// The canary runs as yoal: its writable dirs must exist before the recursive chown.
 		expect(host.canaryChowned).toEqual(['data', join('data', 'objects')]);
 		expect(host.running).toBe(basename(current));
 		expect(host.calls).toContain(`ensure-caddy ${basename(current)}`);
@@ -355,12 +355,12 @@ describe('update', () => {
 		host.active.set(STUDIO, true);
 		const updater = new Updater(layout, host);
 		await updater.update({ withAgent: true });
-		const agentRestart = host.calls.lastIndexOf('start skiff-agent.service');
+		const agentRestart = host.calls.lastIndexOf('start yoal-agent.service');
 		expect(agentRestart).toBeGreaterThanOrEqual(0);
 		expect(host.calls.indexOf(`try-restart ${STUDIO}`)).toBeGreaterThan(agentRestart);
 		expect(host.calls.slice(agentRestart)).toContain(`start ${STUDIO}`);
 
-		// A rollback stops it: the restored agent may predate `skiff-agent studio`.
+		// A rollback stops it: the restored agent may predate `yoal-agent studio`.
 		host.calls = [];
 		await updater.rollback({ withAgent: true });
 		expect(host.calls).toContain(`stop ${STUDIO}`);
@@ -631,8 +631,8 @@ describe('interrupted switches', () => {
 
 describe('helpers', () => {
 	test('unitReleasePaths picks paths below current/ from ExecStart and WorkingDirectory', () => {
-		const unit = '[Service]\nWorkingDirectory=/opt/skiff/current/repo/apps/control-plane\nExecStart=-/opt/skiff/current/runtime/bun /opt/skiff/current/repo/apps/control-plane/build/index.js --flag\nExecStartPost=/usr/bin/chmod 0660 /run/x\n';
-		expect(unitReleasePaths(unit, '/opt/skiff').sort()).toEqual(
+		const unit = '[Service]\nWorkingDirectory=/opt/yoal/current/repo/apps/control-plane\nExecStart=-/opt/yoal/current/runtime/bun /opt/yoal/current/repo/apps/control-plane/build/index.js --flag\nExecStartPost=/usr/bin/chmod 0660 /run/x\n';
+		expect(unitReleasePaths(unit, '/opt/yoal').sort()).toEqual(
 			['repo/apps/control-plane', 'repo/apps/control-plane/build/index.js', 'runtime/bun'].sort(),
 		);
 	});
@@ -640,9 +640,9 @@ describe('helpers', () => {
 	test('assembleRelease ships the CLI bundle when the build produced one', () => {
 		const release = join(root, 'cli-release');
 		mkdirSync(join(release, 'repo', 'apps', 'cli', 'dist'), { recursive: true });
-		writeFileSync(join(release, 'repo', 'apps', 'cli', 'dist', 'skif.js'), '// cli');
+		writeFileSync(join(release, 'repo', 'apps', 'cli', 'dist', 'yoal.js'), '// cli');
 		assembleRelease(release, layout.bunBin);
-		expect(readFileSync(join(release, 'cli', 'skif.js'), 'utf8')).toBe('// cli');
+		expect(readFileSync(join(release, 'cli', 'yoal.js'), 'utf8')).toBe('// cli');
 
 		const bare = join(root, 'bare-release');
 		mkdirSync(join(bare, 'repo'), { recursive: true });
@@ -708,14 +708,14 @@ describe('failure attribution', () => {
 
 	test('two different releases failing the same way blame neither (the updater is suspected)', async () => {
 		host.canaryFails = true;
-		host.canaryReason = '/readyz: Data directory /var/lib/skiff/update-canary/20261105090503-82c6b19c8fa7/data/objects is not writable.';
+		host.canaryReason = '/readyz: Data directory /var/lib/yoal/update-canary/20261105090503-82c6b19c8fa7/data/objects is not writable.';
 		const updater = new Updater(layout, host);
 		expect((await updater.update()).status).toBe('canary-failed');
 		expect(state().failedCommits[NEW]?.cause).toBe('release');
 
 		host.commit = NEWER;
 		host.version = '0.3.0';
-		host.canaryReason = '/readyz: Data directory /var/lib/skiff/update-canary/20261105112639-381ee8171ec7/data/objects is not writable.';
+		host.canaryReason = '/readyz: Data directory /var/lib/yoal/update-canary/20261105112639-381ee8171ec7/data/objects is not writable.';
 		expect(await updater.update()).toMatchObject({ status: 'canary-failed', cause: 'suspect' });
 		expect(state().failedCommits[NEW]?.cause).toBe('suspect');
 		expect(state().failedCommits[NEWER]?.cause).toBe('suspect');
@@ -927,15 +927,15 @@ describe('signed release artifacts', () => {
 		writeRepo(join(build, 'repo'), ['0001_init.sql']);
 		if (input.updater) {
 			mkdirSync(join(build, 'updater'), { recursive: true });
-			writeFileSync(join(build, 'updater', 'skiff-updated'), '#!/bin/sh\necho stage0');
+			writeFileSync(join(build, 'updater', 'yoal-updated'), '#!/bin/sh\necho stage0');
 		}
-		artifactPath = join(root, `skiff-${version}-linux-amd64.tar.gz`);
+		artifactPath = join(root, `yoal-${version}-linux-amd64.tar.gz`);
 		execFileSync('tar', ['-czf', artifactPath, '-C', build, '.']);
 		const manifest = {
 			schema: 1,
 			version,
 			commit: NEW,
-			repo: 'owner/skiff',
+			repo: 'owner/yoal',
 			channel: 'stable',
 			createdAt: '2026-11-05T00:00:00Z',
 			updaterVersion: '2.0.0',
@@ -999,7 +999,7 @@ describe('signed release artifacts', () => {
 	});
 
 	test('a legacy artifact meta that recorded the tag as its ref falls back to the default branch', async () => {
-		writeFileSync(join(original, 'meta.json'), JSON.stringify({ commit: OLD, version: '0.1.0', source: 'artifact', ref: 'v0.1.0', repo: 'owner/skiff' }));
+		writeFileSync(join(original, 'meta.json'), JSON.stringify({ commit: OLD, version: '0.1.0', source: 'artifact', ref: 'v0.1.0', repo: 'owner/yoal' }));
 		const asked: string[] = [];
 		host.resolveCommit = async (_repo: string, ref: string) => (asked.push(ref), NEW);
 		const check = await new Updater(layout, host).check({ source: 'source' });
@@ -1071,7 +1071,7 @@ describe('signed release artifacts', () => {
 	});
 
 	test('switching to stable while ahead of it stays on the canary until stable passes it', async () => {
-		writeFileSync(join(original, 'meta.json'), JSON.stringify({ commit: OLD, version: '0.3.0', repo: 'owner/skiff' }));
+		writeFileSync(join(original, 'meta.json'), JSON.stringify({ commit: OLD, version: '0.3.0', repo: 'owner/yoal' }));
 		publish({ also: [unreachableCanary('0.4.0')] });
 		const result = await new Updater(layout, host).update({ channel: 'stable' });
 		expect(result).toMatchObject({ status: 'up-to-date', version: '0.2.0', fromVersion: '0.3.0' });

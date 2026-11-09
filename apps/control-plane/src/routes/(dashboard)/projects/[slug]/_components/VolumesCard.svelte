@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import type { StorageChoices } from '@skiff/contracts';
+	import type { StorageChoices } from '@yoal/contracts';
 	import CameraIcon from '@lucide/svelte/icons/camera';
 	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
@@ -13,10 +13,10 @@
 		APP_VOLUME_USAGE_WARN_PERCENT,
 		type AppVolumeSnapshotView,
 		type AppVolumeView
-	} from '@skiff/contracts';
+	} from '@yoal/contracts';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
@@ -302,7 +302,7 @@
 									{#if volume.snapshots.length > SNAPSHOTS_SHOWN}
 										<p class="text-xs text-muted-foreground">
 											{volume.snapshots.length - SNAPSHOTS_SHOWN} older — list them with
-											<code>skif volume snapshots {volume.name} --project {slug}</code>.
+											<code>yoal volume snapshots {volume.name} --project {slug}</code>.
 										</p>
 									{/if}
 								</div>
@@ -448,7 +448,7 @@
 						aria-invalid={fieldErrors.mountPath ? 'true' : undefined}
 					/>
 					<Field.Description>
-						Absolute and normalized. System trees, /data and /var/lib/skiff are reserved.
+						Absolute and normalized. System trees, /data and /var/lib/yoal are reserved.
 					</Field.Description>
 					{#if fieldErrors.mountPath}<Field.Error>{fieldErrors.mountPath}</Field.Error>{/if}
 				</Field.Field>

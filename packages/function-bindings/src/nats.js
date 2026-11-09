@@ -1,5 +1,5 @@
 /**
- * A minimal NATS client and the JetStream calls Skiff queues need (docs/FUNCTIONS.md §4.10, D112).
+ * A minimal NATS client and the JetStream calls Yoal queues need (docs/FUNCTIONS.md §4.10, D112).
  *
  * One file serves both ends of a function queue:
  * - the queue binding service inside workerd publishes with it over a socket from
@@ -22,17 +22,17 @@ const CRLF = encoder.encode('\r\n');
 /** Largest message the queue stream accepts (Cloudflare's 128 KiB body limit). */
 export const QUEUE_MAX_MESSAGE_BYTES = 128 * 1024;
 /** The durable pull consumer each queue stream has; one consumer per queue, as on Cloudflare. */
-export const QUEUE_CONSUMER = 'skiff-consumer';
-/** Message headers Skiff sets on publish. */
+export const QUEUE_CONSUMER = 'yoal-consumer';
+/** Message headers Yoal sets on publish. */
 export const QUEUE_HEADERS = Object.freeze({
 	id: 'Nats-Msg-Id',
-	contentType: 'Skiff-Content-Type',
-	notBefore: 'Skiff-Not-Before',
-	timestamp: 'Skiff-Timestamp',
-	attempts: 'Skiff-Attempts',
+	contentType: 'Yoal-Content-Type',
+	notBefore: 'Yoal-Not-Before',
+	timestamp: 'Yoal-Timestamp',
+	attempts: 'Yoal-Attempts',
 });
 
-/** JetStream error codes Skiff branches on. */
+/** JetStream error codes Yoal branches on. */
 const JS_STREAM_NOT_FOUND = 10059;
 const JS_STREAM_NAME_IN_USE = 10058;
 const JS_CONSUMER_NAME_EXISTS = 10148;
@@ -51,12 +51,12 @@ export class NatsError extends Error {
 /** Stream for one queue. Queue names are `[a-z0-9-]`, which streams and subjects both accept. */
 export function queueStreamName(queue) {
 	assertQueueName(queue);
-	return `SKIFF_Q_${queue}`;
+	return `YOAL_Q_${queue}`;
 }
 
 export function queueSubject(queue) {
 	assertQueueName(queue);
-	return `skiff.q.${queue}`;
+	return `yoal.q.${queue}`;
 }
 
 function assertQueueName(queue) {
@@ -86,7 +86,7 @@ export function queueStreamConfig(queue) {
 	};
 }
 
-/** The single durable pull consumer. Retries and dead-lettering are Skiff's, so `max_deliver` is unlimited. */
+/** The single durable pull consumer. Retries and dead-lettering are Yoal's, so `max_deliver` is unlimited. */
 export function queueConsumerConfig(queue, ackWaitMs) {
 	return {
 		durable_name: QUEUE_CONSUMER,
@@ -205,8 +205,8 @@ export class NatsConnection {
 				verbose: false,
 				pedantic: false,
 				tls_required: false,
-				name: options.name ?? 'skiff',
-				lang: 'skiff',
+				name: options.name ?? 'yoal',
+				lang: 'yoal',
 				version: '1',
 				protocol: 1,
 				headers: true,

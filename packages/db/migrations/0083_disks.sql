@@ -1,7 +1,7 @@
 -- Disks and default storage (docs/STORAGE.md, D169). Additive only.
 -- Node volumes become "disks": the table keeps its 0010 name (`node_volumes`) and gains a tier
 -- (`fast`/`bulk`, derived from the hardware until an operator sets it) and `mount_uuid` for a
--- filesystem Skiff mounts by UUID at /mnt/skiff-disks/<name> (folds in `disk_mounts`, 0078).
+-- filesystem Yoal mounts by UUID at /mnt/yoal-disks/<name> (folds in `disk_mounts`, 0078).
 -- Defaults are per kind of service: `system`, `fast` or `bulk`. `storage_pools`, `storage_rules`,
 -- `disk_mounts` and `nodes.default_volume_id` are no longer read.
 

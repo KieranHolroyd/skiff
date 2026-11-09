@@ -1,12 +1,12 @@
 /**
- * Skiff Analytics Engine binding service.
+ * Yoal Analytics Engine binding service.
  *
  * workerd has no built-in Analytics Engine backend: upstream (and Miniflare) implement the
  * `analyticsEngine` capability as a *wrapped* binding whose wrapper is an extension module
  * (`Worker_Binding.wrapped` in workerd.capnp). The composer renders
  *
  *     ( name = "ANALYTICS", wrapped = (
- *         moduleName = "skiff-analytics:writer",
+ *         moduleName = "yoal-analytics:writer",
  *         innerBindings = [
  *           ( name = "sink", service = "analytics-sink-0" ),
  *           ( name = "dataset", text = "…" ),
@@ -29,8 +29,8 @@
  *   JSON body under the sink's 256 KiB cap even when every blob is at its individual maximum.
  *
  * Shape adapted from Miniflare's analytics-engine plugin (Apache-2.0), cloudflare/workers-sdk
- * (`packages/miniflare/src/plugins/analytics-engine`). The backend (a Skiff service, not a
- * simulator) and the caps are Skiff's.
+ * (`packages/miniflare/src/plugins/analytics-engine`). The backend (a Yoal service, not a
+ * simulator) and the caps are Yoal's.
  */
 
 /** Cloudflare's per-write limits (Workers Analytics Engine data point size limits). */

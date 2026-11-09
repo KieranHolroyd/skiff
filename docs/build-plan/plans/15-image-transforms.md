@@ -20,7 +20,7 @@ crop, and format conversion with signed URLs, a cache, and a build-time variant 
 
 ## Current state
 
-- Skiff precompresses HTML/CSS/JS (`br`/`gzip`) but does not transform images.
+- Yoal precompresses HTML/CSS/JS (`br`/`gzip`) but does not transform images.
 - Storage instances serve objects with S3 semantics; no transform route.
 - Static sites can reference an external image CDN, but that is a privacy/availability dependency.
 - Vercel, Netlify, Cloudflare, Supabase, Appwrite, Bunny, and Fastly all offer image optimization.
@@ -29,7 +29,7 @@ crop, and format conversion with signed URLs, a cache, and a build-time variant 
 
 ### Two modes
 
-1. **Build-time variants** (recommended default): `skif images` scans `dist/`, generates AVIF/WebP at
+1. **Build-time variants** (recommended default): `yoal images` scans `dist/`, generates AVIF/WebP at
    configured widths, writes a manifest (`images.json`), and leaves the originals. A small `<Image>`
    snippet or a Svelte component uses `srcset`. No runtime cost; no signed URLs.
 2. **Runtime transforms**: a managed `media` service (imgproxy) attached to a storage instance,
@@ -55,7 +55,7 @@ crop, and format conversion with signed URLs, a cache, and a build-time variant 
 
 ### Build-time variants
 
-- `skif images --widths 320,640,960,1280,1920 --formats avif,webp`:
+- `yoal images --widths 320,640,960,1280,1920 --formats avif,webp`:
   - Uses `sharp`/`libvips` in the CLI or a build step; no runtime service.
   - Writes `<name>-<width>.<format>` and `images.json` with dimensions/hash.
   - Fails the build if an image is too large or an unsupported format.
@@ -73,7 +73,7 @@ crop, and format conversion with signed URLs, a cache, and a build-time variant 
 ## Implementation order
 
 1. Contract `media` config + table (`media_instances` or a `media` profile on storage) (contract PR).
-2. Build-time `skif images` + manifest + snippet (independent, can ship first).
+2. Build-time `yoal images` + manifest + snippet (independent, can ship first).
 3. imgproxy profile/unit + route rendering + signing.
 4. Cache + metrics + limits.
 5. Dashboard: enable media, widths/formats, cache usage, sample URL.
@@ -81,7 +81,7 @@ crop, and format conversion with signed URLs, a cache, and a build-time variant 
 
 ## Acceptance criteria
 
-- [ ] `skif images` generates AVIF/WebP at five widths with a manifest; a `<picture>` snippet works.
+- [ ] `yoal images` generates AVIF/WebP at five widths with a manifest; a `<picture>` snippet works.
 - [ ] A runtime transform returns a WebP at the requested width, with a correct `Content-Type` and
       cache headers.
 - [ ] An unsigned private URL is rejected; a signed URL expires and cannot be reused for another
@@ -112,7 +112,7 @@ crop, and format conversion with signed URLs, a cache, and a build-time variant 
 ## Rollout
 
 Build-time variants ship first (no runtime risk). Runtime transforms behind
-`SKIFF_FEATURE_MEDIA` off by default; enable per storage instance. Do not make it a default route.
+`YOAL_FEATURE_MEDIA` off by default; enable per storage instance. Do not make it a default route.
 
 ## Open questions
 

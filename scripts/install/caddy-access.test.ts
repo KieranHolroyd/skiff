@@ -11,18 +11,18 @@ describe('Caddy supplementary group check', () => {
 	});
 
 	test('parses the numeric id from a getent line', () => {
-		expect(parseGetentGroupId('skiff:x:982:')).toBe(982);
-		expect(parseGetentGroupId('skiff:x:982:caddy,skiff\n')).toBe(982);
+		expect(parseGetentGroupId('yoal:x:982:')).toBe(982);
+		expect(parseGetentGroupId('yoal:x:982:caddy,yoal\n')).toBe(982);
 		expect(parseGetentGroupId('')).toBeNull();
 		expect(parseGetentGroupId('garbage')).toBeNull();
 	});
 
-	test('a process started before the drop-in lacks the skiff group', () => {
-		// Observed on a fresh host: the unit file said skiff, the process had caddy + www-data only.
+	test('a process started before the drop-in lacks the yoal group', () => {
+		// Observed on a fresh host: the unit file said yoal, the process had caddy + www-data only.
 		expect(processHasGroup(status('33 983'), 982)).toBe(false);
 	});
 
-	test('a process restarted after the drop-in has the skiff group', () => {
+	test('a process restarted after the drop-in has the yoal group', () => {
 		expect(processHasGroup(status('33 982 983'), 982)).toBe(true);
 	});
 

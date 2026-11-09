@@ -16,7 +16,7 @@ import {
 import { probeIsolation } from './loop.ts';
 import { jobClaim, startFakeControlPlane, stepSpec, type FakeControlPlane } from './test-server.ts';
 
-const root = mkdtempSync(join(tmpdir(), 'skiff-helper-executor-'));
+const root = mkdtempSync(join(tmpdir(), 'yoal-helper-executor-'));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 const origin = gitRepo(join(root, 'origin'));
 const sha = origin.commit({ 'README.md': 'hello\n' }, 'initial');
@@ -31,7 +31,7 @@ afterEach(() => fake.stop());
 function config(overrides: Partial<BuilderConfig> = {}): BuilderConfig {
 	return {
 		...loadConfig(
-			{ SKIFF_CONTROL_URL: fake.url, SKIFF_NODE_TOKEN: 'node', SKIFF_BUILD_DIR: buildDir, SKIFF_BUILDER_SYSTEMD: 'false' },
+			{ YOAL_CONTROL_URL: fake.url, YOAL_NODE_TOKEN: 'node', YOAL_BUILD_DIR: buildDir, YOAL_BUILDER_SYSTEMD: 'false' },
 			{ platform: 'darwin', isRoot: false, has: () => false, arch: 'arm64', exists: () => false },
 		),
 		pipelineIsolation: 'container',
@@ -86,7 +86,7 @@ class FakeHelper implements PipelineHelper {
 	}
 }
 
-describe('PipelineExecutor through skiff-helper', () => {
+describe('PipelineExecutor through yoal-helper', () => {
 	test('starts the job through the helper verbs, follows it, tails runner.log and cleans up', async () => {
 		const lines: string[] = [];
 		const claim = {
@@ -130,8 +130,8 @@ describe('PipelineExecutor through skiff-helper', () => {
 			buildkit: true,
 			buildkitCacheScope: 'repo_1:trusted',
 		});
-		expect(start.env).toContain(`SKIFF_JOB_TOKEN=${fake.token}`);
-		expect(start.env.some((entry) => entry.startsWith('SKIFF_CONTROL_URL='))).toBe(true);
+		expect(start.env).toContain(`YOAL_JOB_TOKEN=${fake.token}`);
+		expect(start.env.some((entry) => entry.startsWith('YOAL_CONTROL_URL='))).toBe(true);
 		expect(start.services).toEqual([
 			{ name: 'postgres', image: 'docker.io/library/postgres:17', env: ['POSTGRES_PASSWORD=hunter2-secret'], healthCmd: 'pg_isready' },
 		]);

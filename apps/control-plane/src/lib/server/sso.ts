@@ -5,10 +5,10 @@ import {
 	newId,
 	nodeDnsResolver,
 	randomToken
-} from '@skiff/core';
-import type { Principal } from '@skiff/contracts';
+} from '@yoal/core';
+import type { Principal } from '@yoal/contracts';
 // The pure domain/TXT and group-claim helpers live in core so they can be tested without
-// SvelteKit or a database. They are also exported from `@skiff/core`; this deep import keeps the
+// SvelteKit or a database. They are also exported from `@yoal/core`; this deep import keeps the
 // settings service's dependency narrow.
 import {
 	MAX_GROUP_CLAIM_LENGTH,
@@ -40,13 +40,13 @@ import { syncSsoProviders } from './sso-sync';
  *
  * `sso_providers` is the source of truth for configuration (issuer, sealed client secret, SAML
  * certificate and endpoints, claim mapping, enabled flag); `sso_domains` proves ownership with a
- * `skiff-verify=` TXT record. `sso-sync.ts` copies the enabled rows into Better Auth's
+ * `yoal-verify=` TXT record. `sso-sync.ts` copies the enabled rows into Better Auth's
  * boot-migrated `ssoProvider` table, which `@better-auth/sso` reads for the actual sign-in. Settings
  * never writes that table directly.
  *
  * What is real here: provider configuration, OIDC discovery at save time, SAML metadata import,
  * domain TXT ownership checks re-run daily, permission checks, email→provider routing for `/login`,
- * the callback/ACS URLs to register at the IdP, and the IdP-group → Skiff-group mapping used by JIT
+ * the callback/ACS URLs to register at the IdP, and the IdP-group → Yoal-group mapping used by JIT
  * provisioning. Sign-in and JIT provisioning run through Better Auth for both protocols; SCIM lives
  * in `auth.ts`/`core.scim`.
  */
@@ -397,7 +397,7 @@ function cleanSecret(raw: string | undefined): string | undefined {
 	return secret;
 }
 
-/** Refuse the form input with the first protocol-aware field error (pure checks in `@skiff/core`). */
+/** Refuse the form input with the first protocol-aware field error (pure checks in `@yoal/core`). */
 function assertProviderFields(
 	input: SsoProviderInput,
 	options: { requireSecret?: boolean } = {}
@@ -1348,7 +1348,7 @@ export class SsoService {
 		}
 	}
 
-	/** Map one IdP group claim value to one Skiff group. A re-save updates the target group. */
+	/** Map one IdP group claim value to one Yoal group. A re-save updates the target group. */
 	saveGroupMapping(principal: Principal, input: SsoGroupMappingInput): SsoGroupMappingView {
 		this.#requireManage(principal);
 		this.#provider(principal.orgId, input.providerId);

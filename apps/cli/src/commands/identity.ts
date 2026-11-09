@@ -8,44 +8,44 @@ import { asRecord, stringValue } from './iam.ts';
  * Workload identity tokens (docs/IAM.md I18, §7.4; docs/CLOUD-IDENTITY.md).
  *
  * A process or container workload gets an audience-bound ES256 JWT in
- * `$SKIFF_TOKEN_FILE` (`/var/run/skiff/token`). The node's metadata endpoint mints a fresh token
+ * `$YOAL_TOKEN_FILE` (`/var/run/yoal/token`). The node's metadata endpoint mints a fresh token
  * for another audience (`sts.amazonaws.com`, a GCP workload identity provider, …) when the
  * workload presents that file as a bearer token. This command only prints the token: the subject
  * credential is never included in an error or a log line.
  */
 
-/** Mirrors `WORKLOAD_IDENTITY_AUDIENCE` in `@skiff/contracts`. */
-export const WORKLOAD_IDENTITY_AUDIENCE = 'skiff';
-/** Mirrors `WORKLOAD_IDENTITY_MOUNT_PATH` in `@skiff/contracts`. */
-export const WORKLOAD_IDENTITY_TOKEN_FILE = '/var/run/skiff/token';
-/** The agent's loopback metadata endpoint for a process workload (`SKIFF_IDENTITY_URL`). */
+/** Mirrors `WORKLOAD_IDENTITY_AUDIENCE` in `@yoal/contracts`. */
+export const WORKLOAD_IDENTITY_AUDIENCE = 'yoal';
+/** Mirrors `WORKLOAD_IDENTITY_MOUNT_PATH` in `@yoal/contracts`. */
+export const WORKLOAD_IDENTITY_TOKEN_FILE = '/var/run/yoal/token';
+/** The agent's loopback metadata endpoint for a process workload (`YOAL_IDENTITY_URL`). */
 export const WORKLOAD_IDENTITY_URL = 'http://127.0.0.1:8086';
 const METADATA_TIMEOUT_MS = 15_000;
 
-const usage = `Usage: skif identity <command> [options]
+const usage = `Usage: yoal identity <command> [options]
 
 Commands:
-  token                        Mint a workload token for an audience (default: skiff)
+  token                        Mint a workload token for an audience (default: yoal)
 
 Options:
-      --audience <aud>         Token audience: skiff (default), sts.amazonaws.com, a GCP provider
+      --audience <aud>         Token audience: yoal (default), sts.amazonaws.com, a GCP provider
                                resource name, api://AzureADTokenExchange, …
-      --token-file <path>      The workload token file (default: $SKIFF_TOKEN_FILE or
-                               /var/run/skiff/token)
-      --metadata-url <url>     The node metadata endpoint (default: $SKIFF_IDENTITY_URL or
+      --token-file <path>      The workload token file (default: $YOAL_TOKEN_FILE or
+                               /var/run/yoal/token)
+      --metadata-url <url>     The node metadata endpoint (default: $YOAL_IDENTITY_URL or
                                http://127.0.0.1:8086; containers use
                                http://host.containers.internal:8086)
       --json                   Print the whole token response, not just the token
   -h, --help                   Show this help
 
-For the skiff audience the command prints the token file as-is. For any other audience it presents
+For the yoal audience the command prints the token file as-is. For any other audience it presents
 that file to the metadata endpoint, which asks the control plane to mint a one-hour token. The
 metadata endpoint is only reachable inside a workload; run this there, or pass its URL.
 
 Examples:
-  skif identity token
-  skif identity token --audience sts.amazonaws.com
-  TOKEN=$(skif identity token --audience api://AzureADTokenExchange)`;
+  yoal identity token
+  yoal identity token --audience sts.amazonaws.com
+  TOKEN=$(yoal identity token --audience api://AzureADTokenExchange)`;
 
 const tokenFlags: FlagSpec = {
 	json: { type: 'boolean' },
@@ -82,7 +82,7 @@ async function tokenCommand(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif identity token [--audience <aud>] [--json]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal identity token [--audience <aud>] [--json]');
 
 	const audience = parseAudience(args.string('audience'));
 	const tokenPath = identityTokenPath(args.string('token-file'));
@@ -115,20 +115,20 @@ export function parseAudience(value: string | undefined, flag = '--audience'): s
 	return audience;
 }
 
-/** The file the agent/helper writes: an explicit flag, then `$SKIFF_TOKEN_FILE`, then the mount. */
+/** The file the agent/helper writes: an explicit flag, then `$YOAL_TOKEN_FILE`, then the mount. */
 export function identityTokenPath(
 	value?: string,
 	env: NodeJS.ProcessEnv = process.env,
 ): string {
-	return value?.trim() || env.SKIFF_TOKEN_FILE?.trim() || WORKLOAD_IDENTITY_TOKEN_FILE;
+	return value?.trim() || env.YOAL_TOKEN_FILE?.trim() || WORKLOAD_IDENTITY_TOKEN_FILE;
 }
 
-/** The metadata endpoint base URL: an explicit flag, then `$SKIFF_IDENTITY_URL`, then loopback. */
+/** The metadata endpoint base URL: an explicit flag, then `$YOAL_IDENTITY_URL`, then loopback. */
 export function identityMetadataUrl(
 	value?: string,
 	env: NodeJS.ProcessEnv = process.env,
 ): string {
-	const raw = value?.trim() || env.SKIFF_IDENTITY_URL?.trim() || WORKLOAD_IDENTITY_URL;
+	const raw = value?.trim() || env.YOAL_IDENTITY_URL?.trim() || WORKLOAD_IDENTITY_URL;
 	let parsed: URL;
 	try {
 		parsed = new URL(raw);
@@ -184,7 +184,7 @@ async function readWorkloadToken(path: string): Promise<string> {
 			code: 'io',
 			cause: error,
 			suggestions: [
-				'Run this inside a process or container workload, or pass --token-file / set SKIFF_TOKEN_FILE.',
+				'Run this inside a process or container workload, or pass --token-file / set YOAL_TOKEN_FILE.',
 			],
 		});
 	}
@@ -218,7 +218,7 @@ async function mintAtMetadata(
 			code: 'network',
 			cause: error,
 			suggestions: [
-				'Check SKIFF_IDENTITY_URL: a process app uses http://127.0.0.1:8086 and a container uses http://host.containers.internal:8086.',
+				'Check YOAL_IDENTITY_URL: a process app uses http://127.0.0.1:8086 and a container uses http://host.containers.internal:8086.',
 			],
 		});
 	}

@@ -2,19 +2,19 @@ import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import { evaluateAccessPolicy, type AccessPolicyRule } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import { evaluateAccessPolicy, type AccessPolicyRule } from '@yoal/contracts';
 import { buildPrincipal } from '../orgs.ts';
 import { createCore, type Core } from '../index.ts';
 import { LocalObjectStore } from '../object-store.ts';
 
 /**
- * CRUD for Skiff Access policies (IAM.md I25). The migration file owns the tables; this test creates
+ * CRUD for Yoal Access policies (IAM.md I25). The migration file owns the tables; this test creates
  * the same shape directly because `packages/db/src/migrations.ts` is regenerated separately and
  * these columns are not in the checked-in snapshot yet.
  */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-access-policies-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-access-policies-'));
 const opened = createDb({ path: ':memory:' });
 const clock = Date.parse('2026-11-08T12:00:00Z');
 
@@ -150,7 +150,7 @@ describe('access policy CRUD', () => {
 		expect(view.productionAccess).toBe('access');
 		expect(view.productionAccessPolicyId).toBe(policy.id);
 
-		expect(() => core.accessPolicies.remove(admin, policy.id)).toThrow(/Turn Skiff Access off/);
+		expect(() => core.accessPolicies.remove(admin, policy.id)).toThrow(/Turn Yoal Access off/);
 		core.accessPolicies.assign(admin, row, { scope: 'production', policyId: null });
 		expect((await core.projects.get(admin, row.slug)).productionAccess).toBe('platform');
 		core.accessPolicies.remove(admin, policy.id);
@@ -187,7 +187,7 @@ describe('access policy CRUD', () => {
 				action: 'allow',
 				matcher: {
 					type: 'serviceToken',
-					header: 'x-skiff-access-token',
+					header: 'x-yoal-access-token',
 					tokenHash: 'a'.repeat(64),
 				},
 			},

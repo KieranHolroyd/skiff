@@ -27,10 +27,10 @@
 		type GitRepositoryList,
 		type GitRepositoryView,
 		type GithubImportDetection
-	} from '@skiff/contracts';
-	import ForgeMark from '#lib/components/skiff/ForgeMark.svelte';
-	import GitHubMark from '#lib/components/skiff/GitHubMark.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	} from '@yoal/contracts';
+	import ForgeMark from '#lib/components/yoal/ForgeMark.svelte';
+	import GitHubMark from '#lib/components/yoal/GitHubMark.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
@@ -193,7 +193,7 @@
 			// After a refused submit the typed values stay; only later detections refill them.
 			if (restoring) return;
 			applyPreset(found.preset.id);
-			// A name the person typed is kept; one Skiff suggested follows the root directory.
+			// A name the person typed is kept; one Yoal suggested follows the root directory.
 			if (!name || name === suggested) name = found.suggestedName;
 			suggested = found.suggestedName;
 			pipelines = found.workflows.length > 0;
@@ -256,7 +256,7 @@
 </script>
 
 <svelte:head>
-	<title>Deploy from Git · Skiff</title>
+	<title>Deploy from Git · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">
@@ -265,7 +265,7 @@
 		eyebrow="New project"
 		title={data.repo ? `Deploy ${data.repo}` : 'Deploy from Git'}
 		description={data.repo
-			? 'Skiff read the repository and picked how to build it. Adjust anything, then deploy. Every push to the branch deploys again.'
+			? 'Yoal read the repository and picked how to build it. Adjust anything, then deploy. Every push to the branch deploys again.'
 			: 'Import a repository from GitHub, GitLab, Gitea or Forgejo. Each push builds and deploys it, with a commit status for every build.'}
 	>
 		{#if data.repo}
@@ -289,7 +289,7 @@
 		<EmptyState
 			icon={GitHubMark}
 			title="Connect a git provider first"
-			description="A platform admin creates Skiff’s GitHub App once, in Settings → GitHub; owners connect GitLab, Gitea or Forgejo with a token in Settings → Git providers. After that, anyone who can create projects can deploy repositories from here."
+			description="A platform admin creates Yoal’s GitHub App once, in Settings → GitHub; owners connect GitLab, Gitea or Forgejo with a token in Settings → Git providers. After that, anyone who can create projects can deploy repositories from here."
 		>
 			<Button href={resolve('/(dashboard)/settings/github')}>
 				<GitHubMark />Settings → GitHub
@@ -301,8 +301,8 @@
 	{:else if !data.connected}
 		<EmptyState
 			icon={GitHubMark}
-			title="Install Skiff’s GitHub App"
-			description="Install the App on your GitHub account or organisation and choose which repositories Skiff may build. They appear here right after."
+			title="Install Yoal’s GitHub App"
+			description="Install the App on your GitHub account or organisation and choose which repositories Yoal may build. They appear here right after."
 		>
 			{#if data.canInstall && data.app.installUrl}
 				<!-- eslint-disable svelte/no-navigation-without-resolve -- external GitHub URL -->
@@ -479,7 +479,7 @@
 				</header>
 
 				{#if detection.isError}
-					<Notice tone="danger" title="Skiff could not read this repository">
+					<Notice tone="danger" title="Yoal could not read this repository">
 						{errorText(detection.error)}
 					</Notice>
 				{/if}
@@ -612,7 +612,7 @@
 							</div>
 						{/if}
 						<Field.Description>
-							For monorepos: the directory with the app. Skiff detects the framework again when it
+							For monorepos: the directory with the app. Yoal detects the framework again when it
 							changes.
 						</Field.Description>
 						{#if errors.rootDir}<Field.Error>{errors.rootDir}</Field.Error>{/if}
@@ -757,7 +757,7 @@
 									class="w-full"
 								>
 									<NativeSelect.Option value="public">Public</NativeSelect.Option>
-									<NativeSelect.Option value="platform">Skiff login</NativeSelect.Option>
+									<NativeSelect.Option value="platform">Yoal login</NativeSelect.Option>
 								</NativeSelect.Root>
 							</Field.Field>
 							<Field.Field>
@@ -768,7 +768,7 @@
 									bind:value={previewAccess}
 									class="w-full"
 								>
-									<NativeSelect.Option value="platform">Skiff login</NativeSelect.Option>
+									<NativeSelect.Option value="platform">Yoal login</NativeSelect.Option>
 									<NativeSelect.Option value="public">Public</NativeSelect.Option>
 								</NativeSelect.Root>
 							</Field.Field>
@@ -788,11 +788,11 @@
 							{found.workflows.length === 1
 								? 'One workflow'
 								: `${found.workflows.length} workflows`} in
-							<code class="font-mono">.skiff/workflows</code>
+							<code class="font-mono">.yoal/workflows</code>
 							({found.workflows.slice(0, 3).join(', ')}{found.workflows.length > 3 ? ', …' : ''})
 							run on push and {provider === 'gitlab' ? 'merge' : 'pull'} request, delivered by {provider === 'github'
 								? 'the GitHub App'
-								: 'the webhook Skiff creates'}.
+								: 'the webhook Yoal creates'}.
 						</Field.Description>
 					</div>
 				</Field.Field>
@@ -844,7 +844,7 @@
 						The GitHub App delivers pushes, Builders clone with a one-hour token, and every build
 						reports a commit status and a GitHub deployment. No webhook or deploy key.
 					{:else}
-						Skiff creates the webhook on {providerLabel}, Builders clone with {provider === 'gitlab'
+						Yoal creates the webhook on {providerLabel}, Builders clone with {provider === 'gitlab'
 							? 'a short-lived deploy token'
 							: 'the connection’s clone token'}, and every build reports a commit status{provider === 'gitlab'
 							? ' and a GitLab deployment'

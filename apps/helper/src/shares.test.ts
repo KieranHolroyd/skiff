@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { explainMountError, ShareMounter } from './shares.ts';
 import type { CommandRunner } from './wireguard.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-shares-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-shares-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 interface FakeOptions {
@@ -78,7 +78,7 @@ describe('ShareMounter', () => {
 			server: 'nas.home',
 			exportPath: '/backups',
 			readOnly: false,
-			username: 'skiff',
+			username: 'yoal',
 			password: 'secret',
 			domain: 'HOME',
 		});
@@ -87,7 +87,7 @@ describe('ShareMounter', () => {
 		expect(mount.slice(0, 3)).toEqual(['mount', '-t', 'cifs']);
 		expect(mount[4]!.startsWith('rw,vers=3.0,')).toBe(true);
 		expect(mount[5]).toBe('//nas.home/backups');
-		expect(credentials).toBe('username=skiff\npassword=secret\ndomain=HOME\n');
+		expect(credentials).toBe('username=yoal\npassword=secret\ndomain=HOME\n');
 		// The credentials live outside the mount root and are gone once the mount returns.
 		expect(credentialsPath.startsWith(join(dir, 'smb', 'run'))).toBe(true);
 		expect(existsSync(credentialsPath)).toBe(false);
@@ -139,7 +139,7 @@ describe('ShareMounter', () => {
 		expect(result).toEqual({ id: 'media', mounted: false, error: null });
 		expect(existsSync(mountPath)).toBe(false);
 
-		// Something left in an unmounted directory is not Skiff's to delete.
+		// Something left in an unmounted directory is not Yoal's to delete.
 		const stray = join(dir, 'clean', 'mnt', 'stray');
 		mkdirSync(stray, { recursive: true });
 		writeFileSync(join(stray, 'file'), 'x');

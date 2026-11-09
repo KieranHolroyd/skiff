@@ -1,6 +1,6 @@
 /**
  * IAM at org scope (IAM.md I1): loading, compiling and caching a principal's bindings, plus the
- * writes that keep them. The decision itself is pure and lives in `@skiff/contracts` (`authorize`).
+ * writes that keep them. The decision itself is pure and lives in `@yoal/contracts` (`authorize`).
  *
  * This is the seam every call site moves onto in I2:
  *
@@ -31,7 +31,7 @@ import {
 	type Restriction,
 	type Role,
 	type ScopeRef,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from '../context.ts';
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../errors.ts';
 import { newId } from '../util.ts';

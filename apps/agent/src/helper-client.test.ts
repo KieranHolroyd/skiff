@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { workloadActivationSchema, workloadDesiredSchema } from '@skiff/contracts';
+import { workloadActivationSchema, workloadDesiredSchema } from '@yoal/contracts';
 import { HelperClient, HelperError } from './helper-client.ts';
 
 const SHA = 'a'.repeat(64);
@@ -15,7 +15,7 @@ afterEach(async () => {
 });
 
 async function socketPath(): Promise<string> {
-	const dir = await fs.mkdtemp(join(tmpdir(), 'skiff-helper-client-'));
+	const dir = await fs.mkdtemp(join(tmpdir(), 'yoal-helper-client-'));
 	directories.push(dir);
 	return join(dir, 'helper.sock');
 }
@@ -29,7 +29,7 @@ function workload(overrides: Record<string, unknown> = {}) {
 		runtime: 'process',
 		status: 'running',
 		release: SHA,
-		upstream: 'unix//run/skiff-workloads/prj_abc123.sock',
+		upstream: 'unix//run/yoal-workloads/prj_abc123.sock',
 		memoryMb: 256,
 		cpus: 1,
 		port: 3000,
@@ -155,7 +155,7 @@ describe('HelperClient', () => {
 	});
 
 	test('reports a missing helper socket clearly', async () => {
-		const client = new HelperClient(join(tmpdir(), 'skiff-missing-helper-socket.sock'));
+		const client = new HelperClient(join(tmpdir(), 'yoal-missing-helper-socket.sock'));
 		await expect(client.health()).rejects.toThrow(HelperError);
 		await expect(client.health()).rejects.toThrow(/helper unavailable/);
 	});

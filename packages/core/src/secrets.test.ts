@@ -2,12 +2,12 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
+import { createDb } from '@yoal/db';
 import { buildPrincipal } from './orgs.ts';
 import { createCore, type Core } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-secrets-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-secrets-'));
 const opened = createDb({ path: ':memory:' });
 const core: Core = createCore({
 	db: opened.db,

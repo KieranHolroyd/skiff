@@ -6,11 +6,11 @@ import { defaultRunner, type CommandRunner } from './wireguard.ts';
  * Network share mounts (docs/CLUSTERING.md §5.2, docs/STORAGE.md §3, D143).
  *
  * The helper is the only process that can mount: the agent passes a fixed, validated description
- * and never a command or an option string. Shares mount at `/mnt/skiff-shares/<id>`, a path the
+ * and never a command or an option string. Shares mount at `/mnt/yoal-shares/<id>`, a path the
  * volume inventory reports, so a mounted share can become a disk and be verified by source key
  * before a workload starts (D76).
  *
- * NFS has no credentials. SMB writes a 0600 credentials file under `/run/skiff-shares` (tmpfs,
+ * NFS has no credentials. SMB writes a 0600 credentials file under `/run/yoal-shares` (tmpfs,
  * never inside the mount root) for the duration of the mount call only; the kernel keeps the
  * session afterwards. A failed mount is cleaned up and reported.
  *
@@ -45,8 +45,8 @@ export interface ShareMounterOptions {
 	runner?: CommandRunner;
 }
 
-export const DEFAULT_SHARE_ROOT = '/mnt/skiff-shares';
-export const DEFAULT_SHARE_CREDENTIALS_DIR = '/run/skiff-shares';
+export const DEFAULT_SHARE_ROOT = '/mnt/yoal-shares';
+export const DEFAULT_SHARE_CREDENTIALS_DIR = '/run/yoal-shares';
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/;
 /** The characters a share path may use; it must survive findmnt and become a volume source key. */

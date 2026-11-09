@@ -4,12 +4,12 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
  * Signatures on outbound webhooks (alert webhook, log drains). Stripe's scheme, so receivers can
  * reuse familiar code:
  *
- *   X-Skiff-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>
+ *   X-Yoal-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>
  *
  * The timestamp is inside the MAC, so a receiver that rejects old `t` values (five minutes is
  * usual) also rejects replays.
  */
-export const SIGNATURE_HEADER = 'x-skiff-signature';
+export const SIGNATURE_HEADER = 'x-yoal-signature';
 const DEFAULT_TOLERANCE_SECONDS = 300;
 
 export function signWebhookBody(secret: string, body: string, timestampSeconds: number): string {

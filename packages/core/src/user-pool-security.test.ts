@@ -3,8 +3,8 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import type { Principal } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import type { Principal } from '@yoal/contracts';
 import { RateLimitError, UnauthorizedError, ValidationError } from './errors.ts';
 import { createCore, type Core } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
@@ -24,7 +24,7 @@ import {
  * separately. No command in this slice runs this file.
  */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-user-pool-security-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-user-pool-security-'));
 const opened = createDb({ path: ':memory:' });
 opened.sqlite.exec(readFileSync(new URL('../../db/migrations/0097_user_pool_engine.sql', import.meta.url), 'utf8'));
 opened.sqlite.exec(readFileSync(new URL('../../db/migrations/0101_user_pool_passkeys.sql', import.meta.url), 'utf8'));

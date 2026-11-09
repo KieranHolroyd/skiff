@@ -9,8 +9,8 @@
 	import type { Component } from 'svelte';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
@@ -70,7 +70,7 @@
 	function remove(channel: ChatChannelView) {
 		askConfirm({
 			title: `Remove ${channel.label} alerts?`,
-			description: `Skiff stops sending alerts to ${channel.label}. Your other channels keep working.`,
+			description: `Yoal stops sending alerts to ${channel.label}. Your other channels keep working.`,
 			confirmLabel: 'Remove',
 			tone: 'danger',
 			action: '?/removeChat',
@@ -247,7 +247,7 @@
 						spellcheck={false}
 						class="font-mono"
 						value={channel.values.url ?? ''}
-						placeholder="https://ntfy.sh/my-skiff-alerts"
+						placeholder="https://ntfy.sh/my-yoal-alerts"
 						aria-invalid={fieldErrors.url ? 'true' : undefined}
 					/>
 					{#if fieldErrors.url}<Field.Error>{fieldErrors.url}</Field.Error>

@@ -10,22 +10,22 @@ import { authenticatedClient } from './common.ts';
 import { confirmOrRefuse } from './run-operation.ts';
 
 /**
- * `skif db credentials <verb>`: named Postgres credentials (docs/DATABASES.md §16). Listing,
+ * `yoal db credentials <verb>`: named Postgres credentials (docs/DATABASES.md §16). Listing,
  * creating, rotating and revoking return metadata only; `reveal` prints one password and is
- * audited exactly like `skif db credentials <name>`.
+ * audited exactly like `yoal db credentials <name>`.
  */
 
 export const credentialVerbs = ['list', 'create', 'rotate', 'revoke', 'reveal'] as const;
 
-export const credentialsUsage = `Usage: skif db credentials <name>                 Print the owner connection URL
-       skif db credentials list <name>            List credentials (owner, monitor, named)
-       skif db credentials create <name> --role <app|readonly|backup> [--purpose <text>] [--expires <ISO time>]
-       skif db credentials rotate <name> <id>     New password; apps attached with it restart once the node confirms
-       skif db credentials revoke <name> <id>     Disable the role's login (asks first; refused while attached)
-       skif db credentials reveal <name> <id>     Print the password (audited; never over MCP)
+export const credentialsUsage = `Usage: yoal db credentials <name>                 Print the owner connection URL
+       yoal db credentials list <name>            List credentials (owner, monitor, named)
+       yoal db credentials create <name> --role <app|readonly|backup> [--purpose <text>] [--expires <ISO time>]
+       yoal db credentials rotate <name> <id>     New password; apps attached with it restart once the node confirms
+       yoal db credentials revoke <name> <id>     Disable the role's login (asks first; refused while attached)
+       yoal db credentials reveal <name> <id>     Print the password (audited; never over MCP)
 
 Roles: app reads and writes tables in the public schema, readonly can only SELECT, backup reads
-for dumps. Connect an app with one: skif db attach <name> --project <slug> --credential <id|role>.
+for dumps. Connect an app with one: yoal db attach <name> --project <slug> --credential <id|role>.
 
 Options:
   -y, --yes                    Don't ask before revoking (required when stdin isn't a terminal)
@@ -59,7 +59,7 @@ export async function credentialsCommand(argv: string[]): Promise<void> {
 	const client = await authenticatedClient();
 
 	if (verb === 'list') {
-		rejectExtraPositionals(args, 2, 'Usage: skif db credentials list <name>');
+		rejectExtraPositionals(args, 2, 'Usage: yoal db credentials list <name>');
 		const { credentials, raw } = await client.listDatabaseCredentials(name);
 		if (json) return printJson(raw);
 		console.log(databaseCredentialTable(credentials));
@@ -67,7 +67,7 @@ export async function credentialsCommand(argv: string[]): Promise<void> {
 	}
 
 	if (verb === 'create') {
-		rejectExtraPositionals(args, 2, 'Usage: skif db credentials create <name> --role <role>');
+		rejectExtraPositionals(args, 2, 'Usage: yoal db credentials create <name> --role <role>');
 		const role = args.string('role') ?? 'app';
 		if (!(DATABASE_NAMED_CREDENTIAL_ROLES as readonly string[]).includes(role))
 			throw new UsageError(`--role must be one of ${DATABASE_NAMED_CREDENTIAL_ROLES.join(', ')}.`);
@@ -86,11 +86,11 @@ export async function credentialsCommand(argv: string[]): Promise<void> {
 		});
 		if (json) return printJson(raw);
 		console.log(`Created ${credential.role} credential ${credential.id} (${credential.username}); the node provisions it next.`);
-		console.log(`Use it from an app: skif db attach ${name} --project <slug> --credential ${credential.id}`);
+		console.log(`Use it from an app: yoal db attach ${name} --project <slug> --credential ${credential.id}`);
 		return;
 	}
 
-	const line = `Usage: skif db credentials ${verb} <name> <id>`;
+	const line = `Usage: yoal db credentials ${verb} <name> <id>`;
 	rejectExtraPositionals(args, 3, line);
 	const id = requirePositional(args, 2, `credential id.\n\n${line}`);
 

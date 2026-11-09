@@ -392,7 +392,7 @@ export class ApiClient {
 		this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT;
 		this.uploadTimeoutMs = options.uploadTimeoutMs ?? DEFAULT_UPLOAD_TIMEOUT;
 		this.fetchImpl = options.fetch ?? globalThis.fetch;
-		this.userAgent = options.userAgent ?? 'skif-cli';
+		this.userAgent = options.userAgent ?? 'yoal-cli';
 		this.nodeTaskWaitMs = options.nodeTaskWaitMs ?? NODE_TASK_LIMITS.cliWaitMs;
 	}
 
@@ -1069,7 +1069,7 @@ export class ApiClient {
 		return { run: asRecord(raw)?.run as unknown as JobRunView, raw };
 	}
 
-	/** A one-off command against the current release (`skif run`). */
+	/** A one-off command against the current release (`yoal run`). */
 	async runCommand(project: string, input: { command: string[]; timeoutSeconds?: number }): Promise<{ run: JobRunView; raw: unknown }> {
 		const raw = await this.request('POST', this.jobsPath(project, '/runs'), { body: input });
 		return { run: asRecord(raw)?.run as unknown as JobRunView, raw };
@@ -2037,7 +2037,7 @@ export class ApiClient {
 	// Queue and function tools run on the service's node. Each call waits up to 20s for the
 	// result, then polls `GET /node-tasks/:id` until it finishes (or `nodeTaskWaitMs` passes).
 
-	/** Create a function queue's stream (`SKIFF_Q_<queue>`) now instead of on first use. */
+	/** Create a function queue's stream (`YOAL_Q_<queue>`) now instead of on first use. */
 	async brokerQueueCreate(name: string, queue: string): Promise<NodeTaskOutcome<BrokerQueueCreateResult>> {
 		return this.nodeTask('POST', `/api/v1/brokers/${encodeURIComponent(name)}/queues`, { queue });
 	}

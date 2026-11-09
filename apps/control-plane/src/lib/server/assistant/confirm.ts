@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import type { Principal } from '@skiff/contracts';
+import type { Principal } from '@yoal/contracts';
 import { authSecret } from '../config';
 
 /**
@@ -20,7 +20,7 @@ interface Claims {
 
 function mac(payload: string): string {
 	return createHmac('sha256', authSecret)
-		.update(`skiff-assistant-confirm:${payload}`)
+		.update(`yoal-assistant-confirm:${payload}`)
 		.digest('base64url');
 }
 

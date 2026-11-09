@@ -35,7 +35,7 @@ export interface WireguardPeer {
 }
 
 export interface WireguardState {
-	mode: 'skiff' | 'external' | 'edge';
+	mode: 'yoal' | 'external' | 'edge';
 	address: string | null;
 	cidr: string | null;
 	mtu: number;
@@ -65,9 +65,9 @@ export class WireguardError extends Error {
 
 export const DEFAULT_WIREGUARD_PATHS: WireguardPaths = {
 	interface: 'wg0',
-	dir: '/etc/skiff/wireguard',
-	privateKeyPath: '/etc/skiff/wireguard/wg0.key',
-	configPath: '/etc/skiff/wireguard/wg0.conf',
+	dir: '/etc/yoal/wireguard',
+	privateKeyPath: '/etc/yoal/wireguard/wg0.key',
+	configPath: '/etc/yoal/wireguard/wg0.conf',
 	wgPath: 'wg',
 	ipPath: 'ip',
 };
@@ -179,7 +179,7 @@ export function parseWireguardState(raw: unknown): WireguardState {
 	if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new WireguardError('state must be an object');
 	const record = raw as Record<string, unknown>;
 	const mode = record.mode;
-	if (mode !== 'skiff' && mode !== 'external' && mode !== 'edge') throw new WireguardError('invalid network mode');
+	if (mode !== 'yoal' && mode !== 'external' && mode !== 'edge') throw new WireguardError('invalid network mode');
 	const address = record.address;
 	if (address !== null && (typeof address !== 'string' || !/^(?:\d{1,3}\.){3}\d{1,3}$/.test(address)))
 		throw new WireguardError('invalid overlay address');

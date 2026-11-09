@@ -1,11 +1,11 @@
 import type { RequestHandler } from './$types';
-import { databasePitrPolicySchema } from '@skiff/contracts';
+import { databasePitrPolicySchema } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { readJson, route } from '#lib/server/api.js';
 import { requirePrincipal } from '#lib/server/principal.js';
 
 /**
- * PITR policy and status for one database (docs/PITR.md). Behind `SKIFF_FEATURE_PITR`; every
+ * PITR policy and status for one database (docs/PITR.md). Behind `YOAL_FEATURE_PITR`; every
  * mutating call fails closed while the flag is off. Repository credentials are never returned.
  */
 

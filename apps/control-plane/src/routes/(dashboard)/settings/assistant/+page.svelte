@@ -9,8 +9,8 @@
 	import { runAction } from '#lib/actions.js';
 	import ModelPicker from '#lib/assistant/ModelPicker.svelte';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
@@ -20,7 +20,7 @@
 	import { Spinner } from '#lib/components/ui/spinner/index.js';
 	import { Switch } from '#lib/components/ui/switch/index.js';
 	import { Textarea } from '#lib/components/ui/textarea/index.js';
-	import type { AssistantModelInfo } from '@skiff/contracts';
+	import type { AssistantModelInfo } from '@yoal/contracts';
 	import EmptyState from '../../_lib/EmptyState.svelte';
 	import Panel from '../../_lib/Panel.svelte';
 	import ConfigProgress from '../ConfigProgress.svelte';
@@ -129,7 +129,7 @@
 	const canEdit = $derived(data.availability === 'ready' || data.availability === 'local');
 	const ready = $derived(canEdit && !data.inFlight);
 	const values = $derived(data.assistant.values);
-	const keySaved = $derived(data.assistant.secretsSet.includes('SKIFF_ASSISTANT_API_KEY'));
+	const keySaved = $derived(data.assistant.secretsSet.includes('YOAL_ASSISTANT_API_KEY'));
 
 	let provider = $state('');
 	let baseUrl = $state('');
@@ -139,9 +139,9 @@
 	$effect(() => {
 		if (initialized) return;
 		initialized = true;
-		provider = values.SKIFF_ASSISTANT_PROVIDER ?? 'openai-compatible';
-		baseUrl = values.SKIFF_ASSISTANT_BASE_URL ?? '';
-		model = values.SKIFF_ASSISTANT_MODEL ?? '';
+		provider = values.YOAL_ASSISTANT_PROVIDER ?? 'openai-compatible';
+		baseUrl = values.YOAL_ASSISTANT_BASE_URL ?? '';
+		model = values.YOAL_ASSISTANT_MODEL ?? '';
 	});
 
 	$effect(() => {
@@ -173,7 +173,7 @@
 	}
 </script>
 
-<svelte:head><title>Assistant · Settings · Skiff</title></svelte:head>
+<svelte:head><title>Assistant · Settings · Yoal</title></svelte:head>
 
 <SettingsHeader id="assistant" />
 
@@ -204,16 +204,16 @@
 				<div class="space-y-1">
 					<dt class="text-xs text-muted-foreground">Provider</dt>
 					<dd class="font-mono text-sm">
-						{values.SKIFF_ASSISTANT_PROVIDER ?? 'openai-compatible'}
+						{values.YOAL_ASSISTANT_PROVIDER ?? 'openai-compatible'}
 					</dd>
 				</div>
 				<div class="space-y-1 sm:col-span-2">
 					<dt class="text-xs text-muted-foreground">Base URL</dt>
-					<dd class="font-mono text-sm break-all">{values.SKIFF_ASSISTANT_BASE_URL ?? '—'}</dd>
+					<dd class="font-mono text-sm break-all">{values.YOAL_ASSISTANT_BASE_URL ?? '—'}</dd>
 				</div>
 				<div class="space-y-1">
 					<dt class="text-xs text-muted-foreground">Model</dt>
-					<dd class="font-mono text-sm">{values.SKIFF_ASSISTANT_MODEL ?? '—'}</dd>
+					<dd class="font-mono text-sm">{values.YOAL_ASSISTANT_MODEL ?? '—'}</dd>
 				</div>
 				<div class="space-y-1">
 					<dt class="text-xs text-muted-foreground">API key</dt>
@@ -228,7 +228,7 @@
 				icon={SparklesIcon}
 				compact
 				title="The assistant is not set up"
-				description="Point Skiff at an OpenAI-compatible endpoint — OpenAI, OpenRouter, vLLM, LM Studio or a local Ollama — to turn on the chat panel. Nothing is sent anywhere until then."
+				description="Point Yoal at an OpenAI-compatible endpoint — OpenAI, OpenRouter, vLLM, LM Studio or a local Ollama — to turn on the chat panel. Nothing is sent anywhere until then."
 			>
 				{#if canEdit}
 					<Button onclick={() => (setupOpen = true)} disabled={!ready}
@@ -269,7 +269,7 @@
 		<div class="flex flex-wrap items-start justify-between gap-3 rounded-lg border p-3">
 			<div class="min-w-0 flex-1 space-y-1">
 				<div class="flex flex-wrap items-center gap-2">
-					<p class="font-medium">Skiff assistant</p>
+					<p class="font-medium">Yoal assistant</p>
 					{#if data.agent.customized}
 						<Badge variant="outline">Customized</Badge>
 					{/if}
@@ -329,7 +329,7 @@
 	bind:open={setupOpen}
 	icon={SparklesIcon}
 	title={data.assistant.configured ? 'Edit the assistant' : 'Set up the assistant'}
-	description="Skiff lists the provider's models before saving, so a wrong URL or key is caught here."
+	description="Yoal lists the provider's models before saving, so a wrong URL or key is caught here."
 	action="?/save"
 	submitLabel="Check provider and save"
 	size="lg"

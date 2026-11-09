@@ -2,15 +2,15 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_FEATURES, jobLimits, nodeCapabilities } from '@skiff/contracts';
-import { createDb } from '@skiff/db';
+import { DEFAULT_FEATURES, jobLimits, nodeCapabilities } from '@yoal/contracts';
+import { createDb } from '@yoal/db';
 import { buildPrincipal } from './orgs.ts';
 import { createCore, type Core } from './index.ts';
 import { JOB_LOG_LINES_MAX } from './jobs.ts';
 import { LocalObjectStore } from './object-store.ts';
 
 /** App cron jobs and one-off commands (plan 09): definitions, scheduling, the node protocol, sweep. */
-const dir = mkdtempSync(join(tmpdir(), 'skiff-jobs-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-jobs-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 let clock = Date.parse('2026-11-07T10:00:30Z');
@@ -338,7 +338,7 @@ describe('sweep', () => {
 
 describe('the JOBS flag', () => {
 	test('off: no new jobs or runs, and the scheduler does nothing; reads still work', async () => {
-		const offDir = mkdtempSync(join(tmpdir(), 'skiff-jobs-off-'));
+		const offDir = mkdtempSync(join(tmpdir(), 'yoal-jobs-off-'));
 		const db = createDb({ path: ':memory:' });
 		const off = createCore({
 			db: db.db,
@@ -359,8 +359,8 @@ describe('the JOBS flag', () => {
 			await off.projects.create(owner, { name: 'shop', slug: 'shop', runtime: 'process', placement: 'auto', productionAccess: 'public', previewAccess: 'platform' });
 			const row = off.projects.requireRow(owner, 'shop');
 			expect(off.jobs.enabled()).toBe(false);
-			expect(() => off.jobs.create(owner, row, { name: 'tidy', command: ['x'] })).toThrow(/SKIFF_FEATURE_JOBS/);
-			expect(() => off.jobs.runOneOff(owner, row, { command: ['x'] })).toThrow(/SKIFF_FEATURE_JOBS/);
+			expect(() => off.jobs.create(owner, row, { name: 'tidy', command: ['x'] })).toThrow(/YOAL_FEATURE_JOBS/);
+			expect(() => off.jobs.runOneOff(owner, row, { command: ['x'] })).toThrow(/YOAL_FEATURE_JOBS/);
 			expect(off.jobs.list(owner, row)).toEqual([]);
 			expect(off.jobs.scheduleDue()).toEqual({ fired: 0, skipped: 0 });
 		} finally {

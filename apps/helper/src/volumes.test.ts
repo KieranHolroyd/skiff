@@ -18,7 +18,7 @@ const FINDMNT = JSON.stringify({
 		{ target: '/', source: '/dev/mapper/vg-root', fstype: 'ext4', uuid: 'root-uuid', size: '1000', avail: '500', options: 'rw' },
 		{ target: '/mnt/data', source: '/dev/sdb1', fstype: 'ext4', uuid: 'data-uuid', label: 'DATA', size: '100000', avail: '50000', options: 'rw,relatime' },
 		{ target: '/mnt/moved', source: '/dev/sdc1', fstype: 'xfs', uuid: 'moved-uuid', size: '200000', avail: '100000', options: 'rw' },
-		{ target: '/srv/nas', source: 'nas.test:/exports/skiff', fstype: 'nfs4', size: '400000', avail: '300000', options: 'vers=4.2' },
+		{ target: '/srv/nas', source: 'nas.test:/exports/yoal', fstype: 'nfs4', size: '400000', avail: '300000', options: 'vers=4.2' },
 		{ target: '/mnt/zfs', source: 'tank/media', fstype: 'zfs', size: '500000', avail: '450000', options: 'rw' },
 		{ target: '/mnt/luks', source: '/dev/mapper/cryptdata', fstype: 'ext4', uuid: 'luks-fs-uuid', size: '600000', avail: '550000', options: 'rw' },
 		{ target: '/tmp', source: 'tmpfs', fstype: 'tmpfs', size: '100', avail: '50', options: 'rw' },
@@ -76,11 +76,11 @@ describe('volume inventory', () => {
 	test('derives stable keys for ext4, LVM, LUKS, ZFS and NFS and skips pseudo filesystems', () => {
 		const keys = Object.fromEntries(mounts().map((mount) => [mount.mountPath, mount.sourceKey]));
 		expect(keys['/mnt/data']).toBe('fs:data-uuid');
-		// Reserved paths (root, /data, /var/lib/skiff, …) cannot hold node data and are never offered.
+		// Reserved paths (root, /data, /var/lib/yoal, …) cannot hold node data and are never offered.
 		expect(keys['/']).toBeUndefined();
 		expect(keys['/mnt/luks']).toBe('luks:cryptdata');
 		expect(keys['/mnt/zfs']).toBe('zfs:tank/media');
-		expect(keys['/srv/nas']).toBe('nfs:nas.test:/exports/skiff');
+		expect(keys['/srv/nas']).toBe('nfs:nas.test:/exports/yoal');
 		expect(keys['/tmp']).toBeUndefined();
 	});
 
@@ -156,7 +156,7 @@ async function driverFixture(
 	root: string;
 	volumesFile: string;
 }> {
-	const root = await fs.mkdtemp(join(tmpdir(), 'skiff-helper-volumes-'));
+	const root = await fs.mkdtemp(join(tmpdir(), 'yoal-helper-volumes-'));
 	directories.push(root);
 	const runner = new MountRunner();
 	const volumesFile = join(root, 'volumes.json');
@@ -190,10 +190,10 @@ describe('volume registry validation', () => {
 		expect(
 			parseWorkloadVolumes([
 				{ id: 'vol_data', mountPath: '/mnt/data', sourceKey: 'fs:data-uuid', fsType: 'ext4' },
-				{ id: 'vol_nas', mountPath: '/srv/nas', sourceKey: 'nfs:nas.test:/exports/skiff', fsType: 'nfs4' },
+				{ id: 'vol_nas', mountPath: '/srv/nas', sourceKey: 'nfs:nas.test:/exports/yoal', fsType: 'nfs4' },
 			]),
 		).toHaveLength(2);
-		for (const mountPath of ['/etc/skiff', '/usr/local', '/', '/mnt/../etc', '/tmp/x', 'mnt/data'])
+		for (const mountPath of ['/etc/yoal', '/usr/local', '/', '/mnt/../etc', '/tmp/x', 'mnt/data'])
 			expect(() =>
 				parseWorkloadVolumes([{ id: 'vol_bad', mountPath, sourceKey: 'fs:x', fsType: 'ext4' }]),
 			).toThrow();
@@ -229,9 +229,9 @@ describe('volume registry validation', () => {
 });
 
 describe('volume-backed data dirs', () => {
-	test('resolves to <mount>/skiff/<id> only after the mount is verified', async () => {
+	test('resolves to <mount>/yoal/<id> only after the mount is verified', async () => {
 		const { driver, runner } = await driverFixture();
-		await expect(driver.resolveDataDir(workload('vol_data'))).resolves.toBe('/mnt/data/skiff/st_abc123');
+		await expect(driver.resolveDataDir(workload('vol_data'))).resolves.toBe('/mnt/data/yoal/st_abc123');
 		expect(runner.calls.some((argv) => argv[0] === '/usr/bin/findmnt')).toBe(true);
 	});
 
@@ -259,7 +259,7 @@ describe('volume-backed data dirs', () => {
 			vol_data: { mountPath: join(root, 'mnt-data'), sourceKey: 'fs:data-uuid', fsType: 'ext4' },
 		}));
 		const stateTarget = join(root, 'state', 'st_abc123');
-		const volumeTarget = join(root, 'mnt-data', 'skiff', 'st_abc123');
+		const volumeTarget = join(root, 'mnt-data', 'yoal', 'st_abc123');
 		await fs.mkdir(volumeTarget, { recursive: true });
 		await fs.mkdir(stateTarget, { recursive: true });
 		await driver.purge('st_abc123');

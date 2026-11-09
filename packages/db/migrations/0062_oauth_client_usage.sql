@@ -1,5 +1,5 @@
 -- Connected apps (Settings → Connected apps). Additive only.
--- When an MCP/OAuth client last called Skiff for a user. Better Auth owns the grant itself
+-- When an MCP/OAuth client last called Yoal for a user. Better Auth owns the grant itself
 -- (`oauthConsent`, `oauthRefreshToken`): this table only records use, written by `/mcp` at most
 -- once a minute per pair, and is cleared when the grant is revoked. A missing row means the client
 -- has not called since this table was added; the list then falls back to its last token refresh.

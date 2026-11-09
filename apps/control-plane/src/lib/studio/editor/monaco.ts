@@ -1,5 +1,5 @@
 import type * as MonacoApi from 'monaco-editor';
-import type { StudioInfo } from '@skiff/studio/protocol';
+import type { StudioInfo } from '@yoal/studio/protocol';
 import { completionContext, resolveAlias } from '../completion.js';
 import type { CompletionItem, CompletionSource } from '../ui-types.js';
 import { defineThemes } from './theme.js';
@@ -12,9 +12,9 @@ import { defineThemes } from './theme.js';
  */
 export type Monaco = typeof MonacoApi;
 
-export const REDIS_LANGUAGE = 'skiff-redis';
+export const REDIS_LANGUAGE = 'yoal-redis';
 /** Mongo command models end in this, so the command JSON schema applies to them only. */
-export const MONGO_MODEL_SUFFIX = '.skiff-mongo.json';
+export const MONGO_MODEL_SUFFIX = '.yoal-mongo.json';
 
 export function monacoLanguage(
 	language: StudioInfo['capabilities']['language'],
@@ -280,7 +280,7 @@ export const MONGO_COMMAND_SCHEMA = {
 function registerMongoSchema(monaco: Monaco): void {
 	const defaults = monaco.json.jsonDefaults;
 	const schemas = (defaults.diagnosticsOptions.schemas ?? []).filter(
-		(schema) => schema.uri !== 'skiff://studio/mongo-command.json'
+		(schema) => schema.uri !== 'yoal://studio/mongo-command.json'
 	);
 	defaults.setDiagnosticsOptions({
 		...defaults.diagnosticsOptions,
@@ -289,7 +289,7 @@ function registerMongoSchema(monaco: Monaco): void {
 		schemas: [
 			...schemas,
 			{
-				uri: 'skiff://studio/mongo-command.json',
+				uri: 'yoal://studio/mongo-command.json',
 				fileMatch: [`*${MONGO_MODEL_SUFFIX}`],
 				schema: MONGO_COMMAND_SCHEMA
 			}

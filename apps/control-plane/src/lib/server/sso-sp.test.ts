@@ -54,20 +54,20 @@ beforeEach(() => {
 
 describe('SP signing key generation', () => {
 	test('generates an RSA key whose certificate matches its public key', () => {
-		const key = generateSsoSpSigningKey('Skiff SAML sso_test', now);
+		const key = generateSsoSpSigningKey('Yoal SAML sso_test', now);
 		expect(key.privateKeyPem.startsWith('-----BEGIN PRIVATE KEY-----')).toBe(true);
 		expect(key.certificatePem.startsWith('-----BEGIN CERTIFICATE-----')).toBe(true);
 
 		const certificate = new X509Certificate(key.certificatePem);
-		expect(certificate.subject).toContain('CN=Skiff SAML sso_test');
+		expect(certificate.subject).toContain('CN=Yoal SAML sso_test');
 		expect(certificate.publicKey.export({ type: 'spki', format: 'pem' })).toBe(
 			createPublicKey(key.privateKeyPem).export({ type: 'spki', format: 'pem' })
 		);
 	});
 
 	test('re-derives the certificate from the same key', () => {
-		const key = generateSsoSpSigningKey('Skiff SAML sso_test', now);
-		const rederived = ssoSpCertificateFromKey(key.privateKeyPem, 'Skiff SAML sso_test', now);
+		const key = generateSsoSpSigningKey('Yoal SAML sso_test', now);
+		const rederived = ssoSpCertificateFromKey(key.privateKeyPem, 'Yoal SAML sso_test', now);
 		expect(new X509Certificate(rederived).publicKey.export({ type: 'spki', format: 'pem' })).toBe(
 			new X509Certificate(key.certificatePem).publicKey.export({ type: 'spki', format: 'pem' })
 		);
@@ -127,12 +127,12 @@ describe('SP key storage', () => {
 
 describe('SP encryption key', () => {
 	test('generates an RSA key whose certificate matches its public key', () => {
-		const key = generateSsoSpEncryptionKey('Skiff SAML sso_encryption', now);
+		const key = generateSsoSpEncryptionKey('Yoal SAML sso_encryption', now);
 		expect(key.privateKeyPem.startsWith('-----BEGIN PRIVATE KEY-----')).toBe(true);
 		expect(key.certificatePem.startsWith('-----BEGIN CERTIFICATE-----')).toBe(true);
 
 		const certificate = new X509Certificate(key.certificatePem);
-		expect(certificate.subject).toContain('CN=Skiff SAML sso_encryption');
+		expect(certificate.subject).toContain('CN=Yoal SAML sso_encryption');
 		expect(certificate.publicKey.export({ type: 'spki', format: 'pem' })).toBe(
 			createPublicKey(key.privateKeyPem).export({ type: 'spki', format: 'pem' })
 		);

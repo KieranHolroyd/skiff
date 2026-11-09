@@ -8,8 +8,8 @@
 	import RocketIcon from '@lucide/svelte/icons/rocket';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
-	import DataTable, { type DataColumn } from '#lib/components/skiff/DataTable.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import DataTable, { type DataColumn } from '#lib/components/yoal/DataTable.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
@@ -124,7 +124,7 @@
 </script>
 
 <svelte:head>
-	<title>Deployments · Skiff</title>
+	<title>Deployments · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">
@@ -222,7 +222,7 @@
 			title={data.filter ? 'No deployments for this project' : 'No deployments yet'}
 			description={data.projects.length === 0
 				? 'Create a project and deploy from the CLI or an MCP client. The first deploy creates a preview immediately.'
-				: 'Deploy from the CLI with `skif deploy ./dist --project <slug>`, or ask your agent to deploy a site.'}
+				: 'Deploy from the CLI with `yoal deploy ./dist --project <slug>`, or ask your agent to deploy a site.'}
 		>
 			<Button href={resolve('/(dashboard)/projects')} size="sm">Open projects</Button>
 		</EmptyState>

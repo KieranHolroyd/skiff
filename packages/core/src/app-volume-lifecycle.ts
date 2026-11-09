@@ -1,5 +1,5 @@
 import { and, eq, inArray, isNotNull, isNull, lt, lte, or } from 'drizzle-orm';
-import { appVolumeAttachments, appVolumeSnapshots, appVolumes, backupTargets, nodes } from '@skiff/db';
+import { appVolumeAttachments, appVolumeSnapshots, appVolumes, backupTargets, nodes } from '@yoal/db';
 import {
 	APP_VOLUME_SNAPSHOT_ID_PREFIX,
 	appVolumeRestoreSchema,
@@ -14,7 +14,7 @@ import {
 	type AppVolumeUsageSample,
 	type AppVolumeView,
 	type Principal,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { AppVolumeRow, AppVolumeService } from './app-volumes.ts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, NotFoundError, ValidationError } from './errors.ts';
@@ -607,7 +607,7 @@ export class AppVolumeLifecycle {
 
 	/**
 	 * Delete the archive from the target it was written to. A target that was deleted leaves the
-	 * object behind (Skiff has no credentials for it); that is reported, not an error.
+	 * object behind (Yoal has no credentials for it); that is reported, not an error.
 	 */
 	private async deleteObject(snapshot: AppVolumeSnapshotRow, strict: boolean): Promise<boolean> {
 		const recorded = this.ctx.backupTargets.openRecorded(this.recorded(snapshot));

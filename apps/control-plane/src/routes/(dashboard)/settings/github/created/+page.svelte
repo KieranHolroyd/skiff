@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import ArrowLeftIcon from '@lucide/svelte/icons/arrow-left';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import SettingsHeader from '../../_lib/SettingsHeader.svelte';
 
@@ -9,7 +9,7 @@
 	let { data } = $props();
 </script>
 
-<svelte:head><title>GitHub · Settings · Skiff</title></svelte:head>
+<svelte:head><title>GitHub · Settings · Yoal</title></svelte:head>
 
 <SettingsHeader id="github" />
 

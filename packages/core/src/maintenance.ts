@@ -2,8 +2,8 @@ import { lt } from 'drizzle-orm';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { backupRuns, deployments, orgQuotas, shareLinks, shareRedemptions } from '@skiff/db';
-import { operationLimits } from '@skiff/contracts';
+import { backupRuns, deployments, orgQuotas, shareLinks, shareRedemptions } from '@yoal/db';
+import { operationLimits } from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import {
 	AUTO_ROTATION_PURPOSES,
@@ -381,7 +381,7 @@ export class MaintenanceService {
 			.get(PARQUET_STATE_KEY);
 		if (done?.last_value === day) return undefined;
 
-		const dir = await mkdtemp(join(tmpdir(), 'skiff-parquet-'));
+		const dir = await mkdtemp(join(tmpdir(), 'yoal-parquet-'));
 		const errorBefore = telemetry.error;
 		try {
 			await telemetry.exportParquet({ from: todayStart - DAY_MS, to: todayStart, dir: join(dir, 'out') });
@@ -459,7 +459,7 @@ export class MaintenanceService {
 					detail:
 						`${deployment.slug}: ${pct(spike.afterRatio)} of ${after.requests} requests returned 5xx since deployment ` +
 						`${deployment.short_id} was promoted (before: ${before.requests ? pct(spike.beforeRatio) : 'no traffic'}). ` +
-						`Consider \`skif rollback ${deployment.slug}\` or the rollback tool.`,
+						`Consider \`yoal rollback ${deployment.slug}\` or the rollback tool.`,
 					severity: 'critical',
 				});
 			} catch (error) {

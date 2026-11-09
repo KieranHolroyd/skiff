@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:tls';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { HEARTBEAT_CERTS_MAX } from '@skiff/contracts';
+import { HEARTBEAT_CERTS_MAX } from '@yoal/contracts';
 import { CERT_NEW_HOST_RETRY_MS, CERT_PROBE_INTERVAL_MS, CertProbe, certProbeTargets, tlsCertReader } from './certs.ts';
 import { parseCertProbe } from './config.ts';
 
@@ -11,7 +11,7 @@ describe('certProbeTargets', () => {
 	test('probes the apex, the wildcard via an unused label, and the platform host', () => {
 		expect(certProbeTargets('sites.test', 'control.test')).toEqual([
 			{ host: 'sites.test', servername: 'sites.test' },
-			{ host: '*.sites.test', servername: 'skiff-cert-probe.sites.test' },
+			{ host: '*.sites.test', servername: 'yoal-cert-probe.sites.test' },
 			{ host: 'control.test', servername: 'control.test' },
 		]);
 		expect(certProbeTargets(null, null)).toEqual([]);
@@ -20,7 +20,7 @@ describe('certProbeTargets', () => {
 	test('adds custom domains with a name check, deduplicated and capped', () => {
 		expect(certProbeTargets('sites.test', null, ['App.Example.com.', 'app.example.com', 'sites.test'])).toEqual([
 			{ host: 'sites.test', servername: 'sites.test' },
-			{ host: '*.sites.test', servername: 'skiff-cert-probe.sites.test' },
+			{ host: '*.sites.test', servername: 'yoal-cert-probe.sites.test' },
 			{ host: 'app.example.com', servername: 'app.example.com', matchHost: true },
 		]);
 		const many = Array.from({ length: HEARTBEAT_CERTS_MAX + 20 }, (_, index) => `d${index}.example.com`);
@@ -121,7 +121,7 @@ describe('parseCertProbe', () => {
 		expect(parseCertProbe(undefined, [':443', ':80'], false)).toBeNull();
 		expect(parseCertProbe('off', [':443'], true)).toBeNull();
 		expect(parseCertProbe('127.0.0.1:9443', [':443'], false)).toEqual({ host: '127.0.0.1', port: 9443 });
-		expect(() => parseCertProbe('nope', [':443'], true)).toThrow(/SKIFF_CERT_PROBE_ADDR/);
+		expect(() => parseCertProbe('nope', [':443'], true)).toThrow(/YOAL_CERT_PROBE_ADDR/);
 	});
 });
 
@@ -129,7 +129,7 @@ const openssl = Bun.which('openssl');
 
 describe('tlsCertReader', () => {
 	test.skipIf(!openssl)('reads notAfter from a real TLS handshake, even for an untrusted cert', async () => {
-		const dir = mkdtempSync(join(tmpdir(), 'skiff-certs-'));
+		const dir = mkdtempSync(join(tmpdir(), 'yoal-certs-'));
 		try {
 			const result = Bun.spawnSync([
 				openssl!,
@@ -160,7 +160,7 @@ describe('tlsCertReader', () => {
 	});
 
 	test.skipIf(!openssl)('with matchHost, only a certificate naming the host counts', async () => {
-		const dir = mkdtempSync(join(tmpdir(), 'skiff-certs-'));
+		const dir = mkdtempSync(join(tmpdir(), 'yoal-certs-'));
 		try {
 			const result = Bun.spawnSync([
 				openssl!,

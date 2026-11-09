@@ -6,7 +6,7 @@ import {
 	type DatabaseReplicationReport,
 	type DatabaseReplicationSlotStatus,
 	type DesiredState,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { HelperApi } from './helper-client.ts';
 
 /**

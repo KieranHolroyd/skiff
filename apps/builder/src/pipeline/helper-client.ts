@@ -1,7 +1,7 @@
-import type { PipelineContainerRuntime } from '@skiff/contracts';
+import type { PipelineContainerRuntime } from '@yoal/contracts';
 
 /**
- * The Builder's client for skiff-helper's pipeline verbs (docs/PIPELINES.md W5/W6,
+ * The Builder's client for yoal-helper's pipeline verbs (docs/PIPELINES.md W5/W6,
  * `apps/helper/src/pipeline-jobs.ts`). The Builder runs as root but without the capabilities
  * Podman needs (D151), so in `container` isolation every container lifecycle step is a fixed
  * helper verb over the root-only unix socket: the Builder sends validated values, never paths.
@@ -14,7 +14,7 @@ import type { PipelineContainerRuntime } from '@skiff/contracts';
  *   GET  /v1/pipeline/jobs                job ids with containers on this node (orphan reaping)
  */
 
-export const DEFAULT_HELPER_SOCKET = '/run/skiff-helper/helper.sock';
+export const DEFAULT_HELPER_SOCKET = '/run/yoal-helper/helper.sock';
 
 export interface HelperPipelineCapabilities {
 	podman: string | null;
@@ -84,7 +84,7 @@ export class PipelineHelperClient implements PipelineHelper {
 	private async request<T>(method: string, path: string, body?: unknown, timeoutMs = 30_000): Promise<T> {
 		let response: Response;
 		try {
-			response = await fetch(`http://skiff-helper${path}`, {
+			response = await fetch(`http://yoal-helper${path}`, {
 				method,
 				unix: this.socketPath,
 				headers: body === undefined ? {} : { 'content-type': 'application/json' },
@@ -92,7 +92,7 @@ export class PipelineHelperClient implements PipelineHelper {
 				signal: AbortSignal.timeout(timeoutMs),
 			} as RequestInit);
 		} catch (error) {
-			throw new HelperError(`skiff-helper at ${this.socketPath} is not reachable: ${error instanceof Error ? error.message : String(error)}`, 0);
+			throw new HelperError(`yoal-helper at ${this.socketPath} is not reachable: ${error instanceof Error ? error.message : String(error)}`, 0);
 		}
 		const text = await response.text();
 		let parsed: Record<string, unknown> = {};
@@ -103,7 +103,7 @@ export class PipelineHelperClient implements PipelineHelper {
 		}
 		if (!response.ok) {
 			const message = typeof parsed.error === 'string' ? parsed.error : text.slice(0, 500);
-			throw new HelperError(`skiff-helper ${method} ${path}: ${response.status} ${message}`.trim(), response.status);
+			throw new HelperError(`yoal-helper ${method} ${path}: ${response.status} ${message}`.trim(), response.status);
 		}
 		return parsed as T;
 	}

@@ -92,7 +92,7 @@
 		{#if available}
 			<span
 				class="ml-auto rounded-full bg-brand/10 px-1.5 font-mono text-[0.7rem] font-medium text-brand"
-				title="Skiff {available.latest} is available"
+				title="Yoal {available.latest} is available"
 			>
 				{available.latest}
 			</span>

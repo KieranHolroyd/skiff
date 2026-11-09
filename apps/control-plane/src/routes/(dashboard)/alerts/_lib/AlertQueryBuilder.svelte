@@ -9,7 +9,7 @@
 		MetricAggregation,
 		ObservabilityDataset,
 		ObservabilitySchema
-	} from '@skiff/contracts';
+	} from '@yoal/contracts';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';

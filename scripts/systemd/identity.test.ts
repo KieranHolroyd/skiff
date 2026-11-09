@@ -10,7 +10,7 @@ import {
 	identityUnit,
 } from './identity.ts';
 
-const root = mkdtempSync(join(tmpdir(), 'skiff-identity-unit-'));
+const root = mkdtempSync(join(tmpdir(), 'yoal-identity-unit-'));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 function directives(unit: string, section: string): Map<string, string[]> {
@@ -31,7 +31,7 @@ function directives(unit: string, section: string): Map<string, string[]> {
 	return out;
 }
 
-describe('skiff-identity units', () => {
+describe('yoal-identity units', () => {
 	const unit = identityUnit();
 	const service = directives(unit, 'Service');
 
@@ -40,13 +40,13 @@ describe('skiff-identity units', () => {
 		expect(readFileSync(join(import.meta.dir, IDENTITY_LITESTREAM_UNIT), 'utf8')).toBe(identityLitestreamUnit());
 	});
 
-	test('runs the agent identity entrypoint as skiff with its own cgroup and data dir', () => {
+	test('runs the agent identity entrypoint as yoal with its own cgroup and data dir', () => {
 		expect(unit).not.toMatch(/^\[Install\]/m);
-		expect(service.get('ExecStart')).toEqual(['/opt/skiff/current/agent/skiff-agent identity']);
-		expect(service.get('User')).toEqual(['skiff']);
+		expect(service.get('ExecStart')).toEqual(['/opt/yoal/current/agent/yoal-agent identity']);
+		expect(service.get('User')).toEqual(['yoal']);
 		expect(service.get('MemoryMax')).toEqual(['256M']);
-		expect(service.get('StateDirectory')).toEqual(['skiff/identity']);
-		expect(service.get('Environment')).toContain('SKIFF_IDENTITY_DATA_DIR=/var/lib/skiff/identity');
+		expect(service.get('StateDirectory')).toEqual(['yoal/identity']);
+		expect(service.get('Environment')).toContain('YOAL_IDENTITY_DATA_DIR=/var/lib/yoal/identity');
 	});
 
 	test('has no extra privileges and keeps only the socket writable', () => {
@@ -54,7 +54,7 @@ describe('skiff-identity units', () => {
 		expect(service.get('AmbientCapabilities')).toEqual(['']);
 		expect(service.get('NoNewPrivileges')).toEqual(['yes']);
 		expect(service.get('ProtectSystem')).toEqual(['strict']);
-		expect(service.get('ReadWritePaths')).toEqual(['/run/skiff']);
+		expect(service.get('ReadWritePaths')).toEqual(['/run/yoal']);
 	});
 
 	test('carries no secrets', () => {
@@ -65,9 +65,9 @@ describe('skiff-identity units', () => {
 		const litestream = directives(identityLitestreamUnit(), 'Service');
 		expect(identityLitestreamUnit()).not.toMatch(/^\[Install\]/m);
 		expect(litestream.get('ExecStart')).toEqual([
-			'/usr/local/bin/litestream replicate -config /etc/skiff/litestream-identity.yml',
+			'/usr/local/bin/litestream replicate -config /etc/yoal/litestream-identity.yml',
 		]);
-		expect(litestream.get('ReadWritePaths')).toEqual(['/var/lib/skiff/identity']);
+		expect(litestream.get('ReadWritePaths')).toEqual(['/var/lib/yoal/identity']);
 	});
 
 	test('ensure writes once and reloads systemd', () => {

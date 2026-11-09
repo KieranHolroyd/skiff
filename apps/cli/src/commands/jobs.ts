@@ -23,7 +23,7 @@ import { confirmOrRefuse } from './run-operation.ts';
  * client; every rule (names, cron, limits, permissions) lives on the server.
  */
 
-const usage = `Usage: skif jobs <command> [options]
+const usage = `Usage: yoal jobs <command> [options]
 
 Commands:
   list <project>                          List the project's jobs (the default)
@@ -33,7 +33,7 @@ Commands:
   update <project> <job> [options] [-- <command…>]
                                           Change a job (--no-schedule makes it manual only)
   run <project> <job>                     Run it now and stream its output
-  runs <project> [job]                    Run history, newest first (--one-off: \`skif run\` runs only)
+  runs <project> [job]                    Run history, newest first (--one-off: \`yoal run\` runs only)
   logs <project> <run id>                 A run's output (-f follows a running one)
   cancel <project> <run id>               Cancel a queued run or stop a running one
   pause|resume <project> <job>            Stop or restart the schedule; history is kept
@@ -62,13 +62,13 @@ shell split them. Use \`-- sh -c '…'\` if you need a shell. Runs use the app's
 secrets and volumes, on the app's node.
 
 Examples:
-  skif jobs create shop tidy --schedule '0 3 * * *' -- bun scripts/tidy.ts --days 30
-  skif jobs run shop tidy
-  skif jobs runs shop tidy
-  skif jobs update shop tidy --timeout 30m --retries 2
-  skif run shop -- bun run migrate`;
+  yoal jobs create shop tidy --schedule '0 3 * * *' -- bun scripts/tidy.ts --days 30
+  yoal jobs run shop tidy
+  yoal jobs runs shop tidy
+  yoal jobs update shop tidy --timeout 30m --retries 2
+  yoal run shop -- bun run migrate`;
 
-const runUsage = `Usage: skif run <project> [options] -- <command…>
+const runUsage = `Usage: yoal run <project> [options] -- <command…>
 
 Run one command once against the project's current release, in the app's sandbox with its env,
 secrets and volumes, and stream its output. It is not saved as a job. The exit status is the
@@ -81,9 +81,9 @@ Options:
   -h, --help                 Show this help
 
 Examples:
-  skif run shop -- bun run migrate
-  skif run shop --timeout 1h -- bun scripts/backfill.ts --since 2026-01-01
-  skif run api -- sh -c 'echo $DATABASE_URL | cut -d@ -f2'`;
+  yoal run shop -- bun run migrate
+  yoal run shop --timeout 1h -- bun scripts/backfill.ts --since 2026-01-01
+  yoal run api -- sh -c 'echo $DATABASE_URL | cut -d@ -f2'`;
 
 const baseFlags: FlagSpec = {
 	json: { type: 'boolean' },
@@ -132,7 +132,7 @@ export async function jobsCommand(argv: string[]): Promise<void> {
 		return;
 	}
 	const handler = subcommands[first];
-	// `skif jobs <project>` lists, like `skif logs <project>`.
+	// `yoal jobs <project>` lists, like `yoal logs <project>`.
 	if (!handler) {
 		if (!first.startsWith('-') && argv.length === 1) return listJobs(argv);
 		throw new UsageError(`Unknown jobs command "${first}".\n\n${usage}`);
@@ -140,7 +140,7 @@ export async function jobsCommand(argv: string[]): Promise<void> {
 	await handler(argv.slice(1));
 }
 
-/** `skif run <project> [options] -- <command…>` */
+/** `yoal run <project> [options] -- <command…>` */
 export async function runCommand(argv: string[]): Promise<void> {
 	const { before, command } = splitCommand(argv);
 	const args = parseArgs(before, runFlags);
@@ -150,7 +150,7 @@ export async function runCommand(argv: string[]): Promise<void> {
 	}
 	rejectExtraPositionals(args, 1, runUsage);
 	const project = requirePositional(args, 0, `project.\n\n${runUsage}`);
-	if (!command || command.length === 0) throw new UsageError(`Give the command after --, e.g. skif run ${project} -- bun run migrate`);
+	if (!command || command.length === 0) throw new UsageError(`Give the command after --, e.g. yoal run ${project} -- bun run migrate`);
 	const timeout = args.string('timeout');
 	const client = await authenticatedClient();
 	const { run } = await client.runCommand(project, {
@@ -165,12 +165,12 @@ export async function runCommand(argv: string[]): Promise<void> {
 async function listJobs(argv: string[]): Promise<void> {
 	const args = parseArgs(argv, baseFlags);
 	if (args.boolean('help')) return void console.log(usage);
-	rejectExtraPositionals(args, 1, 'Usage: skif jobs list <project>');
-	const project = requirePositional(args, 0, 'project. Usage: skif jobs list <project>');
+	rejectExtraPositionals(args, 1, 'Usage: yoal jobs list <project>');
+	const project = requirePositional(args, 0, 'project. Usage: yoal jobs list <project>');
 	const { jobs, raw } = await (await authenticatedClient()).listJobs(project);
 	if (args.boolean('json')) return printJson(raw);
 	if (jobs.length === 0) {
-		console.log(`${project} has no jobs. Create one with: skif jobs create ${project} <name> --schedule '0 3 * * *' -- <command…>`);
+		console.log(`${project} has no jobs. Create one with: yoal jobs create ${project} <name> --schedule '0 3 * * *' -- <command…>`);
 		return;
 	}
 	console.log(jobTable(jobs));
@@ -179,7 +179,7 @@ async function listJobs(argv: string[]): Promise<void> {
 async function showJob(argv: string[]): Promise<void> {
 	const args = parseArgs(argv, baseFlags);
 	if (args.boolean('help')) return void console.log(usage);
-	const line = 'Usage: skif jobs show <project> <job>';
+	const line = 'Usage: yoal jobs show <project> <job>';
 	rejectExtraPositionals(args, 2, line);
 	const project = requirePositional(args, 0, `project. ${line}`);
 	const name = requirePositional(args, 1, `job name. ${line}`);
@@ -209,7 +209,7 @@ async function createJob(argv: string[]): Promise<void> {
 	const { before, command } = splitCommand(argv);
 	const args = parseArgs(before, definitionFlags);
 	if (args.boolean('help')) return void console.log(usage);
-	const line = "Usage: skif jobs create <project> <job> [--schedule '<cron>'] -- <command…>";
+	const line = "Usage: yoal jobs create <project> <job> [--schedule '<cron>'] -- <command…>";
 	if (args.positionals.length > 2)
 		throw new UsageError(`Put the command after --, and quote the schedule.\n\n${line}`);
 	const project = requirePositional(args, 0, `project. ${line}`);
@@ -220,14 +220,14 @@ async function createJob(argv: string[]): Promise<void> {
 	if (args.boolean('json')) return printJson(raw);
 	console.log(`Created job ${job.name} on ${project}.`);
 	console.log(indent(jobDetails(job)));
-	if (!job.schedule) console.log(`\nRun it with: skif jobs run ${project} ${job.name}`);
+	if (!job.schedule) console.log(`\nRun it with: yoal jobs run ${project} ${job.name}`);
 }
 
 async function updateJob(argv: string[]): Promise<void> {
 	const { before, command } = splitCommand(argv);
 	const args = parseArgs(before, { ...definitionFlags, 'no-schedule': { type: 'boolean' } });
 	if (args.boolean('help')) return void console.log(usage);
-	const line = 'Usage: skif jobs update <project> <job> [options] [-- <command…>]';
+	const line = 'Usage: yoal jobs update <project> <job> [options] [-- <command…>]';
 	rejectExtraPositionals(args, 2, line);
 	const project = requirePositional(args, 0, `project. ${line}`);
 	const name = requirePositional(args, 1, `job name. ${line}`);
@@ -251,7 +251,7 @@ async function updateJob(argv: string[]): Promise<void> {
 async function setPaused(argv: string[], paused: boolean): Promise<void> {
 	const args = parseArgs(argv, baseFlags);
 	if (args.boolean('help')) return void console.log(usage);
-	const line = `Usage: skif jobs ${paused ? 'pause' : 'resume'} <project> <job>`;
+	const line = `Usage: yoal jobs ${paused ? 'pause' : 'resume'} <project> <job>`;
 	rejectExtraPositionals(args, 2, line);
 	const project = requirePositional(args, 0, `project. ${line}`);
 	const name = requirePositional(args, 1, `job name. ${line}`);
@@ -263,7 +263,7 @@ async function setPaused(argv: string[], paused: boolean): Promise<void> {
 async function deleteJob(argv: string[]): Promise<void> {
 	const args = parseArgs(argv, { ...baseFlags, yes: { type: 'boolean', short: 'y' } });
 	if (args.boolean('help')) return void console.log(usage);
-	const line = 'Usage: skif jobs delete <project> <job> [--yes]';
+	const line = 'Usage: yoal jobs delete <project> <job> [--yes]';
 	rejectExtraPositionals(args, 2, line);
 	const project = requirePositional(args, 0, `project. ${line}`);
 	const name = requirePositional(args, 1, `job name. ${line}`);
@@ -285,7 +285,7 @@ async function deleteJob(argv: string[]): Promise<void> {
 async function runJob(argv: string[]): Promise<void> {
 	const args = parseArgs(argv, runFlags);
 	if (args.boolean('help')) return void console.log(usage);
-	const line = 'Usage: skif jobs run <project> <job> [--detach]';
+	const line = 'Usage: yoal jobs run <project> <job> [--detach]';
 	rejectExtraPositionals(args, 2, line);
 	const project = requirePositional(args, 0, `project. ${line}`);
 	const name = requirePositional(args, 1, `job name. ${line}`);
@@ -297,7 +297,7 @@ async function runJob(argv: string[]): Promise<void> {
 async function listRuns(argv: string[]): Promise<void> {
 	const args = parseArgs(argv, { ...baseFlags, 'one-off': { type: 'boolean' }, limit: { type: 'string', short: 'n' } });
 	if (args.boolean('help')) return void console.log(usage);
-	const line = 'Usage: skif jobs runs <project> [job] [--one-off] [-n <limit>]';
+	const line = 'Usage: yoal jobs runs <project> [job] [--one-off] [-n <limit>]';
 	rejectExtraPositionals(args, 2, line);
 	const project = requirePositional(args, 0, `project. ${line}`);
 	const job = args.positionals[1];
@@ -312,10 +312,10 @@ async function listRuns(argv: string[]): Promise<void> {
 async function runLogs(argv: string[]): Promise<void> {
 	const args = parseArgs(argv, { ...baseFlags, follow: { type: 'boolean', short: 'f' } });
 	if (args.boolean('help')) return void console.log(usage);
-	const line = 'Usage: skif jobs logs <project> <run id> [-f]';
+	const line = 'Usage: yoal jobs logs <project> <run id> [-f]';
 	rejectExtraPositionals(args, 2, line);
 	const project = requirePositional(args, 0, `project. ${line}`);
-	const runId = requirePositional(args, 1, `run id (jr_…; see skif jobs runs). ${line}`);
+	const runId = requirePositional(args, 1, `run id (jr_…; see yoal jobs runs). ${line}`);
 	const client = await authenticatedClient();
 	if (args.boolean('json')) return printJson(await client.jobRunLogs(project, runId, { limit: 2000 }));
 	if (!args.boolean('follow')) {
@@ -332,7 +332,7 @@ async function runLogs(argv: string[]): Promise<void> {
 async function cancelRun(argv: string[]): Promise<void> {
 	const args = parseArgs(argv, baseFlags);
 	if (args.boolean('help')) return void console.log(usage);
-	const line = 'Usage: skif jobs cancel <project> <run id>';
+	const line = 'Usage: yoal jobs cancel <project> <run id>';
 	rejectExtraPositionals(args, 2, line);
 	const project = requirePositional(args, 0, `project. ${line}`);
 	const runId = requirePositional(args, 1, `run id. ${line}`);
@@ -348,7 +348,7 @@ async function finish(client: ApiClient, project: string, run: JobRunView, optio
 	if (options.detach) {
 		if (options.json) return printJson({ run });
 		console.log(run.id);
-		console.error(`Queued. Follow it with: skif jobs logs ${project} ${run.id} -f`);
+		console.error(`Queued. Follow it with: yoal jobs logs ${project} ${run.id} -f`);
 		return;
 	}
 	const done = options.json ? await waitFor(client, project, run) : await follow(client, project, run);

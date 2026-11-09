@@ -10,7 +10,7 @@ afterEach(() => {
 	for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 function temp(): string {
-	const dir = mkdtempSync(join(tmpdir(), 'skiff-pyodide-test-'));
+	const dir = mkdtempSync(join(tmpdir(), 'yoal-pyodide-test-'));
 	dirs.push(dir);
 	return dir;
 }

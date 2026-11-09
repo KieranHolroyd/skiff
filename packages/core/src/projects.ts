@@ -1,5 +1,5 @@
 import { and, desc, eq, gt, inArray, isNull, isNotNull, lte } from 'drizzle-orm';
-import { projects, slugRedirects } from '@skiff/db';
+import { projects, slugRedirects } from '@yoal/db';
 import {
 	checkSlug,
 	deriveSlug,
@@ -11,7 +11,7 @@ import {
 	type ProjectUpdate,
 	limits,
 	placementSpecSchema,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { featureEnabled } from './config.ts';
 import { effectiveAccessMode } from './access.ts';
 import type { CoreContext } from './context.ts';
@@ -33,7 +33,7 @@ export interface ProjectRow {
 	productionDeploymentId: string | null;
 	productionAccess: 'public' | 'password' | 'platform';
 	previewAccess: 'public' | 'password' | 'platform';
-	/** Skiff Access policy for each project scope (IAM.md I25); presence means effective `access`. */
+	/** Yoal Access policy for each project scope (IAM.md I25); presence means effective `access`. */
 	productionAccessPolicyId?: string | null;
 	previewAccessPolicyId?: string | null;
 	/** Legacy shared hash (pre-0054); never read. Use the per-scope hashes. */
@@ -58,9 +58,9 @@ export interface ProjectView {
 	name: string;
 	runtime: string;
 	/** Product-facing deploy level: 1 static, 2 process/function, 3 container, 4 compose. */
-	level: import('@skiff/contracts').DeployLevel;
+	level: import('@yoal/contracts').DeployLevel;
 	placement: string;
-	placementSpec: import('@skiff/contracts').PlacementSpec | null;
+	placementSpec: import('@yoal/contracts').PlacementSpec | null;
 	productionDeploymentId: string | null;
 	productionUrl: string;
 	previewPattern: string;
@@ -153,11 +153,11 @@ export class ProjectService {
 	async create(principal: Principal, input: ProjectCreate): Promise<ProjectView> {
 		this.ctx.iam.require(principal, 'project:create', { type: 'org' });
 		// Functions is on by default (D110), but a platform can disable the tier with
-		// SKIFF_FEATURE_FUNCTIONS=0; refuse a project it could never run.
+		// YOAL_FEATURE_FUNCTIONS=0; refuse a project it could never run.
 		if (input.runtime === 'function' && !featureEnabled(this.ctx.config, 'FUNCTIONS'))
-			throw new ValidationError('Functions are not enabled on this platform (SKIFF_FEATURE_FUNCTIONS).');
+			throw new ValidationError('Functions are not enabled on this platform (YOAL_FEATURE_FUNCTIONS).');
 		if (input.runtime === 'compose' && !featureEnabled(this.ctx.config, 'COMPOSE'))
-			throw new ValidationError('Compose stacks are not enabled on this platform (SKIFF_FEATURE_COMPOSE).');
+			throw new ValidationError('Compose stacks are not enabled on this platform (YOAL_FEATURE_COMPOSE).');
 		const name = input.name?.trim() || input.slug || 'Untitled project';
 		const slug = input.slug ?? this.deriveSlug(name);
 		const taken = this.takenSlugs();
@@ -171,9 +171,9 @@ export class ProjectService {
 		if (wantsPassword && !input.password)
 			throw new ValidationError('A password is required for password mode.');
 		if (input.productionAccess === 'access' && !input.productionAccessPolicyId)
-			throw new ValidationError('Choose a Skiff Access policy for production.');
+			throw new ValidationError('Choose a Yoal Access policy for production.');
 		if (input.previewAccess === 'access' && !input.previewAccessPolicyId)
-			throw new ValidationError('Choose a Skiff Access policy for previews.');
+			throw new ValidationError('Choose a Yoal Access policy for previews.');
 		const passwordHash = wantsPassword && input.password ? hashPassword(input.password) : null;
 		const now = this.ctx.now();
 		const row: ProjectRow = {
@@ -281,7 +281,7 @@ export class ProjectService {
 					? (input.productionAccessPolicyId ?? row.productionAccessPolicyId ?? null)
 					: null;
 			if (input.productionAccess === 'access' && !policyId)
-				throw new ValidationError('Choose a Skiff Access policy for production.');
+				throw new ValidationError('Choose a Yoal Access policy for production.');
 			patch.productionAccess = input.productionAccess === 'access' ? 'platform' : input.productionAccess;
 			patch.productionAccessPolicyId = policyId;
 			Object.assign(patch, scopePasswordPatch(row, 'production', input.productionAccess));
@@ -294,7 +294,7 @@ export class ProjectService {
 					? (input.previewAccessPolicyId ?? row.previewAccessPolicyId ?? null)
 					: null;
 			if (input.previewAccess === 'access' && !policyId)
-				throw new ValidationError('Choose a Skiff Access policy for previews.');
+				throw new ValidationError('Choose a Yoal Access policy for previews.');
 			patch.previewAccess = input.previewAccess === 'access' ? 'platform' : input.previewAccess;
 			patch.previewAccessPolicyId = policyId;
 			Object.assign(patch, scopePasswordPatch(row, 'previews', input.previewAccess));
@@ -347,7 +347,7 @@ export class ProjectService {
 		const row = this.requireRow(principal, slug);
 		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: row.id });
 		if (input.mode === 'access' && !input.policyId)
-			throw new ValidationError('Choose a Skiff Access policy.');
+			throw new ValidationError('Choose a Yoal Access policy.');
 		const storedMode = input.mode === 'access' ? 'platform' : input.mode;
 		// Each scope keeps its own password: changing one scope never touches the other's.
 		const patch: Partial<ProjectRow> = {
@@ -546,7 +546,7 @@ export class ProjectService {
 	}
 }
 
-function parsePlacementSpec(raw: string | null | undefined): import('@skiff/contracts').PlacementSpec | null {
+function parsePlacementSpec(raw: string | null | undefined): import('@yoal/contracts').PlacementSpec | null {
 	if (!raw) return null;
 	try {
 		return requirePlacementSpec(raw);
@@ -555,7 +555,7 @@ function parsePlacementSpec(raw: string | null | undefined): import('@skiff/cont
 	}
 }
 
-function requirePlacementSpec(raw: string): import('@skiff/contracts').PlacementSpec {
+function requirePlacementSpec(raw: string): import('@yoal/contracts').PlacementSpec {
 	const parsed = JSON.parse(raw) as unknown;
 	return placementSpecSchema.parse(parsed);
 }

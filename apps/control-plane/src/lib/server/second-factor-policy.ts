@@ -6,7 +6,7 @@
  * - An org **owner's** browser session may use the platform only once the session has proved a
  *   second factor: it was established with a **passkey**, or the owner verified a **TOTP code** (or
  *   a backup code) in this session. GitHub and magic-link sign-ins are single-factor; Better Auth's
- *   twoFactor plugin only intercepts credential (password) sign-in, so Skiff records the factor on
+ *   twoFactor plugin only intercepts credential (password) sign-in, so Yoal records the factor on
  *   the session itself (`session.secondFactor`) and enforces it here.
  * - An owner with **no factor enrolled yet** is sent to enrol (add a passkey or set up an
  *   authenticator app). Completing enrolment in the session satisfies it.
@@ -17,7 +17,7 @@
  *   creation, CLI approval, OAuth consent) needs a satisfied session in the first place.
  */
 
-import type { Principal, Role } from '@skiff/contracts';
+import type { Principal, Role } from '@yoal/contracts';
 import { safeRedirect } from '../redirect';
 
 export type SecondFactor = 'passkey' | 'totp' | 'backup-code';

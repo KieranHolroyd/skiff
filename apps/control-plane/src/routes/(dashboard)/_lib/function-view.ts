@@ -8,7 +8,7 @@ import {
 	functionBindingIsStateful,
 	type FunctionBindingType,
 	type FunctionView
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 
 /**
  * Pure helpers behind the Functions console (docs/FUNCTIONS.md §4.11). Kept out of the components
@@ -21,11 +21,11 @@ export type BindingGroup = 'config' | 'services' | 'data' | 'messaging';
 interface BindingInfo {
 	label: string;
 	group: BindingGroup;
-	/** What Skiff backs this binding with (§4.5). */
+	/** What Yoal backs this binding with (§4.5). */
 	backing: string;
-	/** Where it goes in wrangler.jsonc; `skif deploy` maps it by binding name. */
+	/** Where it goes in wrangler.jsonc; `yoal deploy` maps it by binding name. */
 	wrangler: string;
-	/** What has to exist on Skiff first, when anything does. */
+	/** What has to exist on Yoal first, when anything does. */
 	needs?: string;
 }
 
@@ -56,7 +56,7 @@ export const BINDING_INFO: Readonly<Record<FunctionBindingType, BindingInfo>> = 
 		wrangler: 'services (this Worker + entrypoint)'
 	},
 	app: {
-		label: 'Skiff app',
+		label: 'Yoal app',
 		group: 'services',
 		backing: "Another app's workload socket, fetch only",
 		wrangler: 'services (another project)',
@@ -66,7 +66,7 @@ export const BINDING_INFO: Readonly<Record<FunctionBindingType, BindingInfo>> = 
 		label: 'R2 bucket',
 		group: 'data',
 		backing: 'Managed RustFS, signed S3 requests',
-		wrangler: 'r2_buckets + skiff.storage',
+		wrangler: 'r2_buckets + yoal.storage',
 		needs: 'Storage attached to the function with a grant for the bucket'
 	},
 	kv: {
@@ -91,7 +91,7 @@ export const BINDING_INFO: Readonly<Record<FunctionBindingType, BindingInfo>> = 
 		label: 'Hyperdrive',
 		group: 'data',
 		backing: 'Managed Postgres through its pooler',
-		wrangler: 'hyperdrive + skiff.hyperdrive',
+		wrangler: 'hyperdrive + yoal.hyperdrive',
 		needs: 'A Postgres database attached to the function'
 	},
 	cache: {
@@ -122,7 +122,7 @@ export const BINDING_INFO: Readonly<Record<FunctionBindingType, BindingInfo>> = 
 		label: 'User pool auth',
 		group: 'services',
 		backing: "The attached pool's JWKS, verified in a sibling Worker",
-		wrangler: 'skiff.auth (added by a pool attachment)',
+		wrangler: 'yoal.auth (added by a pool attachment)',
 		needs: 'A user pool attached to the function'
 	}
 };
@@ -149,7 +149,7 @@ export function bindingPhase(type: string): number {
 	return FUNCTION_BINDING_PHASE[type as FunctionBindingType] ?? Number.POSITIVE_INFINITY;
 }
 
-/** True when this Skiff build can serve the binding type (the contract decides). */
+/** True when this Yoal build can serve the binding type (the contract decides). */
 export function bindingAvailable(
 	type: string,
 	implemented: Readonly<Record<string, boolean>> = FUNCTION_BINDING_IMPLEMENTED
@@ -329,8 +329,8 @@ export function describeCron(expression: string): string | null {
 }
 
 /**
- * A starting `wrangler.jsonc`: plain Workers config plus the `skiff` section Wrangler ignores
- * (FN8). `skif deploy` maps bindings by name; the `skiff` section names the Skiff resources behind
+ * A starting `wrangler.jsonc`: plain Workers config plus the `yoal` section Wrangler ignores
+ * (FN8). `yoal deploy` maps bindings by name; the `yoal` section names the Yoal resources behind
  * Hyperdrive and R2 and tunes the host. No Cloudflare account IDs are needed.
  */
 export function starterWrangler(slug: string): string {
@@ -343,8 +343,8 @@ export function starterWrangler(slug: string): string {
   "assets": { "directory": "public", "run_worker_first": ["/api/*"] },
   "triggers": { "crons": ["*/15 * * * *"] },
 
-  // Read by Skiff only; Wrangler ignores it.
-  "skiff": {
+  // Read by Yoal only; Wrangler ignores it.
+  "yoal": {
     "idleStopSeconds": 300,
     "memoryMb": 128
   }
@@ -364,7 +364,7 @@ export function starterWorker(): string {
 };`;
 }
 
-/** An upper-snake binding name for a Skiff resource name ("app-db" → "APP_DB"). */
+/** An upper-snake binding name for a Yoal resource name ("app-db" → "APP_DB"). */
 export function bindingNameFor(resource: string): string {
 	const name = resource
 		.toUpperCase()
@@ -375,7 +375,7 @@ export function bindingNameFor(resource: string): string {
 
 /**
  * The wrangler.jsonc lines that bind attached resources: Hyperdrive per attached database, R2 per
- * granted bucket, and the `skiff` section naming the Skiff resource behind each binding.
+ * granted bucket, and the `yoal` section naming the Yoal resource behind each binding.
  */
 export function dataBindingSnippet(
 	databases: readonly string[],
@@ -387,13 +387,13 @@ export function dataBindingSnippet(
 			? storage.flatMap((item) => item.buckets.map((bucket) => ({ storage: item.name, bucket })))
 			: [{ storage: 'media', bucket: 'uploads' }];
 	const hyperdrive = db.map(
-		(name) => `    { "binding": "${bindingNameFor(name)}", "id": "ignored-by-skiff" }`
+		(name) => `    { "binding": "${bindingNameFor(name)}", "id": "ignored-by-yoal" }`
 	);
 	const r2 = buckets.map(
 		(item) => `    { "binding": "${bindingNameFor(item.bucket)}", "bucket_name": "${item.bucket}" }`
 	);
-	const skiffDb = db.map((name) => `      "${bindingNameFor(name)}": "${name}"`);
-	const skiffStorage = buckets.map(
+	const yoalDb = db.map((name) => `      "${bindingNameFor(name)}": "${name}"`);
+	const yoalStorage = buckets.map(
 		(item) => `      "${bindingNameFor(item.bucket)}": "${item.storage}"`
 	);
 	return `  "hyperdrive": [
@@ -402,20 +402,20 @@ ${hyperdrive.join(',\n')}
   "r2_buckets": [
 ${r2.join(',\n')}
   ],
-  "skiff": {
+  "yoal": {
     "hyperdrive": {
-${skiffDb.join(',\n')}
+${yoalDb.join(',\n')}
     },
     "storage": {
-${skiffStorage.join(',\n')}
+${yoalStorage.join(',\n')}
     }
   }`;
 }
 
 /** Develop locally, then deploy from the Wrangler project; the CLI builds the bundle. */
 export function deployCommands(slug: string): string {
-	return `skif wrangler dev            # the same workerd runtime, locally
-skif deploy --project ${slug}  # bundles with wrangler and deploys`;
+	return `yoal wrangler dev            # the same workerd runtime, locally
+yoal deploy --project ${slug}  # bundles with wrangler and deploys`;
 }
 
 export interface SecretBindingRow {

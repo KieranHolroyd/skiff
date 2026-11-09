@@ -2,8 +2,8 @@ import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import type { Principal } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import type { Principal } from '@yoal/contracts';
 import type { AlertMessage, Notifier } from '../config.ts';
 import { ConflictError, ForbiddenError } from '../errors.ts';
 import { createCore, type Core } from '../index.ts';
@@ -11,7 +11,7 @@ import { GUARDRAIL_TEMPLATES } from './governance.ts';
 import { LocalObjectStore } from '../object-store.ts';
 import { buildPrincipal } from '../orgs.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-governance-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-governance-'));
 const opened = createDb({ path: ':memory:' });
 const accessRequestsSql = readFileSync(
 	new URL('../../../db/migrations/0088_access_requests.sql', import.meta.url),

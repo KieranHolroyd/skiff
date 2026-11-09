@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { telemetryBatchSchema } from '@skiff/contracts';
+import { telemetryBatchSchema } from '@yoal/contracts';
 import {
 	BOOTSTRAP_SQL,
 	bunSqlConnector,
@@ -52,7 +52,7 @@ function target(overrides: Partial<DatabaseTarget> = {}): DatabaseTarget {
 			databaseName: 'orders',
 			ownerUser: 'orders',
 			ownerPassword: OWNER_PASSWORD,
-			monitorUser: 'skiff_monitor',
+			monitorUser: 'yoal_monitor',
 			monitorPassword: MONITOR_PASSWORD,
 			port: 15432,
 		},
@@ -114,9 +114,9 @@ class FakePostgres {
 				if (text === BOOTSTRAP_SQL)
 					return [
 						{
-							role_sql: 'CREATE ROLE skiff_monitor WITH LOGIN PASSWORD <quoted>',
-							monitor_sql: 'GRANT pg_monitor TO skiff_monitor',
-							connect_sql: 'GRANT CONNECT ON DATABASE orders TO skiff_monitor',
+							role_sql: 'CREATE ROLE yoal_monitor WITH LOGIN PASSWORD <quoted>',
+							monitor_sql: 'GRANT pg_monitor TO yoal_monitor',
+							connect_sql: 'GRANT CONNECT ON DATABASE orders TO yoal_monitor',
 						},
 					];
 				if (text === STATS_SQL) return [{ ...this.stats }];
@@ -195,12 +195,12 @@ describe('DatabaseStatsSampler bootstrap', () => {
 		const owner = f.pg.ofUser('orders');
 		expect(owner.map((query) => query.text)).toEqual([
 			BOOTSTRAP_SQL,
-			'CREATE ROLE skiff_monitor WITH LOGIN PASSWORD <quoted>',
-			'GRANT pg_monitor TO skiff_monitor',
-			'GRANT CONNECT ON DATABASE orders TO skiff_monitor',
+			'CREATE ROLE yoal_monitor WITH LOGIN PASSWORD <quoted>',
+			'GRANT pg_monitor TO yoal_monitor',
+			'GRANT CONNECT ON DATABASE orders TO yoal_monitor',
 		]);
 		// The password travels as a bound parameter; Postgres quotes it with %L.
-		expect(owner[0]?.params).toEqual(['skiff_monitor', MONITOR_PASSWORD]);
+		expect(owner[0]?.params).toEqual(['yoal_monitor', MONITOR_PASSWORD]);
 		expect(BOOTSTRAP_SQL).not.toContain(MONITOR_PASSWORD);
 		expect(BOOTSTRAP_SQL).toContain('PASSWORD %L');
 		expect(f.source.forgotten).toEqual([[DB_ID, ACTIVATION]]);
@@ -214,7 +214,7 @@ describe('DatabaseStatsSampler bootstrap', () => {
 		});
 
 		// Sampling happens as the monitor, never as the owner.
-		expect(f.pg.ofUser('skiff_monitor').map((query) => query.text)).toEqual([
+		expect(f.pg.ofUser('yoal_monitor').map((query) => query.text)).toEqual([
 			STATEMENT_TIMEOUT_SQL,
 			STATS_SQL,
 			TABLES_SQL,
@@ -270,7 +270,7 @@ describe('DatabaseStatsSampler bootstrap', () => {
 		await f.sampler.sample();
 		expect(f.sampler.pending().databases.map((bucket) => bucket.up)).toEqual([false]);
 		expect(f.source.forgotten).toEqual([]);
-		expect(f.pg.ofUser('skiff_monitor')).toEqual([]);
+		expect(f.pg.ofUser('yoal_monitor')).toEqual([]);
 		expect(f.logs.join('\n')).toContain('monitor bootstrap failed');
 		expect(f.logs.join('\n')).not.toContain(OWNER_PASSWORD);
 
@@ -352,7 +352,7 @@ describe('DatabaseStatsSampler buckets', () => {
 		expect(f.pg.connects).toEqual([]);
 
 		f.source.targets = [target()];
-		f.pg.refuse.add('skiff_monitor');
+		f.pg.refuse.add('yoal_monitor');
 		f.advance();
 		await f.sampler.sample();
 
@@ -497,7 +497,7 @@ describe('bunSqlConnector', () => {
 		const client = bunSqlConnector()({
 			hostname: '127.0.0.1',
 			port,
-			username: 'skiff_monitor',
+			username: 'yoal_monitor',
 			password: 'x',
 			database: 'orders',
 		});

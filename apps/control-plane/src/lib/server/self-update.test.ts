@@ -3,15 +3,15 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-update-log-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-update-log-'));
 const logFile = join(dir, 'update.log');
-process.env.SKIFF_UPDATE_LOG_FILE = logFile;
+process.env.YOAL_UPDATE_LOG_FILE = logFile;
 const channelFile = join(dir, 'channel');
-process.env.SKIFF_UPDATE_CHANNEL_FILE = channelFile;
+process.env.YOAL_UPDATE_CHANNEL_FILE = channelFile;
 const requestFile = join(dir, 'request');
-process.env.SKIFF_UPDATE_REQUEST_FILE = requestFile;
+process.env.YOAL_UPDATE_REQUEST_FILE = requestFile;
 // `version.ts` reads the build-time constant at module load.
-(globalThis as { __SKIFF_VERSION__?: string }).__SKIFF_VERSION__ = '0.0.0';
+(globalThis as { __YOAL_VERSION__?: string }).__YOAL_VERSION__ = '0.0.0';
 const {
 	approvalsFromForm,
 	currentChannel,
@@ -82,7 +82,7 @@ describe('release channels', () => {
 		prerelease,
 		assets: [{ name: 'manifest.json' }, { name: 'manifest.json.sig' }]
 	});
-	const source = { repo: 'owner/skiff', ref: 'main' };
+	const source = { repo: 'owner/yoal', ref: 'main' };
 	const realFetch = globalThis.fetch;
 
 	function serve(releases: unknown[], version = '0.9.0') {

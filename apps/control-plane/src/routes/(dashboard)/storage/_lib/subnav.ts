@@ -6,7 +6,7 @@ import FolderOpenIcon from '@lucide/svelte/icons/folder-open';
 import LayoutDashboardIcon from '@lucide/svelte/icons/layout-dashboard';
 import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
 import Settings2Icon from '@lucide/svelte/icons/settings-2';
-import type { StorageView } from '@skiff/contracts';
+import type { StorageView } from '@yoal/contracts';
 import type { Subnav, SubnavItem, RouteUrl } from '#lib/nav/subnav.js';
 import { readTab, tabHref } from '../../_lib/service/sections.js';
 import { STORAGE_DEFAULT_TAB, STORAGE_TABS, type StorageTab } from './storage-tabs.js';

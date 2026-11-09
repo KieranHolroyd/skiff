@@ -1,6 +1,6 @@
 import { invalidateAll } from '$app/navigation';
 import { toast } from 'svelte-sonner';
-import { nodeTaskDone, type NodeTaskKind, type NodeTaskView } from '@skiff/contracts';
+import { nodeTaskDone, type NodeTaskKind, type NodeTaskView } from '@yoal/contracts';
 import { fetchJson } from '#lib/query.js';
 import { runAction } from '#lib/actions.js';
 

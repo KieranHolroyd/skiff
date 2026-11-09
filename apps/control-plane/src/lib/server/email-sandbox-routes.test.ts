@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import { roles, type Principal } from '@skiff/contracts';
-import { ConflictError, CoreError } from '@skiff/core';
+import { roles, type Principal } from '@yoal/contracts';
+import { ConflictError, CoreError } from '@yoal/core';
 
 /**
  * The REST routes and the platform-admin page for email sandbox recipients and production access

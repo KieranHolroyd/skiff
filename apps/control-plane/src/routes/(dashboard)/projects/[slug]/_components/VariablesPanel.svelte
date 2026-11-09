@@ -3,7 +3,7 @@
 	import { untrack } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { toast } from 'svelte-sonner';
-	import type { ProjectView, SecretView } from '@skiff/core';
+	import type { ProjectView, SecretView } from '@yoal/core';
 	import {
 		databasePrefixesFromEnvNames,
 		formatEnvFile,
@@ -16,7 +16,7 @@
 		type UserPoolAttachmentView,
 		type WorkloadSpec,
 		type WorkloadView
-	} from '@skiff/contracts';
+	} from '@yoal/contracts';
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import DownloadIcon from '@lucide/svelte/icons/download';
@@ -36,7 +36,7 @@
 	import XIcon from '@lucide/svelte/icons/x';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';

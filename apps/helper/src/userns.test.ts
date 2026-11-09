@@ -17,7 +17,7 @@ afterEach(async () => {
 });
 
 async function tempFiles(contents: { subuid?: string; subgid?: string } = {}) {
-	const directory = await mkdtemp(join(tmpdir(), 'skiff-userns-'));
+	const directory = await mkdtemp(join(tmpdir(), 'yoal-userns-'));
 	directories.push(directory);
 	const subuid = join(directory, 'subuid');
 	const subgid = join(directory, 'subgid');

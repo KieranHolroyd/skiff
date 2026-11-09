@@ -13,7 +13,7 @@ import { fetchServiceAccounts, resolveServiceAccount } from './service-accounts.
  * a thin client over `/api/v1/federation-trusts`.
  */
 
-const usage = `Usage: skif federation <command> [options]
+const usage = `Usage: yoal federation <command> [options]
 
 Commands:
   list [list]                  Trusts in this organisation
@@ -39,11 +39,11 @@ A trust with no permission ceiling uses the service account's bindings as its ce
 never widens the account: the exchange can only narrow with restriction and the caller's scope.
 
 Examples:
-  skif federation create --issuer https://token.actions.githubusercontent.com \\
+  yoal federation create --issuer https://token.actions.githubusercontent.com \\
     --audience https://control.example.com --subject 'repo:acme/web:ref:refs/heads/main' \\
     --service-account github-actions --claim ref=refs/heads/main --ttl 15m
-  skif federation list
-  skif federation delete ft_abc123`;
+  yoal federation list
+  yoal federation delete ft_abc123`;
 
 export interface FederationTrustView {
 	id: string;
@@ -102,7 +102,7 @@ async function listTrusts(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif federation [list] [--json]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal federation [list] [--json]');
 	const client = await authenticatedClient();
 	const trusts = await fetchTrusts(client);
 	if (args.boolean('json')) {
@@ -110,7 +110,7 @@ async function listTrusts(argv: string[]): Promise<void> {
 		return;
 	}
 	if (trusts.length === 0) {
-		console.log('No federation trusts. Add one with `skif federation create`.');
+		console.log('No federation trusts. Add one with `yoal federation create`.');
 		return;
 	}
 	console.log(federationTable(trusts));
@@ -122,7 +122,7 @@ async function createTrust(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif federation create --issuer <url> --audience <aud> --service-account <name|id>');
+	rejectExtraPositionals(args, 0, 'Usage: yoal federation create --issuer <url> --audience <aud> --service-account <name|id>');
 	const issuer = args.string('issuer');
 	if (!issuer) throw new UsageError('Say which issuer the trust accepts with --issuer <url>.');
 	const audiences = parseList(args.strings('audience'));
@@ -175,7 +175,7 @@ async function deleteTrust(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif federation delete <id> [--yes]');
+	rejectExtraPositionals(args, 1, 'Usage: yoal federation delete <id> [--yes]');
 	const id = requirePositional(args, 0, `federation trust id.\n\n${usage}`);
 	const confirmed = await confirmOrRefuse(
 		`Delete federation trust ${id}? New exchanges stop at once. [y/N] `,

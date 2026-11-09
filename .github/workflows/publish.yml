@@ -2,7 +2,7 @@ name: Publish release
 
 # Every push to main whose VERSION has no release yet is tested, built once in CI per
 # architecture, canaried under the production sandbox, signed and published as v<VERSION>.
-# Hosts install these signed artifacts (skiff-update-self); nothing is compiled on a server.
+# Hosts install these signed artifacts (yoal-update-self); nothing is compiled on a server.
 #
 # Releases are published as GitHub prereleases: the canary channel. Hosts on canary (the
 # default) install them straight away; hosts on stable wait until promote.yml flips one to a
@@ -71,9 +71,9 @@ jobs:
           --health-cmd "clickhouse-client --password ci -q 'SELECT 1'"
           --health-interval 2s --health-timeout 5s --health-retries 30
     env:
-      SKIFF_TEST_CLICKHOUSE_URL: http://127.0.0.1:18123
-      SKIFF_TEST_CLICKHOUSE_USER: default
-      SKIFF_TEST_CLICKHOUSE_PASSWORD: ci
+      YOAL_TEST_CLICKHOUSE_URL: http://127.0.0.1:18123
+      YOAL_TEST_CLICKHOUSE_USER: default
+      YOAL_TEST_CLICKHOUSE_PASSWORD: ci
     strategy:
       fail-fast: true
       matrix:
@@ -142,7 +142,7 @@ jobs:
         run: |
           chmod 0755 caddy/caddy
           caddy/caddy list-modules | grep -x 'dns.providers.cloudflare'
-          tar -czf "skiff-caddy-${VERSION}-linux-${{ matrix.arch }}.tar.gz" -C caddy caddy
+          tar -czf "yoal-caddy-${VERSION}-linux-${{ matrix.arch }}.tar.gz" -C caddy caddy
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -165,18 +165,18 @@ jobs:
         working-directory: repo
         run: |
           stage="$(mktemp -d)"
-          install -m 0755 apps/agent/dist/skiff-agent apps/helper/dist/skiff-helper "$stage/"
-          tar -czf "../skiff-node-${VERSION}-linux-${{ matrix.arch }}.tar.gz" -C "$stage" skiff-agent skiff-helper
-          tar -tzf "../skiff-node-${VERSION}-linux-${{ matrix.arch }}.tar.gz"
-          ls -l ../skiff-node-*.tar.gz
+          install -m 0755 apps/agent/dist/yoal-agent apps/helper/dist/yoal-helper "$stage/"
+          tar -czf "../yoal-node-${VERSION}-linux-${{ matrix.arch }}.tar.gz" -C "$stage" yoal-agent yoal-helper
+          tar -tzf "../yoal-node-${VERSION}-linux-${{ matrix.arch }}.tar.gz"
+          ls -l ../yoal-node-*.tar.gz
 
       - name: Compile the stage-0 updater
         working-directory: repo
         run: |
           bun build --compile scripts/update-self/main.ts \
-            --define "SKIFF_UPDATER_BUILD=\"${GITHUB_SHA::12}\"" \
-            --outfile ../updater/skiff-updated
-          ../updater/skiff-updated --version
+            --define "YOAL_UPDATER_BUILD=\"${GITHUB_SHA::12}\"" \
+            --outfile ../updater/yoal-updated
+          ../updater/yoal-updated --version
 
       # Ship only what runs: build tooling (vite, svelte-check, eslint, drizzle-kit, ...) and the
       # SvelteKit build intermediates stay in CI. Done before the canary, so the canary boots
@@ -198,18 +198,18 @@ jobs:
           gz=gzip
           command -v pigz >/dev/null && gz=pigz
           echo "compressing with $gz"
-          tar --use-compress-program="$gz" -cf "skiff-${VERSION}-linux-${{ matrix.arch }}.tar.gz" \
+          tar --use-compress-program="$gz" -cf "yoal-${VERSION}-linux-${{ matrix.arch }}.tar.gz" \
             --exclude='repo/.git' \
             --exclude='repo/node_modules/.old_modules-*' \
             --exclude='repo/node_modules/.cache' \
             repo updater caddy
-          ls -l skiff-*.tar.gz
+          ls -l yoal-*.tar.gz
 
       # The tarballs are already compressed; zipping them again only costs time.
       - uses: actions/upload-artifact@v4
         with:
-          name: skiff-${{ matrix.arch }}
-          path: skiff-*.tar.gz
+          name: yoal-${{ matrix.arch }}
+          path: yoal-*.tar.gz
           compression-level: 0
           retention-days: 7
 
@@ -233,11 +233,11 @@ jobs:
 
       - name: Write and sign the manifest
         env:
-          SKIFF_RELEASE_SIGNING_KEY: ${{ secrets.SKIFF_RELEASE_SIGNING_KEY }}
+          YOAL_RELEASE_SIGNING_KEY: ${{ secrets.YOAL_RELEASE_SIGNING_KEY }}
         run: |
           bun scripts/release/manifest.ts \
             --version "$VERSION" --commit "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" --dir dist
-          cp scripts/release/recover.sh dist/skiff-recover.sh
+          cp scripts/release/recover.sh dist/yoal-recover.sh
 
       - name: Publish
         env:
@@ -246,5 +246,5 @@ jobs:
           gh release create "v$VERSION" dist/* \
             --prerelease \
             --target "$GITHUB_SHA" \
-            --title "Skiff $VERSION" \
-            --notes "Signed canary built from ${GITHUB_SHA::12}. Canary hosts install it with \`skiff-update-self\` (dashboard: Settings → Updates); stable hosts get it once it is promoted with the Promote workflow."
+            --title "Yoal $VERSION" \
+            --notes "Signed canary built from ${GITHUB_SHA::12}. Canary hosts install it with \`yoal-update-self\` (dashboard: Settings → Updates); stable hosts get it once it is promoted with the Promote workflow."

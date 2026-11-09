@@ -3,14 +3,14 @@
  *
  * A process app with `engine: "node"` runs `node --run start` (or its own command) in the same
  * sandboxed unit Bun apps use. The official Linux build is extracted whole to
- * `/usr/lib/skiff/node/<version>/` and `node`, `npm` and `npx` are linked into `/usr/local/bin`,
+ * `/usr/lib/yoal/node/<version>/` and `node`, `npm` and `npx` are linked into `/usr/local/bin`,
  * which is on every process unit's `PATH` (and the Builder's, so `npm ci && npm run build` works
  * for git builds). The agent advertises `process-node` while `/usr/local/bin/node` exists, and
  * placement refuses Node apps on any other node.
  *
- * Installed by default (about 190 MB on disk); `--no-node` (or `SKIFF_NO_NODE=1`) skips it and
+ * Installed by default (about 190 MB on disk); `--no-node` (or `YOAL_NO_NODE=1`) skips it and
  * leaves a marker so release convergence does not add it later. A `/usr/local/bin/node` that is
- * not Skiff's link (the operator's own Node) is left alone. To add it to an installed node:
+ * not Yoal's link (the operator's own Node) is left alone. To add it to an installed node:
  *
  *   sudo bun scripts/install/node.ts
  *
@@ -32,13 +32,13 @@ export const NODE_DIGESTS: Record<NodeArch, string> = {
 	arm64: '439e9c438acdf6a6ffe47418da709153d66c4bed812e30a473faacb107dd2791',
 };
 
-export const NODE_DEST = '/usr/lib/skiff/node';
+export const NODE_DEST = '/usr/lib/yoal/node';
 /** Directory on every process unit's default PATH. */
 export const NODE_BIN_DIR = '/usr/local/bin';
 /** The commands linked onto PATH; `node` is the one the agent and helper look for. */
 export const NODE_COMMANDS = ['node', 'npm', 'npx'] as const;
 /** Written by `--no-node`; convergence never installs Node on a node that has it. */
-export const NODE_OPT_OUT_MARKER = '/usr/lib/skiff/node.disabled';
+export const NODE_OPT_OUT_MARKER = '/usr/lib/yoal/node.disabled';
 
 export type NodeArch = 'amd64' | 'arm64';
 
@@ -61,7 +61,7 @@ export interface EnsureNodeOptions {
 	version?: string;
 	/** Expected SHA-256 of the tarball; defaults to the pinned digest for `arch`. */
 	sha256?: string;
-	/** Defaults to `/usr/lib/skiff/node`. */
+	/** Defaults to `/usr/lib/yoal/node`. */
 	destDir?: string;
 	/** Defaults to `/usr/local/bin`; null skips the links. */
 	binDir?: string | null;
@@ -111,7 +111,7 @@ export async function ensureNode(options: EnsureNodeOptions): Promise<EnsureNode
 	if (actual !== expected) throw new Error(`Node.js download digest mismatch: expected ${expected}, got ${actual}`);
 
 	mkdirSync(destDir, { recursive: true, mode: 0o755 });
-	const tarball = join(tmpdir(), `skiff-node-${version}-${process.pid}.tar.gz`);
+	const tarball = join(tmpdir(), `yoal-node-${version}-${process.pid}.tar.gz`);
 	// Extract next to the destination so the final rename stays on one filesystem.
 	const partial = join(destDir, `.${version}.partial`);
 	rmSync(partial, { recursive: true, force: true });
@@ -145,10 +145,10 @@ function linkCommands(home: string, destDir: string, binDir: string | null, log:
 		if (!existsSync(source)) continue;
 		const linkPath = join(binDir, command);
 		if (!isOursOrMissing(linkPath, destDir)) {
-			log(`keeping ${linkPath}: it is not Skiff's Node.js link`);
+			log(`keeping ${linkPath}: it is not Yoal's Node.js link`);
 			continue;
 		}
-		const temporary = `${linkPath}.skiff-new`;
+		const temporary = `${linkPath}.yoal-new`;
 		rmSync(temporary, { force: true });
 		symlinkSync(source, temporary);
 		renameSync(temporary, linkPath);
@@ -164,8 +164,8 @@ function isOursOrMissing(path: string, destDir: string): boolean {
 	}
 }
 
-/** True when `/usr/local/bin/node` is Skiff's link, i.e. this node follows Node.js pin bumps. */
-export function hasSkiffNode(binDir: string = NODE_BIN_DIR, destDir: string = NODE_DEST): boolean {
+/** True when `/usr/local/bin/node` is Yoal's link, i.e. this node follows Node.js pin bumps. */
+export function hasYoalNode(binDir: string = NODE_BIN_DIR, destDir: string = NODE_DEST): boolean {
 	try {
 		const path = join(binDir, 'node');
 		return lstatSync(path).isSymbolicLink() && readlinkSync(path).startsWith(`${destDir}/`);

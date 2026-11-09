@@ -16,7 +16,7 @@ describe('volume schemas', () => {
 			'md:1a2b3c4d',
 			'zfs:tank/media',
 			'luks:cryptdata',
-			'nfs:nas.test:/exports/skiff',
+			'nfs:nas.test:/exports/yoal',
 			'cifs:nas.test/share',
 		])
 			expect(volumeSourceKeySchema.safeParse(key).success).toBe(true);
@@ -56,7 +56,7 @@ describe('volume schemas', () => {
 		};
 		expect(volumeInventorySchema.safeParse({ generatedAt: 'now', mounts: [entry] }).success).toBe(true);
 		expect(
-			volumeInventorySchema.safeParse({ generatedAt: 'now', mounts: [{ ...entry, mountPath: '/etc/skiff' }] })
+			volumeInventorySchema.safeParse({ generatedAt: 'now', mounts: [{ ...entry, mountPath: '/etc/yoal' }] })
 				.success,
 		).toBe(false);
 		expect(

@@ -1,5 +1,5 @@
 {
-	"name": "@skiff/mail",
+	"name": "@yoal/mail",
 	"private": true,
 	"version": "0.1.0",
 	"type": "module",
@@ -12,7 +12,7 @@
 		"test": "bun test"
 	},
 	"dependencies": {
-		"@skiff/contracts": "workspace:*",
+		"@yoal/contracts": "workspace:*",
 		"mailauth": "8.0.4",
 		"mailparser": "3.14.2",
 		"nodemailer": "10.3.1",

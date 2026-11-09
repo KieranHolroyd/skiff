@@ -24,7 +24,7 @@ describe('ClickHouse server config (docs/DATABASES.md §17)', () => {
 
 	test('allows BACKUP/RESTORE only in the helper staging dir inside the data mount', () => {
 		const config = renderClickHouseServerConfig({ memoryMb: 2048 });
-		expect(config).toContain('<backups>\n\t\t<allowed_path>/data/skiff-dumps/</allowed_path>\n\t</backups>');
+		expect(config).toContain('<backups>\n\t\t<allowed_path>/data/yoal-dumps/</allowed_path>\n\t</backups>');
 		expect(config).not.toContain('<allowed_disk>');
 	});
 

@@ -8,13 +8,13 @@ import {
 	type FederationTrustView,
 	type GuardrailView,
 	type ServiceAccountToken
-} from '@skiff/core';
+} from '@yoal/core';
 import {
 	permissionCatalog,
 	type Permission,
 	type Principal,
 	type ScopeRef
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { failStatus, formOptionalString, formString, toFormFailure } from '../../_lib/errors.js';
 import { RESOURCE_LABELS } from '../_lib/resources.js';

@@ -3,8 +3,8 @@
  * small form helpers live here so they can be tested without a database or a listening socket.
  */
 
-export const SESSION_COOKIE = 'skiff_pool_session';
-export const CSRF_COOKIE = 'skiff_pool_csrf';
+export const SESSION_COOKIE = 'yoal_pool_session';
+export const CSRF_COOKIE = 'yoal_pool_csrf';
 
 export type OAuthAction = 'authorize' | 'token' | 'userinfo' | 'logout';
 export type HostedPage = 'login' | 'signup' | 'verify' | 'reset' | 'magic' | 'logout' | 'mfa' | 'otp' | 'account';

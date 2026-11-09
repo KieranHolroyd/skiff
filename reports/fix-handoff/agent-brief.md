@@ -1,6 +1,6 @@
-# Shared brief for every Skiff fix agent
+# Shared brief for every Yoal fix agent
 
-Repository: /Users/kieranholroyd/Github/private-cloud-deploys (Skiff: a self-hosted deploy platform,
+Repository: /Users/kieranholroyd/Github/private-cloud-deploys (Yoal: a self-hosted deploy platform,
 Bun monorepo). Read README.md "Architecture" first if you are new to it.
 
 ## Wave 2 context
@@ -27,7 +27,7 @@ Triggering Alerts" (alerts area). Expect files to change under you there.
 - Stay inside your work package. If you find something outside it that's broken, report it; don't
   fix it.
 
-## How Skiff code is organised (follow it)
+## How Yoal code is organised (follow it)
 
 - Every surface (dashboard, REST, MCP, assistant, CLI) calls the service layer in `packages/core`.
   RBAC permissions are strings in `packages/contracts/src/permissions.ts`; core methods check them

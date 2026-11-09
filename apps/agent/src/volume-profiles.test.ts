@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { DesiredState } from '@skiff/contracts';
+import type { DesiredState } from '@yoal/contracts';
 import { VolumeProfileRunner, type HelperVolumeProfileApi } from './volume-profiles.ts';
 
 const state = (ids: string[]) =>

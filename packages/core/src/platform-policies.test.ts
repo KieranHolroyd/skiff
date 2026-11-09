@@ -3,14 +3,14 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PLATFORM_POLICIES_KEY, PLATFORM_POLICY_DEFAULTS } from '@skiff/contracts';
-import { createDb } from '@skiff/db';
+import { PLATFORM_POLICIES_KEY, PLATFORM_POLICY_DEFAULTS } from '@yoal/contracts';
+import { createDb } from '@yoal/db';
 import { createCore, type Core } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import { buildPrincipal, renameOrganization } from './orgs.ts';
 import { ValidationError } from './errors.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-policies-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-policies-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 function makeCore(): Core {

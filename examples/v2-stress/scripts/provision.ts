@@ -5,7 +5,7 @@
  * Idempotent: re-running updates the workload spec, reuses existing secrets and environments, and
  * deploys a fresh artifact. Everything it needs is an API key with project/build/secret rights.
  *
- *   SKIFF_URL=https://control.example.com SKIFF_TOKEN=skif_… \
+ *   YOAL_URL=https://control.example.com YOAL_TOKEN=yoal_… \
  *     bun examples/v2-stress/scripts/provision.ts --slug v2-stress
  */
 
@@ -71,9 +71,9 @@ const flags = new Flags(process.argv.slice(2), {
 if (flags.bool('help')) {
 	console.log(`Usage: bun examples/v2-stress/scripts/provision.ts [options]
 
-Platform (or SKIFF_URL / SKIFF_TOKEN):
+Platform (or YOAL_URL / YOAL_TOKEN):
   --url <origin>            control plane origin
-  --token <key>             skif_… API key
+  --token <key>             yoal_… API key
 
 Project:
   --slug <slug>             project slug (default v2-stress)
@@ -123,13 +123,13 @@ const example = exampleDir();
 const statePath = join(example, '.state.json');
 const saved = readState(flags.string('state') ?? statePath);
 
-const platform = (flags.string('url') ?? process.env.SKIFF_URL ?? saved?.platform ?? '').replace(
+const platform = (flags.string('url') ?? process.env.YOAL_URL ?? saved?.platform ?? '').replace(
 	/\/+$/,
 	''
 );
-const token = flags.string('token') ?? process.env.SKIFF_TOKEN ?? '';
+const token = flags.string('token') ?? process.env.YOAL_TOKEN ?? '';
 if (!platform || !token) {
-	fail('Set SKIFF_URL and SKIFF_TOKEN (or pass --url/--token).');
+	fail('Set YOAL_URL and YOAL_TOKEN (or pass --url/--token).');
 }
 if (!/^https?:\/\//.test(platform)) fail('--url must start with http:// or https://');
 
@@ -329,7 +329,7 @@ async function main(): Promise<void> {
 		log('next:');
 		log(
 			`  bun examples/v2-stress/scripts/stress.ts --base ${state.appUrl} --state ${stateFile}${
-				state.workloadId ? ' --node-token "$SKIFF_NODE_TOKEN"' : ''
+				state.workloadId ? ' --node-token "$YOAL_NODE_TOKEN"' : ''
 			}`
 		);
 	}

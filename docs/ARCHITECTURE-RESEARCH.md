@@ -1,4 +1,4 @@
-# Architecture research: what open-source PaaS teach Skiff's internals
+# Architecture research: what open-source PaaS teach Yoal's internals
 
 Status: **research note, 2026-11-08.** Phase A (flows) is built ([FLOWS.md](./FLOWS.md), D167).
 Phases B–E are proposals; each becomes a D-number when it is built. For product features, see
@@ -6,7 +6,7 @@ Phases B–E are proposals; each becomes a D-number when it is built. For produc
 
 ## Summary
 
-Skiff's architecture is sound: pull-based agents, immutable releases, one service layer, and SQLite
+Yoal's architecture is sound: pull-based agents, immutable releases, one service layer, and SQLite
 replicated by Litestream. The research does not argue for Kubernetes, Raft or a new datastore. It
 argues for finer-grained internals, because one feature at a time has added the same plumbing
 everywhere:

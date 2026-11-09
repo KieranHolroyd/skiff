@@ -1,5 +1,5 @@
 /**
- * Create a Skiff user directly in the control-plane database, bypassing the invite-only gate (D10).
+ * Create a Yoal user directly in the control-plane database, bypassing the invite-only gate (D10).
  * For bootstrapping the first owner and for local development.
  *
  *   bun run create-user <email> [name] [--password …] [--org slug --role admin] [--platform-admin]
@@ -10,7 +10,7 @@
  * - The first user in the database is the bootstrap user: platform admin (admin plugin role, which
  *   manages nodes) and owner of a personal org created on first sign-in. Later users need `--org`
  *   (or an invitation) to join an org; `--platform-admin` also grants the platform role.
- * - Uses the same SKIFF_DATA_DIR as the server (default `.data`, relative to the cwd). Start the
+ * - Uses the same YOAL_DATA_DIR as the server (default `.data`, relative to the cwd). Start the
  *   control plane once first so Better Auth's tables exist.
  *
  * `src/lib/server/auth.ts` imports SvelteKit's `$app/*` modules, so this script builds a minimal
@@ -19,8 +19,8 @@
 import { parseArgs } from 'node:util';
 import { existsSync } from 'node:fs';
 import { betterAuth } from 'better-auth';
-import { createDb } from '@skiff/db';
-import { isRole } from '@skiff/core';
+import { createDb } from '@yoal/db';
+import { isRole } from '@yoal/core';
 
 const usage =
 	'Usage: bun run create-user <email> [name] [--password <password>] [--org <slug> --role <owner|admin|deployer|viewer>] [--platform-admin]';
@@ -63,10 +63,10 @@ if (values.role && !values.org) fail('--role requires --org');
 const role = values.role ?? 'viewer';
 if (!isRole(role)) fail(`unknown role "${role}" (owner, admin, deployer, viewer)`);
 
-const dataDir = process.env.SKIFF_DATA_DIR ?? '.data';
-const dbPath = `${dataDir}/skiff.db`;
+const dataDir = process.env.YOAL_DATA_DIR ?? '.data';
+const dbPath = `${dataDir}/yoal.db`;
 if (!existsSync(dbPath))
-	fail(`no database at ${dbPath}. Start the control plane once (or set SKIFF_DATA_DIR).`);
+	fail(`no database at ${dbPath}. Start the control plane once (or set YOAL_DATA_DIR).`);
 
 const { sqlite } = createDb({ path: dbPath });
 const hasUserTable = sqlite

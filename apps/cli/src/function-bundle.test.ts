@@ -15,7 +15,7 @@ let dir = '';
 const built: BuiltFunctionBundle[] = [];
 
 beforeEach(async () => {
-	dir = await mkdtemp(join(tmpdir(), 'skiff-cli-fn-'));
+	dir = await mkdtemp(join(tmpdir(), 'yoal-cli-fn-'));
 	await mkdir(join(dir, 'src'), { recursive: true });
 	await mkdir(join(dir, 'public', 'nested'), { recursive: true });
 	await writeFile(join(dir, 'public', 'index.html'), '<h1>Hello</h1>');
@@ -135,15 +135,15 @@ describe('buildFunctionBundle', () => {
 		expect(bundle.manifest.assets).toBeUndefined();
 
 		const manifestOnDisk = JSON.parse(
-			await readFile(join(bundle.dir, 'skiff-function.json'), 'utf8'),
+			await readFile(join(bundle.dir, 'yoal-function.json'), 'utf8'),
 		) as unknown;
 		expect(manifestOnDisk).toEqual(bundle.manifest);
-		await expect(stat(join(dir, 'skiff-function.json'))).rejects.toThrow();
-		await expect(stat(join(dir, '.skiff-bundle'))).rejects.toThrow();
+		await expect(stat(join(dir, 'yoal-function.json'))).rejects.toThrow();
+		await expect(stat(join(dir, '.yoal-bundle'))).rejects.toThrow();
 		expect(await readFile(join(bundle.dir, `${sha1(wasm)}-mod.wasm`))).toEqual(Buffer.from(wasm));
 	});
 
-	test('maps every supported wrangler binding, assets, secrets and skiff overrides', async () => {
+	test('maps every supported wrangler binding, assets, secrets and yoal overrides', async () => {
 		const { bundle } = await build(
 			{
 				...baseConfig,
@@ -161,7 +161,7 @@ describe('buildFunctionBundle', () => {
 				],
 				triggers: { crons: ['0 * * * *'] },
 				assets: { directory: './public/', run_worker_first: ['/api/*'] },
-				skiff: {
+				yoal: {
 					storage: { BUCKET: 'media' },
 					hyperdrive: { DB_CONN: 'app-db' },
 					secrets: ['EXTRA_KEY'],
@@ -232,7 +232,7 @@ describe('buildFunctionBundle', () => {
 		expect(bundle.manifest.main).toBe('index.js');
 	});
 
-	test('skiff.run_worker_first true means every path runs the Worker first', async () => {
+	test('yoal.run_worker_first true means every path runs the Worker first', async () => {
 		const { bundle } = await build({
 			...baseConfig,
 			assets: { directory: 'public', run_worker_first: true },
@@ -347,7 +347,7 @@ describe('buildFunctionBundle', () => {
 		]) {
 			await expect(
 				build({ ...baseConfig, [key]: {} }),
-			).rejects.toThrow(`"${key}" is not supported by Skiff Functions`);
+			).rejects.toThrow(`"${key}" is not supported by Yoal Functions`);
 		}
 	});
 });
@@ -386,11 +386,11 @@ describe('mapWranglerBindings', () => {
 		]);
 	});
 
-	test('skiff.bindings wins over a generated binding with the same name', () => {
+	test('yoal.bindings wins over a generated binding with the same name', () => {
 		const { bindings } = mapWranglerBindings(
 			{
 				vars: { API_KEY: 'plain' },
-				skiff: { bindings: [{ name: 'API_KEY', type: 'secret' }] },
+				yoal: { bindings: [{ name: 'API_KEY', type: 'secret' }] },
 			},
 			{ label: 'wrangler.jsonc' },
 		);
@@ -399,7 +399,7 @@ describe('mapWranglerBindings', () => {
 });
 
 describe('queues on managed brokers (D112)', () => {
-	test('producers and consumers map from wrangler, with skiff.brokers naming the broker', () => {
+	test('producers and consumers map from wrangler, with yoal.brokers naming the broker', () => {
 		const config = {
 			queues: {
 				producers: [{ binding: 'JOBS', queue: 'jobs' }, { binding: 'MAIL', queue: 'mail' }],
@@ -408,7 +408,7 @@ describe('queues on managed brokers (D112)', () => {
 					{ queue: 'mail' },
 				],
 			},
-			skiff: { brokers: { jobs: 'events' } },
+			yoal: { brokers: { jobs: 'events' } },
 		};
 		const { bindings } = mapWranglerBindings(config, { label: 'wrangler.jsonc', workerName: 'w', projectSecrets: [] });
 		expect(bindings.find((item) => item.name === 'JOBS')).toEqual({ name: 'JOBS', type: 'queue', queue: 'jobs', broker: 'events' });
@@ -419,7 +419,7 @@ describe('queues on managed brokers (D112)', () => {
 		]);
 	});
 
-	test('consumer settings Skiff cannot honour are refused, not ignored', () => {
+	test('consumer settings Yoal cannot honour are refused, not ignored', () => {
 		expect(() => mapQueueConsumers({ queues: { consumers: [{ queue: 'jobs', max_concurrency: 4 }] } }, 'w', {})).toThrow(
 			/max_concurrency is not supported/,
 		);

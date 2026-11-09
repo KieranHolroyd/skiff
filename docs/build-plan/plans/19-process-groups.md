@@ -24,7 +24,7 @@ restart policy.
 - `WorkloadSpec` is one command/image; `workloads` has a unique index on `project_id` (D44).
 - `WorkloadDesired` has one `command`/`image`, one `port`, one `healthPath`.
 - The helper renders one unit per workload; the agent converges one.
-- Heroku has a Procfile, Fly has `processes`, Render has six service types; Skiff has one.
+- Heroku has a Procfile, Fly has `processes`, Render has six service types; Yoal has one.
 
 ## Design
 
@@ -63,7 +63,7 @@ restart policy.
 
 ### Runtime
 
-- Helper renders one unit per process: `skiff-workload-<groupId>-<process>.service` for processes, or
+- Helper renders one unit per process: `yoal-workload-<groupId>-<process>.service` for processes, or
   one Quadlet container per process for containers (if the spec allows it; start with process only).
 - Each unit mounts the same release, env files, secrets, and volumes; `ReadWritePaths` per process.
 - `Restart=on-failure`; `TimeoutStopSec` for drain; health check only for web.
@@ -76,9 +76,9 @@ restart policy.
 - REST: `GET/PUT /projects/:slug/workload` accepts `processes`; `GET /projects/:slug/processes`
   returns status per process.
 - MCP: `set_processes`, `get_processes`, `restart_process` (confirmed).
-- CLI: `skif processes list|restart|logs`.
+- CLI: `yoal processes list|restart|logs`.
 - Dashboard: Processes tab, per-process status/logs/restart, memory/CPU, replica count.
-- Docs: `docs/V2-BACKEND.md` process groups; `skiff.json` migration.
+- Docs: `docs/V2-BACKEND.md` process groups; `yoal.json` migration.
 
 ## Implementation order
 
@@ -120,7 +120,7 @@ restart policy.
 
 ## Rollout
 
-`SKIFF_FEATURE_PROCESS_GROUPS` off by default. Existing single-process apps continue. Enable for new
+`YOAL_FEATURE_PROCESS_GROUPS` off by default. Existing single-process apps continue. Enable for new
 process apps, then migrate a fixture. Do not change the default for existing projects.
 
 ## Open questions

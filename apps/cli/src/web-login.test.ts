@@ -37,7 +37,7 @@ describe('webLogin', () => {
 					if (actual !== challenge)
 						return Response.json({ error: 'invalid_grant', message: 'Bad verifier.' }, { status: 400 });
 					return Response.json({
-						token: 'skif_test_token',
+						token: 'yoal_test_token',
 						platform: baseUrl(platform!),
 						contentDomain: 'sites.test',
 					});
@@ -54,7 +54,7 @@ describe('webLogin', () => {
 			},
 		});
 
-		expect(result.token).toBe('skif_test_token');
+		expect(result.token).toBe('yoal_test_token');
 		expect(result.contentDomain).toBe('sites.test');
 		expect(exchange.code).toBe('code-123');
 		expect(challenge).toHaveLength(43);

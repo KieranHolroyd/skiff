@@ -3,14 +3,14 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import type { Permission, Principal } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import type { Permission, Principal } from '@yoal/contracts';
 import { ForbiddenError } from './errors.ts';
 import { createCore, type Core } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import { buildPrincipal } from './orgs.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-access-keys-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-access-keys-'));
 const opened = createDb({ path: ':memory:' });
 let now = Date.parse('2026-11-08T12:00:00Z');
 let core: Core;
@@ -50,7 +50,7 @@ function insertApiKey(
 	apiKeySequence++;
 	const raw =
 		overrides.raw ??
-		`skif_${'A'.repeat(63)}${'ABCDEFGHIJKLMNOPQRSTUVWXYZ'[apiKeySequence % 26]}`;
+		`yoal_${'A'.repeat(63)}${'ABCDEFGHIJKLMNOPQRSTUVWXYZ'[apiKeySequence % 26]}`;
 	const id = `apikey_${apiKeySequence}`;
 	const hash = overrides.hash ?? betterAuthHash(raw);
 	opened.sqlite.run(
@@ -61,8 +61,8 @@ function insertApiKey(
 			id,
 			overrides.referenceId ?? 'user_1',
 			overrides.name === undefined ? 'Legacy CLI' : overrides.name,
-			overrides.prefix === undefined ? 'skif_' : overrides.prefix,
-			overrides.start === undefined ? 'skif_A' : overrides.start,
+			overrides.prefix === undefined ? 'yoal_' : overrides.prefix,
+			overrides.start === undefined ? 'yoal_A' : overrides.start,
 			hash,
 			overrides.enabled === false ? 0 : 1,
 			overrides.expiresAt === undefined ? '2026-12-01T00:00:00.000Z' : overrides.expiresAt,
@@ -162,13 +162,13 @@ describe('access keys', () => {
 		const owner = principal();
 		const created = core.ctx.accessKeys.create(owner, { name: '  CLI ' });
 
-		expect(created.key).toMatch(/^skif_[A-Za-z0-9_-]+$/);
+		expect(created.key).toMatch(/^yoal_[A-Za-z0-9_-]+$/);
 		expect(created.accessKey).toMatchObject({
 			orgId: 'org_1',
 			principalType: 'user',
 			principalId: 'user_1',
 			name: 'CLI',
-			prefix: 'skif_',
+			prefix: 'yoal_',
 			start: created.key.slice(0, 8),
 			permissions: null,
 			resources: null,
@@ -226,8 +226,8 @@ describe('access keys', () => {
 		expect(ipHash).not.toContain('203.0.113.9');
 	});
 
-	test('an unknown or non-Skiff key does not verify', () => {
-		expect(core.ctx.accessKeys.verify('skif_missing')).toBeUndefined();
+	test('an unknown or non-Yoal key does not verify', () => {
+		expect(core.ctx.accessKeys.verify('yoal_missing')).toBeUndefined();
 		expect(core.ctx.accessKeys.verify('not-a-key')).toBeUndefined();
 	});
 
@@ -410,7 +410,7 @@ describe('Better Auth key migration (spike S1)', () => {
 		addMembership('user_1');
 		const legacy = insertApiKey({
 			name: 'Legacy CLI',
-			start: 'skif_A',
+			start: 'yoal_A',
 			metadata: JSON.stringify({
 				scopes: ['project:read', 'deployment:read', 'not-a-permission'],
 				orgId: 'org_1',
@@ -420,7 +420,7 @@ describe('Better Auth key migration (spike S1)', () => {
 		});
 		expect(legacy.hash).toMatch(/^[A-Za-z0-9_-]{43}$/);
 
-		// Better Auth's format is 43 base64url characters, not Skiff's 64 hex characters.
+		// Better Auth's format is 43 base64url characters, not Yoal's 64 hex characters.
 		expect(legacy.hash).toBe(betterAuthHash(legacy.raw));
 
 		const result = core.ctx.accessKeys.migrateBetterAuthKeys('org_1', principal());
@@ -463,8 +463,8 @@ describe('Better Auth key migration (spike S1)', () => {
 			hash: betterAuthHash(legacy.raw),
 			hash_scheme: 'better-auth',
 			name: 'Legacy CLI',
-			prefix: 'skif_',
-			start: 'skif_A',
+			prefix: 'yoal_',
+			start: 'yoal_A',
 			expires_at: Date.parse('2026-12-01T00:00:00.000Z'),
 			created_at: Date.parse('2026-11-01T00:00:00.000Z'),
 		});
@@ -523,7 +523,7 @@ describe('Better Auth key migration (spike S1)', () => {
 	test('a key whose owner has no org is skipped, and an org read-all caller is pinned to its org', () => {
 		addMembership('user_1', 'org_2');
 		const otherOrg = insertApiKey({ referenceId: 'user_1' });
-		const noOrg = insertApiKey({ referenceId: 'user_without_org', start: 'skif_B' });
+		const noOrg = insertApiKey({ referenceId: 'user_without_org', start: 'yoal_B' });
 
 		const orgOne = limited(['accessKey:read', 'accessKey:read-all']);
 		const result = core.ctx.accessKeys.migrateBetterAuthKeys('org_2', orgOne);
@@ -540,7 +540,7 @@ describe('Better Auth key migration (spike S1)', () => {
 
 	test('a raw or unhashed apikey row is reported as unmigratable', () => {
 		addMembership('user_1');
-		const raw = `skif_${'B'.repeat(64)}`;
+		const raw = `yoal_${'B'.repeat(64)}`;
 		const legacy = insertApiKey({ raw, hash: raw });
 
 		const result = core.ctx.accessKeys.migrateBetterAuthKeys('org_1', principal());

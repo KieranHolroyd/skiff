@@ -175,7 +175,7 @@ describe('output', () => {
 	test('inspectReport keeps env values out and lists processes', () => {
 		const container = {
 			id: 'wld_x',
-			name: 'skiff-workload-wld_x',
+			name: 'yoal-workload-wld_x',
 			exists: true,
 			state: { status: 'running', running: true, paused: false, restarting: false, oomKilled: false, exitCode: 0, error: null, startedAt: '2026-11-07T10:00:00Z', finishedAt: null, health: null },
 			unit: { activeState: 'active', subState: 'running', restarts: 1 },
@@ -188,7 +188,7 @@ describe('output', () => {
 			processes: [{ pid: 1, ppid: 0, uid: 1000, state: 'S', rssBytes: 4096, cpuMicros: 2_000_000, startedAt: null, command: 'node server.js' }],
 		} satisfies ContainerInspect;
 		const report = inspectReport(container, { replica: null, nodeId: 'n', nodeName: 'edge', desiredId: 'wld_x' }).join('\n');
-		expect(report).toContain('skiff-workload-wld_x  running');
+		expect(report).toContain('yoal-workload-wld_x  running');
 		expect(report).toContain('Command     node server.js');
 		expect(report).toContain('DATABASE_URL');
 		expect(report).toContain('node server.js');

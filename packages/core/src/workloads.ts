@@ -1,5 +1,5 @@
 import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
-import { deployments, nodes, projects, releases, workloadReplicas, workloads } from '@skiff/db';
+import { deployments, nodes, projects, releases, workloadReplicas, workloads } from '@yoal/db';
 import {
 	githubRunnerSecretNames,
 	githubRunnerTarget,
@@ -39,7 +39,7 @@ import {
 	type WorkloadVariables,
 	type WorkloadView,
 	type WorkloadReplica,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
@@ -71,7 +71,7 @@ export interface ReplicaCopy {
 const ACTIVE_STATUSES: WorkloadStatus[] = ['pending', 'starting', 'running'];
 
 /**
- * Loopback ports Skiff assigns to compose services (Caddy dials one per exposed service). The
+ * Loopback ports Yoal assigns to compose services (Caddy dials one per exposed service). The
  * range is deliberately above the managed-service ranges so a stack never steals a database,
  * broker or storage port. Ports are stable for a service until the stack changes.
  */
@@ -89,7 +89,7 @@ export interface ResolvedWorkload {
 
 /**
  * Tier 2/3 runtime state (DESIGN §3.4). Placement is resolved once per deploy, admission is
- * checked against the target node's `skiff-workloads.slice` budget, and the agent receives only
+ * checked against the target node's `yoal-workloads.slice` budget, and the agent receives only
  * public spec fields plus secret *references*. Values are fetched at activation time.
  */
 export class WorkloadService {
@@ -108,7 +108,7 @@ export class WorkloadService {
 		// A function has no sensible default: the manifest is the program (D110).
 		if (runtime === 'function')
 			throw new ValidationError(
-				`Project "${project.slug}" needs a skiff-function.json bundle before it can deploy.`,
+				`Project "${project.slug}" needs a yoal-function.json bundle before it can deploy.`,
 			);
 		if (runtime === 'compose')
 			throw new ValidationError(
@@ -142,10 +142,10 @@ export class WorkloadService {
 				`Project "${project.slug}" is static. Create it with runtime "process", "container", "function" or "compose" to run a workload.`,
 			);
 		if (runtime === 'function' && !featureEnabled(this.ctx.config, 'FUNCTIONS'))
-			throw new ValidationError('Functions are not enabled on this platform (SKIFF_FEATURE_FUNCTIONS).');
+			throw new ValidationError('Functions are not enabled on this platform (YOAL_FEATURE_FUNCTIONS).');
 		if (runtime === 'compose') {
 			if (!featureEnabled(this.ctx.config, 'COMPOSE'))
-				throw new ValidationError('Compose stacks are not enabled on this platform (SKIFF_FEATURE_COMPOSE).');
+				throw new ValidationError('Compose stacks are not enabled on this platform (YOAL_FEATURE_COMPOSE).');
 			if (!spec.compose) throw new ValidationError('A compose project needs a parsed compose spec.');
 			// Admission is the whole stack: every service reserves its own memory and CPU share.
 			spec = {
@@ -252,7 +252,7 @@ export class WorkloadService {
 	}
 
 	/**
-	 * Give every exposed compose service a stable loopback port on its node. Skiff assigns these
+	 * Give every exposed compose service a stable loopback port on its node. Yoal assigns these
 	 * (never the compose file): a host port is host-global, so two stacks on one node must not
 	 * collide. An existing port is kept when it is still free, which keeps redeploys quiet.
 	 */
@@ -293,8 +293,8 @@ export class WorkloadService {
 				`Project "${project.slug}" is static. Create it with runtime "process", "container", "function" or "compose" to run a workload.`,
 			);
 		if (runtime === 'compose' && !featureEnabled(this.ctx.config, 'COMPOSE'))
-			throw new ValidationError('Compose stacks are not enabled on this platform (SKIFF_FEATURE_COMPOSE).');
-		// The digest is Skiff's to set at deploy time (R1); an input never carries one.
+			throw new ValidationError('Compose stacks are not enabled on this platform (YOAL_FEATURE_COMPOSE).');
+		// The digest is Yoal's to set at deploy time (R1); an input never carries one.
 		const { imageDigest: _ignored, ...specInput } = input as WorkloadSpecInput & { imageDigest?: string };
 		let spec = workloadSpecSchema.parse({ ...specInput, runtime });
 		if (spec.compose)
@@ -414,7 +414,7 @@ export class WorkloadService {
 		if (spec.runner.auth.method === 'installation') {
 			if (!this.ctx.githubApp.hasInstallationFor(project.orgId, spec.runner.owner))
 				throw new ValidationError(
-					`Skiff's GitHub App is not installed on ${spec.runner.owner} for this organisation. Install it from Settings → GitHub, or use a token.`,
+					`Yoal's GitHub App is not installed on ${spec.runner.owner} for this organisation. Install it from Settings → GitHub, or use a token.`,
 				);
 			return;
 		}
@@ -446,7 +446,7 @@ export class WorkloadService {
 		// A Python host loads Pyodide from the node's warmed cache, never from the internet (D121).
 		if (python && !capabilities.includes(FUNCTIONS_PYTHON_CAPABILITY))
 			throw new ValidationError(
-				`Node "${node.name}" cannot run Python functions yet: its Pyodide cache is not installed. Run \`sudo bun /opt/skiff/current/repo/scripts/install/pyodide.ts\` on the node (or upgrade it), then deploy again.`,
+				`Node "${node.name}" cannot run Python functions yet: its Pyodide cache is not installed. Run \`sudo bun /opt/yoal/current/repo/scripts/install/pyodide.ts\` on the node (or upgrade it), then deploy again.`,
 			);
 	}
 
@@ -462,7 +462,7 @@ export class WorkloadService {
 			.get();
 		if (node && nodeCapabilities(node.capabilitiesJson).includes(PROCESS_NODE_CAPABILITY)) return;
 		throw new ValidationError(
-			`Node "${node?.name ?? nodeId}" cannot run Node.js apps yet: its pinned Node.js is not installed. Run \`sudo bun /opt/skiff/current/repo/scripts/install/node.ts\` on the node (or upgrade it), then deploy again.`,
+			`Node "${node?.name ?? nodeId}" cannot run Node.js apps yet: its pinned Node.js is not installed. Run \`sudo bun /opt/yoal/current/repo/scripts/install/node.ts\` on the node (or upgrade it), then deploy again.`,
 		);
 	}
 
@@ -1319,7 +1319,7 @@ export function upstreamFor(id: string, spec: WorkloadSpec): string {
 	}
 	// Functions are socket-activated like a process app (D110): workerd takes the listener.
 	if ((spec.runtime === 'process' || spec.runtime === 'function') && spec.socketActivation)
-		return `unix//run/skiff-workloads/${id}.sock`;
+		return `unix//run/yoal-workloads/${id}.sock`;
 	return `127.0.0.1:${spec.port}`;
 }
 
@@ -1391,7 +1391,7 @@ function storedWorkloadRuntime(runtime: WorkloadRuntime): 'process' | 'container
 	return storedRuntime(runtime) as 'process' | 'container';
 }
 
-function placementSpecFor(project: ProjectRow): import('@skiff/contracts').PlacementSpec | null {
+function placementSpecFor(project: ProjectRow): import('@yoal/contracts').PlacementSpec | null {
 	if (!project.placementJson) return null;
 	try {
 		const parsed = placementSpecSchema.safeParse(JSON.parse(project.placementJson));

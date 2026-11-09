@@ -1,5 +1,5 @@
 import { fail } from '@sveltejs/kit';
-import { PLATFORM_CONFIG_SECTIONS, parseSmsRecipients } from '@skiff/contracts';
+import { PLATFORM_CONFIG_SECTIONS, parseSmsRecipients } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import {
 	currentSection,
@@ -41,36 +41,36 @@ function emailFields(data: FormData) {
 	return collect([
 		{
 			field: 'host',
-			key: 'SKIFF_SMTP_HOST',
+			key: 'YOAL_SMTP_HOST',
 			value: formString(data, 'host'),
 			required: true,
 			label: 'Host'
 		},
 		{
 			field: 'port',
-			key: 'SKIFF_SMTP_PORT',
+			key: 'YOAL_SMTP_PORT',
 			value: formString(data, 'port') || '587',
 			required: true,
 			label: 'Port'
 		},
-		{ field: 'user', key: 'SKIFF_SMTP_USER', value: formString(data, 'user'), label: 'Username' },
+		{ field: 'user', key: 'YOAL_SMTP_USER', value: formString(data, 'user'), label: 'Username' },
 		{
 			field: 'password',
-			key: 'SKIFF_SMTP_PASSWORD',
+			key: 'YOAL_SMTP_PASSWORD',
 			value: formRawString(data, 'password'),
 			secret: true,
 			label: 'Password'
 		},
 		{
 			field: 'from',
-			key: 'SKIFF_SMTP_FROM',
+			key: 'YOAL_SMTP_FROM',
 			value: formString(data, 'from'),
 			required: true,
 			label: 'From address'
 		},
 		{
 			field: 'secure',
-			key: 'SKIFF_SMTP_SECURE',
+			key: 'YOAL_SMTP_SECURE',
 			value: formBoolean(data, 'secure') ? '1' : '',
 			label: 'TLS'
 		}
@@ -79,12 +79,12 @@ function emailFields(data: FormData) {
 
 function smtpOptions(set: Record<string, string>) {
 	return {
-		host: set.SKIFF_SMTP_HOST!,
-		port: Number(set.SKIFF_SMTP_PORT),
-		user: set.SKIFF_SMTP_USER ?? '',
-		password: set.SKIFF_SMTP_PASSWORD ?? process.env.SKIFF_SMTP_PASSWORD ?? '',
-		from: set.SKIFF_SMTP_FROM!,
-		secure: set.SKIFF_SMTP_SECURE === '1' || Number(set.SKIFF_SMTP_PORT) === 465
+		host: set.YOAL_SMTP_HOST!,
+		port: Number(set.YOAL_SMTP_PORT),
+		user: set.YOAL_SMTP_USER ?? '',
+		password: set.YOAL_SMTP_PASSWORD ?? process.env.YOAL_SMTP_PASSWORD ?? '',
+		from: set.YOAL_SMTP_FROM!,
+		secure: set.YOAL_SMTP_SECURE === '1' || Number(set.YOAL_SMTP_PORT) === 465
 	};
 }
 
@@ -92,14 +92,14 @@ function smsFields(data: FormData) {
 	return collect([
 		{
 			field: 'accountSid',
-			key: 'SKIFF_TWILIO_ACCOUNT_SID',
+			key: 'YOAL_TWILIO_ACCOUNT_SID',
 			value: formString(data, 'accountSid'),
 			required: true,
 			label: 'Account SID'
 		},
 		{
 			field: 'authToken',
-			key: 'SKIFF_TWILIO_AUTH_TOKEN',
+			key: 'YOAL_TWILIO_AUTH_TOKEN',
 			value: formString(data, 'authToken'),
 			secret: true,
 			required: true,
@@ -107,7 +107,7 @@ function smsFields(data: FormData) {
 		},
 		{
 			field: 'from',
-			key: 'SKIFF_TWILIO_FROM',
+			key: 'YOAL_TWILIO_FROM',
 			value: formString(data, 'from'),
 			required: true,
 			label: 'Send from'
@@ -118,17 +118,17 @@ function smsFields(data: FormData) {
 /** Submitted values over the running ones; a blank Auth Token field keeps the saved token. */
 function twilioOptions(set: Record<string, string> = {}) {
 	return {
-		accountSid: set.SKIFF_TWILIO_ACCOUNT_SID ?? process.env.SKIFF_TWILIO_ACCOUNT_SID ?? '',
-		authToken: set.SKIFF_TWILIO_AUTH_TOKEN ?? process.env.SKIFF_TWILIO_AUTH_TOKEN ?? '',
-		from: set.SKIFF_TWILIO_FROM ?? process.env.SKIFF_TWILIO_FROM ?? ''
+		accountSid: set.YOAL_TWILIO_ACCOUNT_SID ?? process.env.YOAL_TWILIO_ACCOUNT_SID ?? '',
+		authToken: set.YOAL_TWILIO_AUTH_TOKEN ?? process.env.YOAL_TWILIO_AUTH_TOKEN ?? '',
+		from: set.YOAL_TWILIO_FROM ?? process.env.YOAL_TWILIO_FROM ?? ''
 	};
 }
 
 const twilioConfigured = () =>
 	Boolean(
-		process.env.SKIFF_TWILIO_ACCOUNT_SID &&
-		process.env.SKIFF_TWILIO_AUTH_TOKEN &&
-		process.env.SKIFF_TWILIO_FROM
+		process.env.YOAL_TWILIO_ACCOUNT_SID &&
+		process.env.YOAL_TWILIO_AUTH_TOKEN &&
+		process.env.YOAL_TWILIO_FROM
 	);
 
 export const actions: Actions = {
@@ -169,15 +169,15 @@ export const actions: Actions = {
 	testEmail: async ({ locals }) => {
 		requireOwnerPage(locals);
 		const to = locals.user?.email;
-		if (!process.env.SKIFF_SMTP_HOST) return fail(409, { message: 'Email is not configured yet.' });
+		if (!process.env.YOAL_SMTP_HOST) return fail(409, { message: 'Email is not configured yet.' });
 		if (!to) return fail(400, { message: 'Your account has no email address.' });
 		const result = await testSmtp(
 			smtpOptions({
-				SKIFF_SMTP_HOST: process.env.SKIFF_SMTP_HOST,
-				SKIFF_SMTP_PORT: process.env.SKIFF_SMTP_PORT ?? '587',
-				SKIFF_SMTP_USER: process.env.SKIFF_SMTP_USER ?? '',
-				SKIFF_SMTP_FROM: process.env.SKIFF_SMTP_FROM ?? '',
-				SKIFF_SMTP_SECURE: process.env.SKIFF_SMTP_SECURE ?? ''
+				YOAL_SMTP_HOST: process.env.YOAL_SMTP_HOST,
+				YOAL_SMTP_PORT: process.env.YOAL_SMTP_PORT ?? '587',
+				YOAL_SMTP_USER: process.env.YOAL_SMTP_USER ?? '',
+				YOAL_SMTP_FROM: process.env.YOAL_SMTP_FROM ?? '',
+				YOAL_SMTP_SECURE: process.env.YOAL_SMTP_SECURE ?? ''
 			}),
 			to
 		);
@@ -223,26 +223,26 @@ export const actions: Actions = {
 		const { set, unset, fieldErrors } = collect([
 			{
 				field: 'webhook',
-				key: 'SKIFF_ALERT_WEBHOOK',
+				key: 'YOAL_ALERT_WEBHOOK',
 				value: formString(data, 'webhook'),
 				label: 'Webhook URL'
 			},
 			{
 				field: 'webhookSecret',
-				key: 'SKIFF_ALERT_WEBHOOK_SECRET',
+				key: 'YOAL_ALERT_WEBHOOK_SECRET',
 				value: formString(data, 'webhookSecret'),
 				secret: true,
 				label: 'Signing secret'
 			},
 			{
 				field: 'email',
-				key: 'SKIFF_ALERT_EMAIL',
+				key: 'YOAL_ALERT_EMAIL',
 				value: formString(data, 'email'),
 				label: 'Alert email'
 			},
 			{
 				field: 'sms',
-				key: 'SKIFF_ALERT_SMS',
+				key: 'YOAL_ALERT_SMS',
 				// Normalise "+44 7700 900123, +1…" to the stored form before validating.
 				value: parseSmsRecipients(formString(data, 'sms').replace(/[\s()-]/g, '')).join(','),
 				label: 'SMS numbers'
@@ -250,24 +250,24 @@ export const actions: Actions = {
 		]);
 		if (Object.keys(fieldErrors).length) return fieldFailure(fieldErrors);
 		// The signing secret is write-only: blank keeps it, the checkbox (or removing the URL) drops it.
-		if (formBoolean(data, 'removeWebhookSecret') || unset.includes('SKIFF_ALERT_WEBHOOK')) {
-			delete set.SKIFF_ALERT_WEBHOOK_SECRET;
-			if (process.env.SKIFF_ALERT_WEBHOOK_SECRET) unset.push('SKIFF_ALERT_WEBHOOK_SECRET');
+		if (formBoolean(data, 'removeWebhookSecret') || unset.includes('YOAL_ALERT_WEBHOOK')) {
+			delete set.YOAL_ALERT_WEBHOOK_SECRET;
+			if (process.env.YOAL_ALERT_WEBHOOK_SECRET) unset.push('YOAL_ALERT_WEBHOOK_SECRET');
 		}
-		if (set.SKIFF_ALERT_EMAIL && !process.env.SKIFF_SMTP_HOST)
+		if (set.YOAL_ALERT_EMAIL && !process.env.YOAL_SMTP_HOST)
 			return fail(400, {
 				message: 'Set up outbound email first; alert emails are sent through it.',
 				fieldErrors: { email: 'Email is not configured.' }
 			});
-		if (set.SKIFF_ALERT_SMS && !twilioConfigured())
+		if (set.YOAL_ALERT_SMS && !twilioConfigured())
 			return fail(400, {
 				message: 'Set up Twilio first; SMS alerts are sent through it.',
 				fieldErrors: { sms: 'SMS is not configured.' }
 			});
-		if (set.SKIFF_ALERT_SMS) {
+		if (set.YOAL_ALERT_SMS) {
 			// Only numbers that are new get a (billed) test message.
-			const known = new Set(parseSmsRecipients(process.env.SKIFF_ALERT_SMS));
-			const added = parseSmsRecipients(set.SKIFF_ALERT_SMS).filter((n) => !known.has(n));
+			const known = new Set(parseSmsRecipients(process.env.YOAL_ALERT_SMS));
+			const added = parseSmsRecipients(set.YOAL_ALERT_SMS).filter((n) => !known.has(n));
 			if (added.length) {
 				const result = await testSms(twilioOptions(), added);
 				if (!result.ok)
@@ -277,12 +277,12 @@ export const actions: Actions = {
 					});
 			}
 		}
-		if (set.SKIFF_ALERT_WEBHOOK && set.SKIFF_ALERT_WEBHOOK !== process.env.SKIFF_ALERT_WEBHOOK) {
+		if (set.YOAL_ALERT_WEBHOOK && set.YOAL_ALERT_WEBHOOK !== process.env.YOAL_ALERT_WEBHOOK) {
 			const result = await testWebhook(
-				set.SKIFF_ALERT_WEBHOOK,
-				unset.includes('SKIFF_ALERT_WEBHOOK_SECRET')
+				set.YOAL_ALERT_WEBHOOK,
+				unset.includes('YOAL_ALERT_WEBHOOK_SECRET')
 					? undefined
-					: (set.SKIFF_ALERT_WEBHOOK_SECRET ?? process.env.SKIFF_ALERT_WEBHOOK_SECRET)
+					: (set.YOAL_ALERT_WEBHOOK_SECRET ?? process.env.YOAL_ALERT_WEBHOOK_SECRET)
 			);
 			if (!result.ok)
 				return fail(400, {
@@ -307,7 +307,7 @@ export const actions: Actions = {
 				await notifier.notify({
 					key: 'test',
 					title: 'Test alert',
-					detail: `This is a test alert from Skiff, sent by ${locals.user?.email ?? principal.userId}. Real alerts look like this.`,
+					detail: `This is a test alert from Yoal, sent by ${locals.user?.email ?? principal.userId}. Real alerts look like this.`,
 					severity: 'info'
 				});
 			} catch (error) {

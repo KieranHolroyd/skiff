@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { createHmac } from 'node:crypto';
-import { forgeFullName, parseRepoUrl, repoKey } from '@skiff/contracts';
+import { forgeFullName, parseRepoUrl, repoKey } from '@yoal/contracts';
 import { normaliseForgeEvent, verifyDelivery, webhookEventName, webhookSource, type HeaderReader } from './events.ts';
 
 const headers = (values: Record<string, string>): HeaderReader => ({ get: (name) => values[name.toLowerCase()] ?? null });
@@ -56,7 +56,7 @@ describe('normalised events', () => {
 		const event = normaliseForgeEvent('github', 'push', {
 			ref: 'refs/heads/main',
 			after: 'a'.repeat(40),
-			commits: [{ added: ['x'], modified: ['.skiff/workflows/ci.yml'], removed: ['y'] }],
+			commits: [{ added: ['x'], modified: ['.yoal/workflows/ci.yml'], removed: ['y'] }],
 			head_commit: { message: 'ship' },
 			pusher: { name: 'kim' },
 			repository: { full_name: 'acme/app', clone_url: 'https://github.com/acme/app.git', default_branch: 'main' },
@@ -65,8 +65,8 @@ describe('normalised events', () => {
 			kind: 'push',
 			after: 'a'.repeat(40),
 			deleted: false,
-			changedFiles: ['x', '.skiff/workflows/ci.yml', 'y'],
-			addedOrModified: ['x', '.skiff/workflows/ci.yml'],
+			changedFiles: ['x', '.yoal/workflows/ci.yml', 'y'],
+			addedOrModified: ['x', '.yoal/workflows/ci.yml'],
 			message: 'ship',
 			actor: 'kim',
 			fullName: 'acme/app',

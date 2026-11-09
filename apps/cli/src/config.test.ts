@@ -24,7 +24,7 @@ import {
 let dir = '';
 
 beforeEach(async () => {
-	dir = await mkdtemp(join(tmpdir(), 'skiff-cli-config-'));
+	dir = await mkdtemp(join(tmpdir(), 'yoal-cli-config-'));
 });
 
 afterEach(async () => {
@@ -34,10 +34,10 @@ afterEach(async () => {
 const env = () =>
 	({
 		HOME: dir,
-		SKIFF_CONFIG_DIR: dir,
-		SKIFF_URL: undefined,
-		SKIFF_TOKEN: undefined,
-		SKIFF_CONTENT_DOMAIN: undefined,
+		YOAL_CONFIG_DIR: dir,
+		YOAL_URL: undefined,
+		YOAL_TOKEN: undefined,
+		YOAL_CONTENT_DOMAIN: undefined,
 	}) as Record<string, string | undefined>;
 
 describe('config storage', () => {
@@ -232,7 +232,7 @@ describe('config resolution', () => {
 	});
 
 	test('explains how to log in when no credentials exist', async () => {
-		await expect(resolveConfig({}, env())).rejects.toThrow('Run `skif login`');
+		await expect(resolveConfig({}, env())).rejects.toThrow('Run `yoal login`');
 	});
 
 	test('a saved URL without a key still asks for login', async () => {

@@ -4,8 +4,8 @@ import { zipSync } from 'fflate';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import type { PipelineClaimRequestInput, PipelineJobClaim, PipelineResolveClaim } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import type { PipelineClaimRequestInput, PipelineJobClaim, PipelineResolveClaim } from '@yoal/contracts';
 import { buildPrincipal } from '../orgs.ts';
 import { createCore, type Core } from '../index.ts';
 import { LocalObjectStore } from '../object-store.ts';
@@ -17,7 +17,7 @@ import { headerReader } from '../builds.ts';
  * deployments, Deploy from Git and GitLab CI trusts. The forges are a fake behind `forgeFetch`.
  */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-forges-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-forges-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 
@@ -45,7 +45,7 @@ const forgeFetch = (async (input: string | URL | Request, init?: RequestInit) =>
 	// GitLab (gitlab.test)
 	if (url.host === 'gitlab.test') {
 		if (headers.get('private-token') !== 'glpat-api-token' && headers.get('private-token') !== 'glpat-clone-only') return Response.json({ message: '401 Unauthorized' }, { status: 401 });
-		if (path === '/api/v4/user') return Response.json({ username: headers.get('private-token') === 'glpat-clone-only' ? 'reader' : 'skiff-bot' });
+		if (path === '/api/v4/user') return Response.json({ username: headers.get('private-token') === 'glpat-clone-only' ? 'reader' : 'yoal-bot' });
 		if (path === '/api/v4/projects' && method === 'GET')
 			return Response.json([
 				{ id: 11, name: 'api', path_with_namespace: 'acme/platform/api', namespace: { full_path: 'acme/platform' }, visibility: 'private', default_branch: 'main', http_url_to_repo: 'https://gitlab.test/acme/platform/api.git', web_url: 'https://gitlab.test/acme/platform/api', last_activity_at: '2026-11-01T00:00:00Z' },
@@ -55,7 +55,7 @@ const forgeFetch = (async (input: string | URL | Request, init?: RequestInit) =>
 		if (path.endsWith('/repository/tree')) {
 			const treePath = url.searchParams.get('path') ?? '';
 			if (treePath === '') return Response.json([{ name: 'package.json', path: 'package.json', type: 'blob' }, { name: 'src', path: 'src', type: 'tree' }]);
-			if (treePath === '.skiff/workflows') return Response.json([{ name: 'ci.yml', path: '.skiff/workflows/ci.yml', type: 'blob' }]);
+			if (treePath === '.yoal/workflows') return Response.json([{ name: 'ci.yml', path: '.yoal/workflows/ci.yml', type: 'blob' }]);
 			return Response.json({ message: '404 Tree Not Found' }, { status: 404 });
 		}
 		if (path.endsWith('/repository/files/package.json'))
@@ -88,7 +88,7 @@ const forgeFetch = (async (input: string | URL | Request, init?: RequestInit) =>
 	// Forgejo (forgejo.test)
 	if (url.host === 'forgejo.test') {
 		if (headers.get('authorization') !== 'token fj-api-token') return Response.json({ message: 'token is required' }, { status: 401 });
-		if (path === '/api/v1/user') return Response.json({ login: 'skiff-bot' });
+		if (path === '/api/v1/user') return Response.json({ login: 'yoal-bot' });
 		if (path === '/api/v1/user/repos') return Response.json([{ id: 5, name: 'web', full_name: 'acme/web', owner: { login: 'acme' }, private: true, default_branch: 'main', clone_url: 'https://forgejo.test/acme/web.git', html_url: 'https://forgejo.test/acme/web' }]);
 		const hookMatch = /^\/api\/v1\/(repos|orgs)\/(.+)\/hooks(?:\/(\d+))?$/.exec(path);
 		if (hookMatch) {
@@ -101,7 +101,7 @@ const forgeFetch = (async (input: string | URL | Request, init?: RequestInit) =>
 				return Response.json({ id: hook.id }, { status: 201 });
 			}
 		}
-		if (path === '/api/v1/repos/acme/new-svc/contents/.skiff/workflows') return Response.json([{ name: 'ci.yaml', path: '.skiff/workflows/ci.yaml', type: 'file' }]);
+		if (path === '/api/v1/repos/acme/new-svc/contents/.yoal/workflows') return Response.json([{ name: 'ci.yaml', path: '.yoal/workflows/ci.yaml', type: 'file' }]);
 		if (/\/statuses\/[a-f0-9]{40}$/.test(path)) return Response.json({ id: 1 }, { status: 201 });
 	}
 	return Response.json({ message: `Not Found: ${method} ${url}` }, { status: 404 });
@@ -172,7 +172,7 @@ describe('connections', () => {
 	test('GitLab and Forgejo connect; tokens are proven and never returned', async () => {
 		const gitlab = await core.forges.create(owner, { kind: 'gitlab', baseUrl: 'https://gitlab.test/', token: 'glpat-api-token', cloneToken: 'glpat-clone-only' });
 		gitlabId = gitlab.id;
-		expect(gitlab).toMatchObject({ kind: 'gitlab', baseUrl: 'https://gitlab.test', accountLogin: 'skiff-bot', cloneLogin: 'reader', hasCloneToken: true, webhookUrl: `https://control.test/api/webhooks/forge/${gitlab.id}` });
+		expect(gitlab).toMatchObject({ kind: 'gitlab', baseUrl: 'https://gitlab.test', accountLogin: 'yoal-bot', cloneLogin: 'reader', hasCloneToken: true, webhookUrl: `https://control.test/api/webhooks/forge/${gitlab.id}` });
 		expect(JSON.stringify(gitlab)).not.toContain('glpat');
 		forgejoId = (await core.forges.create(owner, { kind: 'forgejo', baseUrl: 'https://forgejo.test', token: 'fj-api-token', name: 'Forgejo' })).id;
 		await expect(core.forges.create(owner, { kind: 'gitlab', baseUrl: 'https://gitlab.test', token: 'glpat-api-token' })).rejects.toMatchObject({ status: 409 });
@@ -189,7 +189,7 @@ describe('connections', () => {
 describe('git builds on GitLab', () => {
 	let slug = '';
 
-	test('a git source on a connected forge gets Skiff’s webhook', async () => {
+	test('a git source on a connected forge gets Yoal’s webhook', async () => {
 		const project = await core.projects.create(owner, { name: 'api', slug: 'gl-api', runtime: 'static', placement: 'edge', productionAccess: 'public', previewAccess: 'platform' });
 		slug = project.slug;
 		const source = core.builds.upsertGitSource(owner, core.projects.requireRow(owner, slug), {
@@ -235,7 +235,7 @@ describe('git builds on GitLab', () => {
 		await Bun.sleep(20);
 		const states = calls.filter((call) => call.url.includes(`/statuses/${sha}`)).map((call) => call.body?.state);
 		expect(states).toEqual(['pending', 'failed']);
-		expect(calls.find((call) => call.url.includes('/statuses/'))!.body).toMatchObject({ name: `skiff-build/${slug}` });
+		expect(calls.find((call) => call.url.includes('/statuses/'))!.body).toMatchObject({ name: `yoal-build/${slug}` });
 	});
 
 	test('without Maintainer the clone token is used; the deploy token is cached', async () => {
@@ -249,12 +249,12 @@ describe('git builds on GitLab', () => {
 		deployTokenAllowed = true;
 	});
 
-	test('the project’s hand-made webhook accepts GitLab’s token but is ignored while Skiff’s hook delivers', async () => {
+	test('the project’s hand-made webhook accepts GitLab’s token but is ignored while Yoal’s hook delivers', async () => {
 		const project = core.projects.requireRow(owner, slug);
 		const body = JSON.stringify({ object_kind: 'push', ref: 'refs/heads/main', after: 'b'.repeat(40), commits: [], project: { path_with_namespace: 'acme/platform/api' } });
 		await expect(core.builds.handleWebhook(project, body, headerReader({ 'x-gitlab-event': 'Push Hook', 'x-gitlab-token': 'wrong-secret' }))).rejects.toMatchObject({ status: 401 });
 		expect(await core.builds.handleWebhook(project, body, headerReader({ 'x-gitlab-event': 'Push Hook', 'x-gitlab-token': 'hand-made-secret-12345' }))).toBeNull();
-		// Once Skiff's hook is gone, the hand-made one builds.
+		// Once Yoal's hook is gone, the hand-made one builds.
 		opened.sqlite.run('UPDATE forge_webhooks SET hook_id = NULL');
 		const build = await core.builds.handleWebhook(project, body, headerReader({ 'x-gitlab-event': 'Push Hook', 'x-gitlab-token': 'hand-made-secret-12345' }));
 		expect(build?.commitSha).toBe('b'.repeat(40));
@@ -306,13 +306,13 @@ describe('pipelines on GitLab and Forgejo', () => {
 		expect(resolve).toMatchObject({ kind: 'resolve', gitTokenHost: 'gitlab.test', gitTokenUsername: 'gitlab+deploy-token-1', gitToken: 'gldt-1' });
 		engine.resolveTrigger(engine.authenticateTrigger(resolve.token), {
 			sha,
-			files: [{ path: '.skiff/workflows/ci.yml', content: 'name: ci\non: push\njobs:\n  a: { runs-on: linux, steps: [{ run: echo }] }\n' }],
+			files: [{ path: '.yoal/workflows/ci.yml', content: 'name: ci\non: push\njobs:\n  a: { runs-on: linux, steps: [{ run: echo }] }\n' }],
 		});
 		const job = (await engine.claim(nodeId, labels)) as PipelineJobClaim;
 		expect(job.gitTokenHost).toBe('gitlab.test');
 		expect(job.secretNames).not.toContain('GITHUB_TOKEN');
 		await Bun.sleep(20);
-		expect(calls.some((call) => call.url.includes(`/statuses/${sha}`) && call.body?.name === 'skiff/ci')).toBe(true);
+		expect(calls.some((call) => call.url.includes(`/statuses/${sha}`) && call.body?.name === 'yoal/ci')).toBe(true);
 		await drain();
 	});
 
@@ -328,7 +328,7 @@ describe('pipelines on GitLab and Forgejo', () => {
 		expect(resolve.ref).toBe('refs/merge-requests/5/head');
 		engine.resolveTrigger(engine.authenticateTrigger(resolve.token), {
 			sha: 'e'.repeat(40),
-			files: [{ path: '.skiff/workflows/ci.yml', content: 'name: ci\non: pull_request\njobs:\n  a: { runs-on: linux, steps: [{ run: echo }] }\n' }],
+			files: [{ path: '.yoal/workflows/ci.yml', content: 'name: ci\non: pull_request\njobs:\n  a: { runs-on: linux, steps: [{ run: echo }] }\n' }],
 		});
 		const job = (await engine.claim(nodeId, labels)) as PipelineJobClaim;
 		expect(job.trust).toBe('untrusted');

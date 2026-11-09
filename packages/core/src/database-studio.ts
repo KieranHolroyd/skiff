@@ -1,5 +1,5 @@
 import { and, desc, eq, isNull } from 'drizzle-orm';
-import { databases, databaseStudioSessions } from '@skiff/db';
+import { databases, databaseStudioSessions } from '@yoal/db';
 import {
 	DATABASE_CONSOLE_DEFAULT_IDLE_MINUTES,
 	DATABASE_STUDIO_READONLY_USER,
@@ -14,7 +14,7 @@ import {
 	type DatabaseStudioView,
 	type NodeStudioDesired,
 	type Principal,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
 import type { DatabaseRow } from './databases.ts';
@@ -104,7 +104,7 @@ function iso(ms: number): string {
  * desired state. Lifecycle audit keeps the `database.console.*` names from D60.
  */
 export class DatabaseStudioService {
-	/** The per-database `skiff_studio_ro` account read-only sessions connect as (track G). */
+	/** The per-database `yoal_studio_ro` account read-only sessions connect as (track G). */
 	readonly principals: DatabaseStudioPrincipals;
 
 	constructor(private readonly ctx: CoreContext) {
@@ -277,7 +277,7 @@ export class DatabaseStudioService {
 		if (this.lapsed(session, this.ctx.now())) throw new ConflictError('The database studio session has expired.');
 
 		const connection = this.ctx.databases.studioConnection(row);
-		// Read-only sessions connect as the database's `skiff_studio_ro` principal, so the database
+		// Read-only sessions connect as the database's `yoal_studio_ro` principal, so the database
 		// itself refuses their writes; the plugin's session flags are a second layer. They never
 		// fall back to the owner. Write sessions use the owner.
 		let user = connection.user;

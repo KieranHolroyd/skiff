@@ -2,7 +2,7 @@ import {
 	databaseRotationActivationSchema,
 	type DatabaseRotationResult,
 	type DesiredState,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { HelperApi } from './helper-client.ts';
 
 /**

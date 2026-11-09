@@ -23,7 +23,7 @@ import {
 	type PruneCategory,
 	type PruneScope,
 	type Role,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from '../context.ts';
 import { ConflictError, CoreError, ForbiddenError, NotFoundError, ValidationError } from '../errors.ts';
 import { buildPrincipal, readMembership } from '../orgs.ts';

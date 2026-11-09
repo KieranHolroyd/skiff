@@ -34,7 +34,7 @@ const view: HaStatusView = {
 	],
 };
 
-describe('skif ha status', () => {
+describe('yoal ha status', () => {
 	test('prints the lease, lost nodes, database candidates and recent events', () => {
 		const text = formatHaStatus(view);
 		expect(text).toContain('Automatic failover: on');

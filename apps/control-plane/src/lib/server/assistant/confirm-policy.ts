@@ -44,7 +44,7 @@ export const CONFIRM_TOOLS: ReadonlySet<string> = new Set([
 	'create_backup_target',
 	// Real mail to real people can't be recalled (docs/EMAIL.md §9).
 	'send_email',
-	// A sandbox recipient gets a verification email from Skiff: a third party, so a click first.
+	// A sandbox recipient gets a verification email from Yoal: a third party, so a click first.
 	'add_email_address',
 	// Node tasks (D124) run production code: a consumer handles the message, the function the request.
 	'send_queue_message',
@@ -54,7 +54,7 @@ export const CONFIRM_TOOLS: ReadonlySet<string> = new Set([
 	// Jobs (plan 09) run production code against production data.
 	'run_job',
 	'run_command',
-	// A log drain copies every log line out of Skiff, to a URL the model chose (DESIGN §8).
+	// A log drain copies every log line out of Yoal, to a URL the model chose (DESIGN §8).
 	'create_log_drain',
 	// Pipelines run workflow code with the repository's secrets and may deploy (docs/PIPELINES.md §7).
 	'dispatch_workflow',

@@ -3,7 +3,7 @@ title: Dashboard assistant
 description: Turn on the optional AI assistant, pick a model provider, and see what it can do, what it sends to the model and how actions are confirmed.
 ---
 
-The dashboard assistant is an optional chat panel in the Skiff dashboard. You can ask it how something works, ask for the state of your projects, databases and fleet, and ask it to make changes. It uses the same tools as the [MCP server](/clients/mcp), so it can do no more than the signed-in user, and every call is audited. It stays off until an owner connects a model provider.
+The dashboard assistant is an optional chat panel in the Yoal dashboard. You can ask it how something works, ask for the state of your projects, databases and fleet, and ask it to make changes. It uses the same tools as the [MCP server](/clients/mcp), so it can do no more than the signed-in user, and every call is audited. It stays off until an owner connects a model provider.
 
 ## Enable the assistant
 
@@ -14,7 +14,7 @@ Only an owner can configure the assistant. Open **Settings → Assistant** and f
 - **Model**: the model id that server serves.
 - **API key**: only if the endpoint needs one.
 
-Saving checks the endpoint first. Skiff calls `GET <base URL>/models`, and if the server does not implement that, it sends a one-token test completion. If the check fails, nothing is saved and the form shows the reason. A successful save writes the settings to the host and restarts the dashboard for a few seconds. **Test provider** runs the same check against the saved settings, and **Remove** clears the configuration so the launcher disappears after the restart.
+Saving checks the endpoint first. Yoal calls `GET <base URL>/models`, and if the server does not implement that, it sends a one-token test completion. If the check fails, nothing is saved and the form shows the reason. A successful save writes the settings to the host and restarts the dashboard for a few seconds. **Test provider** runs the same check against the saved settings, and **Remove** clears the configuration so the launcher disappears after the restart.
 
 The API key is write-only. The form shows only whether a key is saved, and a blank field keeps the saved key.
 
@@ -36,14 +36,14 @@ With **OpenRouter** selected, the model field lists the models in OpenRouter's p
 On a host where the dashboard does not manage settings, set the assistant in the environment:
 
 ```sh
-SKIFF_ASSISTANT_PROVIDER=openai          # openai | openai-compatible | openrouter | ollama
-SKIFF_ASSISTANT_BASE_URL=https://api.openai.com/v1
-SKIFF_ASSISTANT_MODEL=gpt-4.1-mini
-SKIFF_ASSISTANT_API_KEY=sk-...
-SKIFF_ASSISTANT_DISABLED=1               # switches the assistant off
+YOAL_ASSISTANT_PROVIDER=openai          # openai | openai-compatible | openrouter | ollama
+YOAL_ASSISTANT_BASE_URL=https://api.openai.com/v1
+YOAL_ASSISTANT_MODEL=gpt-4.1-mini
+YOAL_ASSISTANT_API_KEY=sk-...
+YOAL_ASSISTANT_DISABLED=1               # switches the assistant off
 ```
 
-If `SKIFF_ASSISTANT_PROVIDER` is unset, the provider is `openai-compatible`. If `SKIFF_ASSISTANT_BASE_URL` is unset, the provider's address from the table above is used. The assistant is on when `SKIFF_ASSISTANT_MODEL` is set and `SKIFF_ASSISTANT_DISABLED` is not `1`. On a development server, the Settings page saves the same values to `platform-settings.json` in the data directory. See [configuration](/self-hosting/configuration) for how the other settings are managed.
+If `YOAL_ASSISTANT_PROVIDER` is unset, the provider is `openai-compatible`. If `YOAL_ASSISTANT_BASE_URL` is unset, the provider's address from the table above is used. The assistant is on when `YOAL_ASSISTANT_MODEL` is set and `YOAL_ASSISTANT_DISABLED` is not `1`. On a development server, the Settings page saves the same values to `platform-settings.json` in the data directory. See [configuration](/self-hosting/configuration) for how the other settings are managed.
 
 ### Instructions and tools
 
@@ -59,7 +59,7 @@ Below the provider settings, **Instructions and tools** (owner only) lets you ch
 
 Press **⌘I** (or Ctrl+I) to open the panel. It opens beside the page without covering the dashboard. From its menu you can make it wider, or dock it beside the page on screens 1024 px and wider.
 
-- **Conversations** are saved in this browser's local storage, separately for each signed-in user. Up to 40 are kept, and pinned ones are kept first. Skiff does not store them on the server. Use `/history` to search, pin, rename and delete them.
+- **Conversations** are saved in this browser's local storage, separately for each signed-in user. Up to 40 are kept, and pinned ones are kept first. Yoal does not store them on the server. Use `/history` to search, pin, rename and delete them.
 - **Slash commands** are `/new`, `/history`, `/retry`, `/clear`, `/export`, `/status`, `/tour` and `/help`.
 - **Mentions**: type `@` to pick a project, database or storage instance. It inserts the name, such as `@launch-page`, and the assistant looks it up with a tool.
 - **Page context** is shared by default. A chip under the composer shows this, and clicking it stops sharing. While it is off, the assistant cannot see the page you are on.
@@ -80,7 +80,7 @@ sequenceDiagram
   participant P as Assistant panel
   participant CP as Control plane
   participant M as Model provider
-  participant T as Skiff tools
+  participant T as Yoal tools
   participant L as Audit log
   U->>P: ask in chat
   P->>CP: message, history and page outline
@@ -102,7 +102,7 @@ sequenceDiagram
   T->>L: record assistant.deploy_site
 ```
 
-It can also use one tool of its own, `guide_user`, to show a guided tour. A tour has up to eight steps. Each step can navigate to a dashboard path first, then spotlight an element by its `data-skiff-target` id or a CSS selector, with a short title and body. Ask it "where do I…" and it will usually point at the element rather than describe where it is.
+It can also use one tool of its own, `guide_user`, to show a guided tour. A tour has up to eight steps. Each step can navigate to a dashboard path first, then spotlight an element by its `data-yoal-target` id or a CSS selector, with a short title and body. Ask it "where do I…" and it will usually point at the element rather than describe where it is.
 
 Each turn runs at most 12 model rounds and 24 tool calls by default. Both limits are set in **Settings → Assistant → Turn limits**.
 
@@ -115,7 +115,7 @@ When the assistant proposes one of these actions, the chat shows a card with the
 - **Confirm** runs the action. **Cancel** leaves everything unchanged.
 - The approval is a signed token bound to your user, your organisation, the tool and the exact arguments. It expires after 10 minutes. The confirm endpoint checks the token and the permissions again before it runs the tool.
 - A turn stops after the first confirmation card, so the assistant does not queue more destructive steps.
-- After an action completes, **Ask Skiff to follow up** asks the assistant to check the result.
+- After an action completes, **Ask Yoal to follow up** asks the assistant to check the result.
 
 The assistant reads logs, page content and database rows, and any of them can contain text that tries to give instructions. The confirmation step means such text cannot publish a site, mint a link or rotate a credential on its own.
 
@@ -168,7 +168,7 @@ The turn limit is counted in memory by each control-plane process.
 
 | Symptom | Cause |
 |---|---|
-| No launcher. The API returns `503` with `assistant_not_configured` | No model is set, or `SKIFF_ASSISTANT_DISABLED=1` |
+| No launcher. The API returns `503` with `assistant_not_configured` | No model is set, or `YOAL_ASSISTANT_DISABLED=1` |
 | "The model provider answered 401" or 404 | Wrong key, wrong base URL, or the model is not served there. The message points to Settings → Assistant |
 | "The model provider timed out" | No answer within 120 seconds |
 | `429` with `rate_limited` | More than the turn limit in one minute. Wait for the retry time shown |

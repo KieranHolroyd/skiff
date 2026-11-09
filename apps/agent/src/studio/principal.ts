@@ -4,7 +4,7 @@ import {
 	type DatabaseStudioPrincipalResult,
 	type DatabaseStudioPrincipalTask,
 	type DesiredState,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { HelperStudioPrincipalApi } from '../helper-client.ts';
 
 /**

@@ -11,7 +11,7 @@ import {
 const base = { id: 'req_0123456789', requestedAt: '2026-11-03T12:00:00.000Z', by: 'user_1' };
 const r2 = {
 	R2_ACCOUNT_ID: '0123456789abcdef0123456789abcdef',
-	R2_BUCKET: 'skiff-prod',
+	R2_BUCKET: 'yoal-prod',
 	R2_ACCESS_KEY_ID: 'abcdef0123456789abcdef0123456789',
 	R2_SECRET_ACCESS_KEY: 'f'.repeat(64),
 };
@@ -25,11 +25,11 @@ function configure(raw: Record<string, unknown>) {
 describe('parsePlatformConfigRequest', () => {
 	test('accepts a backups configure request', () => {
 		const request = configure({ section: 'backups', set: r2, unset: [] });
-		expect(request.set.R2_BUCKET).toBe('skiff-prod');
+		expect(request.set.R2_BUCKET).toBe('yoal-prod');
 	});
 
 	test('rejects keys outside the section allowlist', () => {
-		for (const key of ['BETTER_AUTH_SECRET', 'SKIFF_PLATFORM_ORIGIN', 'SKIFF_SMTP_HOST', 'PATH']) {
+		for (const key of ['BETTER_AUTH_SECRET', 'YOAL_PLATFORM_ORIGIN', 'YOAL_SMTP_HOST', 'PATH']) {
 			const parsed = parsePlatformConfigRequest({ ...base, action: 'configure', section: 'backups', set: { [key]: 'x' } });
 			expect(parsed.ok).toBe(false);
 		}
@@ -38,7 +38,7 @@ describe('parsePlatformConfigRequest', () => {
 
 	test('rejects values that could inject env lines or YAML structure', () => {
 		const bad = [
-			{ R2_BUCKET: 'skiff\nBETTER_AUTH_SECRET=x' },
+			{ R2_BUCKET: 'yoal\nBETTER_AUTH_SECRET=x' },
 			{ R2_BUCKET: 'a: {b}' },
 			{ R2_SECRET_ACCESS_KEY: 'abc def ghi jkl mno' },
 			{ R2_ENDPOINT: 'https://evil.example/path' },
@@ -59,8 +59,8 @@ describe('parsePlatformConfigRequest', () => {
 				...base,
 				action: 'configure',
 				section: 'alerts',
-				set: { SKIFF_ALERT_EMAIL: 'a@b.co' },
-				unset: ['SKIFF_ALERT_EMAIL'],
+				set: { YOAL_ALERT_EMAIL: 'a@b.co' },
+				unset: ['YOAL_ALERT_EMAIL'],
 			}).ok,
 		).toBe(false);
 	});
@@ -73,44 +73,44 @@ describe('parsePlatformConfigRequest', () => {
 
 describe('validatePlatformConfigValue', () => {
 	test('email and webhook values', () => {
-		expect(validatePlatformConfigValue('SKIFF_SMTP_FROM', 'Skiff <noreply@example.com>')).toBeNull();
-		expect(validatePlatformConfigValue('SKIFF_SMTP_FROM', 'noreply@example.com')).toBeNull();
-		expect(validatePlatformConfigValue('SKIFF_SMTP_FROM', 'Skiff')).not.toBeNull();
-		expect(validatePlatformConfigValue('SKIFF_SMTP_PORT', '587')).toBeNull();
-		expect(validatePlatformConfigValue('SKIFF_SMTP_PORT', '70000')).not.toBeNull();
-		expect(validatePlatformConfigValue('SKIFF_SMTP_HOST', 'email-smtp.eu-west-2.amazonaws.com')).toBeNull();
-		expect(validatePlatformConfigValue('SKIFF_SMTP_HOST', 'smtp host')).not.toBeNull();
-		expect(validatePlatformConfigValue('SKIFF_SMTP_PASSWORD', 'p@ss $word; "quoted"')).toBeNull();
-		expect(validatePlatformConfigValue('SKIFF_ALERT_WEBHOOK', 'https://ntfy.sh/skiff-alerts')).toBeNull();
-		expect(validatePlatformConfigValue('SKIFF_ALERT_WEBHOOK', 'https://user:pw@hooks.example')).not.toBeNull();
-		expect(validatePlatformConfigValue('SKIFF_ALERT_WEBHOOK', 'file:///etc/passwd')).not.toBeNull();
-		expect(validatePlatformConfigValue('SKIFF_ALERT_EMAIL', 'ops@example.com')).toBeNull();
-		expect(validatePlatformConfigValue('SKIFF_ALERT_WEBHOOK_SECRET', 'a3f9c0de5b7e41a2a3f9c0de5b7e41a2')).toBeNull();
-		expect(validatePlatformConfigValue('SKIFF_ALERT_WEBHOOK_SECRET', 'short')).not.toBeNull();
-		expect(validatePlatformConfigValue('SKIFF_ALERT_WEBHOOK_SECRET', 'has a space in it 123456')).not.toBeNull();
-		expect(PLATFORM_CONFIG_SECRET_KEYS.has('SKIFF_ALERT_WEBHOOK_SECRET')).toBe(true);
+		expect(validatePlatformConfigValue('YOAL_SMTP_FROM', 'Yoal <noreply@example.com>')).toBeNull();
+		expect(validatePlatformConfigValue('YOAL_SMTP_FROM', 'noreply@example.com')).toBeNull();
+		expect(validatePlatformConfigValue('YOAL_SMTP_FROM', 'Yoal')).not.toBeNull();
+		expect(validatePlatformConfigValue('YOAL_SMTP_PORT', '587')).toBeNull();
+		expect(validatePlatformConfigValue('YOAL_SMTP_PORT', '70000')).not.toBeNull();
+		expect(validatePlatformConfigValue('YOAL_SMTP_HOST', 'email-smtp.eu-west-2.amazonaws.com')).toBeNull();
+		expect(validatePlatformConfigValue('YOAL_SMTP_HOST', 'smtp host')).not.toBeNull();
+		expect(validatePlatformConfigValue('YOAL_SMTP_PASSWORD', 'p@ss $word; "quoted"')).toBeNull();
+		expect(validatePlatformConfigValue('YOAL_ALERT_WEBHOOK', 'https://ntfy.sh/yoal-alerts')).toBeNull();
+		expect(validatePlatformConfigValue('YOAL_ALERT_WEBHOOK', 'https://user:pw@hooks.example')).not.toBeNull();
+		expect(validatePlatformConfigValue('YOAL_ALERT_WEBHOOK', 'file:///etc/passwd')).not.toBeNull();
+		expect(validatePlatformConfigValue('YOAL_ALERT_EMAIL', 'ops@example.com')).toBeNull();
+		expect(validatePlatformConfigValue('YOAL_ALERT_WEBHOOK_SECRET', 'a3f9c0de5b7e41a2a3f9c0de5b7e41a2')).toBeNull();
+		expect(validatePlatformConfigValue('YOAL_ALERT_WEBHOOK_SECRET', 'short')).not.toBeNull();
+		expect(validatePlatformConfigValue('YOAL_ALERT_WEBHOOK_SECRET', 'has a space in it 123456')).not.toBeNull();
+		expect(PLATFORM_CONFIG_SECRET_KEYS.has('YOAL_ALERT_WEBHOOK_SECRET')).toBe(true);
 	});
 
 	test('validates Twilio settings and SMS recipients', () => {
 		const sid = `AC${'0123456789abcdef'.repeat(2)}`;
-		expect(validatePlatformConfigValue('SKIFF_TWILIO_ACCOUNT_SID', sid)).toBeNull();
-		expect(validatePlatformConfigValue('SKIFF_TWILIO_ACCOUNT_SID', `SK${'0'.repeat(32)}`)).not.toBeNull();
-		expect(validatePlatformConfigValue('SKIFF_TWILIO_AUTH_TOKEN', 'f'.repeat(32))).toBeNull();
-		expect(validatePlatformConfigValue('SKIFF_TWILIO_AUTH_TOKEN', 'short')).not.toBeNull();
-		expect(validatePlatformConfigValue('SKIFF_TWILIO_FROM', '+447700900123')).toBeNull();
-		expect(validatePlatformConfigValue('SKIFF_TWILIO_FROM', `MG${'a'.repeat(32)}`)).toBeNull();
-		expect(validatePlatformConfigValue('SKIFF_TWILIO_FROM', 'Skiff')).toBeNull();
-		expect(validatePlatformConfigValue('SKIFF_TWILIO_FROM', 'SkiffAlertsX1')).not.toBeNull(); // > 11 chars
-		expect(validatePlatformConfigValue('SKIFF_TWILIO_FROM', '12345')).not.toBeNull(); // needs a letter
-		expect(validatePlatformConfigValue('SKIFF_TWILIO_FROM', '07700900123')).not.toBeNull();
+		expect(validatePlatformConfigValue('YOAL_TWILIO_ACCOUNT_SID', sid)).toBeNull();
+		expect(validatePlatformConfigValue('YOAL_TWILIO_ACCOUNT_SID', `SK${'0'.repeat(32)}`)).not.toBeNull();
+		expect(validatePlatformConfigValue('YOAL_TWILIO_AUTH_TOKEN', 'f'.repeat(32))).toBeNull();
+		expect(validatePlatformConfigValue('YOAL_TWILIO_AUTH_TOKEN', 'short')).not.toBeNull();
+		expect(validatePlatformConfigValue('YOAL_TWILIO_FROM', '+447700900123')).toBeNull();
+		expect(validatePlatformConfigValue('YOAL_TWILIO_FROM', `MG${'a'.repeat(32)}`)).toBeNull();
+		expect(validatePlatformConfigValue('YOAL_TWILIO_FROM', 'Yoal')).toBeNull();
+		expect(validatePlatformConfigValue('YOAL_TWILIO_FROM', 'YoalAlertsX1')).not.toBeNull(); // > 11 chars
+		expect(validatePlatformConfigValue('YOAL_TWILIO_FROM', '12345')).not.toBeNull(); // needs a letter
+		expect(validatePlatformConfigValue('YOAL_TWILIO_FROM', '07700900123')).not.toBeNull();
 
-		expect(validatePlatformConfigValue('SKIFF_ALERT_SMS', '+447700900123')).toBeNull();
-		expect(validatePlatformConfigValue('SKIFF_ALERT_SMS', '+447700900123, +15005550006')).toBeNull();
-		expect(validatePlatformConfigValue('SKIFF_ALERT_SMS', '07700900123')).toContain('07700900123');
-		expect(validatePlatformConfigValue('SKIFF_ALERT_SMS', '+447700900123,+447700900123')).not.toBeNull();
-		expect(validatePlatformConfigValue('SKIFF_ALERT_SMS', ' , ')).not.toBeNull();
+		expect(validatePlatformConfigValue('YOAL_ALERT_SMS', '+447700900123')).toBeNull();
+		expect(validatePlatformConfigValue('YOAL_ALERT_SMS', '+447700900123, +15005550006')).toBeNull();
+		expect(validatePlatformConfigValue('YOAL_ALERT_SMS', '07700900123')).toContain('07700900123');
+		expect(validatePlatformConfigValue('YOAL_ALERT_SMS', '+447700900123,+447700900123')).not.toBeNull();
+		expect(validatePlatformConfigValue('YOAL_ALERT_SMS', ' , ')).not.toBeNull();
 		const six = Array.from({ length: 6 }, (_, i) => `+4477009001${i}0`).join(',');
-		expect(validatePlatformConfigValue('SKIFF_ALERT_SMS', six)).not.toBeNull();
+		expect(validatePlatformConfigValue('YOAL_ALERT_SMS', six)).not.toBeNull();
 		expect(parseSmsRecipients(' +447700900123 ,,+15005550006 ')).toEqual(['+447700900123', '+15005550006']);
 	});
 
@@ -120,7 +120,7 @@ describe('validatePlatformConfigValue', () => {
 			...base,
 			action: 'configure',
 			section: 'sms',
-			set: { SKIFF_TWILIO_FROM: 'Skiff' },
+			set: { YOAL_TWILIO_FROM: 'Yoal' },
 		});
 		if (!parsed.ok || parsed.request.action !== 'configure') throw new Error('expected a configure request');
 		const request = parsed.request;
@@ -148,13 +148,13 @@ describe('applyPlatformConfig', () => {
 
 	test('removing every key of a section is allowed', () => {
 		const env = new Map([
-			['SKIFF_SMTP_HOST', 'smtp.example.com'],
-			['SKIFF_SMTP_PORT', '587'],
-			['SKIFF_SMTP_FROM', 'a@example.com'],
+			['YOAL_SMTP_HOST', 'smtp.example.com'],
+			['YOAL_SMTP_PORT', '587'],
+			['YOAL_SMTP_FROM', 'a@example.com'],
 		]);
 		applyPlatformConfig(
 			env,
-			configure({ section: 'email', unset: ['SKIFF_SMTP_HOST', 'SKIFF_SMTP_PORT', 'SKIFF_SMTP_FROM'] }),
+			configure({ section: 'email', unset: ['YOAL_SMTP_HOST', 'YOAL_SMTP_PORT', 'YOAL_SMTP_FROM'] }),
 		);
 		expect(env.size).toBe(0);
 	});

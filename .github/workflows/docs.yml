@@ -1,15 +1,15 @@
 name: Docs
 
-# Builds the standalone docs site (apps/docs) from packages/docs/content and, when a Skiff
+# Builds the standalone docs site (apps/docs) from packages/docs/content and, when a Yoal
 # instance is configured, deploys it there. Runs whenever the docs or the platform version change,
 # so the published docs always describe the latest platform release. The dashboard's own /docs and
 # the agents' search_docs index need no job: they are bundled into every control-plane build.
 #
 # To deploy, set in the repository settings:
-#   secrets.SKIFF_DOCS_TOKEN   an API key (skif_…) with project:create and deployment:create
-#   vars.SKIFF_DOCS_URL        the control plane, e.g. https://control.example.com
-#   vars.SKIFF_DOCS_PROJECT    optional project slug (default: skiff-docs)
-#   vars.SKIFF_DOCS_SITE_URL   optional public URL, for canonical links and the sitemap
+#   secrets.YOAL_DOCS_TOKEN   an API key (yoal_…) with project:create and deployment:create
+#   vars.YOAL_DOCS_URL        the control plane, e.g. https://control.example.com
+#   vars.YOAL_DOCS_PROJECT    optional project slug (default: yoal-docs)
+#   vars.YOAL_DOCS_SITE_URL   optional public URL, for canonical links and the sitemap
 # Without them the job still builds and uploads the site as an artifact.
 
 on:
@@ -51,7 +51,7 @@ jobs:
       - name: Build site
         run: bun run --cwd apps/docs build
         env:
-          DOCS_SITE_URL: ${{ vars.SKIFF_DOCS_SITE_URL }}
+          DOCS_SITE_URL: ${{ vars.YOAL_DOCS_SITE_URL }}
       - uses: actions/upload-artifact@v4
         with:
           name: docs-site
@@ -63,29 +63,29 @@ jobs:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     env:
-      SKIFF_URL: ${{ vars.SKIFF_DOCS_URL }}
-      SKIFF_TOKEN: ${{ secrets.SKIFF_DOCS_TOKEN }}
+      YOAL_URL: ${{ vars.YOAL_DOCS_URL }}
+      YOAL_TOKEN: ${{ secrets.YOAL_DOCS_TOKEN }}
     steps:
-      - name: Skip when no Skiff instance is configured
-        if: env.SKIFF_URL == '' || env.SKIFF_TOKEN == ''
-        run: echo "::notice::Set vars.SKIFF_DOCS_URL and secrets.SKIFF_DOCS_TOKEN to deploy the docs."
+      - name: Skip when no Yoal instance is configured
+        if: env.YOAL_URL == '' || env.YOAL_TOKEN == ''
+        run: echo "::notice::Set vars.YOAL_DOCS_URL and secrets.YOAL_DOCS_TOKEN to deploy the docs."
       - uses: actions/checkout@v4
-        if: env.SKIFF_URL != '' && env.SKIFF_TOKEN != ''
+        if: env.YOAL_URL != '' && env.YOAL_TOKEN != ''
         with:
           sparse-checkout: VERSION
       - uses: actions/download-artifact@v4
-        if: env.SKIFF_URL != '' && env.SKIFF_TOKEN != ''
+        if: env.YOAL_URL != '' && env.YOAL_TOKEN != ''
         with:
           name: docs-site
           path: dist
       - uses: oven-sh/setup-bun@v2
-        if: env.SKIFF_URL != '' && env.SKIFF_TOKEN != ''
+        if: env.YOAL_URL != '' && env.YOAL_TOKEN != ''
         with:
           bun-version: ${{ env.BUN_VERSION }}
-      - name: Deploy to Skiff
-        if: env.SKIFF_URL != '' && env.SKIFF_TOKEN != ''
+      - name: Deploy to Yoal
+        if: env.YOAL_URL != '' && env.YOAL_TOKEN != ''
         run: |
-          bunx @skiffy/skiff deploy dist \
-            --project "${{ vars.SKIFF_DOCS_PROJECT || 'skiff-docs' }}" \
+          bunx @yoal/cli deploy dist \
+            --project "${{ vars.YOAL_DOCS_PROJECT || 'yoal-docs' }}" \
             --message "docs for v$(cat VERSION) (${GITHUB_SHA::7})" \
             --json

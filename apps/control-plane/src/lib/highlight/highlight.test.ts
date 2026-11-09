@@ -13,9 +13,9 @@ describe('resolveLang', () => {
 		expect(resolveLang('src/index.ts')).toBe('typescript');
 		expect(resolveLang('wrangler.jsonc')).toBe('jsonc');
 		expect(resolveLang('edge · /etc/wireguard/wg0.conf')).toBe('ini');
-		expect(resolveLang('worker · /etc/systemd/system/skiff-agent.service')).toBe('systemd');
-		expect(resolveLang('worker · /etc/skiff/skiff.env')).toBe('dotenv');
-		expect(resolveLang('skiff-function.json → bindings')).toBe('json');
+		expect(resolveLang('worker · /etc/systemd/system/yoal-agent.service')).toBe('systemd');
+		expect(resolveLang('worker · /etc/yoal/yoal.env')).toBe('dotenv');
+		expect(resolveLang('yoal-function.json → bindings')).toBe('json');
 		expect(resolveLang('.github/workflows/ci.yml')).toBe('yaml');
 		expect(resolveLang('schema.prisma')).toBe('prisma');
 		expect(resolveLang('Dockerfile')).toBe('dockerfile');

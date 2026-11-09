@@ -36,7 +36,7 @@ function workloadInput(overrides: Record<string, unknown> = {}): Record<string, 
 		runtime: 'function',
 		status: 'running',
 		release: SHA,
-		upstream: 'unix//run/skiff-workloads/wld_abc123.sock',
+		upstream: 'unix//run/yoal-workloads/wld_abc123.sock',
 		memoryMb: 128,
 		cpus: 0.5,
 		port: 3000,
@@ -56,7 +56,7 @@ function workloadInput(overrides: Record<string, unknown> = {}): Record<string, 
 			compatibilityFlags: ['nodejs_compat'],
 			bindings: [
 				{ name: 'API_KEY', type: 'secret', secret: 'API_TOKEN' },
-				{ name: 'OTHER', type: 'app', project: 'other', upstream: 'unix//run/skiff-workloads/prj_2.sock' },
+				{ name: 'OTHER', type: 'app', project: 'other', upstream: 'unix//run/yoal-workloads/prj_2.sock' },
 			],
 			triggers: { crons: [] },
 			assets: null,
@@ -450,65 +450,65 @@ describe('parseApplyRequest: function files', () => {
 describe('renderFunctionUnit', () => {
 	test('renders the fixed workerd unit with one credential per module', () => {
 		const workload = functionWorkload();
-		const configPath = '/run/skiff-workloads/wld_abc123/function/config.capnp';
-		const shimPath = '/run/skiff-workloads/wld_abc123/function/shim.mjs';
-		const workerdPath = `/usr/lib/skiff/workerd/${WORKERD_VERSION}/workerd`;
+		const configPath = '/run/yoal-workloads/wld_abc123/function/config.capnp';
+		const shimPath = '/run/yoal-workloads/wld_abc123/function/shim.mjs';
+		const workerdPath = `/usr/lib/yoal/workerd/${WORKERD_VERSION}/workerd`;
 		const unit = renderFunctionUnit({
 			workload,
-			releaseDir: '/srv/skiff/releases/' + SHA,
-			envFile: '/run/skiff-workloads/wld_abc123/env',
-			secrets: [{ name: 'TLS_KEY', path: '/run/skiff-workloads/wld_abc123/secrets/TLS_KEY' }],
+			releaseDir: '/srv/yoal/releases/' + SHA,
+			envFile: '/run/yoal-workloads/wld_abc123/env',
+			secrets: [{ name: 'TLS_KEY', path: '/run/yoal-workloads/wld_abc123/secrets/TLS_KEY' }],
 			volumeMounts: [
-				{ hostPath: '/var/lib/skiff/apps/prj_1/vol_1', mountPath: '/data/app', readOnly: false },
-				{ hostPath: '/var/lib/skiff/apps/prj_1/vol_2', mountPath: '/data/ro', readOnly: true },
+				{ hostPath: '/var/lib/yoal/apps/prj_1/vol_1', mountPath: '/data/app', readOnly: false },
+				{ hostPath: '/var/lib/yoal/apps/prj_1/vol_2', mountPath: '/data/ro', readOnly: true },
 			],
 			configPath,
 			shimPath,
 			workerdPath,
-			modulePaths: ['/srv/skiff/releases/' + SHA + '/index.js', '/srv/skiff/releases/' + SHA + '/lib/util.js'],
+			modulePaths: ['/srv/yoal/releases/' + SHA + '/index.js', '/srv/yoal/releases/' + SHA + '/lib/util.js'],
 			durableStorage: false,
 		});
 		const lines = unit.split('\n');
 
 		expect(lines).toContain(`ExecStart=${workerdPath} serve %d/function-config --socket-fd http=3`);
 		// Without these a plain `systemctl restart` starts workerd with no fd 3 and it exits.
-		expect(lines).toContain(`Requires=skiff-workload-${workload.id}.socket`);
-		expect(lines).toContain(`After=skiff-workload-${workload.id}.socket`);
+		expect(lines).toContain(`Requires=yoal-workload-${workload.id}.socket`);
+		expect(lines).toContain(`After=yoal-workload-${workload.id}.socket`);
 		expect(lines).toContain(`LoadCredential=function-config:${configPath}`);
 		expect(lines).toContain(`LoadCredential=function-shim:${shimPath}`);
 		expect(lines).toContain(
-			`LoadCredential=module-0:/srv/skiff/releases/${SHA}/index.js`,
+			`LoadCredential=module-0:/srv/yoal/releases/${SHA}/index.js`,
 		);
 		expect(lines).toContain(
-			`LoadCredential=module-1:/srv/skiff/releases/${SHA}/lib/util.js`,
+			`LoadCredential=module-1:/srv/yoal/releases/${SHA}/lib/util.js`,
 		);
-		expect(lines.indexOf(`LoadCredential=module-0:/srv/skiff/releases/${SHA}/index.js`)).toBeLessThan(
-			lines.indexOf(`LoadCredential=module-1:/srv/skiff/releases/${SHA}/lib/util.js`),
+		expect(lines.indexOf(`LoadCredential=module-0:/srv/yoal/releases/${SHA}/index.js`)).toBeLessThan(
+			lines.indexOf(`LoadCredential=module-1:/srv/yoal/releases/${SHA}/lib/util.js`),
 		);
 		expect(lines).toContain('Type=simple');
 		expect(lines).toContain('DynamicUser=yes');
-		expect(lines).toContain('StateDirectory=skiff-workloads/wld_abc123');
+		expect(lines).toContain('StateDirectory=yoal-workloads/wld_abc123');
 		expect(lines).toContain('StateDirectoryMode=0700');
-		expect(lines).toContain(`WorkingDirectory=/srv/skiff/releases/${SHA}`);
-		expect(lines).toContain('EnvironmentFile=-/run/skiff-workloads/wld_abc123/env');
+		expect(lines).toContain(`WorkingDirectory=/srv/yoal/releases/${SHA}`);
+		expect(lines).toContain('EnvironmentFile=-/run/yoal-workloads/wld_abc123/env');
 		expect(lines).toContain('MemoryMax=128M');
 		expect(lines).toContain('CPUQuota=50%');
-		expect(lines).toContain('Slice=skiff-workloads.slice');
+		expect(lines).toContain('Slice=yoal-workloads.slice');
 		expect(lines).toContain('KillSignal=SIGTERM');
 		expect(lines).toContain('TimeoutStopSec=30');
 		expect(lines).toContain('IPAddressAllow=127.0.0.0/8 ::1/128');
 		expect(lines).toContain(
 			'IPAddressDeny=10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 fc00::/7 fe80::/10',
 		);
-		expect(lines).toContain('LoadCredential=TLS_KEY:/run/skiff-workloads/wld_abc123/secrets/TLS_KEY');
+		expect(lines).toContain('LoadCredential=TLS_KEY:/run/yoal-workloads/wld_abc123/secrets/TLS_KEY');
 		expect(lines).toContain('Environment=TLS_KEY_FILE=%d/TLS_KEY');
-		expect(lines).toContain('BindPaths=/var/lib/skiff/apps/prj_1/vol_1:/data/app');
+		expect(lines).toContain('BindPaths=/var/lib/yoal/apps/prj_1/vol_1:/data/app');
 		expect(lines).toContain('ReadWritePaths=/data/app');
-		expect(lines).toContain('BindReadOnlyPaths=/var/lib/skiff/apps/prj_1/vol_2:/data/ro');
+		expect(lines).toContain('BindReadOnlyPaths=/var/lib/yoal/apps/prj_1/vol_2:/data/ro');
 
 		// Phase 1 has no stateful binding: exactly one writable state dir and no disk service.
 		expect(lines.filter((line) => line.startsWith('StateDirectory='))).toEqual([
-			'StateDirectory=skiff-workloads/wld_abc123',
+			'StateDirectory=yoal-workloads/wld_abc123',
 		]);
 		expect(unit).not.toContain('--directory-path');
 		expect(unit).not.toContain('do-storage');
@@ -532,31 +532,31 @@ describe('renderFunctionUnit', () => {
 				],
 			},
 		});
-		const workerdPath = `/usr/lib/skiff/workerd/${WORKERD_VERSION}/workerd`;
+		const workerdPath = `/usr/lib/yoal/workerd/${WORKERD_VERSION}/workerd`;
 		const unit = renderFunctionUnit({
 			workload,
-			releaseDir: '/srv/skiff/releases/' + SHA,
-			envFile: '/run/skiff-workloads/wld_abc123/env',
+			releaseDir: '/srv/yoal/releases/' + SHA,
+			envFile: '/run/yoal-workloads/wld_abc123/env',
 			secrets: [],
-			configPath: '/run/skiff-workloads/wld_abc123/function/config.capnp',
-			shimPath: '/run/skiff-workloads/wld_abc123/function/shim.mjs',
+			configPath: '/run/yoal-workloads/wld_abc123/function/config.capnp',
+			shimPath: '/run/yoal-workloads/wld_abc123/function/shim.mjs',
 			workerdPath,
-			modulePaths: ['/srv/skiff/releases/' + SHA + '/index.js', '/srv/skiff/releases/' + SHA + '/lib/util.js'],
-			files: [{ name: 'binding-kv', path: '/run/skiff-workloads/wld_abc123/function/binding-kv' }],
+			modulePaths: ['/srv/yoal/releases/' + SHA + '/index.js', '/srv/yoal/releases/' + SHA + '/lib/util.js'],
+			files: [{ name: 'binding-kv', path: '/run/yoal-workloads/wld_abc123/function/binding-kv' }],
 			durableStorage: true,
 		});
 		const lines = unit.split('\n');
 
 		// Both state dirs are created and owned by the dynamic user; the helper never mkdirs them.
 		expect(lines.filter((line) => line.startsWith('StateDirectory='))).toEqual([
-			'StateDirectory=skiff-workloads/wld_abc123',
-			'StateDirectory=skiff-workloads/wld_abc123/do',
+			'StateDirectory=yoal-workloads/wld_abc123',
+			'StateDirectory=yoal-workloads/wld_abc123/do',
 		]);
 		expect(lines).toContain(
-			`ExecStart=${workerdPath} serve %d/function-config --socket-fd http=3 --directory-path do-storage=/var/lib/skiff-workloads/wld_abc123/do`,
+			`ExecStart=${workerdPath} serve %d/function-config --socket-fd http=3 --directory-path do-storage=/var/lib/yoal-workloads/wld_abc123/do`,
 		);
 		expect(lines).toContain(
-			'LoadCredential=binding-kv:/run/skiff-workloads/wld_abc123/function/binding-kv',
+			'LoadCredential=binding-kv:/run/yoal-workloads/wld_abc123/function/binding-kv',
 		);
 		expect(unit).not.toContain('ExecStartPre');
 		expect(unit).not.toContain('[Install]');
@@ -565,15 +565,15 @@ describe('renderFunctionUnit', () => {
 	test('requires one module path per module and a function workload', () => {
 		const base = {
 			workload: functionWorkload(),
-			releaseDir: '/srv/skiff/releases/' + SHA,
-			envFile: '/run/skiff-workloads/wld_abc123/env',
+			releaseDir: '/srv/yoal/releases/' + SHA,
+			envFile: '/run/yoal-workloads/wld_abc123/env',
 			secrets: [],
-			configPath: '/run/skiff-workloads/wld_abc123/function/config.capnp',
-			shimPath: '/run/skiff-workloads/wld_abc123/function/shim.mjs',
-			workerdPath: `/usr/lib/skiff/workerd/${WORKERD_VERSION}/workerd`,
+			configPath: '/run/yoal-workloads/wld_abc123/function/config.capnp',
+			shimPath: '/run/yoal-workloads/wld_abc123/function/shim.mjs',
+			workerdPath: `/usr/lib/yoal/workerd/${WORKERD_VERSION}/workerd`,
 			durableStorage: false,
 		};
-		expect(() => renderFunctionUnit({ ...base, modulePaths: ['/srv/skiff/releases/' + SHA + '/index.js'] })).toThrow(
+		expect(() => renderFunctionUnit({ ...base, modulePaths: ['/srv/yoal/releases/' + SHA + '/index.js'] })).toThrow(
 			/one module path per module/,
 		);
 		const processWorkload = parseWorkload({
@@ -616,7 +616,7 @@ interface Fixture {
 }
 
 async function fixture(options: { modules?: boolean; workerd?: boolean } = {}): Promise<Fixture> {
-	const root = await fs.mkdtemp(join(tmpdir(), 'skiff-helper-function-'));
+	const root = await fs.mkdtemp(join(tmpdir(), 'yoal-helper-function-'));
 	directories.push(root);
 	const unitDir = join(root, 'units');
 	const quadletDir = join(root, 'quadlet');
@@ -668,7 +668,7 @@ describe('SystemdDriver.apply: function', () => {
 		expect((await fs.stat(shimPath)).mode & 0o777).toBe(0o600);
 		expect((await fs.stat(functionDir)).mode & 0o777).toBe(0o700);
 
-		const unit = await fs.readFile(join(f.unitDir, 'skiff-workload-wld_abc123.service'), 'utf8');
+		const unit = await fs.readFile(join(f.unitDir, 'yoal-workload-wld_abc123.service'), 'utf8');
 		const binary = join(f.workerdDir, WORKERD_VERSION, 'workerd');
 		expect(unit).toContain(`ExecStart=${binary} serve %d/function-config --socket-fd http=3`);
 		expect(unit).toContain(`LoadCredential=function-config:${configPath}`);
@@ -677,7 +677,7 @@ describe('SystemdDriver.apply: function', () => {
 		expect(unit).toContain(`LoadCredential=module-1:${join(f.releaseDir, 'lib/util.js')}`);
 		expect(unit).not.toContain('[Install]');
 
-		const socket = await fs.readFile(join(f.unitDir, 'skiff-workload-wld_abc123.socket'), 'utf8');
+		const socket = await fs.readFile(join(f.unitDir, 'yoal-workload-wld_abc123.socket'), 'utf8');
 		expect(socket).toContain(`ListenStream=${join(f.runtimeDir, 'wld_abc123.sock')}`);
 		expect(socket).toContain('SocketMode=0660');
 		expect(socket).toContain('SocketGroup=caddy');
@@ -685,22 +685,22 @@ describe('SystemdDriver.apply: function', () => {
 		expect(f.runner.calls).toContainEqual([
 			'/usr/bin/systemctl',
 			'disable',
-			'skiff-workload-wld_abc123.service',
+			'yoal-workload-wld_abc123.service',
 		]);
 		expect(f.runner.calls).toContainEqual([
 			'/usr/bin/systemctl',
 			'enable',
-			'skiff-workload-wld_abc123.socket',
+			'yoal-workload-wld_abc123.socket',
 		]);
 		expect(f.runner.calls).toContainEqual([
 			'/usr/bin/systemctl',
 			'restart',
-			'skiff-workload-wld_abc123.service',
+			'yoal-workload-wld_abc123.service',
 		]);
 		expect(f.runner.calls).toContainEqual([
 			'/usr/bin/systemctl',
 			'restart',
-			'skiff-workload-wld_abc123.socket',
+			'yoal-workload-wld_abc123.socket',
 		]);
 		expect(status.id).toBe('wld_abc123');
 	});
@@ -708,8 +708,8 @@ describe('SystemdDriver.apply: function', () => {
 	test('removes a stale container and pooler unit for the same id', async () => {
 		const f = await fixture();
 		await fs.mkdir(f.quadletDir, { recursive: true });
-		const container = join(f.quadletDir, 'skiff-workload-wld_abc123.container');
-		const pooler = join(f.quadletDir, 'skiff-workload-wld_abc123-pool.container');
+		const container = join(f.quadletDir, 'yoal-workload-wld_abc123.container');
+		const pooler = join(f.quadletDir, 'yoal-workload-wld_abc123-pool.container');
 		await fs.writeFile(container, 'stale');
 		await fs.writeFile(pooler, 'stale');
 
@@ -734,7 +734,7 @@ describe('SystemdDriver.apply: function', () => {
 			expect(await fs.readFile(path, 'utf8')).toBe(files.files![name]!);
 			expect((await fs.stat(path)).mode & 0o777).toBe(0o600);
 		}
-		const unit = await fs.readFile(join(f.unitDir, 'skiff-workload-wld_abc123.service'), 'utf8');
+		const unit = await fs.readFile(join(f.unitDir, 'yoal-workload-wld_abc123.service'), 'utf8');
 		expect(unit).toContain(`LoadCredential=binding-kv:${join(functionDir, 'binding-kv')}`);
 		expect(unit).toContain(`LoadCredential=binding-cache:${join(functionDir, 'binding-cache')}`);
 		// Sorted by name, deterministic across applies.
@@ -755,10 +755,10 @@ describe('SystemdDriver.apply: function', () => {
 		});
 		await f.driver.apply(workload, activation(), functionFiles());
 
-		const unit = await fs.readFile(join(f.unitDir, 'skiff-workload-wld_abc123.service'), 'utf8');
-		expect(unit).toContain('StateDirectory=skiff-workloads/wld_abc123/do');
+		const unit = await fs.readFile(join(f.unitDir, 'yoal-workload-wld_abc123.service'), 'utf8');
+		expect(unit).toContain('StateDirectory=yoal-workloads/wld_abc123/do');
 		expect(unit).toContain(
-			'--directory-path do-storage=/var/lib/skiff-workloads/wld_abc123/do',
+			'--directory-path do-storage=/var/lib/yoal-workloads/wld_abc123/do',
 		);
 		// The helper never creates the directory itself; systemd owns it under DynamicUser.
 		await expect(fs.stat(join(f.root, 'state/wld_abc123/do'))).rejects.toThrow();

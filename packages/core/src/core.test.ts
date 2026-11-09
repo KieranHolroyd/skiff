@@ -3,13 +3,13 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { zipSync } from 'fflate';
-import { createDb } from '@skiff/db';
+import { createDb } from '@yoal/db';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import type { Core } from './index.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-core-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-core-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 let clock = Date.now();
@@ -99,7 +99,7 @@ describe('deploy pipeline', () => {
 				file('index.html', '<h1>Hello</h1>'),
 				file('about.html', '<h1>About</h1>'),
 				file('_redirects', '/old /new 301\n'),
-				file('skiff.json', JSON.stringify({ spa: false, notFound: '/404.html' })),
+				file('yoal.json', JSON.stringify({ spa: false, notFound: '/404.html' })),
 				file('404.html', '<h1>Not found</h1>'),
 			],
 			{ promote: true },
@@ -119,7 +119,7 @@ describe('deploy pipeline', () => {
 		const project = core.projects.requireRow(principal, 'blog');
 		const first = core.deployments.list(principal, project)[0]!;
 		clock += 1000;
-		const second = await core.uploads.deployInline(principal, project, [file('index.html', '<h1>Hello</h1>'), file('about.html', '<h1>About</h1>'), file('_redirects', '/old /new 301\n'), file('skiff.json', JSON.stringify({ spa: false, notFound: '/404.html' })), file('404.html', '<h1>Not found</h1>')], { promote: false });
+		const second = await core.uploads.deployInline(principal, project, [file('index.html', '<h1>Hello</h1>'), file('about.html', '<h1>About</h1>'), file('_redirects', '/old /new 301\n'), file('yoal.json', JSON.stringify({ spa: false, notFound: '/404.html' })), file('404.html', '<h1>Not found</h1>')], { promote: false });
 		expect(second.release.sha256).toBe(first.release.sha256);
 	});
 
@@ -237,7 +237,7 @@ describe('access and share links', () => {
 			sessionTtlSeconds: 600,
 			note: 'client review',
 		});
-		const raw = new URL(link.url!).searchParams.get('_skiff_share')!;
+		const raw = new URL(link.url!).searchParams.get('_yoal_share')!;
 		const first = core.access.shareAccess(raw, { ip: '1.2.3.4', userAgent: 'test' });
 		expect(first.token).toBeTruthy();
 		expect(core.access.verifySiteToken(project.id, first.token)?.kind).toBe('share');
@@ -273,7 +273,7 @@ describe('site access tokens and share-link sessions', () => {
 	test('callback tokens are one-time and live 60 s; the session expiry travels separately', async () => {
 		const project = core.projects.requireRow(principal, 'blog');
 		const link = await core.access.createShareLink(principal, project, { sessionTtlSeconds: 7200 });
-		const raw = new URL(link.url!).searchParams.get('_skiff_share')!;
+		const raw = new URL(link.url!).searchParams.get('_yoal_share')!;
 		const visit = core.access.shareAccess(raw, { ip: '9.9.9.9', userAgent: 'token-test' });
 		const claims = decode(visit.token);
 		const now = Math.floor(clock / 1000);
@@ -288,7 +288,7 @@ describe('site access tokens and share-link sessions', () => {
 	test('maxVisitors caps distinct visitors but lets a returning visitor back in', async () => {
 		const project = core.projects.requireRow(principal, 'blog');
 		const link = await core.access.createShareLink(principal, project, { maxVisitors: 1 });
-		const raw = new URL(link.url!).searchParams.get('_skiff_share')!;
+		const raw = new URL(link.url!).searchParams.get('_yoal_share')!;
 		core.access.shareAccess(raw, { ip: '5.5.5.5', userAgent: 'alice' });
 		expect(() => core.access.shareAccess(raw, { ip: '5.5.5.5', userAgent: 'alice' })).not.toThrow();
 		expect(() => core.access.shareAccess(raw, { ip: '6.6.6.6', userAgent: 'bob' })).toThrow(/visitor limit/);
@@ -339,7 +339,7 @@ describe('revocations', () => {
 	test('a revoked share session stays revoked for as long as the session could last', async () => {
 		const project = core.projects.requireRow(principal, 'blog');
 		const link = await core.access.createShareLink(principal, project, { sessionTtlSeconds: 30 * 86_400 });
-		const raw = new URL(link.url!).searchParams.get('_skiff_share')!;
+		const raw = new URL(link.url!).searchParams.get('_yoal_share')!;
 		const visit = core.access.shareAccess(raw, { ip: '7.7.7.7', userAgent: 'long-session' });
 		const sid = (JSON.parse(Buffer.from(visit.token.split('.')[0]!, 'base64url').toString()) as { sid: string }).sid;
 		await core.access.revokeShareLink(principal, project, link.id);
@@ -360,7 +360,7 @@ describe('revocations', () => {
 		const blog = core.projects.requireRow(principal, 'blog');
 		const other = core.projects.requireRow(principal, 'my-cool-site');
 		const link = await core.access.createShareLink(principal, blog, {});
-		const raw = new URL(link.url!).searchParams.get('_skiff_share')!;
+		const raw = new URL(link.url!).searchParams.get('_yoal_share')!;
 		const visit = core.access.shareAccess(raw, { ip: '8.8.8.8', userAgent: 'scoped' });
 		const sid = (JSON.parse(Buffer.from(visit.token.split('.')[0]!, 'base64url').toString()) as { sid: string }).sid;
 		await expect(core.access.revokeSession(principal, other, sid)).rejects.toThrow();

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { bucketCreateSchema } from '@skiff/contracts';
-import type { BucketCorsRule, BucketLifecycleRule, BucketObjectLock, StorageAdmin, WorkloadObjectStorage } from '@skiff/contracts';
+import { bucketCreateSchema } from '@yoal/contracts';
+import type { BucketCorsRule, BucketLifecycleRule, BucketObjectLock, StorageAdmin, WorkloadObjectStorage } from '@yoal/contracts';
 import {
 	StorageApiError,
 	StorageReconciler,
@@ -232,7 +232,7 @@ describe('storage bucket configuration convergence', () => {
 		expect(api.lock).toEqual(objectLock);
 	});
 
-	test('a watched bucket points its events at the skiff target; unwatching clears it (D122)', async () => {
+	test('a watched bucket points its events at the yoal target; unwatching clears it (D122)', async () => {
 		const api = new FakeApi();
 		const reconciler = new StorageReconciler({
 			source: { storageTargets: () => [{ ...target(api), desired: desired({ notifications: true }) }] },
@@ -241,7 +241,7 @@ describe('storage bucket configuration convergence', () => {
 		});
 		await reconciler.reconcile();
 		expect(api.notifications.get('uploads')).toBe(true);
-		expect(notificationXml(true)).toContain('<Queue>arn:rustfs:sqs:us-east-1:skiff:webhook</Queue>');
+		expect(notificationXml(true)).toContain('<Queue>arn:rustfs:sqs:us-east-1:yoal:webhook</Queue>');
 		expect(notificationXml(true)).toContain('<Event>s3:ObjectCreated:*</Event><Event>s3:ObjectRemoved:*</Event>');
 		expect(notificationXml(false)).not.toContain('QueueConfiguration');
 

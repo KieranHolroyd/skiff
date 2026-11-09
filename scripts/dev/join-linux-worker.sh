@@ -1,7 +1,7 @@
 #!/bin/sh
-# Dev-only: turn this Linux box into a Skiff worker (agent + helper + Caddy + Podman) that joins
+# Dev-only: turn this Linux box into a Yoal worker (agent + helper + Caddy + Podman) that joins
 # the vite dev control plane on your Mac over the LAN. Plain HTTP, no WireGuard.
-# Needs nothing from the Mac: it clones github.com/KieranHolroyd/skiff and builds there.
+# Needs nothing from the Mac: it clones github.com/KieranHolroyd/yoal and builds there.
 #
 #   sudo sh join-linux-worker.sh <control-url> <join-token> [node-name] [this-box-lan-ip]
 #
@@ -15,10 +15,10 @@ CONTROL=$1 TOKEN=$2 NAME=${3:-linux-box}
 CONTROL_HOST=$(echo "$CONTROL" | sed -E 's#^[a-z]+://([^:/]+).*#\1#')
 LAN_IP=${4:-$(ip -4 route get "$CONTROL_HOST" | sed -n 's/.* src \([0-9.]*\).*/\1/p')}
 [ -n "$LAN_IP" ] || { echo "could not detect this box's LAN IP; pass it as the 4th argument" >&2; exit 1; }
-SRC=${SKIFF_SRC:-/opt/skiff/src}
-REF=${SKIFF_REF:-main}
+SRC=${YOAL_SRC:-/opt/yoal/src}
+REF=${YOAL_REF:-main}
 BUN_VERSION=1.4.4
-BUN=/opt/skiff/runtime/bin/bun
+BUN=/opt/yoal/runtime/bin/bun
 
 say() { printf '\033[1m==> %s\033[0m\n' "$*"; }
 
@@ -49,7 +49,7 @@ if [ ! -x "$BUN" ] || [ "$("$BUN" --version)" != "$BUN_VERSION" ]; then
 	tmp=$(mktemp -d)
 	curl -fsSL -o "$tmp/bun.zip" "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/bun-linux-$arch.zip"
 	unzip -q "$tmp/bun.zip" -d "$tmp"
-	install -d -m 0755 /opt/skiff/runtime/bin
+	install -d -m 0755 /opt/yoal/runtime/bin
 	install -m 0755 "$(find "$tmp" -type f -name bun | head -n1)" "$BUN"
 	rm -rf "$tmp"
 fi
@@ -58,7 +58,7 @@ say "source ($REF) in $SRC"
 if [ -d "$SRC/.git" ]; then
 	git -C "$SRC" fetch --depth 1 origin "$REF" && git -C "$SRC" reset --hard FETCH_HEAD
 else
-	git clone --depth 1 --branch "$REF" https://github.com/KieranHolroyd/skiff.git "$SRC"
+	git clone --depth 1 --branch "$REF" https://github.com/KieranHolroyd/yoal.git "$SRC"
 fi
 
 say "build agent + helper"
@@ -66,51 +66,51 @@ say "build agent + helper"
 	"$BUN" run --cwd apps/agent build && "$BUN" run --cwd apps/helper build)
 
 say "users and directories"
-getent group skiff >/dev/null || groupadd --system skiff
-id skiff >/dev/null 2>&1 || useradd --system --gid skiff --home-dir /var/lib/skiff --shell "$(command -v nologin || echo /bin/false)" skiff
-usermod -aG caddy skiff
-install -d -m 0755 /opt/skiff/current/agent /opt/skiff/helper
-install -d -m 0750 -o root -g skiff /etc/skiff
-install -d -m 0751 -o skiff -g skiff /var/lib/skiff
-install -d -m 0750 -o skiff -g skiff /var/lib/skiff/agent
+getent group yoal >/dev/null || groupadd --system yoal
+id yoal >/dev/null 2>&1 || useradd --system --gid yoal --home-dir /var/lib/yoal --shell "$(command -v nologin || echo /bin/false)" yoal
+usermod -aG caddy yoal
+install -d -m 0755 /opt/yoal/current/agent /opt/yoal/helper
+install -d -m 0750 -o root -g yoal /etc/yoal
+install -d -m 0751 -o yoal -g yoal /var/lib/yoal
+install -d -m 0750 -o yoal -g yoal /var/lib/yoal/agent
 install -d -m 0750 -o caddy -g caddy /var/lib/caddy
-echo 'd /run/skiff 2770 root caddy -' > /etc/tmpfiles.d/skiff.conf
-systemd-tmpfiles --create /etc/tmpfiles.d/skiff.conf
-install -m 0755 "$SRC/apps/agent/dist/skiff-agent" /opt/skiff/current/agent/skiff-agent
-install -m 0755 "$SRC/apps/helper/dist/skiff-helper" /opt/skiff/helper/skiff-helper
+echo 'd /run/yoal 2770 root caddy -' > /etc/tmpfiles.d/yoal.conf
+systemd-tmpfiles --create /etc/tmpfiles.d/yoal.conf
+install -m 0755 "$SRC/apps/agent/dist/yoal-agent" /opt/yoal/current/agent/yoal-agent
+install -m 0755 "$SRC/apps/helper/dist/yoal-helper" /opt/yoal/helper/yoal-helper
 
 say "Caddy (admin on a unix socket only)"
 install -d -m 0755 /etc/caddy /etc/systemd/system/caddy.service.d
 printf '{\n\tadmin unix//var/lib/caddy/admin.sock|0660\n}\n' > /etc/caddy/Caddyfile
-printf '[Service]\nSupplementaryGroups=skiff\n' > /etc/systemd/system/caddy.service.d/skiff.conf
+printf '[Service]\nSupplementaryGroups=yoal\n' > /etc/systemd/system/caddy.service.d/yoal.conf
 
 say "helper (root; renders systemd units and Quadlets for databases)"
-cat > /etc/skiff/helper.env <<EOF
-SKIFF_HELPER_BUN_PATH=$BUN
-SKIFF_HELPER_RELEASE_DIRS=/var/lib/skiff/agent/releases,/opt/skiff/releases
-SKIFF_HELPER_CONTROL_SOCKET_GROUP=skiff
-SKIFF_HELPER_WORKLOAD_SOCKET_GROUP=caddy
-SKIFF_HELPER_WORKLOAD_SOCKET_MODE=0660
-SKIFF_HELPER_QUADLET_DIR=/etc/containers/systemd
-SKIFF_HELPER_APPARMOR_PROFILE=auto
+cat > /etc/yoal/helper.env <<EOF
+YOAL_HELPER_BUN_PATH=$BUN
+YOAL_HELPER_RELEASE_DIRS=/var/lib/yoal/agent/releases,/opt/yoal/releases
+YOAL_HELPER_CONTROL_SOCKET_GROUP=yoal
+YOAL_HELPER_WORKLOAD_SOCKET_GROUP=caddy
+YOAL_HELPER_WORKLOAD_SOCKET_MODE=0660
+YOAL_HELPER_QUADLET_DIR=/etc/containers/systemd
+YOAL_HELPER_APPARMOR_PROFILE=auto
 EOF
-chown root:skiff /etc/skiff/helper.env && chmod 0640 /etc/skiff/helper.env
-cat > /etc/systemd/system/skiff-helper.service <<'EOF'
+chown root:yoal /etc/yoal/helper.env && chmod 0640 /etc/yoal/helper.env
+cat > /etc/systemd/system/yoal-helper.service <<'EOF'
 [Unit]
-Description=Skiff privileged workload helper
+Description=Yoal privileged workload helper
 After=network-online.target
 Wants=network-online.target
-ConditionPathExists=/etc/skiff/helper.env
+ConditionPathExists=/etc/yoal/helper.env
 StartLimitIntervalSec=60
 StartLimitBurst=10
 
 [Service]
 Type=simple
 User=root
-ExecStartPre=+/usr/bin/install -d -o root -g skiff -m 0750 /run/skiff-helper
+ExecStartPre=+/usr/bin/install -d -o root -g yoal -m 0750 /run/yoal-helper
 ExecStartPre=+/usr/bin/install -d -o root -g root -m 0755 /etc/containers/systemd
-ExecStart=/opt/skiff/helper/skiff-helper
-EnvironmentFile=/etc/skiff/helper.env
+ExecStart=/opt/yoal/helper/yoal-helper
+EnvironmentFile=/etc/yoal/helper.env
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=yes
@@ -121,37 +121,37 @@ WantedBy=multi-user.target
 EOF
 
 say "agent"
-cat > /etc/skiff/skiff.env <<EOF
+cat > /etc/yoal/yoal.env <<EOF
 # development, not production: the agent refuses plain-HTTP control URLs in production.
 NODE_ENV=development
-SKIFF_AGENT_INSECURE_HTTP=1
-SKIFF_DATA_DIR=/var/lib/skiff/agent
-SKIFF_TLS=0
-SKIFF_CADDY_LISTEN=$LAN_IP:8080
-SKIFF_CERT_PROBE_ADDR=off
-SKIFF_CADDY_ADMIN_SOCKET=/var/lib/caddy/admin.sock
-SKIFF_AGENT_SOCKET=/run/skiff/agent.sock
+YOAL_AGENT_INSECURE_HTTP=1
+YOAL_DATA_DIR=/var/lib/yoal/agent
+YOAL_TLS=0
+YOAL_CADDY_LISTEN=$LAN_IP:8080
+YOAL_CERT_PROBE_ADDR=off
+YOAL_CADDY_ADMIN_SOCKET=/var/lib/caddy/admin.sock
+YOAL_AGENT_SOCKET=/run/yoal/agent.sock
 EOF
-chown root:skiff /etc/skiff/skiff.env && chmod 0640 /etc/skiff/skiff.env
-cat > /etc/systemd/system/skiff-agent.service <<'EOF'
+chown root:yoal /etc/yoal/yoal.env && chmod 0640 /etc/yoal/yoal.env
+cat > /etc/systemd/system/yoal-agent.service <<'EOF'
 [Unit]
-Description=Skiff node agent
-After=network-online.target caddy.service skiff-helper.service
-Wants=network-online.target skiff-helper.service
-ConditionPathExists=/etc/skiff/agent.env
+Description=Yoal node agent
+After=network-online.target caddy.service yoal-helper.service
+Wants=network-online.target yoal-helper.service
+ConditionPathExists=/etc/yoal/agent.env
 StartLimitIntervalSec=60
 StartLimitBurst=5
 
 [Service]
 Type=simple
-User=skiff
-Group=skiff
+User=yoal
+Group=yoal
 SupplementaryGroups=caddy
 UMask=0007
-WorkingDirectory=/opt/skiff/current/agent
-EnvironmentFile=/etc/skiff/skiff.env
-EnvironmentFile=-/etc/skiff/agent.env
-ExecStart=/opt/skiff/current/agent/skiff-agent
+WorkingDirectory=/opt/yoal/current/agent
+EnvironmentFile=/etc/yoal/yoal.env
+EnvironmentFile=-/etc/yoal/agent.env
+ExecStart=/opt/yoal/current/agent/yoal-agent
 Restart=on-failure
 RestartSec=2
 TimeoutStopSec=20
@@ -162,28 +162,28 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/var/lib/skiff /run/skiff
+ReadWritePaths=/var/lib/yoal /run/yoal
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
 say "join $CONTROL as $NAME ($LAN_IP:8080)"
-runuser -u skiff -- env NODE_ENV=development SKIFF_AGENT_INSECURE_HTTP=1 \
-	/opt/skiff/current/agent/skiff-agent join "$CONTROL" \
-	--token "$TOKEN" --name "$NAME" --public-address "$LAN_IP:8080" --data-dir /var/lib/skiff/agent \
-	> /etc/skiff/agent.env.new
+runuser -u yoal -- env NODE_ENV=development YOAL_AGENT_INSECURE_HTTP=1 \
+	/opt/yoal/current/agent/yoal-agent join "$CONTROL" \
+	--token "$TOKEN" --name "$NAME" --public-address "$LAN_IP:8080" --data-dir /var/lib/yoal/agent \
+	> /etc/yoal/agent.env.new
 # Join echoes the control plane's own origin, which is http://localhost:5173 on a dev server:
 # keep the URL this box actually reached instead.
-sed -i "s#^SKIFF_CONTROL_URL=.*#SKIFF_CONTROL_URL=$CONTROL#" /etc/skiff/agent.env.new
-mv /etc/skiff/agent.env.new /etc/skiff/agent.env
-chown root:skiff /etc/skiff/agent.env && chmod 0640 /etc/skiff/agent.env
+sed -i "s#^YOAL_CONTROL_URL=.*#YOAL_CONTROL_URL=$CONTROL#" /etc/yoal/agent.env.new
+mv /etc/yoal/agent.env.new /etc/yoal/agent.env
+chown root:yoal /etc/yoal/agent.env && chmod 0640 /etc/yoal/agent.env
 
 say "start"
 systemctl daemon-reload
 systemctl restart caddy
-systemctl enable --now skiff-helper skiff-agent
+systemctl enable --now yoal-helper yoal-agent
 sleep 3
-systemctl --no-pager --lines=0 status caddy skiff-helper skiff-agent || true
-ls -l /run/skiff-helper/helper.sock /var/lib/caddy/admin.sock
-echo "Logs: journalctl -u skiff-agent -u skiff-helper -f"
+systemctl --no-pager --lines=0 status caddy yoal-helper yoal-agent || true
+ls -l /run/yoal-helper/helper.sock /var/lib/caddy/admin.sock
+echo "Logs: journalctl -u yoal-agent -u yoal-helper -f"

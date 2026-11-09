@@ -77,7 +77,7 @@ that includes the control DB, secrets, and data. Refuse unsafe Postgres major-ve
 ## Implementation order
 
 1. `/readyz` + version/schema/helper checks (contract PR).
-2. Preflight service + CLI `skif upgrade plan`.
+2. Preflight service + CLI `yoal upgrade plan`.
 3. Snapshot bundle (control DB, env/APP_KEY, config) + retention.
 4. Self-update flow uses preflight/snapshot/readyz/rollback.
 5. Postgres major guard in `DatabaseService.update`.
@@ -114,7 +114,7 @@ that includes the control DB, secrets, and data. Refuse unsafe Postgres major-ve
 ## Rollout
 
 Ship `/readyz` and preflight first; enable automatic rollback for the control plane only. The
-Postgres wizard stays opt-in until tested on Debian 13. Keep `SKIFF_FEATURE_UPGRADE_ROLLBACK` off
+Postgres wizard stays opt-in until tested on Debian 13. Keep `YOAL_FEATURE_UPGRADE_ROLLBACK` off
 until the integration test passes.
 
 ## Open questions

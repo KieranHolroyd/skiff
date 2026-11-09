@@ -12,8 +12,8 @@ const active: AccessKeyView = {
 	principalType: 'serviceAccount',
 	principalId: 'sa_1',
 	name: 'ci',
-	prefix: 'skif_',
-	start: 'skif_abc',
+	prefix: 'yoal_',
+	start: 'yoal_abc',
 	permissions: ['project:read'],
 	resources: null,
 	allowedCidrs: ['10.0.0.0/8'],
@@ -65,7 +65,7 @@ describe('accessKeyTable', () => {
 	test('shows the principal, visible start, expiry and state', () => {
 		const table = accessKeyTable([active, revoked]);
 		expect(table).toContain('serviceAccount:sa_1');
-		expect(table).toContain('skif_abc');
+		expect(table).toContain('yoal_abc');
 		expect(table).toContain('2026-12-01 09:00:00Z');
 		expect(table).toContain('never');
 		expect(table).toContain('revoked');

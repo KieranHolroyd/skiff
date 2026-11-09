@@ -8,7 +8,7 @@
 	let { data, form }: PageProps = $props();
 </script>
 
-<svelte:head><title>Policies · Settings · Skiff</title></svelte:head>
+<svelte:head><title>Policies · Settings · Yoal</title></svelte:head>
 
 <SettingsHeader id="policies" />
 

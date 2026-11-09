@@ -2,14 +2,14 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import { DEFAULT_FEATURES } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import { DEFAULT_FEATURES } from '@yoal/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore, diskAdmissionProblem, nodeDiskFreeBytes } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import type { Core } from './index.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-app-volumes-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-app-volumes-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 let clock = Date.parse('2026-11-05T10:00:00Z');
@@ -158,7 +158,7 @@ describe('app volumes', () => {
 			usedBytes: null,
 		});
 		expect(view.disk).toBeNull();
-		expect(JSON.stringify(view)).not.toContain('/skiff/apps');
+		expect(JSON.stringify(view)).not.toContain('/yoal/apps');
 		expect(JSON.stringify(view)).not.toContain(dir);
 	});
 
@@ -241,7 +241,7 @@ describe('app volumes', () => {
 				backing: 'state_dir',
 			},
 		]);
-		expect(JSON.stringify(state)).not.toContain('/skiff/apps');
+		expect(JSON.stringify(state)).not.toContain('/yoal/apps');
 		expect(JSON.stringify(state)).not.toContain(dir);
 		const mounted = core.appVolumes.mountsForWorkload(core.workloads.view(project)!.id);
 		expect(mounted).toHaveLength(2);

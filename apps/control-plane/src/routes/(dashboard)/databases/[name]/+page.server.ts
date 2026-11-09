@@ -1,5 +1,5 @@
 import { error, fail, redirect } from '@sveltejs/kit';
-import { CoreError, featureEnabled } from '@skiff/core';
+import { CoreError, featureEnabled } from '@yoal/core';
 import {
 	databaseAttachSchema,
 	databaseCredentialCreateSchema,
@@ -15,7 +15,7 @@ import {
 	type NodeCapacityView,
 	type DatabaseView,
 	type Principal
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { parseTrafficRange, trafficRangeHref, trafficRanges } from '#lib/server/traffic-range.js';
 import { failStatus, formString, toFormFailure } from '../../_lib/errors.js';
@@ -115,7 +115,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		}
 	}
 
-	// Point-in-time recovery (docs/PITR.md): only offered while SKIFF_FEATURE_PITR is on.
+	// Point-in-time recovery (docs/PITR.md): only offered while YOAL_FEATURE_PITR is on.
 	const pitrFeature = featureEnabled(core.ctx.config, 'PITR') && database.capabilities.pitr;
 	let pitr: DatabasePitrStatus | null = null;
 	let pitrError: string | null = null;

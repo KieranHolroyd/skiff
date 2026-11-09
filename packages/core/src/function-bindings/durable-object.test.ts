@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { FunctionBinding } from '@skiff/contracts';
+import type { FunctionBinding } from '@yoal/contracts';
 import type { CoreContext } from '../context.ts';
 import type { ProjectRow } from '../projects.ts';
 import { durableObjectUniqueKey, resolveDurableObject } from './durable-object.ts';

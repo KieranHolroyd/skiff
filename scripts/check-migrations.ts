@@ -11,7 +11,7 @@
  * exception can land, but CI prints them on every run.
  *
  *   bun scripts/check-migrations.ts
- *   SKIFF_MIGRATION_BASE_REF=origin/main bun scripts/check-migrations.ts
+ *   YOAL_MIGRATION_BASE_REF=origin/main bun scripts/check-migrations.ts
  *
  * In CI the base reference should be the PR base SHA (or the previous push SHA), not `HEAD`, so
  * edits committed on the branch are compared with what is already on the target branch.
@@ -250,7 +250,7 @@ export function readMigrations(root: string): MigrationCheckInput {
 function main(): void {
 	const root = resolve(import.meta.dir, '..');
 	const strict = process.argv.includes('--strict');
-	const baseRef = process.env.SKIFF_MIGRATION_BASE_REF ?? 'HEAD';
+	const baseRef = process.env.YOAL_MIGRATION_BASE_REF ?? 'HEAD';
 	const input = readMigrations(root);
 
 	let changed: MigrationChange[] = [];

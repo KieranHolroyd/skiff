@@ -53,7 +53,7 @@ async function withServer<T>(
 ): Promise<T> {
 	const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: handler });
 	try {
-		return await run(new ApiClient({ baseUrl: `http://127.0.0.1:${server.port}`, token: 'skif_test' }));
+		return await run(new ApiClient({ baseUrl: `http://127.0.0.1:${server.port}`, token: 'yoal_test' }));
 	} finally {
 		server.stop(true);
 	}
@@ -77,7 +77,7 @@ describe('followOperation', () => {
 			(request) => {
 				const url = new URL(request.url);
 				expect(url.pathname).toBe('/api/v1/operations/op_1/stream');
-				expect(request.headers.get('authorization')).toBe('Bearer skif_test');
+				expect(request.headers.get('authorization')).toBe('Bearer yoal_test');
 				seen.push({ lastEventId: request.headers.get('last-event-id'), until: url.searchParams.get('until') });
 				if (seen.length === 1)
 					// Drops after the first item: no `done`.

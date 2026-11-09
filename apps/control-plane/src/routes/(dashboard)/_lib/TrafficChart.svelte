@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { TrafficSeriesPoint } from '@skiff/core';
+	import type { TrafficSeriesPoint } from '@yoal/core';
 	import { areaY, defineChart, lineY, rect } from '@tanstack/charts';
 	import { crosshair } from '@tanstack/charts/crosshair';
 	import { decorative } from '@tanstack/charts/mark/decorative';

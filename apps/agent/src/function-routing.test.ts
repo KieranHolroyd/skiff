@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { CaddyHandler, CaddyRoute, SiteCompileInput } from '@skiff/site-config';
+import type { CaddyHandler, CaddyRoute, SiteCompileInput } from '@yoal/site-config';
 import {
 	compileFunctionRoute,
 	FUNCTION_DIAL_RETRY,
@@ -14,13 +14,13 @@ function site(overrides: Partial<SiteCompileInput> = {}): SiteCompileInput {
 		projectId: 'prj_app',
 		deploymentId: 'dep_1',
 		releasePath: '/data/sites/prj_app',
-		agentSocket: '/run/skiff-agent/agent.sock',
+		agentSocket: '/run/yoal-agent/agent.sock',
 		accessMode: 'public',
 		site: { spa: false, cleanUrls: false, trailingSlash: 'ignore', notFound: null },
 		redirects: [],
 		headers: [],
 		loginUrl: 'https://cloud.example.com/login',
-		upstream: 'unix//run/skiff-workloads/prj_app.sock',
+		upstream: 'unix//run/yoal-workloads/prj_app.sock',
 		...overrides,
 	};
 }
@@ -89,9 +89,9 @@ describe('function route safety', () => {
 
 describe('replica upstreams (phase 4)', () => {
 	const replicas = [
-		'unix//run/skiff-workloads/wld_fn.sock',
-		'unix//run/skiff-workloads/wld_fn-r1.sock',
-		'unix//run/skiff-workloads/wld_fn-r2.sock',
+		'unix//run/yoal-workloads/wld_fn.sock',
+		'unix//run/yoal-workloads/wld_fn-r1.sock',
+		'unix//run/yoal-workloads/wld_fn-r2.sock',
 	];
 
 	/** The routes inside the site's `subroute`, in evaluation order. */
@@ -133,7 +133,7 @@ describe('replica upstreams (phase 4)', () => {
 		expect(proxy.headers).toEqual({
 			request: {
 				set: {
-					'X-Skiff-Internal': ['0'],
+					'X-Yoal-Internal': ['0'],
 					'X-Forwarded-Host': ['{http.request.host}'],
 				},
 			},
@@ -162,7 +162,7 @@ describe('replica upstreams (phase 4)', () => {
 		const withList = compileFunctionRoute(site(), {
 			assetsDirectory: null,
 			runWorkerFirst: [],
-			upstreams: ['unix//run/skiff-workloads/prj_app.sock'],
+			upstreams: ['unix//run/yoal-workloads/prj_app.sock'],
 		});
 		expect(withList).toEqual(withoutList);
 		// An empty list (older desired state sends none) falls back to the route's own upstream.

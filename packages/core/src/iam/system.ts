@@ -6,8 +6,8 @@
  * `viewer` role is only a placeholder for the legacy `role` field; nothing reads it for a system
  * principal.
  */
-import type { ActingFor, CredentialKind, Principal, systemPrincipals } from '@skiff/contracts';
-import { systemPermissions } from '@skiff/contracts';
+import type { ActingFor, CredentialKind, Principal, systemPrincipals } from '@yoal/contracts';
+import { systemPermissions } from '@yoal/contracts';
 
 export function buildSystemPrincipal(
 	name: keyof typeof systemPrincipals,

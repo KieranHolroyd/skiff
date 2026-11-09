@@ -5,9 +5,9 @@ import { formatBytes, formatTime, printJson, renderTable, truncate } from '../ou
 import { authenticatedClient } from './common.ts';
 import { confirmOrRefuse } from './run-operation.ts';
 
-/** `skif storage objects` — browse and manage bucket contents through the control plane (D82). */
+/** `yoal storage objects` — browse and manage bucket contents through the control plane (D82). */
 
-const usage = `Usage: skif storage objects <command> <storage> [options]
+const usage = `Usage: yoal storage objects <command> <storage> [options]
 
 Commands:
   ls <storage> -b <bucket>       List objects and folders (the default)
@@ -40,11 +40,11 @@ Options:
   -h, --help                     Show this help
 
 Examples:
-  skif storage objects ls media -b uploads --prefix photos/
-  skif storage objects put media -b uploads -k photos/a.jpg -f ./a.jpg
-  skif storage objects get media -b uploads -k photos/a.jpg -o a.jpg
-  skif storage objects rm media -b uploads --prefix photos/ --yes
-  skif storage objects presign media -b uploads -k photos/a.jpg --expires 6h`;
+  yoal storage objects ls media -b uploads --prefix photos/
+  yoal storage objects put media -b uploads -k photos/a.jpg -f ./a.jpg
+  yoal storage objects get media -b uploads -k photos/a.jpg -o a.jpg
+  yoal storage objects rm media -b uploads --prefix photos/ --yes
+  yoal storage objects presign media -b uploads -k photos/a.jpg --expires 6h`;
 
 const flags: FlagSpec = {
 	bucket: { type: 'string', short: 'b' },
@@ -69,7 +69,7 @@ function parse(command: string, argv: string[], maxPositionals = 1) {
 		console.log(usage);
 		return null;
 	}
-	const line = `Usage: skif storage objects ${command} <storage> [options]`;
+	const line = `Usage: yoal storage objects ${command} <storage> [options]`;
 	rejectExtraPositionals(args, maxPositionals, line);
 	const name = requirePositional(args, 0, `storage name.\n\n${line}`);
 	const bucket = args.string('bucket');

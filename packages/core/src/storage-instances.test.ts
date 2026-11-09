@@ -2,15 +2,15 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import { DEFAULT_FEATURES, environmentSlugSchema, orgNetworkName, storageAlias, storageUserPolicy } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import { DEFAULT_FEATURES, environmentSlugSchema, orgNetworkName, storageAlias, storageUserPolicy } from '@yoal/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import { disposeTelemetryStore, hasClickHouse, testTelemetryStore } from './test-clickhouse.ts';
 import type { Core } from './index.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-storage-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-storage-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 let clock = Date.parse('2026-11-05T10:00:00Z');
@@ -464,7 +464,7 @@ describe('managed object storage', () => {
 		const points = await core.storage.metrics(owner, 'media', { from: clock - 3_600_000, to: clock, interval: '1m' });
 		expect(points).toHaveLength(2);
 		expect(points[0]).toMatchObject({ objects: 1200, bucketCount: 3, up: 1 });
-		expect(await telemetry.getPrometheusMetrics()).toContain(`skiff_storage_up{storage_id="${media.id}"} 1`);
+		expect(await telemetry.getPrometheusMetrics()).toContain(`yoal_storage_up{storage_id="${media.id}"} 1`);
 
 		await telemetry.rollupHourly(clock - 2 * 3_600_000, clock + 3_600_000);
 		const hourly = await core.storage.metrics(owner, 'media', { from: clock - 3_600_000, to: clock, interval: '1h' });

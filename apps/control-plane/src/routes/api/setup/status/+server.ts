@@ -1,5 +1,5 @@
 import type { RequestHandler } from './$types';
-import { migrations } from '@skiff/db';
+import { migrations } from '@yoal/db';
 import { sqlite } from '#lib/server/db.js';
 import { core } from '#lib/server/core.js';
 import { contentDomain, features, objectStoreKind, platformOrigin, sharedDomain, smtp } from '#lib/server/config.js';
@@ -15,7 +15,7 @@ export const GET: RequestHandler = async () => {
 	const count = sqlite.query<{ count: number }, []>('SELECT count(*) AS count FROM user').get();
 	const nodes = sqlite.query<{ count: number }, []>('SELECT count(*) AS count FROM nodes').get();
 	const applied = new Set(
-		sqlite.query<{ id: string }, []>('SELECT id FROM skiff_migrations').all().map((row) => row.id)
+		sqlite.query<{ id: string }, []>('SELECT id FROM yoal_migrations').all().map((row) => row.id)
 	);
 	const pending = migrations.filter((migration) => !applied.has(migration.id));
 	const snapshot = core.upgrades.listSnapshotBundles()[0];
@@ -29,7 +29,7 @@ export const GET: RequestHandler = async () => {
 		nodes: nodes?.count ?? 0,
 		/** Release identity for the dashboard/installer; never a secret. */
 		version: platformVersion,
-		channel: process.env.SKIFF_RELEASE_CHANNEL === 'edge' ? 'edge' : 'stable',
+		channel: process.env.YOAL_RELEASE_CHANNEL === 'edge' ? 'edge' : 'stable',
 		/** True when every migration this release ships is applied. */
 		ready: pending.length === 0,
 		lastUpgradeSnapshot: snapshot
@@ -39,7 +39,7 @@ export const GET: RequestHandler = async () => {
 					pinned: snapshot.manifest.pinned
 				}
 			: null,
-		/** Resolved SKIFF_FEATURE_* values; booleans only, never env values or secrets. */
+		/** Resolved YOAL_FEATURE_* values; booleans only, never env values or secrets. */
 		features,
 	});
 };

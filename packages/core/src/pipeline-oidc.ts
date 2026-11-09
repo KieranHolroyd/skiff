@@ -2,14 +2,14 @@ import { createPrivateKey, createPublicKey, randomUUID } from 'node:crypto';
 
 type JsonWebKey = Record<string, unknown>;
 import { eq } from 'drizzle-orm';
-import { settings } from '@skiff/db';
+import { settings } from '@yoal/db';
 import type { CoreContext } from './context.ts';
 import { decrypt } from './util.ts';
 
 /**
  * OIDC ID tokens for pipeline jobs (docs/PIPELINES.md W9): `POST /api/pipeline/oidc-token` gives a
  * running, trusted job a short-lived ES256 JWT that a cloud (AWS, GCP, Azure, Vault, …) can trust
- * by pointing a federated identity at Skiff's issuer. Discovery and keys are public at
+ * by pointing a federated identity at Yoal's issuer. Discovery and keys are public at
  * `<issuer>/.well-known/openid-configuration` and `<issuer>/jwks`.
  *
  * Tokens are signed by the ring's `oidc` purpose (I15), but keep the path-based issuer so clouds

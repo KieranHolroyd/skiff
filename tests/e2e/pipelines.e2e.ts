@@ -1,5 +1,5 @@
 /**
- * Pipelines end-to-end (docs/PIPELINES.md): the real control-plane engine (`@skiff/core`) behind a
+ * Pipelines end-to-end (docs/PIPELINES.md): the real control-plane engine (`@yoal/core`) behind a
  * small HTTP server that mirrors the SvelteKit routes, and the real Builder pipeline loop and
  * in-job step runner (`apps/builder`) claiming from it in direct (no sandbox) mode. A local git
  * repository is the origin; steps are real bash.
@@ -30,7 +30,7 @@ import { loadConfig } from '../../apps/builder/src/config.ts';
 import { runPipelineLoop } from '../../apps/builder/src/pipeline/loop.ts';
 import { gitRepo } from '../../apps/builder/src/pipeline/git-fixture.ts';
 
-const root = mkdtempSync(join(tmpdir(), 'skiff-pipelines-e2e-'));
+const root = mkdtempSync(join(tmpdir(), 'yoal-pipelines-e2e-'));
 let core: Core;
 let store: LocalObjectStore;
 
@@ -148,8 +148,8 @@ jobs:
       - uses: actions/checkout@v4
       - id: meta
         run: |
-          echo "version=1.2.\${{ skiff.run_number }}" >> "$SKIFF_OUTPUT"
-          echo "$GREETING from \${{ skiff.repository }} at $(head -c 7 <<< "$SKIFF_SHA")"
+          echo "version=1.2.\${{ yoal.run_number }}" >> "$YOAL_OUTPUT"
+          echo "$GREETING from \${{ yoal.repository }} at $(head -c 7 <<< "$YOAL_SHA")"
           echo "token is $API_TOKEN"
         env:
           API_TOKEN: \${{ secrets.API_TOKEN }}
@@ -175,13 +175,13 @@ jobs:
 
 const config = loadConfig(
 	{
-		SKIFF_CONTROL_URL: origin,
-		SKIFF_NODE_TOKEN: joined.token,
-		SKIFF_BUILD_DIR: join(root, 'build'),
-		SKIFF_BUILDER_SYSTEMD: 'false',
-		SKIFF_PIPELINE_POLL_MS: '200',
-		SKIFF_PIPELINE_ISOLATION: 'sandbox',
-		SKIFF_PIPELINE_STEP_BINARY: process.env.E2E_STEP_BINARY ?? '',
+		YOAL_CONTROL_URL: origin,
+		YOAL_NODE_TOKEN: joined.token,
+		YOAL_BUILD_DIR: join(root, 'build'),
+		YOAL_BUILDER_SYSTEMD: 'false',
+		YOAL_PIPELINE_POLL_MS: '200',
+		YOAL_PIPELINE_ISOLATION: 'sandbox',
+		YOAL_PIPELINE_STEP_BINARY: process.env.E2E_STEP_BINARY ?? '',
 	},
 	{ platform: process.platform, isRoot: false, has: (b) => Boolean(Bun.which(b)), arch: process.arch, exists: () => false },
 );

@@ -10,12 +10,12 @@
 		type DatabaseCredentialReveal,
 		type DatabaseCredentialView,
 		type DatabaseView
-	} from '@skiff/contracts';
+	} from '@yoal/contracts';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import DetailList from '#lib/components/yoal/DetailList.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
@@ -86,7 +86,7 @@
 		const apps = usedBy[credential.id] ?? [];
 		askConfirm({
 			title: `Rotate ${credential.username}?`,
-			description: `The node sets a new password and verifies it before Skiff swaps the stored secret.${
+			description: `The node sets a new password and verifies it before Yoal swaps the stored secret.${
 				apps.length
 					? ` ${apps.join(', ')} then restart${apps.length === 1 ? 's' : ''} with it.`
 					: ''
@@ -271,7 +271,7 @@
 		bind:open={createOpen}
 		icon={UsersIcon}
 		title="New credential"
-		description="Skiff creates a separate Postgres role with its own generated password. The node provisions it on its next pull."
+		description="Yoal creates a separate Postgres role with its own generated password. The node provisions it on its next pull."
 		action="?/credential-create"
 		submitLabel="Create credential"
 	>

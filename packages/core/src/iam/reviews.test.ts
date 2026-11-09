@@ -2,15 +2,15 @@ import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import type { Principal } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import type { Principal } from '@yoal/contracts';
 import { ConflictError, ForbiddenError } from '../errors.ts';
 import { createCore, type Core } from '../index.ts';
 import { REVIEW_SHORTEN_DAYS } from './governance.ts';
 import { LocalObjectStore } from '../object-store.ts';
 import { buildPrincipal } from '../orgs.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-reviews-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-reviews-'));
 const opened = createDb({ path: ':memory:' });
 const reviewsSql = readFileSync(
 	new URL('../../../db/migrations/0090_access_reviews.sql', import.meta.url),

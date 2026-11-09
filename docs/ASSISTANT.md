@@ -1,6 +1,6 @@
 # The dashboard assistant
 
-An optional chat panel inside the Skiff dashboard. It answers questions about the current page and
+An optional chat panel inside the Yoal dashboard. It answers questions about the current page and
 the whole platform, drives the same MCP tools your agents use, and can move the user around the UI
 with a spotlight tour. It is **off until an owner configures a model provider** in Settings →
 Assistant.
@@ -10,7 +10,7 @@ The assistant cannot do more than the signed-in user, and every action is audite
 
 ## What it is
 
-- **A chat surface over the MCP catalog.** `skiffToolDefinitions()` captures the exact tool
+- **A chat surface over the MCP catalog.** `yoalToolDefinitions()` captures the exact tool
   definitions the remote MCP server registers, and the assistant calls those handlers. Tool names,
   schemas, validation, permissions and results are the same on both surfaces.
 - **One agent with every tool.** Each turn runs a single tool loop with one system prompt that
@@ -26,7 +26,7 @@ The assistant cannot do more than the signed-in user, and every action is audite
   context; it is not a permission boundary (the catalog is already filtered to what the caller may
   use). An owner allowlist of 40 tools or fewer is offered whole, with no search tool.
 - **A UI channel.** Besides the MCP tools, the assistant gets `guide_user`. The browser sends a
-  compact outline of the current page (`data-skiff-target` ids plus headings, buttons, links, tabs
+  compact outline of the current page (`data-yoal-target` ids plus headings, buttons, links, tabs
   and inputs with CSS selectors). The assistant can navigate to a path and spotlight an element, one
   step at a time.
 - **Optional.** No provider means no launcher and the chat endpoint answers `503`.
@@ -63,7 +63,7 @@ narrows the page instead of covering it.
   Turning it off sends an empty `path` and no outline; the assistant is told it cannot see the page.
 - **Outcomes reach the model.** When history is sent, each past reply carries a line saying what
   happened to its proposed action (confirmed and the result, cancelled, failed or expired) and
-  whether the user stopped it early. After an action completes, **Ask Skiff to follow up** sends a
+  whether the user stopped it early. After an action completes, **Ask Yoal to follow up** sends a
   verification message.
 - **Contextual questions.** A firing or no-data series on Alerts has **Ask AI**, which opens the
   panel with the rule, series, value and duration already written out and asks the assistant to
@@ -93,14 +93,14 @@ never loaded on ordinary dashboard pages.
 The same settings can be set in the environment on a host that is not managed by the dashboard:
 
 ```sh
-SKIFF_ASSISTANT_PROVIDER=openai-compatible  # openai | openai-compatible | openrouter | ollama
-SKIFF_ASSISTANT_BASE_URL=https://api.openai.com/v1
-SKIFF_ASSISTANT_MODEL=gpt-4.1-mini
-SKIFF_ASSISTANT_API_KEY=sk-...
-SKIFF_ASSISTANT_DISABLED=1                  # emergency off switch
+YOAL_ASSISTANT_PROVIDER=openai-compatible  # openai | openai-compatible | openrouter | ollama
+YOAL_ASSISTANT_BASE_URL=https://api.openai.com/v1
+YOAL_ASSISTANT_MODEL=gpt-4.1-mini
+YOAL_ASSISTANT_API_KEY=sk-...
+YOAL_ASSISTANT_DISABLED=1                  # emergency off switch
 ```
 
-On an installed host the dashboard writes these through `skiff-platform-config` (the same
+On an installed host the dashboard writes these through `yoal-platform-config` (the same
 owner-only, validate-then-restart path as email and backups, [OPS.md §4.3](./OPS.md)). On a dev
 server they go to `.data/platform-settings.json` and apply after a restart.
 
@@ -182,9 +182,9 @@ The browser can cancel a run; `request.signal` aborts the upstream provider requ
 }
 ```
 
-The browser resolves `target` against `[data-skiff-target]`, then falls back to `selector`, waits
+The browser resolves `target` against `[data-yoal-target]`, then falls back to `selector`, waits
 for client-side navigation and deferred rendering, scrolls the element into view and draws a
-spotlight. `data-skiff-target` ids exist on the sidebar, page headers, project tabs, settings tabs
+spotlight. `data-yoal-target` ids exist on the sidebar, page headers, project tabs, settings tabs
 and the Deploy button; everything else is collected dynamically with a CSS selector, so the guide
 works on pages that have not been annotated.
 
@@ -192,7 +192,7 @@ works on pages that have not been annotated.
 
 | Symptom | Cause |
 |---|---|
-| No launcher, `503 assistant_not_configured` | Base URL or model is missing, or `SKIFF_ASSISTANT_DISABLED=1` |
+| No launcher, `503 assistant_not_configured` | Base URL or model is missing, or `YOAL_ASSISTANT_DISABLED=1` |
 | "The model provider answered 401/404" | Wrong key, wrong base URL, or the model id is not served there |
 | "The model provider timed out" | No response within 120 s |
 | A tour step says the element is not on the page | The page changed, the element is hidden, or the user lacks access |
@@ -203,7 +203,7 @@ works on pages that have not been annotated.
 | Path | Role |
 |---|---|
 | `packages/contracts/src/assistant.ts` | Page outline, chat request, tour, event and status types |
-| `apps/control-plane/src/lib/server/mcp.ts` | `skiffToolDefinitions()` captures the MCP catalog |
+| `apps/control-plane/src/lib/server/mcp.ts` | `yoalToolDefinitions()` captures the MCP catalog |
 | `apps/control-plane/src/lib/server/assistant/agents.ts` | The system prompt and `PANEL_FORMAT` |
 | `apps/control-plane/src/lib/server/assistant/orchestrator.ts` | The tool loop and confirmations |
 | `apps/control-plane/src/lib/server/assistant/tool-search.ts` | Deferred tool loading: core set, `search_tools`, ranking |

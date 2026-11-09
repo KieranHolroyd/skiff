@@ -1,6 +1,6 @@
 /**
- * Caddy must run with the `skiff` supplementary group to read release artifacts from
- * `/var/lib/skiff/agent`. systemd only applies a drop-in to a process it starts, so after writing
+ * Caddy must run with the `yoal` supplementary group to read release artifacts from
+ * `/var/lib/yoal/agent`. systemd only applies a drop-in to a process it starts, so after writing
  * the drop-in the installer has to inspect the **running** process. `systemctl show
  * -p SupplementaryGroups` reports the unit file, which already lists the group, so checking it
  * skips the restart and leaves a Caddy that cannot read any deployed file: every site answers 403
@@ -19,7 +19,7 @@ export function parseProcStatusGroups(status: string): number[] {
 		.filter((id) => Number.isInteger(id) && id > 0);
 }
 
-/** The numeric id from a `getent group <name>` line (`skiff:x:982:`), or null. */
+/** The numeric id from a `getent group <name>` line (`yoal:x:982:`), or null. */
 export function parseGetentGroupId(output: string): number | null {
 	const id = Number(output.trim().split(':')[2]);
 	return Number.isInteger(id) && id > 0 ? id : null;

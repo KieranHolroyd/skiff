@@ -1,8 +1,8 @@
-# PHP on Skiff (FrankenPHP)
+# PHP on Yoal (FrankenPHP)
 
 A PHP app deployed as an ordinary **process app** that scales to zero (D121). FrankenPHP is PHP
 embedded in Caddy: it serves `public/` and adopts the listen socket systemd hands it (`bind fd/3`),
-so Skiff can stop it after five idle minutes and start it again on the next request.
+so Yoal can stop it after five idle minutes and start it again on the next request.
 
 | File            | What it is                                                                      |
 | --------------- | ------------------------------------------------------------------------------- |
@@ -18,11 +18,11 @@ node like workerd. It is pinned and checksum-verified, and it is opt-in:
 ```sh
 # a new install
 curl -fsSL https://…/install.sh | sudo bash -s -- --with-php
-# an installed node (from the Skiff checkout under /opt/skiff/current/repo)
-sudo /opt/skiff/runtime/bin/bun /opt/skiff/current/repo/scripts/install/frankenphp.ts
+# an installed node (from the Yoal checkout under /opt/yoal/current/repo)
+sudo /opt/yoal/runtime/bin/bun /opt/yoal/current/repo/scripts/install/frankenphp.ts
 ```
 
-That installs `/usr/lib/skiff/frankenphp/<version>/frankenphp` and links `/usr/local/bin/frankenphp`.
+That installs `/usr/lib/yoal/frankenphp/<version>/frankenphp` and links `/usr/local/bin/frankenphp`.
 Updates keep the pin current on nodes that have it. Place PHP projects on a node that has it; a node
 without it fails the unit with "frankenphp: not found" in the logs.
 
@@ -38,15 +38,15 @@ Create a project with runtime **process**, then either open **Runtime → Config
 or send `workload.json` to the API:
 
 ```sh
-curl -X PUT "https://$SKIFF_HOST/api/v1/projects/php-demo/workload" \
-  -H "Authorization: Bearer $SKIFF_TOKEN" -H 'Content-Type: application/json' \
+curl -X PUT "https://$YOAL_HOST/api/v1/projects/php-demo/workload" \
+  -H "Authorization: Bearer $YOAL_TOKEN" -H 'Content-Type: application/json' \
   --data @workload.json
 ```
 
 ## 3. Deploy
 
 ```sh
-skif deploy --project php-demo
+yoal deploy --project php-demo
 ```
 
 The first request after an idle stop pays a cold start (FrankenPHP starts in tens of milliseconds;

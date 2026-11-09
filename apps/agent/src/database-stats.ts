@@ -10,11 +10,11 @@ import {
 	type DatabaseSnapshot,
 	type DatabaseTableStat,
 	type WorkloadStatus,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 
 /**
  * Managed database sampler (D57). Once a minute it connects to every database on this node over
- * loopback, as the `skiff_monitor` role (`pg_monitor` only), and buffers one bucket per database
+ * loopback, as the `yoal_monitor` role (`pg_monitor` only), and buffers one bucket per database
  * for the telemetry batch. Every fifth sample it also takes the top-50 table snapshot.
  *
  * Credentials live in memory only. The owner password from the activation payload is used once
@@ -161,7 +161,7 @@ export const BOOTSTRAP_SQL = `SELECT
 	format('GRANT pg_monitor TO %I', $1::text) AS monitor_sql,
 	format('GRANT CONNECT ON DATABASE %I TO %I', current_database(), $1::text) AS connect_sql`;
 
-/** Gauges and raw counters for the current database, as `skiff_monitor`. */
+/** Gauges and raw counters for the current database, as `yoal_monitor`. */
 export const STATS_SQL = `SELECT
 	pg_database_size(current_database())::float8 AS size_bytes,
 	(SELECT count(*) FROM pg_stat_activity a

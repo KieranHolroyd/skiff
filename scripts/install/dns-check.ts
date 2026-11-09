@@ -32,7 +32,7 @@ export function dnsTargets(platformHost: string, contentDomain: string, probe = 
 	const targets: DnsTarget[] = [
 		{ display: platformHost, name: platformHost },
 		{ display: contentDomain, name: contentDomain },
-		{ display: `*.${contentDomain}`, name: `skiff-dns-check-${probe}.${contentDomain}` },
+		{ display: `*.${contentDomain}`, name: `yoal-dns-check-${probe}.${contentDomain}` },
 	];
 	return targets.filter((target, index) => targets.findIndex((other) => other.name === target.name) === index);
 }

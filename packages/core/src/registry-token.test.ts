@@ -4,8 +4,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { eq } from 'drizzle-orm';
-import { createDb, settings } from '@skiff/db';
-import { DEFAULT_FEATURES } from '@skiff/contracts';
+import { createDb, settings } from '@yoal/db';
+import { DEFAULT_FEATURES } from '@yoal/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
@@ -13,9 +13,9 @@ import { generateRegistrySigningKey, signRegistryToken } from './registry-token.
 import type { Core } from './index.ts';
 
 const HOST = 'registry.sites.test';
-const LEGACY = generateRegistrySigningKey('skiff-registry-token-legacy', Date.now());
+const LEGACY = generateRegistrySigningKey('yoal-registry-token-legacy', Date.now());
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-registry-token-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-registry-token-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 const core: Core = createCore({
@@ -105,11 +105,11 @@ describe('registry tokens on the signing-key ring', () => {
 	test("zot's certificate is derived from the active ring key and follows a rotation", async () => {
 		const [desired] = core.registry.desiredForNode(workerId);
 		const first = core.workloads.activation(workerId, desired!.id);
-		const firstCertPem = first.env.SKIFF_REGISTRY_TOKEN_CERT!;
+		const firstCertPem = first.env.YOAL_REGISTRY_TOKEN_CERT!;
 		const firstCert = new X509Certificate(firstCertPem);
 		const firstKey = await core.ctx.signingKeys.active('registry');
 
-		expect(firstCert.subject).toBe('CN=skiff-registry-token');
+		expect(firstCert.subject).toBe('CN=yoal-registry-token');
 		expect(publicJwk(firstCert)).toEqual({
 			kty: 'EC',
 			crv: 'P-256',
@@ -128,7 +128,7 @@ describe('registry tokens on the signing-key ring', () => {
 		expect(nextKey.kid).not.toBe(firstKey.kid);
 
 		const [nextDesired] = core.registry.desiredForNode(workerId);
-		const nextCertPem = core.workloads.activation(workerId, nextDesired!.id).env.SKIFF_REGISTRY_TOKEN_CERT!;
+		const nextCertPem = core.workloads.activation(workerId, nextDesired!.id).env.YOAL_REGISTRY_TOKEN_CERT!;
 		const nextCert = new X509Certificate(nextCertPem);
 		expect(nextDesired!.activationVersion).not.toBe(desired!.activationVersion);
 		expect(publicJwk(nextCert)).toEqual({

@@ -58,7 +58,7 @@ async function fixture(
 		containerSubids?: import('./userns.ts').SubidFiles;
 	} = {},
 ): Promise<Fixture> {
-	const root = await fs.mkdtemp(join(tmpdir(), 'skiff-helper-systemd-'));
+	const root = await fs.mkdtemp(join(tmpdir(), 'yoal-helper-systemd-'));
 	directories.push(root);
 	const unitDir = join(root, 'units');
 	const quadletDir = join(root, 'quadlet');
@@ -111,7 +111,7 @@ function workload(overrides: Record<string, unknown> = {}): WorkloadDesired {
 		runtime: 'process',
 		status: 'running',
 		release: SHA,
-		upstream: 'unix//run/skiff-workloads/prj_abc123.sock',
+		upstream: 'unix//run/yoal-workloads/prj_abc123.sock',
 		memoryMb: 256,
 		cpus: 1,
 		port: 3000,
@@ -143,11 +143,11 @@ describe('ensureSlice', () => {
 	test('writes the slice, reloads systemd and starts it with argv arrays', async () => {
 		const f = await fixture();
 		await f.driver.ensureSlice({ memoryMb: 1024 });
-		const slice = await fs.readFile(join(f.unitDir, 'skiff-workloads.slice'), 'utf8');
+		const slice = await fs.readFile(join(f.unitDir, 'yoal-workloads.slice'), 'utf8');
 		expect(slice).toContain('MemoryMax=1024M');
 		expect(slice).toContain('CPUWeight=200');
 		expect(f.runner.calls).toContainEqual(['/usr/bin/systemctl', 'daemon-reload']);
-		expect(f.runner.calls).toContainEqual(['/usr/bin/systemctl', 'start', 'skiff-workloads.slice']);
+		expect(f.runner.calls).toContainEqual(['/usr/bin/systemctl', 'start', 'yoal-workloads.slice']);
 		// Every call is an argv array; the helper never builds a shell string.
 		expect(f.runner.calls.every((argv) => argv.every((part) => !part.includes(' ; ')))).toBe(true);
 	});
@@ -163,12 +163,12 @@ describe('apply', () => {
 			activation({ files: { TLS_KEY: '-----BEGIN KEY-----\nabc\n-----END KEY-----\n' } }),
 		);
 
-		const service = await fs.readFile(join(f.unitDir, 'skiff-workload-wld_abc123.service'), 'utf8');
+		const service = await fs.readFile(join(f.unitDir, 'yoal-workload-wld_abc123.service'), 'utf8');
 		expect(service).toContain(`WorkingDirectory=${f.releaseDir}`);
 		expect(service).toContain('ExecStart="/usr/local/bin/bun" "run" "start"');
 		expect(service).toContain('LoadCredential=TLS_KEY:' + join(f.runtimeDir, 'wld_abc123/secrets/TLS_KEY'));
 
-		const socket = await fs.readFile(join(f.unitDir, 'skiff-workload-wld_abc123.socket'), 'utf8');
+		const socket = await fs.readFile(join(f.unitDir, 'yoal-workload-wld_abc123.socket'), 'utf8');
 		expect(socket).toContain(`ListenStream=${join(f.runtimeDir, 'prj_abc123.sock')}`);
 
 		const envFile = join(f.runtimeDir, 'wld_abc123/env');
@@ -185,12 +185,12 @@ describe('apply', () => {
 		expect(f.runner.calls).toContainEqual([
 			'/usr/bin/systemctl',
 			'enable',
-			'skiff-workload-wld_abc123.socket',
+			'yoal-workload-wld_abc123.socket',
 		]);
 		expect(f.runner.calls).toContainEqual([
 			'/usr/bin/systemctl',
 			'restart',
-			'skiff-workload-wld_abc123.service',
+			'yoal-workload-wld_abc123.service',
 		]);
 	});
 
@@ -198,7 +198,7 @@ describe('apply', () => {
 		const withManifest = await fixture();
 		await withManifest.driver.apply(workload(), activation());
 		const unit = await fs.readFile(
-			join(withManifest.unitDir, 'skiff-workload-wld_abc123.service'),
+			join(withManifest.unitDir, 'yoal-workload-wld_abc123.service'),
 			'utf8',
 		);
 		expect(unit).toContain('ExecStart="/usr/local/bin/bun" "run" "start"');
@@ -212,7 +212,7 @@ describe('apply', () => {
 	test('honours an explicit command and rejects undeclared secret files', async () => {
 		const f = await fixture();
 		await f.driver.apply(workload({ command: ['/opt/bin/app', '--serve'] }), activation());
-		const unit = await fs.readFile(join(f.unitDir, 'skiff-workload-wld_abc123.service'), 'utf8');
+		const unit = await fs.readFile(join(f.unitDir, 'yoal-workload-wld_abc123.service'), 'utf8');
 		expect(unit).toContain('ExecStart="/opt/bin/app" "--serve"');
 
 		await expect(
@@ -246,17 +246,17 @@ describe('apply', () => {
 		expect(status.status).toBe('running');
 
 		const quadlet = await fs.readFile(
-			join(f.quadletDir, 'skiff-workload-wld_abc123.container'),
+			join(f.quadletDir, 'yoal-workload-wld_abc123.container'),
 			'utf8',
 		);
 		expect(quadlet).toContain('Image=ghcr.io/acme/app:1.2.3');
 		expect(quadlet).toContain('PublishPort=127.0.0.1:3000:3000');
-		await expect(fs.stat(join(f.unitDir, 'skiff-workload-wld_abc123.service'))).rejects.toThrow();
-		await expect(fs.stat(join(f.unitDir, 'skiff-workload-wld_abc123.socket'))).rejects.toThrow();
+		await expect(fs.stat(join(f.unitDir, 'yoal-workload-wld_abc123.service'))).rejects.toThrow();
+		await expect(fs.stat(join(f.unitDir, 'yoal-workload-wld_abc123.socket'))).rejects.toThrow();
 		expect(f.runner.calls).toContainEqual([
 			'/usr/bin/systemctl',
 			'restart',
-			'skiff-workload-wld_abc123.service',
+			'yoal-workload-wld_abc123.service',
 		]);
 	});
 });
@@ -292,7 +292,7 @@ describe('logs', () => {
 		// the cursor as a match ("Failed to add match ... Invalid argument").
 		const after = call!.indexOf('--after-cursor');
 		expect(call![after + 1]).toBe('s=9');
-		expect(call![call!.indexOf('-u') + 1]).toBe('skiff-workload-wld_abc123.service');
+		expect(call![call!.indexOf('-u') + 1]).toBe('yoal-workload-wld_abc123.service');
 		expect(call).toContain('50');
 	});
 });
@@ -310,10 +310,10 @@ describe('remove', () => {
 			'/usr/bin/systemctl',
 			'disable',
 			'--now',
-			'skiff-workload-wld_abc123.service',
+			'yoal-workload-wld_abc123.service',
 		]);
-		await expect(fs.stat(join(f.unitDir, 'skiff-workload-wld_abc123.service'))).rejects.toThrow();
-		await expect(fs.stat(join(f.unitDir, 'skiff-workload-wld_abc123.socket'))).rejects.toThrow();
+		await expect(fs.stat(join(f.unitDir, 'yoal-workload-wld_abc123.service'))).rejects.toThrow();
+		await expect(fs.stat(join(f.unitDir, 'yoal-workload-wld_abc123.socket'))).rejects.toThrow();
 		await expect(fs.stat(join(f.runtimeDir, 'wld_abc123'))).rejects.toThrow();
 	});
 
@@ -349,16 +349,16 @@ describe('stop and restart', () => {
 		const f = await fixture();
 		await f.driver.stop('wld_abc123');
 		expect(f.runner.calls).toEqual([
-			['/usr/bin/systemctl', 'stop', 'skiff-workload-wld_abc123.service'],
+			['/usr/bin/systemctl', 'stop', 'yoal-workload-wld_abc123.service'],
 		]);
 		// The listener survives: nothing touches the .socket unit (RemoveOnStop=yes is on it).
-		expect(f.runner.calls.some((argv) => argv.includes('skiff-workload-wld_abc123.socket'))).toBe(false);
+		expect(f.runner.calls.some((argv) => argv.includes('yoal-workload-wld_abc123.socket'))).toBe(false);
 	});
 
 	test('stop is idempotent, even when systemd no longer knows the unit', async () => {
 		const f = await fixture();
 		await f.driver.stop('wld_abc123');
-		f.runner.fail.stop = { code: 1, stdout: '', stderr: 'Unit skiff-workload-wld_abc123.service not loaded.\n' };
+		f.runner.fail.stop = { code: 1, stdout: '', stderr: 'Unit yoal-workload-wld_abc123.service not loaded.\n' };
 		await expect(f.driver.stop('wld_abc123')).resolves.toBeUndefined();
 		expect(f.runner.count('stop')).toBe(2);
 	});
@@ -367,8 +367,8 @@ describe('stop and restart', () => {
 		const f = await fixture();
 		await f.driver.restart('wld_abc123');
 		expect(f.runner.calls).toEqual([
-			['/usr/bin/systemctl', 'restart', 'skiff-workload-wld_abc123.service'],
-			['/usr/bin/systemctl', 'restart', 'skiff-workload-wld_abc123.socket'],
+			['/usr/bin/systemctl', 'restart', 'yoal-workload-wld_abc123.service'],
+			['/usr/bin/systemctl', 'restart', 'yoal-workload-wld_abc123.socket'],
 		]);
 		// Idempotent: repeating the fixed pair is the same request.
 		await f.driver.restart('wld_abc123');
@@ -377,7 +377,7 @@ describe('stop and restart', () => {
 
 	test('a failed restart surfaces the systemctl error', async () => {
 		const f = await fixture();
-		f.runner.fail.restart = { code: 1, stdout: '', stderr: 'Unit skiff-workload-wld_abc123.service not found.\n' };
+		f.runner.fail.restart = { code: 1, stdout: '', stderr: 'Unit yoal-workload-wld_abc123.service not found.\n' };
 		await expect(f.driver.restart('wld_abc123')).rejects.toThrow(/systemctl restart failed/);
 	});
 
@@ -424,10 +424,10 @@ describe('container network', () => {
 			socketActivation: false,
 		});
 		await f.driver.apply(container, activation());
-		const network = await fs.readFile(join(f.quadletDir, 'skiff-workloads.network'), 'utf8');
-		expect(network).toContain('NetworkName=skiff-workloads');
-		const quadlet = await fs.readFile(join(f.quadletDir, 'skiff-workload-wld_abc123.container'), 'utf8');
-		expect(quadlet).toContain('Network=skiff-workloads.network');
+		const network = await fs.readFile(join(f.quadletDir, 'yoal-workloads.network'), 'utf8');
+		expect(network).toContain('NetworkName=yoal-workloads');
+		const quadlet = await fs.readFile(join(f.quadletDir, 'yoal-workload-wld_abc123.container'), 'utf8');
+		expect(quadlet).toContain('Network=yoal-workloads.network');
 		expect(f.runner.count('daemon-reload')).toBe(1);
 
 		// Unchanged network + unit: no reload.
@@ -435,7 +435,7 @@ describe('container network', () => {
 		expect(f.runner.count('daemon-reload')).toBe(1);
 
 		// A missing network unit alone triggers a reload.
-		await fs.rm(join(f.quadletDir, 'skiff-workloads.network'));
+		await fs.rm(join(f.quadletDir, 'yoal-workloads.network'));
 		await f.driver.apply(container, activation());
 		expect(f.runner.count('daemon-reload')).toBe(2);
 	});
@@ -443,7 +443,7 @@ describe('container network', () => {
 	test('process workloads do not need the network unit', async () => {
 		const f = await fixture();
 		await f.driver.apply(workload(), activation());
-		await expect(fs.stat(join(f.quadletDir, 'skiff-workloads.network'))).rejects.toThrow();
+		await expect(fs.stat(join(f.quadletDir, 'yoal-workloads.network'))).rejects.toThrow();
 	});
 
 	test('each org gets its own network and only sees its own containers', async () => {
@@ -459,31 +459,31 @@ describe('container network', () => {
 				image: 'ghcr.io/acme/app:1',
 				socketActivation: false,
 				orgId,
-				networkName: `skiff-org-${orgId}`,
+				networkName: `yoal-org-${orgId}`,
 			});
 		await f.driver.apply(container('wld_a', 'org_1'), activation({ workloadId: 'wld_a' }));
 		await f.driver.apply(container('wld_b', 'org_2'), activation({ workloadId: 'wld_b' }));
 		await f.driver.apply(container('wld_c', 'org_1'), activation({ workloadId: 'wld_c' }));
 
-		expect(await fs.readFile(join(f.quadletDir, 'skiff-org-org_1.network'), 'utf8')).toContain(
-			'NetworkName=skiff-org-org_1',
+		expect(await fs.readFile(join(f.quadletDir, 'yoal-org-org_1.network'), 'utf8')).toContain(
+			'NetworkName=yoal-org-org_1',
 		);
-		expect(await fs.readFile(join(f.quadletDir, 'skiff-org-org_2.network'), 'utf8')).toContain(
-			'NetworkName=skiff-org-org_2',
+		expect(await fs.readFile(join(f.quadletDir, 'yoal-org-org_2.network'), 'utf8')).toContain(
+			'NetworkName=yoal-org-org_2',
 		);
-		expect(await fs.readFile(join(f.quadletDir, 'skiff-workload-wld_a.container'), 'utf8')).toContain(
-			'Network=skiff-org-org_1.network',
+		expect(await fs.readFile(join(f.quadletDir, 'yoal-workload-wld_a.container'), 'utf8')).toContain(
+			'Network=yoal-org-org_1.network',
 		);
-		expect(await fs.readFile(join(f.quadletDir, 'skiff-workload-wld_b.container'), 'utf8')).toContain(
-			'Network=skiff-org-org_2.network',
+		expect(await fs.readFile(join(f.quadletDir, 'yoal-workload-wld_b.container'), 'utf8')).toContain(
+			'Network=yoal-org-org_2.network',
 		);
 		// Same-org workloads share one network; the file count proves no per-workload networks.
-		expect(await fs.readFile(join(f.quadletDir, 'skiff-workload-wld_c.container'), 'utf8')).toContain(
-			'Network=skiff-org-org_1.network',
+		expect(await fs.readFile(join(f.quadletDir, 'yoal-workload-wld_c.container'), 'utf8')).toContain(
+			'Network=yoal-org-org_1.network',
 		);
 		const networks = (await fs.readdir(f.quadletDir)).filter((name) => name.endsWith('.network')).sort();
-		expect(networks).toEqual(['skiff-org-org_1.network', 'skiff-org-org_2.network']);
-		await expect(fs.stat(join(f.quadletDir, 'skiff-workloads.network'))).rejects.toThrow();
+		expect(networks).toEqual(['yoal-org-org_1.network', 'yoal-org-org_2.network']);
+		await expect(fs.stat(join(f.quadletDir, 'yoal-workloads.network'))).rejects.toThrow();
 	});
 
 	test('repairs a missing network attachment without a shell', async () => {
@@ -494,7 +494,7 @@ describe('container network', () => {
 			image: 'ghcr.io/acme/app:1',
 			socketActivation: false,
 			orgId: 'org_1',
-			networkName: 'skiff-org-org_1',
+			networkName: 'yoal-org-org_1',
 		});
 		f.runner.network = '{}';
 		await f.driver.apply(isolated, activation());
@@ -502,11 +502,11 @@ describe('container network', () => {
 			'/usr/bin/podman',
 			'network',
 			'connect',
-			'skiff-org-org_1',
-			'skiff-workload-wld_abc123',
+			'yoal-org-org_1',
+			'yoal-workload-wld_abc123',
 		]);
 
-		f.runner.network = '{"skiff-workload-wld_abc123":{}}';
+		f.runner.network = '{"yoal-workload-wld_abc123":{}}';
 		f.runner.calls = [];
 		await f.driver.apply(isolated, activation());
 		expect(f.runner.calls.some((argv) => argv[2] === 'connect')).toBe(false);
@@ -520,11 +520,11 @@ describe('database profile', () => {
 		const status = await f.driver.apply(database(), databaseActivation());
 		expect(status.status).toBe('starting');
 
-		const quadlet = await fs.readFile(join(f.quadletDir, `skiff-workload-${DB_ID}.container`), 'utf8');
+		const quadlet = await fs.readFile(join(f.quadletDir, `yoal-workload-${DB_ID}.container`), 'utf8');
 		expect(quadlet).toContain('User=70:70');
 		expect(quadlet).toContain('PublishPort=127.0.0.1:15432:5432');
 		expect(quadlet).toContain('NetworkAlias=db-0123456789abcdef0123456789abcdef');
-		expect(await fs.readFile(join(f.quadletDir, 'skiff-workloads.network'), 'utf8')).toContain('[Network]');
+		expect(await fs.readFile(join(f.quadletDir, 'yoal-workloads.network'), 'utf8')).toContain('[Network]');
 
 		const env = await fs.readFile(join(f.runtimeDir, DB_ID, 'env'), 'utf8');
 		// Podman reads env files literally, so container values are written unquoted.
@@ -542,7 +542,7 @@ describe('database profile', () => {
 			'/usr/bin/systemctl',
 			'restart',
 			'--no-block',
-			`skiff-workload-${DB_ID}.service`,
+			`yoal-workload-${DB_ID}.service`,
 		]);
 	});
 
@@ -562,8 +562,8 @@ describe('database profile', () => {
 		);
 		expect(status.status).toBe('running');
 		expect(status.tls).toEqual({ enabled: false, caPem: null, error: 'openssl is missing' });
-		const quadlet = await fs.readFile(join(f.quadletDir, `skiff-workload-${DB_ID}.container`), 'utf8');
-		expect(quadlet).not.toContain('/run/skiff-tls');
+		const quadlet = await fs.readFile(join(f.quadletDir, `yoal-workload-${DB_ID}.container`), 'utf8');
+		expect(quadlet).not.toContain('/run/yoal-tls');
 		expect(quadlet).not.toContain('ssl=on');
 	});
 
@@ -590,8 +590,8 @@ describe('database profile', () => {
 		);
 		expect(status.tls?.enabled).toBe(true);
 		expect(status.tls?.caPem).toContain('BEGIN CERTIFICATE');
-		const quadlet = await fs.readFile(join(f.quadletDir, `skiff-workload-${DB_ID}.container`), 'utf8');
-		expect(quadlet).toContain(`Volume=${join(f.runtimeDir, DB_ID, 'tls')}:/run/skiff-tls:ro,z`);
+		const quadlet = await fs.readFile(join(f.quadletDir, `yoal-workload-${DB_ID}.container`), 'utf8');
+		expect(quadlet).toContain(`Volume=${join(f.runtimeDir, DB_ID, 'tls')}:/run/yoal-tls:ro,z`);
 		expect(quadlet).toContain('ssl=on');
 	});
 
@@ -602,11 +602,11 @@ describe('database profile', () => {
 			activation(),
 		);
 		expect(f.chowns).toEqual([]);
-		expect(f.runner.calls).toContainEqual(['/usr/bin/systemctl', 'restart', 'skiff-workload-wld_abc123.service']);
+		expect(f.runner.calls).toContainEqual(['/usr/bin/systemctl', 'restart', 'yoal-workload-wld_abc123.service']);
 	});
 
 	test('app containers get the containers subid range first; databases do not need it', async () => {
-		const root = await fs.mkdtemp(join(tmpdir(), 'skiff-helper-subids-'));
+		const root = await fs.mkdtemp(join(tmpdir(), 'yoal-helper-subids-'));
 		directories.push(root);
 		const subids = { subuid: join(root, 'subuid'), subgid: join(root, 'subgid') };
 		const f = await fixture({ containerSubids: subids });
@@ -621,7 +621,7 @@ describe('database profile', () => {
 		);
 		expect(await fs.readFile(subids.subuid, 'utf8')).toMatch(/^containers:\d+:\d+\n$/);
 		expect(await fs.readFile(subids.subgid, 'utf8')).toMatch(/^containers:\d+:\d+\n$/);
-		const quadlet = await fs.readFile(join(f.quadletDir, 'skiff-workload-wld_abc123.container'), 'utf8');
+		const quadlet = await fs.readFile(join(f.quadletDir, 'yoal-workload-wld_abc123.container'), 'utf8');
 		expect(quadlet).toContain('UserNS=auto');
 	});
 
@@ -679,7 +679,7 @@ describe('leftover D60 studio console cleanup (D96)', () => {
 
 	async function leaveConsole(f: Fixture, id: string): Promise<void> {
 		await fs.mkdir(f.quadletDir, { recursive: true });
-		await fs.writeFile(join(f.quadletDir, `skiff-workload-${id}-console.container`), '[Container]\n');
+		await fs.writeFile(join(f.quadletDir, `yoal-workload-${id}-console.container`), '[Container]\n');
 		await fs.mkdir(join(f.runtimeDir, id), { recursive: true });
 		await fs.writeFile(join(f.runtimeDir, id, 'env'), 'POSTGRES_USER=orders\n');
 		await fs.writeFile(join(f.runtimeDir, id, 'console.env'), 'PASSWORD=x\n', { mode: 0o600 });
@@ -689,9 +689,9 @@ describe('leftover D60 studio console cleanup (D96)', () => {
 		const f = await fixture();
 		await leaveConsole(f, DB_ID);
 		// A pooler sidecar and a non-database unit with a similar name must survive.
-		await fs.writeFile(join(f.quadletDir, `skiff-workload-${DB_ID}-pool.container`), '[Container]\n');
-		await fs.writeFile(join(f.quadletDir, 'skiff-workload-wld_abc123-console.container'), '[Container]\n');
-		f.runner.containers = `skiff-workload-${DB_ID}-console\nskiff-workload-${OTHER_ID}-console\nunrelated-console\n`;
+		await fs.writeFile(join(f.quadletDir, `yoal-workload-${DB_ID}-pool.container`), '[Container]\n');
+		await fs.writeFile(join(f.quadletDir, 'yoal-workload-wld_abc123-console.container'), '[Container]\n');
+		f.runner.containers = `yoal-workload-${DB_ID}-console\nyoal-workload-${OTHER_ID}-console\nunrelated-console\n`;
 
 		expect(await f.driver.removeLegacyConsoles()).toEqual([DB_ID, OTHER_ID]);
 
@@ -699,19 +699,19 @@ describe('leftover D60 studio console cleanup (D96)', () => {
 			'/usr/bin/systemctl',
 			'disable',
 			'--now',
-			`skiff-workload-${DB_ID}-console.service`,
+			`yoal-workload-${DB_ID}-console.service`,
 		]);
 		expect(f.runner.count('daemon-reload')).toBe(1);
-		expect(f.runner.calls).toContainEqual(['/usr/bin/podman', 'rm', '--force', `skiff-workload-${DB_ID}-console`]);
-		expect(f.runner.calls).toContainEqual(['/usr/bin/podman', 'rm', '--force', `skiff-workload-${OTHER_ID}-console`]);
+		expect(f.runner.calls).toContainEqual(['/usr/bin/podman', 'rm', '--force', `yoal-workload-${DB_ID}-console`]);
+		expect(f.runner.calls).toContainEqual(['/usr/bin/podman', 'rm', '--force', `yoal-workload-${OTHER_ID}-console`]);
 		expect(f.runner.calls.some((argv) => argv.includes('unrelated-console'))).toBe(false);
 
-		await expect(fs.stat(join(f.quadletDir, `skiff-workload-${DB_ID}-console.container`))).rejects.toThrow();
+		await expect(fs.stat(join(f.quadletDir, `yoal-workload-${DB_ID}-console.container`))).rejects.toThrow();
 		await expect(fs.stat(join(f.runtimeDir, DB_ID, 'console.env'))).rejects.toThrow();
 		// The database itself is untouched: its own env file stays and it is never restarted.
 		expect(await fs.readFile(join(f.runtimeDir, DB_ID, 'env'), 'utf8')).toContain('POSTGRES_USER');
-		await fs.stat(join(f.quadletDir, `skiff-workload-${DB_ID}-pool.container`));
-		await fs.stat(join(f.quadletDir, 'skiff-workload-wld_abc123-console.container'));
+		await fs.stat(join(f.quadletDir, `yoal-workload-${DB_ID}-pool.container`));
+		await fs.stat(join(f.quadletDir, 'yoal-workload-wld_abc123-console.container'));
 		expect(f.runner.calls.some((argv) => argv[1] === 'restart')).toBe(false);
 	});
 
@@ -736,7 +736,7 @@ describe('leftover D60 studio console cleanup (D96)', () => {
 		await leaveConsole(f, DB_ID);
 		f.runner.fail.disable = { code: 1, stdout: '', stderr: 'Unit not loaded' };
 		expect(await f.driver.removeLegacyConsoles()).toEqual([DB_ID]);
-		await expect(fs.stat(join(f.quadletDir, `skiff-workload-${DB_ID}-console.container`))).rejects.toThrow();
+		await expect(fs.stat(join(f.quadletDir, `yoal-workload-${DB_ID}-console.container`))).rejects.toThrow();
 	});
 });
 
@@ -747,7 +747,7 @@ describe('storage profile', () => {
 		const status = await f.driver.apply(storage(), storageActivation());
 		expect(status.status).toBe('starting');
 
-		const quadlet = await fs.readFile(join(f.quadletDir, `skiff-workload-${ST_ID}.container`), 'utf8');
+		const quadlet = await fs.readFile(join(f.quadletDir, `yoal-workload-${ST_ID}.container`), 'utf8');
 		expect(quadlet).toContain(
 			'Image=docker.io/rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2',
 		);
@@ -777,7 +777,7 @@ describe('storage profile', () => {
 			'/usr/bin/systemctl',
 			'restart',
 			'--no-block',
-			`skiff-workload-${ST_ID}.service`,
+			`yoal-workload-${ST_ID}.service`,
 		]);
 	});
 
@@ -813,10 +813,10 @@ describe('purge', () => {
 		await f.driver.purge(DB_ID);
 
 		const disableAt = f.runner.calls.findIndex(
-			(argv) => argv[1] === 'disable' && argv[3] === `skiff-workload-${DB_ID}.service`,
+			(argv) => argv[1] === 'disable' && argv[3] === `yoal-workload-${DB_ID}.service`,
 		);
 		expect(disableAt).toBeGreaterThanOrEqual(0);
-		await expect(fs.stat(join(f.quadletDir, `skiff-workload-${DB_ID}.container`))).rejects.toThrow();
+		await expect(fs.stat(join(f.quadletDir, `yoal-workload-${DB_ID}.container`))).rejects.toThrow();
 		await expect(fs.stat(join(f.runtimeDir, DB_ID))).rejects.toThrow();
 		await expect(fs.stat(dataDir)).rejects.toThrow();
 		expect((await fs.stat(sibling)).isDirectory()).toBe(true);
@@ -831,7 +831,7 @@ describe('purge', () => {
 		const sibling = join(f.stateDir, 'st_other');
 		await fs.mkdir(sibling);
 		await f.driver.purge(ST_ID);
-		await expect(fs.stat(join(f.quadletDir, `skiff-workload-${ST_ID}.container`))).rejects.toThrow();
+		await expect(fs.stat(join(f.quadletDir, `yoal-workload-${ST_ID}.container`))).rejects.toThrow();
 		await expect(fs.stat(dataDir)).rejects.toThrow();
 		expect((await fs.stat(sibling)).isDirectory()).toBe(true);
 	});
@@ -870,7 +870,7 @@ describe('app volumes (plan 07)', () => {
 		const info = await fs.stat(hostPath);
 		expect(info.isDirectory()).toBe(true);
 		expect(info.mode & 0o777).toBe(0o777);
-		const unit = await fs.readFile(join(f.unitDir, 'skiff-workload-wld_abc123.service'), 'utf8');
+		const unit = await fs.readFile(join(f.unitDir, 'yoal-workload-wld_abc123.service'), 'utf8');
 		expect(unit).toContain(`BindPaths=${hostPath}:/var/lib/app`);
 		expect(unit).toContain('ReadWritePaths=/var/lib/app');
 	});
@@ -889,7 +889,7 @@ describe('app volumes (plan 07)', () => {
 			],
 		});
 		await expect(f.driver.apply(desired, activation())).rejects.toThrow(/not registered/);
-		await expect(fs.stat(join(f.unitDir, 'skiff-workload-wld_abc123.service'))).rejects.toThrow();
+		await expect(fs.stat(join(f.unitDir, 'yoal-workload-wld_abc123.service'))).rejects.toThrow();
 	});
 
 	test('a registered node volume that is not mounted fails closed instead of using the root disk', async () => {
@@ -913,8 +913,8 @@ describe('app volumes (plan 07)', () => {
 		});
 		await expect(f.driver.apply(desired, activation())).rejects.toThrow(/not mounted|Could not read mounts/);
 		// The helper never creates the path under the (empty) mountpoint or the root disk.
-		await expect(fs.stat('/mnt/data/skiff/apps/prj_abc123/av_1')).rejects.toThrow();
-		await expect(fs.stat(join(f.unitDir, 'skiff-workload-wld_abc123.service'))).rejects.toThrow();
+		await expect(fs.stat('/mnt/data/yoal/apps/prj_abc123/av_1')).rejects.toThrow();
+		await expect(fs.stat(join(f.unitDir, 'yoal-workload-wld_abc123.service'))).rejects.toThrow();
 	});
 });
 
@@ -926,10 +926,10 @@ describe('studio process', () => {
 		expect(started.status).toBe(200);
 		const stopped = await handle(new Request('http://localhost/v1/studio/stop', { method: 'POST' }));
 		expect(stopped.status).toBe(200);
-		expect(STUDIO_UNIT).toBe('skiff-studio.service');
+		expect(STUDIO_UNIT).toBe('yoal-studio.service');
 		expect(f.runner.calls).toEqual([
-			['/usr/bin/systemctl', 'start', 'skiff-studio.service'],
-			['/usr/bin/systemctl', 'stop', 'skiff-studio.service'],
+			['/usr/bin/systemctl', 'start', 'yoal-studio.service'],
+			['/usr/bin/systemctl', 'stop', 'yoal-studio.service'],
 		]);
 	});
 
@@ -938,13 +938,13 @@ describe('studio process', () => {
 		f.runner.fail.start = {
 			code: 1,
 			stdout: '',
-			stderr: 'Job for skiff-studio.service failed because the control process exited with error code.\n',
+			stderr: 'Job for yoal-studio.service failed because the control process exited with error code.\n',
 		};
 		const handle = createHandler(f.driver, { version: '0.1.0' });
 		const response = await handle(new Request('http://localhost/v1/studio/start', { method: 'POST' }));
 		expect(response.status).toBe(500);
 		expect(await response.json()).toEqual({
-			error: 'systemctl start failed (1): Job for skiff-studio.service failed because the control process exited with error code.',
+			error: 'systemctl start failed (1): Job for yoal-studio.service failed because the control process exited with error code.',
 		});
 	});
 
@@ -990,8 +990,8 @@ describe('platform registry (docs/REGISTRY.md G1)', () => {
 		workloadId: REG_ID,
 		activationVersion: 'b'.repeat(64),
 		env: {
-			SKIFF_REGISTRY_TOKEN_CERT: CERT,
-			SKIFF_REGISTRY_EVENTS_URL: 'https://control.example.com/api/webhooks/registry/s3cret',
+			YOAL_REGISTRY_TOKEN_CERT: CERT,
+			YOAL_REGISTRY_EVENTS_URL: 'https://control.example.com/api/webhooks/registry/s3cret',
 			...env,
 		},
 		files: {},
@@ -1000,7 +1000,7 @@ describe('platform registry (docs/REGISTRY.md G1)', () => {
 	test('renders zot from the profile: pinned image, config dir, unprivileged uid, no secrets in env', async () => {
 		const f = await fixture();
 		await f.driver.apply(parseWorkload(registryWorkload()), registryActivation());
-		const unit = await fs.readFile(join(f.quadletDir, `skiff-workload-${REG_ID}.container`), 'utf8');
+		const unit = await fs.readFile(join(f.quadletDir, `yoal-workload-${REG_ID}.container`), 'utf8');
 		expect(unit).toContain('Image=ghcr.io/project-zot/zot:v2.1.23@sha256:9d3de83ac2099e6f4843045b4c9b65b7e8baf40f92d28f54906dee9d4d390fd7');
 		expect(unit).toContain('User=65532:65532');
 		expect(unit).toContain('PublishPort=127.0.0.1:15000:5000');
@@ -1015,16 +1015,16 @@ describe('platform registry (docs/REGISTRY.md G1)', () => {
 		});
 		expect(config.http.compat).toEqual(['docker2s2']);
 		expect(config.storage.retention.policies[0].keepTags).toEqual([
-			{ patterns: ['^skiff-d-.*'] },
+			{ patterns: ['^yoal-d-.*'] },
 			{ mostRecentlyPushedCount: 15 },
 		]);
 		expect(config.extensions.events.sinks[0].address).toBe('https://control.example.com/api/webhooks/registry/s3cret');
 		expect(await fs.readFile(join(f.runtimeDir, REG_ID, 'zot', 'cert.pem'), 'utf8')).toBe(`${CERT}\n`);
 		const env = await fs.readFile(join(f.runtimeDir, REG_ID, 'env'), 'utf8');
-		expect(env).not.toContain('SKIFF_REGISTRY');
+		expect(env).not.toContain('YOAL_REGISTRY');
 		expect(f.chowns).toContainEqual([join(f.runtimeDir, REG_ID, 'zot', 'config.json'), 65532, 65532]);
 		// The first start pulls the image, so the restart is queued.
-		expect(f.runner.calls).toContainEqual(['/usr/bin/systemctl', 'restart', '--no-block', `skiff-workload-${REG_ID}.service`]);
+		expect(f.runner.calls).toContainEqual(['/usr/bin/systemctl', 'restart', '--no-block', `yoal-workload-${REG_ID}.service`]);
 		// The config dir ends read-only; reopen it so the fixture cleanup (not root) can delete it.
 		expect((await fs.stat(join(f.runtimeDir, REG_ID, 'zot'))).mode & 0o777).toBe(0o500);
 		await fs.chmod(join(f.runtimeDir, REG_ID, 'zot'), 0o700);
@@ -1039,7 +1039,7 @@ describe('platform registry (docs/REGISTRY.md G1)', () => {
 		expect(() => parseWorkload(workload({ id: 'reg_1234' }))).toThrow(/reserved for the registry/);
 		const f = await fixture();
 		await expect(
-			f.driver.apply(parseWorkload(registryWorkload()), registryActivation({ SKIFF_REGISTRY_TOKEN_CERT: 'not a cert' })),
+			f.driver.apply(parseWorkload(registryWorkload()), registryActivation({ YOAL_REGISTRY_TOKEN_CERT: 'not a cert' })),
 		).rejects.toThrow(/PEM certificate/);
 	});
 });
@@ -1100,14 +1100,14 @@ describe('compose stacks (level 4)', () => {
 		const f = await fixture();
 		await f.driver.apply(composeWorkload(), activation({ workloadId: 'wld_compose1', env: { DATABASE_URL: 'postgres://db/app' } }));
 
-		const web = await fs.readFile(join(f.quadletDir, 'skiff-workload-wld_compose1--web.container'), 'utf8');
-		const db = await fs.readFile(join(f.quadletDir, 'skiff-workload-wld_compose1--db.container'), 'utf8');
-		expect(web).toContain('ContainerName=skiff-workload-wld_compose1--web');
+		const web = await fs.readFile(join(f.quadletDir, 'yoal-workload-wld_compose1--web.container'), 'utf8');
+		const db = await fs.readFile(join(f.quadletDir, 'yoal-workload-wld_compose1--db.container'), 'utf8');
+		expect(web).toContain('ContainerName=yoal-workload-wld_compose1--web');
 		expect(web).toContain('NetworkAlias=web');
 		expect(web).toContain('PublishPort=127.0.0.1:30001:3000');
 		expect(web).toContain('Exec="nginx" "-g" "daemon off;"');
-		expect(web).toContain('After=skiff-workload-wld_compose1--db.service');
-		expect(web).toContain('Requires=skiff-workload-wld_compose1--db.service');
+		expect(web).toContain('After=yoal-workload-wld_compose1--db.service');
+		expect(web).toContain('Requires=yoal-workload-wld_compose1--db.service');
 		expect(web).toContain('Volume=');
 		expect(web).toContain(':/app/uploads:Z,U');
 		expect(db).not.toContain('PublishPort=');
@@ -1118,20 +1118,20 @@ describe('compose stacks (level 4)', () => {
 		expect(webEnv).toContain('PORT=3000');
 		expect(webEnv).toContain('DATABASE_URL=postgres://db/app');
 		expect(await fs.readFile(join(f.runtimeDir, 'wld_compose1', 'compose.json'), 'utf8')).toContain('web');
-		expect(f.runner.calls).toContainEqual(['/usr/bin/systemctl', 'restart', '--no-block', 'skiff-workload-wld_compose1--web.service']);
-		expect(f.runner.calls).toContainEqual(['/usr/bin/systemctl', 'restart', '--no-block', 'skiff-workload-wld_compose1--db.service']);
+		expect(f.runner.calls).toContainEqual(['/usr/bin/systemctl', 'restart', '--no-block', 'yoal-workload-wld_compose1--web.service']);
+		expect(f.runner.calls).toContainEqual(['/usr/bin/systemctl', 'restart', '--no-block', 'yoal-workload-wld_compose1--db.service']);
 	});
 
 	test('removes every service unit and its container', async () => {
 		const f = await fixture();
 		await f.driver.apply(composeWorkload(), activation({ workloadId: 'wld_compose1' }));
 		await f.driver.remove('wld_compose1');
-		expect((await fs.readdir(f.quadletDir)).filter((name) => name.startsWith('skiff-workload-wld_compose1--'))).toEqual([]);
+		expect((await fs.readdir(f.quadletDir)).filter((name) => name.startsWith('yoal-workload-wld_compose1--'))).toEqual([]);
 		expect(f.runner.calls).toContainEqual([
 			'/usr/bin/systemctl',
 			'disable',
 			'--now',
-			'skiff-workload-wld_compose1--web.service',
+			'yoal-workload-wld_compose1--web.service',
 		]);
 		expect(await fs.stat(join(f.runtimeDir, 'wld_compose1')).catch(() => null)).toBeNull();
 	});

@@ -1,7 +1,7 @@
 import { readFileSync, statfsSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { and, desc, eq, isNull } from 'drizzle-orm';
-import { backupRuns, databases, migrations, nodes } from '@skiff/db';
+import { backupRuns, databases, migrations, nodes } from '@yoal/db';
 import type { CoreContext } from './context.ts';
 import {
 	buildReadyzReport,
@@ -30,11 +30,11 @@ export interface UpgradeServiceOptions {
 	/** The running platform version, baked in by the control plane build. */
 	platformVersion: string;
 	dataDir?: string;
-	/** Defaults to `<dataDir>/skiff.db`. */
+	/** Defaults to `<dataDir>/yoal.db`. */
 	dbPath?: string;
 	/** Defaults to `<parent of dataDir>/backups`. */
 	backupsDir?: string;
-	/** `/etc/skiff` on an installed host. */
+	/** `/etc/yoal` on an installed host. */
 	envDir?: string;
 	agentVersion?: string | null;
 	helperVersion?: string | null;
@@ -82,10 +82,10 @@ export class UpgradeService {
 		private readonly options: UpgradeServiceOptions
 	) {
 		this.dataDir = options.dataDir ?? ctx.config.dataDir;
-		this.dbPath = options.dbPath ?? process.env.SKIFF_DB_PATH ?? join(this.dataDir, 'skiff.db');
+		this.dbPath = options.dbPath ?? process.env.YOAL_DB_PATH ?? join(this.dataDir, 'yoal.db');
 		this.backupsDir =
-			options.backupsDir ?? process.env.SKIFF_BACKUPS_DIR ?? join(dirname(this.dataDir), 'backups');
-		this.envDir = options.envDir ?? process.env.SKIFF_ETC_DIR ?? '/etc/skiff';
+			options.backupsDir ?? process.env.YOAL_BACKUPS_DIR ?? join(dirname(this.dataDir), 'backups');
+		this.envDir = options.envDir ?? process.env.YOAL_ETC_DIR ?? '/etc/yoal';
 		this.now = options.now ?? ctx.now ?? (() => Date.now());
 	}
 
@@ -112,7 +112,7 @@ export class UpgradeService {
 		return evaluateUpgradePreflight({
 			currentVersion: this.options.platformVersion,
 			targetVersion: overrides.targetVersion ?? this.options.platformVersion,
-			channel: overrides.channel ?? this.options.channel ?? (process.env.SKIFF_RELEASE_CHANNEL === 'edge' ? 'edge' : 'stable'),
+			channel: overrides.channel ?? this.options.channel ?? (process.env.YOAL_RELEASE_CHANNEL === 'edge' ? 'edge' : 'stable'),
 			releaseNotes: overrides.releaseNotes,
 			migrations: targetMigrations,
 			appliedMigrations,
@@ -237,7 +237,7 @@ export class UpgradeService {
 	private appliedMigrations(): string[] {
 		try {
 			return this.ctx.sqlite
-				.query<{ id: string }, []>('SELECT id FROM skiff_migrations ORDER BY id')
+				.query<{ id: string }, []>('SELECT id FROM yoal_migrations ORDER BY id')
 				.all()
 				.map((row) => row.id);
 		} catch {
@@ -375,9 +375,9 @@ export class UpgradeService {
 		// when it is newer than the (optional) database row.
 		try {
 			const path =
-				process.env.SKIFF_RESTORE_DRILL_STATUS ??
+				process.env.YOAL_RESTORE_DRILL_STATUS ??
 				join(
-					process.env.SKIFF_RESTORE_DRILL_DIR ?? join(dirname(this.dataDir), 'drill'),
+					process.env.YOAL_RESTORE_DRILL_DIR ?? join(dirname(this.dataDir), 'drill'),
 					'status.json'
 				);
 			const status = JSON.parse(readFileSync(path, 'utf8')) as { ok?: unknown; at?: unknown };

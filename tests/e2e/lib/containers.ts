@@ -106,22 +106,22 @@ async function probe(kind: EngineKind, command: string[]): Promise<Engine | null
 /**
  * Resolve an engine.
  *
- * - `SKIFF_E2E_ENGINE=none` always skips.
- * - `SKIFF_E2E_ENGINE=podman|docker` requires that engine (CI uses this so a missing engine is a
+ * - `YOAL_E2E_ENGINE=none` always skips.
+ * - `YOAL_E2E_ENGINE=podman|docker` requires that engine (CI uses this so a missing engine is a
  *   failure, not a silent skip).
  * - Unset tries Podman, then Docker, and returns null when neither is usable.
  */
-export async function detectEngine(preferred = process.env.SKIFF_E2E_ENGINE): Promise<Engine | null> {
+export async function detectEngine(preferred = process.env.YOAL_E2E_ENGINE): Promise<Engine | null> {
 	const normalized = preferred?.trim().toLowerCase();
 	if (normalized === 'none') return null;
 	if (normalized === 'podman' || normalized === 'docker') {
-		const command = normalized === 'podman' && process.env.SKIFF_E2E_PODMAN_SUDO === '1'
+		const command = normalized === 'podman' && process.env.YOAL_E2E_PODMAN_SUDO === '1'
 			? ['sudo', 'podman']
 			: [normalized];
 		const engine = await probe(normalized, command);
 		if (!engine)
 			throw new EngineUnavailableError(
-				`SKIFF_E2E_ENGINE=${normalized} was requested but \`${command.join(' ')} info\` failed.`,
+				`YOAL_E2E_ENGINE=${normalized} was requested but \`${command.join(' ')} info\` failed.`,
 			);
 		return engine;
 	}
@@ -203,9 +203,9 @@ export class ContainerRuntime {
 			'--network',
 			spec.network,
 			'--label',
-			`skiff.e2e.run=${this.runId}`,
+			`yoal.e2e.run=${this.runId}`,
 			'--label',
-			'skiff.e2e=true',
+			'yoal.e2e=true',
 		];
 		for (const [key, value] of Object.entries(spec.env ?? {})) args.push('-e', `${key}=${value}`);
 		for (const [hostPort, containerPort] of spec.ports)

@@ -17,11 +17,11 @@
 	import TimerIcon from '@lucide/svelte/icons/timer';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import WifiOffIcon from '@lucide/svelte/icons/wifi-off';
-	import type { SelfUpdateLog, SelfUpdateMethod, SelfUpdateStatus } from '@skiff/contracts';
+	import type { SelfUpdateLog, SelfUpdateMethod, SelfUpdateStatus } from '@yoal/contracts';
 	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
-	import FormFeedback from '#lib/components/skiff/FormFeedback.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import FormFeedback from '#lib/components/yoal/FormFeedback.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import type { Tone } from '#lib/status.js';
 	import { fetchJson } from '#lib/query.js';
 	import Panel from '../../_lib/Panel.svelte';
@@ -213,7 +213,7 @@
 					icon: RotateCcwIcon,
 					eyebrow: 'Rolling back',
 					title: back ? `Rolling back to v${back}` : 'Rolling back',
-					description: `${activeRun.toVersion ? `v${activeRun.toVersion}` : 'The new version'} failed its health checks after switching over. Skiff is restoring the previous version on its own.`,
+					description: `${activeRun.toVersion ? `v${activeRun.toVersion}` : 'The new version'} failed its health checks after switching over. Yoal is restoring the previous version on its own.`,
 					target: null
 				};
 			}
@@ -258,7 +258,7 @@
 					icon: TriangleAlertIcon,
 					eyebrow: 'Needs your approval',
 					title: `v${approval.version} is waiting for you`,
-					description: `It changes or removes existing data in the control database, so Skiff stopped before installing it. Review the migration below and approve it to continue. You're still on v${view.version}.`,
+					description: `It changes or removes existing data in the control database, so Yoal stopped before installing it. Review the migration below and approve it to continue. You're still on v${view.version}.`,
 					target: approval.version
 				};
 			if (data.comparison.available && retrying && lastRun)
@@ -275,7 +275,7 @@
 					tone: 'info',
 					icon: CircleArrowUpIcon,
 					eyebrow: `${data.comparison.bump ? `${data.comparison.bump} update` : 'Update available'} · ${data.channel}`,
-					title: `Skiff v${target} is available`,
+					title: `Yoal v${target} is available`,
 					description:
 						'Test-booted against a copy of your data before anything switches over, and rolled back on its own if anything fails.',
 					target
@@ -286,7 +286,7 @@
 					icon: ShieldCheckIcon,
 					eyebrow: `Switch to ${data.channel}`,
 					title: `This host is ahead of ${data.channel}`,
-					description: `The newest ${data.channel} release is v${data.comparison.latest}, older than the v${view.version} running here. Switching keeps v${view.version} (Skiff never downgrades) and installs the next ${data.channel} release once it is newer.`,
+					description: `The newest ${data.channel} release is v${data.comparison.latest}, older than the v${view.version} running here. Switching keeps v${view.version} (Yoal never downgrades) and installs the next ${data.channel} release once it is newer.`,
 					target: null
 				};
 			return {
@@ -301,7 +301,7 @@
 	);
 </script>
 
-<svelte:head><title>Updates · Settings · Skiff</title></svelte:head>
+<svelte:head><title>Updates · Settings · Yoal</title></svelte:head>
 
 <SettingsHeader id="updates">
 	{#snippet actions()}
@@ -349,7 +349,7 @@
 
 	{#if data.availability === 'not-enabled'}
 		<Notice tone="warning" title="Dashboard updates aren't enabled on this host">
-			Run <code>sudo skiff-update-self check</code> on the server once. It installs the small systemd
+			Run <code>sudo yoal-update-self check</code> on the server once. It installs the small systemd
 			trigger that lets this page start an update.
 		</Notice>
 	{/if}
@@ -357,15 +357,15 @@
 	{#if startTimedOut && !running && !data.inFlight}
 		<Notice tone="warning" title="The updater hasn't started">
 			The request is queued on the server, but nothing has reported progress yet. Check
-			<code>systemctl status skiff-update-self.path</code> and
-			<code>journalctl -u skiff-update-self</code>.
+			<code>systemctl status yoal-update-self.path</code> and
+			<code>journalctl -u yoal-update-self</code>.
 		</Notice>
 	{/if}
 
 	{#if !running && view.status?.stale}
 		<Notice tone="warning" title="The last update stopped reporting">
 			It last reported “{view.status.message}” at {formatDateTime(view.status.updatedAt)} and probably
-			crashed. Check <code>journalctl -u skiff-update-self</code> on the server. You can start a new update.
+			crashed. Check <code>journalctl -u yoal-update-self</code> on the server. You can start a new update.
 		</Notice>
 	{/if}
 
@@ -523,7 +523,7 @@
 					</AlertDialog.Media>
 					<AlertDialog.Title>
 						{target
-							? `Update Skiff to v${target}?`
+							? `Update Yoal to v${target}?`
 							: switching
 								? `Switch this host to ${data.channel}?`
 								: 'Install the newest version?'}
@@ -562,7 +562,7 @@
 						</li>
 						<li class="flex gap-2">
 							<span class="mt-2 size-1 shrink-0 rounded-full bg-muted-foreground/60"></span>
-							If health checks fail, Skiff rolls back to v{view.version} automatically.
+							If health checks fail, Yoal rolls back to v{view.version} automatically.
 						</li>
 					</ul>
 					{#if !data.preflight.ok}

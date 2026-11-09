@@ -5,18 +5,18 @@ import {
 	type MailDesired,
 	type MailHealth,
 	type MailInject,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 
 /**
  * The agent's side of Email (docs/EMAIL.md §3.2, §3.5). On the mail node only, it:
- * - starts `skiff-mail` through the helper and stops it when the node stops being the mail node;
+ * - starts `yoal-mail` through the helper and stops it when the node stops being the mail node;
  * - pushes the mail state (opened DKIM keys, credential hashes, policy) whenever its generation
- *   moves or `skiff-mail` restarted and lost it;
+ *   moves or `yoal-mail` restarted and lost it;
  * - long-polls the control plane's outbox and injects messages, acknowledging only spooled ones;
- * - forwards `skiff-mail`'s events to the control plane and acks them back by cursor;
+ * - forwards `yoal-mail`'s events to the control plane and acks them back by cursor;
  * - copies the submission certificate out of Caddy (through the helper) and reloads TLS.
  *
- * `skiff-mail` never talks to the control plane: everything crosses this bridge.
+ * `yoal-mail` never talks to the control plane: everything crosses this bridge.
  */
 
 export interface HelperMailApi {
@@ -31,7 +31,7 @@ type Log = (level: 'info' | 'warn' | 'error', message: string) => void;
 export interface MailBridgeOptions {
 	controlUrl: string;
 	nodeToken: string;
-	/** `skiff-mail`'s control socket. */
+	/** `yoal-mail`'s control socket. */
 	socketPath: string;
 	helper: HelperMailApi;
 	fetch?: Fetch;
@@ -94,9 +94,9 @@ export class MailBridge {
 		this.started = false;
 		try {
 			await this.options.helper.mailStop();
-			this.options.log('info', 'This node is no longer the mail node: stopped skiff-mail');
+			this.options.log('info', 'This node is no longer the mail node: stopped yoal-mail');
 		} catch (error) {
-			this.options.log('warn', `Stopping skiff-mail failed: ${String(error)}`);
+			this.options.log('warn', `Stopping yoal-mail failed: ${String(error)}`);
 		}
 	}
 
@@ -108,7 +108,7 @@ export class MailBridge {
 		}
 	}
 
-	/** One pass: make sure skiff-mail runs and has current state, then forward events. Exposed for tests. */
+	/** One pass: make sure yoal-mail runs and has current state, then forward events. Exposed for tests. */
 	async tick(): Promise<void> {
 		if (this.ticking || !this.desired) return;
 		this.ticking = true;
@@ -116,7 +116,7 @@ export class MailBridge {
 			if (!this.started) {
 				await this.options.helper.mailStart();
 				this.started = true;
-				this.options.log('info', 'Started skiff-mail (this node is the mail node)');
+				this.options.log('info', 'Started yoal-mail (this node is the mail node)');
 			}
 			const health = await this.health();
 			if (!health) return; // Still starting; the next tick tries again.
@@ -129,7 +129,7 @@ export class MailBridge {
 	}
 
 	private mail(path: string, init: RequestInit = {}): Promise<Response> {
-		return this.fetch(`http://skiff-mail${path}`, {
+		return this.fetch(`http://yoal-mail${path}`, {
 			...init,
 			unix: this.options.socketPath,
 			headers: { 'content-type': 'application/json', ...(init.headers as Record<string, string> | undefined) },
@@ -163,7 +163,7 @@ export class MailBridge {
 		if (!response.ok) throw new Error(`email/state -> ${response.status}`);
 		const state = mailStateSchema.parse(await response.json());
 		const pushed = await this.mail('/state', { method: 'PUT', body: JSON.stringify(state) });
-		if (!pushed.ok) throw new Error(`skiff-mail refused the state: ${pushed.status} ${await pushed.text().catch(() => '')}`);
+		if (!pushed.ok) throw new Error(`yoal-mail refused the state: ${pushed.status} ${await pushed.text().catch(() => '')}`);
 		this.options.log('info', `Pushed mail state g${state.generation} (${state.domains.length} domains, ${state.credentials.length} credentials)`);
 	}
 
@@ -187,7 +187,7 @@ export class MailBridge {
 	private async forwardEvents(): Promise<void> {
 		for (let round = 0; round < 20; round++) {
 			const response = await this.mail(`/events?after=0&limit=${EVENT_BATCH}`);
-			if (!response.ok) throw new Error(`skiff-mail events -> ${response.status}`);
+			if (!response.ok) throw new Error(`yoal-mail events -> ${response.status}`);
 			const { events } = (await response.json()) as { events: EmailEvent[] };
 			if (events.length === 0) return;
 			const sent = await this.control('email/events', { method: 'POST', body: JSON.stringify({ events }) });
@@ -228,7 +228,7 @@ export class MailBridge {
 			else
 				this.options.log(
 					'warn',
-					`skiff-mail did not take ${message.messageId}: ${injected.status} ${await injected.text().catch(() => '')}`,
+					`yoal-mail did not take ${message.messageId}: ${injected.status} ${await injected.text().catch(() => '')}`,
 				);
 		}
 		if (spooled.length > 0) {

@@ -6,7 +6,7 @@ description: Persistent directories for apps that survive redeploys, with a size
 A volume is a directory that belongs to a project and keeps its files when the app is redeployed or restarted. Use one when an app needs to write data that has to outlive a deploy, such as an SQLite file, uploaded files or a cache worth keeping. Volumes can be mounted into **process** and **container** projects only. A static site has nothing to mount into.
 
 > [!NOTE]
-> Volumes are behind the `APP_VOLUMES` feature flag, which is on by default. An operator can turn it off with `SKIFF_FEATURE_APP_VOLUMES=0`. If the Volumes card is missing or disabled on your project, ask your platform operator whether it was turned off.
+> Volumes are behind the `APP_VOLUMES` feature flag, which is on by default. An operator can turn it off with `YOAL_FEATURE_APP_VOLUMES=0`. If the Volumes card is missing or disabled on your project, ask your platform operator whether it was turned off.
 
 For managed databases and object storage, use [databases](/data/databases) and [object storage](/data/object-storage) instead. They are separate services with their own backups.
 
@@ -25,7 +25,7 @@ The app only sees the mount path. Host paths and device names are never shown in
 ## Create a volume
 
 ```sh
-skif volume create app-data --project api --size 2G
+yoal volume create app-data --project api --size 2G
 ```
 
 `--disk` picks where it is stored: `system` for the node's system disk, `fast` or `bulk` for a disk of that tier, or a disk by name. Without it, the volume uses the **App volumes** default from **Settings → Storage**, which is the system disk unless an operator set another. The dashboard's **Storage** field offers the same choice.
@@ -36,26 +36,26 @@ Create a volume after the project has been deployed at least once if you want it
 
 `--size` takes a whole number of megabytes, or a number with an `M` or `G` unit: `512M`, `2G`. The default is 1 GB (1024 MB). The largest volume is 1 TB (1,048,576 MB).
 
-When you create or grow a volume, Skiff checks that the total reserved quota on that disk stays within 90% of the free space the node last reported. If it would not, the request is refused and the error names the free space and the limit. A node that has not reported its free disk yet also refuses the request. It reports about every 10 seconds, so retry shortly.
+When you create or grow a volume, Yoal checks that the total reserved quota on that disk stays within 90% of the free space the node last reported. If it would not, the request is refused and the error names the free space and the limit. A node that has not reported its free disk yet also refuses the request. It reports about every 10 seconds, so retry shortly.
 
 > [!NOTE]
-> The quota is a reservation for capacity planning. Skiff does not currently stop an app writing past its quota.
+> The quota is a reservation for capacity planning. Yoal does not currently stop an app writing past its quota.
 
 ### Usage
 
-The volume's node measures how much space each volume uses every 5 minutes. The dashboard, `skif volume list` and `skif volume show` show used space against the quota, and a volume at 90% or more of its quota is flagged as nearly full. A new volume shows no usage until the first measurement.
+The volume's node measures how much space each volume uses every 5 minutes. The dashboard, `yoal volume list` and `yoal volume show` show used space against the quota, and a volume at 90% or more of its quota is flagged as nearly full. A new volume shows no usage until the first measurement.
 
-Usage also raises a platform alert when a volume passes the storage usage threshold (85% by default, critical at 95%), and it is exported as the `skiff_project_volume_used_bytes` metric. See [alerts](/observe/alerts) and [metrics](/observe/metrics).
+Usage also raises a platform alert when a volume passes the storage usage threshold (85% by default, critical at 95%), and it is exported as the `yoal_project_volume_used_bytes` metric. See [alerts](/observe/alerts) and [metrics](/observe/metrics).
 
 ## Attach to an app
 
 Attach a volume at a mount path inside the app:
 
 ```sh
-skif volume attach app-data --project api --mount /var/lib/app
+yoal volume attach app-data --project api --mount /var/lib/app
 ```
 
-The app restarts to pick up the mount. The mount path must be absolute and normalised, with no trailing slash, `//`, `.` or `..`. It also cannot be one of the reserved paths `/`, `/data`, `/home`, `/media`, `/mnt`, `/srv`, `/var`, or `/var/lib`, and it cannot sit inside a system or platform tree such as `/bin`, `/etc`, `/usr`, `/tmp`, `/opt/skiff` or `/var/lib/skiff`. Mount inside a reserved path instead, for example `/var/lib/app`.
+The app restarts to pick up the mount. The mount path must be absolute and normalised, with no trailing slash, `//`, `.` or `..`. It also cannot be one of the reserved paths `/`, `/data`, `/home`, `/media`, `/mnt`, `/srv`, `/var`, or `/var/lib`, and it cannot sit inside a system or platform tree such as `/bin`, `/etc`, `/usr`, `/tmp`, `/opt/yoal` or `/var/lib/yoal`. Mount inside a reserved path instead, for example `/var/lib/app`.
 
 Add `--read-only` to mount the volume read-only. A read-write attachment to a single-writer volume that already has one is refused. Detach the existing attachment first, or attach the new one read-only.
 
@@ -66,11 +66,11 @@ By default an attachment goes to the project's workload. `--workload` also accep
 A volume lives on one node, and its project is tied to that node while the volume is attached.
 
 - A volume is created on the node the project's workload runs on. If the project has no workload yet, it is created on the edge node. If no edge node is registered, creation fails.
-- With `fast` or `bulk`, that node needs a ready disk of that tier with room for the quota. If it has none, creation is refused; Skiff never uses the other tier instead.
+- With `fast` or `bulk`, that node needs a ready disk of that tier with room for the quota. If it has none, creation is refused; Yoal never uses the other tier instead.
 - A volume on a named disk lives on that disk's node. Naming a disk on another node than the one the project's workload runs on is refused.
 - Attaching a volume to a workload on a different node is refused.
 - Apps with volumes cannot be moved to another node yet.
-- A volume on a disk is checked each time the app starts. If the disk is not mounted, the app does not start, and Skiff never falls back to the system disk.
+- A volume on a disk is checked each time the app starts. If the disk is not mounted, the app does not start, and Yoal never falls back to the system disk.
 
 ## Resize a volume
 
@@ -78,7 +78,7 @@ Volumes can only grow. Use the REST API to change the size, because the CLI and 
 
 ```sh
 curl -X PATCH https://control.example.com/api/v1/projects/api/volumes/app-data \
-  -H "Authorization: Bearer skif_…" \
+  -H "Authorization: Bearer yoal_…" \
   -H "Content-Type: application/json" \
   -d '{"sizeMb": 4096}'
 ```
@@ -88,7 +88,7 @@ A smaller size is refused. To shrink, create a new volume, copy the data across,
 ## Detach a volume
 
 ```sh
-skif volume detach app-data --project api
+yoal volume detach app-data --project api
 ```
 
 The app restarts without the mount. The volume and its data are untouched. If a project has more than one attachment, pass `--env` (default `production`) to choose which one to remove. Use `--workload` to name the workload explicitly.
@@ -98,7 +98,7 @@ The app restarts without the mount. The volume and its data are untouched. If a 
 A volume must be detached before you can delete it:
 
 ```sh
-skif volume delete app-data --project api --yes
+yoal volume delete app-data --project api --yes
 ```
 
 Deletion is a soft delete. The volume can no longer be mounted, and its data is kept for the platform's trash period, which is 7 days by default. The CLI prints the purge date. While a volume is in the trash, its name cannot be reused, and its snapshots can still be listed and restored. Without `--yes`, the CLI asks for confirmation in a terminal. Without a terminal, it refuses and changes nothing.
@@ -112,7 +112,7 @@ A volume that is still being restored cannot be deleted. Wait for the restore to
 A snapshot is a compressed archive (`.tar.gz`) of a volume, written to a backup target. Take one before a risky migration or upgrade:
 
 ```sh
-skif volume snapshot app-data --project api --label "before v2 migration"
+yoal volume snapshot app-data --project api --label "before v2 migration"
 ```
 
 The volume's node picks the snapshot up within a few seconds. By default it pauses the app that has the volume mounted read-write while it copies, so the copy is consistent:
@@ -136,8 +136,8 @@ Snapshots are kept until you delete them or the volume is purged. There is no au
 ### List and delete snapshots
 
 ```sh
-skif volume snapshots app-data --project api
-skif volume snapshot-delete app-data avs_… --project api --yes
+yoal volume snapshots app-data --project api
+yoal volume snapshot-delete app-data avs_… --project api --yes
 ```
 
 The list shows each snapshot's id, status, size, method, target, label, when it was created and when a restore last verified it. Deleting a snapshot removes its archive from the backup target first. A snapshot that is still running, or that a volume is being restored from, cannot be deleted. A write-only backup target cannot delete objects, so deleting a snapshot stored there is refused.
@@ -147,16 +147,16 @@ The list shows each snapshot's id, status, size, method, target, label, when it 
 A restore always creates a **new** volume in the same project. It never overwrites the volume the snapshot was taken from:
 
 ```sh
-skif volume restore app-data avs_… --project api --to app-data-restored
+yoal volume restore app-data avs_… --project api --to app-data-restored
 ```
 
-The new volume is on the same disk and has the same single-writer setting as the source, and at least the same quota. Use `--size` to make it larger. Creating it goes through the same quota and capacity checks as `skif volume create`, and the snapshot's backup target must still exist.
+The new volume is on the same disk and has the same single-writer setting as the source, and at least the same quota. Use `--size` to make it larger. Creating it goes through the same quota and capacity checks as `yoal volume create`, and the snapshot's backup target must still exist.
 
-The node downloads the archive and extracts it into the new, empty volume, checking the SHA-256 checksum as it goes. Until that finishes, the volume shows as `restoring` and cannot be attached or deleted. Follow it with `skif volume show app-data-restored --project api`. When it is ready, mount it in place of the old volume:
+The node downloads the archive and extracts it into the new, empty volume, checking the SHA-256 checksum as it goes. Until that finishes, the volume shows as `restoring` and cannot be attached or deleted. Follow it with `yoal volume show app-data-restored --project api`. When it is ready, mount it in place of the old volume:
 
 ```sh
-skif volume detach app-data --project api
-skif volume attach app-data-restored --project api --mount /var/lib/app
+yoal volume detach app-data --project api
+yoal volume attach app-data-restored --project api --mount /var/lib/app
 ```
 
 If the restore fails, for example because the checksum does not match, the new volume is left empty and marked `failed` with the reason. It cannot be attached: delete it and restore again. A restore that no node finishes within 6 hours fails the same way.
@@ -167,9 +167,9 @@ If the restore fails, for example because the checksum does not match, the new v
 ## List volumes
 
 ```sh
-skif volume list --project api
-skif volume list --project api --json
-skif volume show app-data --project api
+yoal volume list --project api
+yoal volume list --project api --json
+yoal volume show app-data --project api
 ```
 
 The table shows each volume's status, backing (`system` or `disk:<name>`), quota, usage, the mount paths it is attached at, and when it was created. A nearly full volume gets a warning under the table. `show` adds the writer, when usage was last measured, a restore in progress and the latest snapshots. `--json` prints the raw API response.
@@ -177,7 +177,7 @@ The table shows each volume's status, backing (`system` or `disk:<name>`), quota
 ## CLI reference
 
 ```sh
-skif volume <command> [options]
+yoal volume <command> [options]
 ```
 
 | Command | Purpose |
@@ -215,7 +215,7 @@ skif volume <command> [options]
 
 ## REST API
 
-Every route is under `/api/v1/projects/{slug}` and takes `Authorization: Bearer skif_…`. Responses are JSON.
+Every route is under `/api/v1/projects/{slug}` and takes `Authorization: Bearer yoal_…`. Responses are JSON.
 
 | Method and path | Purpose | Body | Response |
 | --- | --- | --- | --- |
@@ -236,12 +236,12 @@ The create body uses `sizeMb` in megabytes, not the CLI's `--size` string, and `
 
 ```sh
 curl -X POST https://control.example.com/api/v1/projects/api/volumes \
-  -H "Authorization: Bearer skif_…" \
+  -H "Authorization: Bearer yoal_…" \
   -H "Content-Type: application/json" \
   -d '{"name": "app-data", "sizeMb": 2048}'
 
 curl -X POST https://control.example.com/api/v1/projects/api/volumes/app-data/attach \
-  -H "Authorization: Bearer skif_…" \
+  -H "Authorization: Bearer yoal_…" \
   -H "Content-Type: application/json" \
   -d '{"mountPath": "/var/lib/app"}'
 ```

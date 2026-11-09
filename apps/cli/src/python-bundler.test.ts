@@ -11,7 +11,7 @@ afterEach(async () => {
 });
 
 async function project(files: Record<string, string>): Promise<string> {
-	const root = await mkdtemp(join(tmpdir(), 'skiff-py-'));
+	const root = await mkdtemp(join(tmpdir(), 'yoal-py-'));
 	dirs.push(root);
 	for (const [path, content] of Object.entries(files)) {
 		await mkdir(join(root, path, '..'), { recursive: true });
@@ -87,7 +87,7 @@ describe('Python Worker bundling (D121)', () => {
 		).rejects.toThrow(/exit 1/);
 	});
 
-	test('skif deploy writes a manifest whose main and modules are Python', async () => {
+	test('yoal deploy writes a manifest whose main and modules are Python', async () => {
 		const root = await project({
 			'wrangler.json': WRANGLER,
 			'src/entry.py': 'print(1)\n',

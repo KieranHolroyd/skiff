@@ -1,4 +1,4 @@
-import type { PipelineContainerSpec } from '@skiff/contracts';
+import type { PipelineContainerSpec } from '@yoal/contracts';
 import { BuildValidationError } from '../command.ts';
 
 /**
@@ -72,19 +72,19 @@ function envArgs(env: Record<string, string>): string[] {
 	});
 }
 
-export const jobContainerName = (jobId: string) => `skiff-job-${validateJobId(jobId)}`;
-export const jobNetworkName = (jobId: string) => `skiff-job-${validateJobId(jobId)}`;
+export const jobContainerName = (jobId: string) => `yoal-job-${validateJobId(jobId)}`;
+export const jobNetworkName = (jobId: string) => `yoal-job-${validateJobId(jobId)}`;
 export const serviceContainerName = (jobId: string, service: string) =>
-	`skiff-job-${validateJobId(jobId)}-svc-${validateServiceName(service)}`;
+	`yoal-job-${validateJobId(jobId)}-svc-${validateServiceName(service)}`;
 
 /** Where things live inside the job container. */
 export const CONTAINER_PATHS = {
 	workspace: '/workspace',
-	meta: '/skiff/meta',
-	home: '/skiff/home',
-	tmp: '/skiff/tmp',
-	stepBinary: '/skiff/bin/skiff-step',
-	jobFile: '/skiff/meta/job.json',
+	meta: '/yoal/meta',
+	home: '/yoal/home',
+	tmp: '/yoal/tmp',
+	stepBinary: '/yoal/bin/yoal-step',
+	jobFile: '/yoal/meta/job.json',
 } as const;
 
 export interface PodmanJobInput {

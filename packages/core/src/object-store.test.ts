@@ -10,7 +10,7 @@ import {
 	storageKindForDb,
 } from './object-store.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-objects-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-objects-'));
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 
 afterAll(() => {
@@ -45,7 +45,7 @@ interface S3Call {
 }
 
 function fakeS3(options: { bucket?: string; headStatus?: number } = {}) {
-	const bucket = options.bucket ?? 'skiff';
+	const bucket = options.bucket ?? 'yoal';
 	const objects = new Map<string, Uint8Array>();
 	const calls: S3Call[] = [];
 
@@ -116,7 +116,7 @@ function escapeXml(value: string): string {
 function s3(fake: ReturnType<typeof fakeS3>, overrides: Partial<ConstructorParameters<typeof S3ObjectStore>[0]> = {}) {
 	return new S3ObjectStore({
 		endpoint: 'http://minio.test:9000',
-		bucket: 'skiff',
+		bucket: 'yoal',
 		region: 'us-east-1',
 		forcePathStyle: true,
 		accessKeyId: 'AKIAEXAMPLE',
@@ -240,7 +240,7 @@ describe('S3ObjectStore', () => {
 		await client.putStream('uploads/a b.bin', bytes(data.subarray(0, 3), data.subarray(3)), 'application/octet-stream', data.byteLength);
 
 		const put = fake.calls.find((call) => call.method === 'PUT')!;
-		expect(new URL(put.url).pathname).toBe('/skiff/uploads/a%20b.bin');
+		expect(new URL(put.url).pathname).toBe('/yoal/uploads/a%20b.bin');
 		expect(put.headers.get('content-type')).toBe('application/octet-stream');
 		expect(put.headers.get('content-length')).toBe('5');
 		expect(put.headers.get('x-amz-content-sha256')).toBe('UNSIGNED-PAYLOAD');
@@ -258,7 +258,7 @@ describe('S3ObjectStore', () => {
 		await client.put('releases/x.zip', new Uint8Array([9, 9]), 'application/zip');
 		const put = fake.calls.find((call) => call.method === 'PUT')!;
 		const url = new URL(put.url);
-		expect(url.host).toBe('skiff.s3.example.test');
+		expect(url.host).toBe('yoal.s3.example.test');
 		expect(url.pathname).toBe('/releases/x.zip');
 		expect(put.headers.get('content-type')).toBe('application/zip');
 

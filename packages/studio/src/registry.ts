@@ -3,7 +3,7 @@
  * the driver code for engines that actually have an open session, and the agent and control
  * plane never load any. Each engine maps to the plugin that serves it.
  */
-import type { DatabaseEngine } from '@skiff/contracts';
+import type { DatabaseEngine } from '@yoal/contracts';
 import type { StudioPlugin } from './driver.ts';
 import { StudioError } from './protocol.ts';
 

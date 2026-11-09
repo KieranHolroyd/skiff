@@ -1,7 +1,7 @@
 import * as z from 'zod';
 
 /**
- * Skiff Access policies (IAM.md I25, §11.1).
+ * Yoal Access policies (IAM.md I25, §11.1).
  *
  * A policy is an ordered list of allow/deny rules. Each rule matches one thing: an org group, any
  * org member, an email or email domain, an SSO provider, a user pool and its groups, a CIDR, or a
@@ -57,7 +57,7 @@ export const accessPolicyMatcherSchema = z.discriminatedUnion('type', [
 	z.object({ type: z.literal('cidr'), cidrs: z.array(z.string().min(1).max(64)).min(1).max(50) }),
 	z.object({
 		type: z.literal('serviceToken'),
-		/** Header name, e.g. `x-skiff-token`. */
+		/** Header name, e.g. `x-yoal-token`. */
 		header: z.string().trim().regex(/^[A-Za-z0-9-]{1,80}$/),
 		/** Lowercase hex SHA-256 of the header value; the value itself is never stored. */
 		tokenHash: z.string().regex(/^[a-f0-9]{64}$/),
@@ -95,14 +95,14 @@ export const accessPolicyUpdateSchema = z
 export type AccessPolicyUpdate = z.infer<typeof accessPolicyUpdateSchema>;
 
 /** Default header a machine sends when none is chosen. */
-export const ACCESS_SERVICE_TOKEN_DEFAULT_HEADER = 'X-Skiff-Access-Token';
+export const ACCESS_SERVICE_TOKEN_DEFAULT_HEADER = 'X-Yoal-Access-Token';
 
 const SERVICE_TOKEN_HEADER = z
 	.string()
 	.trim()
 	.min(1)
 	.max(80)
-	.regex(/^[A-Za-z0-9-]+$/, 'Use a header name such as X-Skiff-Access-Token.');
+	.regex(/^[A-Za-z0-9-]+$/, 'Use a header name such as X-Yoal-Access-Token.');
 
 /** Create a named machine token for a policy. The secret is generated and returned once. */
 export const accessServiceTokenCreateSchema = z.object({

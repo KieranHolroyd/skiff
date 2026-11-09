@@ -55,7 +55,7 @@ export function resolveAssetsDirectory(
  *
  * Caddy serves the same release directory first; `env.ASSETS.fetch()` is for the paths the Worker
  * takes over (`run_worker_first`, a 404 fall-through, or code that reads a file directly). The
- * binding is a Skiff-supplied Worker because workerd cannot expose a directory to user code: the
+ * binding is a Yoal-supplied Worker because workerd cannot expose a directory to user code: the
  * Worker gets a read-only `disk` service for the assets directory and the user Worker only gets a
  * plain service binding named `ASSETS`.
  *

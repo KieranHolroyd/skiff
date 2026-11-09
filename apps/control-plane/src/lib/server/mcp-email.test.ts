@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import { principalStub } from './principal-stub.test-support';
-import { mailHostnames, roles, type EmailDomainView, type Principal } from '@skiff/contracts';
+import { mailHostnames, roles, type EmailDomainView, type Principal } from '@yoal/contracts';
 
 /**
  * The Email MCP tools (docs/EMAIL.md §9) against a fake `core.email`: the EMAIL flag hides them,
@@ -17,12 +17,12 @@ const pendingDomain: EmailDomainView = {
 	status: 'pending',
 	sending: true,
 	receiving: false,
-	dkimSelector: 'skiff2611',
+	dkimSelector: 'yoal2611',
 	records: [
 		{
 			purpose: 'dkim',
 			type: 'TXT',
-			name: 'skiff2611._domainkey.example.com',
+			name: 'yoal2611._domainkey.example.com',
 			value: 'v=DKIM1; k=rsa; p=MIIB',
 			required: true,
 			ok: false,
@@ -113,7 +113,7 @@ mock.module('./core', () => ({ core: fakeCore }));
 mock.module('./config', () => ({ platformOrigin: 'https://control.test', authSecret: 'test-secret' }));
 mock.module('./principal', () => principalStub({ principalFromMcp: () => null }));
 
-const { skiffToolDefinitions } = await import('./mcp');
+const { yoalToolDefinitions } = await import('./mcp');
 const { assistantTools } = await import('./assistant/tools');
 
 const principal = (role: 'deployer' | 'viewer'): Principal =>
@@ -151,17 +151,17 @@ describe('email MCP tools', () => {
 		accessRequest = null;
 	});
 
-	test('are offered only while SKIFF_FEATURE_EMAIL is on', () => {
-		const on = new Set(skiffToolDefinitions(principal('deployer')).map((tool) => tool.name));
+	test('are offered only while YOAL_FEATURE_EMAIL is on', () => {
+		const on = new Set(yoalToolDefinitions(principal('deployer')).map((tool) => tool.name));
 		for (const name of EMAIL_TOOLS) expect(on.has(name)).toBe(true);
 		features.EMAIL = false;
-		const off = new Set(skiffToolDefinitions(principal('deployer')).map((tool) => tool.name));
+		const off = new Set(yoalToolDefinitions(principal('deployer')).map((tool) => tool.name));
 		for (const name of EMAIL_TOOLS) expect(off.has(name)).toBe(false);
 		expect(off.has('whoami')).toBe(true);
 	});
 
 	test('never include credential, settings or org-state tools (D58)', () => {
-		const names = skiffToolDefinitions(principal('deployer')).map((tool) => tool.name);
+		const names = yoalToolDefinitions(principal('deployer')).map((tool) => tool.name);
 		expect(
 			names.filter((name) => name.includes('email') && /credential|setting|org_state/.test(name))
 		).toEqual([]);
@@ -174,7 +174,7 @@ describe('email MCP tools', () => {
 		const result = await tool.run({ domain: 'example.com' });
 		expect(result.ok).toBe(true);
 		const body = JSON.parse(result.text) as { nextSteps: string[] };
-		expect(body.nextSteps[0]).toContain('TXT record at skiff2611._domainkey.example.com');
+		expect(body.nextSteps[0]).toContain('TXT record at yoal2611._domainkey.example.com');
 		expect(body.nextSteps[0]).toContain('v=DKIM1; k=rsa; p=MIIB');
 		// The SPF record already checks out, so it is not repeated.
 		expect(body.nextSteps.some((step) => step.includes('(spf)'))).toBe(false);
@@ -262,13 +262,13 @@ describe('email MCP tools', () => {
 		let body = JSON.parse((await status.run({})).text) as { nextSteps: string[] };
 		expect(body.nextSteps.some((step) => step.includes('add_email_address'))).toBe(true);
 		const ask = body.nextSteps.find((step) => step.includes('requests production access'));
-		expect(ask).toContain('skif email request-access');
+		expect(ask).toContain('yoal email request-access');
 		expect(ask).toContain('https://control.example.net/api/v1/email/access-request');
 
 		accessRequest = { status: 'pending', createdAt: '2026-11-07T09:00:00.000Z', note: null };
 		body = JSON.parse((await status.run({})).text) as { nextSteps: string[] };
 		expect(body.nextSteps.some((step) => step.includes('waiting for a platform admin'))).toBe(true);
-		expect(body.nextSteps.some((step) => step.includes('skif email request-access'))).toBe(false);
+		expect(body.nextSteps.some((step) => step.includes('yoal email request-access'))).toBe(false);
 
 		accessRequest = { status: 'denied', createdAt: '2026-11-07T09:00:00.000Z', note: 'DMARC fails' };
 		body = JSON.parse((await status.run({})).text) as { nextSteps: string[] };

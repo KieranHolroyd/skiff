@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { StorageAdmin, StorageReplicationDesired, WorkloadObjectStorage } from '@skiff/contracts';
+import type { StorageAdmin, StorageReplicationDesired, WorkloadObjectStorage } from '@yoal/contracts';
 import { StorageApiError, type StorageTarget } from './storage-admin.ts';
 import {
 	S3ReplicaStore,
@@ -18,7 +18,7 @@ import {
 	type S3ReplicaStoreOptions,
 } from './storage-replicator.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-replicator-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-replicator-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 interface Stored {

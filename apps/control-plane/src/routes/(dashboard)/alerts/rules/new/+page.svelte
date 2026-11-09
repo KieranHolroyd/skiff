@@ -4,13 +4,13 @@
 	 * `?draft=1` (a draft handed over in session storage, e.g. "Create alert…" on a dashboard
 	 * panel).
 	 */
-	import { alertRuleTemplate, type AlertRuleInput, type AlertRuleView } from '@skiff/contracts';
+	import { alertRuleTemplate, type AlertRuleInput, type AlertRuleView } from '@yoal/contracts';
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { browser } from '$app/env';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Skeleton } from '#lib/components/ui/skeleton/index.js';
 	import { errorText } from '#lib/query.js';
 	import PageHeader from '../../../_lib/PageHeader.svelte';
@@ -95,7 +95,7 @@
 	}
 </script>
 
-<svelte:head><title>{heading} · Alerts · Skiff</title></svelte:head>
+<svelte:head><title>{heading} · Alerts · Yoal</title></svelte:head>
 
 <div class="space-y-6">
 	<PageHeader title={heading} {description} />

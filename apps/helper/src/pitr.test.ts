@@ -33,9 +33,9 @@ const PASSWORD = 'target-password-0123456789';
 const repo = {
 	kind: 's3' as const,
 	endpoint: 'https://s3.example.test',
-	bucket: 'skiff-pitr',
+	bucket: 'yoal-pitr',
 	region: 'us-east-1',
-	pathPrefix: 'skiff/pitr',
+	pathPrefix: 'yoal/pitr',
 	forcePathStyle: true,
 	accessKeyId: 'access-key',
 	secretAccessKey: 'secret-key-value',
@@ -46,10 +46,10 @@ const repo = {
 describe('pgBackRest repository config', () => {
 	test('reaches Postgres over the socket and spools on the data volume', () => {
 		const config = renderPgBackRestConfig({ stanza: SOURCE, repo: parsePitrRepo(repo), pg1User: 'main_db' });
-		expect(config).toContain('repo1-s3-bucket=skiff-pitr');
+		expect(config).toContain('repo1-s3-bucket=yoal-pitr');
 		expect(config).toContain('repo1-s3-endpoint=s3.example.test');
 		expect(config).not.toContain('repo1-storage-port');
-		expect(config).toContain('repo1-path=/skiff/pitr/db_abc123');
+		expect(config).toContain('repo1-path=/yoal/pitr/db_abc123');
 		expect(config).toContain('repo1-s3-uri-style=path');
 		expect(config).toContain('spool-path=/data/pgbackrest-spool');
 		expect(config).toContain('log-level-file=off');
@@ -95,10 +95,10 @@ describe('pgBackRest repository config', () => {
 	});
 
 	test('the config directory stays inside the workload runtime dir', () => {
-		expect(pitrPaths('/run/skiff-workloads', SOURCE)).toEqual({
-			dir: '/run/skiff-workloads/db_abc123/pgbackrest',
-			config: '/run/skiff-workloads/db_abc123/pgbackrest/pgbackrest.conf',
-			pgpass: '/run/skiff-workloads/db_abc123/pgbackrest/pgpass',
+		expect(pitrPaths('/run/yoal-workloads', SOURCE)).toEqual({
+			dir: '/run/yoal-workloads/db_abc123/pgbackrest',
+			config: '/run/yoal-workloads/db_abc123/pgbackrest/pgbackrest.conf',
+			pgpass: '/run/yoal-workloads/db_abc123/pgbackrest/pgpass',
 		});
 	});
 });
@@ -130,7 +130,7 @@ describe('fixed pgBackRest argv', () => {
 			'exec',
 			'--env',
 			'PGPASSFILE=/etc/pgbackrest/pgpass',
-			'skiff-workload-db_abc123',
+			'yoal-workload-db_abc123',
 			'pgbackrest',
 			'--config=/etc/pgbackrest/pgbackrest.conf',
 			'--stanza=db_abc123',
@@ -141,18 +141,18 @@ describe('fixed pgBackRest argv', () => {
 
 	const oneShot = {
 		podmanPath: '/usr/bin/podman',
-		image: 'ghcr.io/kieranholroyd/skiff-postgres-pitr:18-1',
+		image: 'ghcr.io/kieranholroyd/yoal-postgres-pitr:18-1',
 		targetId: TARGET,
-		targetDataDir: `/var/lib/skiff-workloads/${TARGET}`,
-		configDir: `/run/skiff-workloads/${SOURCE}/pgbackrest`,
+		targetDataDir: `/var/lib/yoal-workloads/${TARGET}`,
+		configDir: `/run/yoal-workloads/${SOURCE}/pgbackrest`,
 	};
 
 	test('a restore is a one-shot of the PITR image with the shared config dir', () => {
 		const args = renderPitrRestoreArgs({ ...oneShot, stanza: SOURCE, targetTime: Date.parse('2026-11-05T09:30:00Z') });
-		expect(args.slice(0, 5)).toEqual(['/usr/bin/podman', 'run', '--rm', '--name', `skiff-pitr-restore-${TARGET}`]);
-		expect(args).toContain(`/var/lib/skiff-workloads/${TARGET}:/data:Z`);
+		expect(args.slice(0, 5)).toEqual(['/usr/bin/podman', 'run', '--rm', '--name', `yoal-pitr-restore-${TARGET}`]);
+		expect(args).toContain(`/var/lib/yoal-workloads/${TARGET}:/data:Z`);
 		// The source's own container mounts the same directory: a shared label, never private.
-		expect(args).toContain(`/run/skiff-workloads/${SOURCE}/pgbackrest:/etc/pgbackrest:ro,z`);
+		expect(args).toContain(`/run/yoal-workloads/${SOURCE}/pgbackrest:/etc/pgbackrest:ro,z`);
 		expect(args).toContain('--read-only');
 		expect(args.slice(-6)).toEqual([
 			'--stanza=db_abc123',
@@ -166,7 +166,7 @@ describe('fixed pgBackRest argv', () => {
 
 	test('recovery runs Postgres without TCP or archiving', () => {
 		const args = renderPitrRecoveryArgs(oneShot);
-		expect(args.slice(0, 6)).toEqual(['/usr/bin/podman', 'run', '--detach', '--init', '--name', `skiff-pitr-recover-${TARGET}`]);
+		expect(args.slice(0, 6)).toEqual(['/usr/bin/podman', 'run', '--detach', '--init', '--name', `yoal-pitr-recover-${TARGET}`]);
 		expect(args.slice(-5)).toEqual(['postgres', '-c', 'listen_addresses=', '-c', 'archive_mode=off']);
 		expect(args).toContain('/var/run/postgresql:rw,size=8m,mode=1777');
 	});
@@ -280,14 +280,14 @@ function databaseWorkload(database: Record<string, unknown>, image: string, id =
 describe('PITR image', () => {
 	const pitr = { stanza: SOURCE, archiveTimeoutSeconds: 60 };
 
-	test('a PITR database must run the Skiff-built pgBackRest image', () => {
-		expect(postgresPitrImage('18')).toBe('ghcr.io/kieranholroyd/skiff-postgres-pitr:18-1');
+	test('a PITR database must run the Yoal-built pgBackRest image', () => {
+		expect(postgresPitrImage('18')).toBe('ghcr.io/kieranholroyd/yoal-postgres-pitr:18-1');
 		expect(
 			databaseWorkload({ engine: 'postgres', version: '18', pitr }, postgresPitrImage('18')).database?.pitr,
 		).toEqual(pitr);
 		expect(() =>
 			databaseWorkload({ engine: 'postgres', version: '18', pitr }, 'docker.io/pgvector/pgvector:0.8.7-pg18-trixie'),
-		).toThrow(/skiff-postgres-pitr/);
+		).toThrow(/yoal-postgres-pitr/);
 	});
 
 	test('16/17 and the D126 variants have no PITR build', () => {
@@ -298,7 +298,7 @@ describe('PITR image', () => {
 		expect(() =>
 			databaseWorkload(
 				{ engine: 'postgres', version: '18', variant: 'postgis', pitr },
-				'ghcr.io/kieranholroyd/skiff-postgres:18-postgis-1',
+				'ghcr.io/kieranholroyd/yoal-postgres:18-postgis-1',
 			),
 		).toThrow(/only supported for standard postgres 18/);
 	});
@@ -311,17 +311,17 @@ describe('archive settings in the Postgres unit', () => {
 				{ engine: 'postgres', version: '18', pitr: { stanza: SOURCE, archiveTimeoutSeconds: 60 } },
 				postgresPitrImage('18'),
 			),
-			envFile: `/run/skiff-workloads/${SOURCE}/env`,
-			dataDir: `/var/lib/skiff-workloads/${SOURCE}`,
-			pitr: { stanza: SOURCE, configDir: `/run/skiff-workloads/${SOURCE}/pgbackrest`, archiveTimeoutSeconds: 60 },
+			envFile: `/run/yoal-workloads/${SOURCE}/env`,
+			dataDir: `/var/lib/yoal-workloads/${SOURCE}`,
+			pitr: { stanza: SOURCE, configDir: `/run/yoal-workloads/${SOURCE}/pgbackrest`, archiveTimeoutSeconds: 60 },
 		});
-		expect(unit).toContain('Image=ghcr.io/kieranholroyd/skiff-postgres-pitr:18-1');
+		expect(unit).toContain('Image=ghcr.io/kieranholroyd/yoal-postgres-pitr:18-1');
 		expect(unit).toContain('archive_mode=on');
 		expect(unit).toContain('wal_level=replica');
 		expect(unit).toContain('archive_timeout=60');
 		// systemd would expand %p, so the unit must escape it for Postgres/the archive command.
 		expect(unit).toContain('archive-push %%p');
-		expect(unit).toContain(`Volume=/run/skiff-workloads/${SOURCE}/pgbackrest:/etc/pgbackrest:ro,z`);
+		expect(unit).toContain(`Volume=/run/yoal-workloads/${SOURCE}/pgbackrest:/etc/pgbackrest:ro,z`);
 		expect(unit).not.toContain('pgbackrest.conf:ro');
 		// Postgres must not be PID 1: it would treat pgBackRest's orphaned async archiver as a crash.
 		expect(unit).toContain('RunInit=true');
@@ -330,8 +330,8 @@ describe('archive settings in the Postgres unit', () => {
 	test('leaves a non-PITR database unchanged', () => {
 		const unit = renderDatabaseUnit({
 			workload: databaseWorkload({ engine: 'postgres', version: '17' }, 'docker.io/library/postgres:17-alpine'),
-			envFile: `/run/skiff-workloads/${SOURCE}/env`,
-			dataDir: `/var/lib/skiff-workloads/${SOURCE}`,
+			envFile: `/run/yoal-workloads/${SOURCE}/env`,
+			dataDir: `/var/lib/yoal-workloads/${SOURCE}`,
 		});
 		expect(unit).not.toContain('archive_mode');
 		expect(unit).not.toContain('pgbackrest');
@@ -361,7 +361,7 @@ afterEach(async () => {
 });
 
 async function fixture(respond?: Responder) {
-	const root = await fs.mkdtemp(join(tmpdir(), 'skiff-pitr-helper-'));
+	const root = await fs.mkdtemp(join(tmpdir(), 'yoal-pitr-helper-'));
 	roots.push(root);
 	const runtimeDir = join(root, 'run');
 	const stateDir = join(root, 'state');
@@ -427,7 +427,7 @@ describe('helper PITR verbs', () => {
 		const { dir } = pitrPaths(runtimeDir, SOURCE);
 		expect((await fs.stat(dir)).isDirectory()).toBe(true);
 		expect(chowns).toContainEqual([dir, 70, 70]);
-		const quadlet = await fs.readFile(join(root, 'quadlet', `skiff-workload-${SOURCE}.container`), 'utf8');
+		const quadlet = await fs.readFile(join(root, 'quadlet', `yoal-workload-${SOURCE}.container`), 'utf8');
 		expect(quadlet).toContain(`Volume=${dir}:/etc/pgbackrest:ro,z`);
 		expect(quadlet).toContain(`Image=${postgresPitrImage('18')}`);
 	});
@@ -471,7 +471,7 @@ describe('helper PITR verbs', () => {
 		expect(status).toEqual({
 			configured: true,
 			stanza: SOURCE,
-			repo: { bucket: 'skiff-pitr', region: 'us-east-1', endpoint: 's3.example.test', path: '/skiff/pitr/db_abc123' },
+			repo: { bucket: 'yoal-pitr', region: 'us-east-1', endpoint: 's3.example.test', path: '/yoal/pitr/db_abc123' },
 			archiveStatus: 'ok',
 			recoverableFrom: 1_762_000_600_000,
 			recoverableTo: 1_762_400_400_000,
@@ -484,7 +484,7 @@ describe('helper PITR verbs', () => {
 		});
 		expect(JSON.stringify(status)).not.toContain('secret-key-value');
 		const psql = runner.podman().find((argv) => argv.includes('psql'))!;
-		expect(psql).toContain('skiff-workload-db_abc123');
+		expect(psql).toContain('yoal-workload-db_abc123');
 		expect(psql.slice(psql.indexOf('-U'), psql.indexOf('-U') + 4)).toEqual(['-U', 'main_db', '-d', 'main_db']);
 	});
 
@@ -531,18 +531,18 @@ describe('helper PITR verbs', () => {
 
 		const argvs = runner.calls.map((call) => call.argv);
 		const index = (predicate: (argv: string[]) => boolean) => argvs.findIndex(predicate);
-		const stop = index((argv) => argv[1] === 'stop' && argv[2] === `skiff-workload-${TARGET}.service`);
+		const stop = index((argv) => argv[1] === 'stop' && argv[2] === `yoal-workload-${TARGET}.service`);
 		const restore = index((argv) => argv[1] === 'run' && argv.at(-1) === 'restore');
 		const recover = index((argv) => argv[1] === 'run' && argv.includes('--detach'));
-		const stopRecovery = index((argv) => argv[1] === 'stop' && argv.includes(`skiff-pitr-recover-${TARGET}`));
-		const start = index((argv) => argv[1] === 'start' && argv[2] === `skiff-workload-${TARGET}.service`);
+		const stopRecovery = index((argv) => argv[1] === 'stop' && argv.includes(`yoal-pitr-recover-${TARGET}`));
+		const start = index((argv) => argv[1] === 'start' && argv[2] === `yoal-workload-${TARGET}.service`);
 		expect(stop).toBeGreaterThanOrEqual(0);
 		expect(stop).toBeLessThan(restore);
 		expect(restore).toBeLessThan(recover);
 		expect(recover).toBeLessThan(stopRecovery);
 		expect(stopRecovery).toBeLessThan(start);
 		// The one-shots run the source's PITR image, chosen from its PG_VERSION.
-		expect(argvs[restore]).toContain('ghcr.io/kieranholroyd/skiff-postgres-pitr:18-1');
+		expect(argvs[restore]).toContain('ghcr.io/kieranholroyd/yoal-postgres-pitr:18-1');
 		expect(argvs[restore]).toContain('--target=' + formatPitrTarget(targetTime));
 
 		// Rename steps go over stdin; the password never reaches argv.
@@ -562,8 +562,8 @@ describe('helper PITR verbs', () => {
 		expect(await fs.readdir(join(stateDir, TARGET, 'pgdata'))).toEqual([]);
 		// One-shots are removed before the target starts again.
 		expect(argvs.slice(start - 2, start)).toEqual([
-			['/usr/bin/podman', 'rm', '--force', '--ignore', `skiff-pitr-restore-${TARGET}`],
-			['/usr/bin/podman', 'rm', '--force', '--ignore', `skiff-pitr-recover-${TARGET}`],
+			['/usr/bin/podman', 'rm', '--force', '--ignore', `yoal-pitr-restore-${TARGET}`],
+			['/usr/bin/podman', 'rm', '--force', '--ignore', `yoal-pitr-recover-${TARGET}`],
 		]);
 	});
 
@@ -582,8 +582,8 @@ describe('helper PITR verbs', () => {
 		const argvs = runner.calls.map((call) => call.argv);
 		expect(argvs.some((argv) => argv[1] === 'start')).toBe(false);
 		expect(argvs.slice(-2)).toEqual([
-			['/usr/bin/podman', 'rm', '--force', '--ignore', `skiff-pitr-restore-${TARGET}`],
-			['/usr/bin/podman', 'rm', '--force', '--ignore', `skiff-pitr-recover-${TARGET}`],
+			['/usr/bin/podman', 'rm', '--force', '--ignore', `yoal-pitr-restore-${TARGET}`],
+			['/usr/bin/podman', 'rm', '--force', '--ignore', `yoal-pitr-recover-${TARGET}`],
 		]);
 	});
 

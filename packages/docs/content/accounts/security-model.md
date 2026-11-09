@@ -1,25 +1,25 @@
 ---
 title: Security model
-description: How Skiff separates the platform from deployed sites, what runs with privilege, how secrets and audit entries are handled, and how to report a vulnerability.
+description: How Yoal separates the platform from deployed sites, what runs with privilege, how secrets and audit entries are handled, and how to report a vulnerability.
 ---
 
-This page describes the protections Skiff builds in and where the trust boundaries sit. It is written for operators deciding whether to run Skiff, and for anyone who needs to know what a site or an agent can and cannot reach. Installation choices are in [Installation](/self-hosting/installation) and [Configuration](/self-hosting/configuration); sign-in and second factors are in [Sign-in and 2FA](/accounts/sign-in-and-2fa).
+This page describes the protections Yoal builds in and where the trust boundaries sit. It is written for operators deciding whether to run Yoal, and for anyone who needs to know what a site or an agent can and cannot reach. Installation choices are in [Installation](/self-hosting/installation) and [Configuration](/self-hosting/configuration); sign-in and second factors are in [Sign-in and 2FA](/accounts/sign-in-and-2fa).
 
 ## One service layer
 
-The dashboard, the REST API, the MCP server and the dashboard assistant all call the same service layer. The `skif` CLI goes through the REST API. Every operation checks the caller's permissions before it runs and writes an audit entry, so no surface can do more than another.
+The dashboard, the REST API, the MCP server and the dashboard assistant all call the same service layer. The `yoal` CLI goes through the REST API. Every operation checks the caller's permissions before it runs and writes an audit entry, so no surface can do more than another.
 
 Tokens never widen access. A token's effective permissions are the scopes it was granted, intersected with the user's current role in the organisation. API keys and OAuth tokens never carry platform-admin rights, so a narrowly scoped key cannot mint node credentials. See [Organisations and roles](/accounts/organizations-and-roles) and [API keys and tokens](/accounts/api-keys-and-tokens).
 
 ## Two domains
 
-Skiff serves the dashboard on one origin, for example `control.example.net`, and every site on a subdomain of a content domain, for example `*.example.com`. Deployed content is code written by you or by an agent, so the dashboard must treat it as untrusted.
+Yoal serves the dashboard on one origin, for example `control.example.net`, and every site on a subdomain of a content domain, for example `*.example.com`. Deployed content is code written by you or by an agent, so the dashboard must treat it as untrusted.
 
 The recommended setup puts the two on **separate registrable domains**. A script running on a site is then cross-site to the dashboard, and platform session cookies are never sent to a site host.
 
 ### Shared-domain mode
 
-If the dashboard sits under the content domain, for example `control.example.com` with sites at `example.com`, the installer accepts it and warns that both names share a registrable domain. Skiff cannot separate them in that case, so it relies on the following, which stay on in both modes:
+If the dashboard sits under the content domain, for example `control.example.com` with sites at `example.com`, the installer accepts it and warns that both names share a registrable domain. Yoal cannot separate them in that case, so it relies on the following, which stay on in both modes:
 
 - On HTTPS installs, session cookies use the `__Host-` prefix. A `__Host-` cookie must be `Secure`, must have no `Domain` attribute and must use `Path=/`, so a sibling host cannot overwrite it.
 - Every state-changing request passes the Origin check described below.
@@ -49,7 +49,7 @@ A project slug becomes a hostname, so the rules are strict:
 
 - 3 to 40 characters, lowercase letters, digits and single hyphens. It must start and end with a letter or digit. Underscores are not allowed.
 - No double hyphen. `--` separates a slug from a preview ID, as in `my-site--abc123.example.com`.
-- Reserved names cannot be used, including `api`, `auth`, `mcp`, `admin`, `www`, `control`, `mail`, `login`, `status`, `static`, `assets`, `preview`, `skiff`, `skif`, `support`, `billing`, `internal` and `system`.
+- Reserved names cannot be used, including `api`, `auth`, `mcp`, `admin`, `www`, `control`, `mail`, `login`, `status`, `static`, `assets`, `preview`, `yoal`, `support`, `billing`, `internal` and `system`.
 - A slug is unique across the platform. A taken slug is refused with suggestions.
 
 ### Protected sites
@@ -65,9 +65,9 @@ The diagram shows the same boundaries from the internet inwards. Platform traffi
 ```mermaid
 flowchart LR
   Net["Internet"] -->|"HTTPS"| Caddy["Caddy (TLS)"]
-  Caddy -->|"platform domain, unix socket"| CP["Control plane (user skiff, unprivileged)"]
+  Caddy -->|"platform domain, unix socket"| CP["Control plane (user yoal, unprivileged)"]
   Caddy -->|"content domains (untrusted)"| Apps["Sites and app units (untrusted)"]
-  Agent["Node agent (user skiff)"] -->|"admin API, unix socket only"| CaddyAdmin["Caddy admin API"]
+  Agent["Node agent (user yoal)"] -->|"admin API, unix socket only"| CaddyAdmin["Caddy admin API"]
   Agent -->|"unix socket, fixed verbs"| Helper["Privileged helper (root)"]
   Helper -->|"starts sandboxed systemd units"| Apps
   Helper -->|"manages WireGuard interface"| Peers["Other nodes over WireGuard"]
@@ -75,21 +75,21 @@ flowchart LR
 
 | Process | Runs as | What it can do |
 | --- | --- | --- |
-| Control plane | `skiff` | Writes only its data directory and runtime socket. Runs under a systemd sandbox with `ProtectSystem=strict` and `NoNewPrivileges`. |
-| Node agent | `skiff`, with `caddy` as a supplementary group | Renders and applies Caddy's configuration. Has no root access. |
+| Control plane | `yoal` | Writes only its data directory and runtime socket. Runs under a systemd sandbox with `ProtectSystem=strict` and `NoNewPrivileges`. |
+| Node agent | `yoal`, with `caddy` as a supplementary group | Renders and applies Caddy's configuration. Has no root access. |
 | Caddy | `caddy` | Serves sites and terminates TLS. |
 | Privileged helper | `root` | The only process with root. It accepts a fixed set of verbs on a local socket. |
 | App workloads | An unprivileged user per unit, or a per-container user namespace | Each runs inside its own systemd sandbox. See [App units](#app-units). |
 
 ### Caddy's admin API
 
-Caddy's admin API listens on a unix socket only. Skiff never opens the default TCP admin port, so nothing on the network can reach it. The agent reaches the socket through group permissions.
+Caddy's admin API listens on a unix socket only. Yoal never opens the default TCP admin port, so nothing on the network can reach it. The agent reaches the socket through group permissions.
 
 ### The privileged helper
 
 The helper is the only component that runs as root, and it is deliberately small.
 
-- It listens on a unix socket in a root-owned directory, with the socket readable by the `skiff` group. The helper refuses any configuration that grants permissions to other users.
+- It listens on a unix socket in a root-owned directory, with the socket readable by the `yoal` group. The helper refuses any configuration that grants permissions to other users.
 - It has no passthrough and no shell. Each route is a fixed verb, such as applying or removing a workload, reading its logs, or starting and stopping a named unit. A request cannot name a command to run.
 - It validates every request itself and does not trust the control plane or the agent. Identifiers and names must match fixed patterns. Container images must be valid OCI references with no `..` and no shell characters. Commands are argument arrays, with no newlines or control characters and at most 64 arguments. Paths must be absolute and normalised. Request bodies are capped at 8 MiB by default.
 - Before the first app container starts, it adds a `containers` subuid/subgid range to `/etc/subuid` and `/etc/subgid` and refuses to continue if another account's range overlaps it. That range gives each container its own user namespace.
@@ -110,8 +110,8 @@ Functions also cannot reach private network addresses. Their units deny traffic 
 ## Secrets
 
 - **Envelope encryption.** Each organisation has its own 256-bit data key. The key is stored wrapped by the master key. Secret values are encrypted with AES-256-GCM under the data key.
-- **Master key.** The control plane needs a 32-byte base64 master key, read from `SKIFF_MASTER_KEY` or from the file named by `SKIFF_MASTER_KEY_FILE`. The installer seals it with `systemd-creds` into `/etc/skiff/master.key.cred`, bound to the server's TPM2 chip and host key, or the host key alone when there is no TPM2. systemd decrypts it only into the control plane's private credential directory through `LoadCredentialEncrypted`, so the plain key is never on disk and the sealed file cannot be opened on another machine. The TPM2 binding uses no PCR policy, so a firmware or Secure Boot update does not lock the control plane out. On systemd older than 250 the key is a root-only file with mode `0400`, passed through `LoadCredential`.
-- **Rotation.** `skiff-rotate-master-key` replaces the master key and re-wraps every organisation's data key with it in one transaction, so no secret has to be re-encrypted. See [platform backups](/self-hosting/platform-backups#rotating-secrets).
+- **Master key.** The control plane needs a 32-byte base64 master key, read from `YOAL_MASTER_KEY` or from the file named by `YOAL_MASTER_KEY_FILE`. The installer seals it with `systemd-creds` into `/etc/yoal/master.key.cred`, bound to the server's TPM2 chip and host key, or the host key alone when there is no TPM2. systemd decrypts it only into the control plane's private credential directory through `LoadCredentialEncrypted`, so the plain key is never on disk and the sealed file cannot be opened on another machine. The TPM2 binding uses no PCR policy, so a firmware or Secure Boot update does not lock the control plane out. On systemd older than 250 the key is a root-only file with mode `0400`, passed through `LoadCredential`.
+- **Rotation.** `yoal-rotate-master-key` replaces the master key and re-wraps every organisation's data key with it in one transaction, so no secret has to be re-encrypted. See [platform backups](/self-hosting/platform-backups#rotating-secrets).
 
 > [!WARNING]
 > The master key decrypts every secret. Keep a recovery kit somewhere safe, separately from the server: the sealed key file is not a backup, because it only opens on that server. Without the key, a restored database cannot read its secrets. See [platform backups](/self-hosting/platform-backups#recovery-kit).
@@ -132,7 +132,7 @@ Reads are not audited, except for revealing a credential, which is. For the fiel
 
 ## Confirmations for agent actions
 
-Agents read untrusted text, such as logs, page content and database rows, and that text can contain instructions. Skiff therefore does not let an agent make production-changing or destructive calls unseen:
+Agents read untrusted text, such as logs, page content and database rows, and that text can contain instructions. Yoal therefore does not let an agent make production-changing or destructive calls unseen:
 
 - In the dashboard assistant, a set of tools always stops at a confirmation card. Those cover publishing or promoting sites, creating share links and presigned URLs, rolling back, changing workload configuration, rotating database credentials, restarting services, sending email, and invoking functions. The approval is bound to your user, your organisation, the tool and its exact arguments, and it expires after 10 minutes. The server checks it again before running the tool. See [Assistant](/clients/assistant).
 - On the MCP server, destructive tools ask the person to confirm when the client can show the prompt. A client that cannot show it is refused for email sending rather than sending silently. See [MCP](/clients/mcp).
@@ -148,4 +148,4 @@ On production installs, an owner must verify a passkey or an authenticator app b
 
 ## Reporting a vulnerability
 
-Please report security issues privately through [GitHub security advisories](https://github.com/KieranHolroyd/skiff/security/advisories/new), not in a public issue.
+Please report security issues privately through [GitHub security advisories](https://github.com/KieranHolroyd/yoal/security/advisories/new), not in a public issue.

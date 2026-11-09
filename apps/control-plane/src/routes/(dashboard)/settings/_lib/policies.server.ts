@@ -3,8 +3,8 @@ import {
 	PLATFORM_POLICY_DEFAULTS,
 	type PlatformPolicies,
 	type PlatformPolicyKey
-} from '@skiff/contracts';
-import { ValidationError } from '@skiff/core';
+} from '@yoal/contracts';
+import { ValidationError } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import { formString } from '../../_lib/errors.js';
 import { requireOwnerPage } from '../_platform.server.js';

@@ -1,4 +1,4 @@
-import type { DesiredState, VolumeProfileResult, VolumeProfileTask } from '@skiff/contracts';
+import type { DesiredState, VolumeProfileResult, VolumeProfileTask } from '@yoal/contracts';
 
 /**
  * Runs `volumeProfileTasks` (docs/STORAGE.md §5.1) one at a time through the helper's

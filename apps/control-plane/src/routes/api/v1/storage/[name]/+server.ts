@@ -1,5 +1,5 @@
 import type { RequestHandler } from './$types';
-import { storageUpdateSchema } from '@skiff/contracts';
+import { storageUpdateSchema } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { readJson, route } from '#lib/server/api.js';
 import { requirePrincipal } from '#lib/server/principal.js';

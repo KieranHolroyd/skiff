@@ -2,7 +2,7 @@ import type {
 	EmailAccessRequestView,
 	EmailOrgView,
 	EmailSandboxAddressView
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { canRequestAccess, sandboxActions } from '../_lib/sandbox.server.js';
 import type { Actions, PageServerLoad } from './$types';

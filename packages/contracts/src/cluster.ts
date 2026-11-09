@@ -23,7 +23,7 @@ export const nodeZoneSchema = z
 
 /**
  * Operator labels match placement constraints. Keys are lowercase and may contain dots, so
- * `owner=media` and `tier=critical` are valid; `skiff.io/*` is reserved for derived facts.
+ * `owner=media` and `tier=critical` are valid; `yoal.io/*` is reserved for derived facts.
  */
 export const nodeLabelKeySchema = z
 	.string()
@@ -31,7 +31,7 @@ export const nodeLabelKeySchema = z
 	.min(1)
 	.max(63)
 	.regex(/^[a-z0-9](?:[a-z0-9./-]*[a-z0-9])?$/, 'Use lowercase letters, digits, dots, slashes and hyphens.')
-	.refine((key) => !key.startsWith('skiff.io/'), 'The skiff.io/ prefix is reserved for derived labels.');
+	.refine((key) => !key.startsWith('yoal.io/'), 'The yoal.io/ prefix is reserved for derived labels.');
 export const nodeLabelValueSchema = z.string().trim().min(0).max(128);
 export const nodeLabelsSchema = z.record(nodeLabelKeySchema, nodeLabelValueSchema);
 
@@ -150,7 +150,7 @@ export interface TopologyNodeView {
 	privateAddress: string | null;
 	lanEndpoint: string | null;
 	hardware: NodeHardware | null;
-	/** Derived labels (skiff.io/*) plus operator labels. */
+	/** Derived labels (yoal.io/*) plus operator labels. */
 	derivedLabels: Record<string, string>;
 	disks: Array<{
 		id: string;

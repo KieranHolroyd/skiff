@@ -2,15 +2,15 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import { databaseAlias, DEFAULT_FEATURES, orgNetworkName } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import { databaseAlias, DEFAULT_FEATURES, orgNetworkName } from '@yoal/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import { disposeTelemetryStore, hasClickHouse, testTelemetryStore } from './test-clickhouse.ts';
 import type { Core } from './index.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-databases-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-databases-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 let clock = Date.parse('2026-11-04T10:00:00Z');
@@ -103,12 +103,12 @@ describe('managed databases', () => {
 		const second = core.databases.get(owner, 'second');
 		core.databases.applyHeartbeat(edgeId, [{ id: second.id, status: 'running', restarts: 0 }]);
 		expect(() => core.databases.update(owner, 'second', { version: '16' })).toThrow(
-			/major-version upgrade.*skif db upgrade second --to 16 --plan/
+			/major-version upgrade.*yoal db upgrade second --to 16 --plan/
 		);
 		expect(core.databases.get(owner, 'second').version).toBe('17');
 		// The same major has nothing to plan, and the message names a command that exists.
 		expect(() => core.databases.upgradeDatabase(owner, 'second', { targetVersion: '17' })).toThrow(
-			/already runs PostgreSQL 17.*skif db update second/
+			/already runs PostgreSQL 17.*yoal db update second/
 		);
 
 		const plan = core.databases.upgradeDatabase(owner, 'second', { targetVersion: '16' });
@@ -156,7 +156,7 @@ describe('managed databases', () => {
 		const activation = core.workloads.activation(edgeId, entry!.id);
 		expect(activation.activationVersion).toBe(entry!.activationVersion);
 		expect(activation.env.POSTGRES_PASSWORD).toBe(creds.password);
-		expect(activation.monitor).toMatchObject({ monitorUser: 'skiff_monitor', ownerUser: 'main_db', port: 15432 });
+		expect(activation.monitor).toMatchObject({ monitorUser: 'yoal_monitor', ownerUser: 'main_db', port: 15432 });
 		expect(() => core.workloads.activation('nod_other', entry!.id)).toThrow();
 	});
 
@@ -186,7 +186,7 @@ describe('managed databases', () => {
 			purpose: 'web app',
 		});
 		expect(created).toMatchObject({ role: 'app', status: 'pending' });
-		expect(created.username).toStartWith('skiff_app_');
+		expect(created.username).toStartWith('yoal_app_');
 		expect(() => core.databases.revealCredential(owner, 'main-db', created.id)).toThrow(/not active/);
 
 		const tasks = (await core.nodes.desiredState(edgeToken)).databaseCredentialTasks;
@@ -318,7 +318,7 @@ describe('managed databases', () => {
 		expect(db).toMatchObject({ variant: 'postgis', version: '18', extensions: ['postgis'] });
 		const state = await core.nodes.desiredState(edgeToken);
 		const workload = state.workloads.find((item) => item.projectSlug === 'geo-db')!;
-		expect(workload.image).toBe('ghcr.io/kieranholroyd/skiff-postgres:18-postgis-1');
+		expect(workload.image).toBe('ghcr.io/kieranholroyd/yoal-postgres:18-postgis-1');
 		expect(workload.database).toMatchObject({ engine: 'postgres', version: '18', variant: 'postgis' });
 		// Standard databases send no variant, so older helpers keep accepting them.
 		const main = state.workloads.find((item) => item.projectSlug === 'main-db')!;
@@ -838,7 +838,7 @@ describe('managed databases', () => {
 		expect(latest).toEqual([
 			expect.objectContaining({ databaseId: db.id, connectionsTotal: 5, maxConnections: 100, up: true }),
 		]);
-		expect(await telemetry.getPrometheusMetrics()).toContain(`skiff_database_up{database_id="${db.id}"} 1`);
+		expect(await telemetry.getPrometheusMetrics()).toContain(`yoal_database_up{database_id="${db.id}"} 1`);
 
 		await telemetry.rollupHourly(clock - 2 * 3_600_000, clock + 3_600_000);
 		const hourly = await core.databases.metrics(owner, 'main-db', {

@@ -7,7 +7,7 @@ import type { BackupTargetCreateInput, BackupTargetView } from '../api.ts';
 
 /** Backup targets (plan 05, docs/BACKUPS.md). Checks live on the server; this is a thin client. */
 
-const usage = `Usage: skif backup-target <command> [options]
+const usage = `Usage: yoal backup-target <command> [options]
 
 Commands:
   list                         List backup targets (the default)
@@ -17,11 +17,11 @@ Commands:
 
 Add options:
       --kind <local|s3>        Target kind (default s3)
-      --path <dir>             Local directory, e.g. /var/lib/skiff/backups
+      --path <dir>             Local directory, e.g. /var/lib/yoal/backups
       --endpoint <url>         S3 endpoint (R2, MinIO, RustFS, Garage); omit for AWS
       --bucket <name>          S3 bucket
       --region <region>        SigV4 region (default us-east-1; R2 uses auto)
-      --prefix <path>          Key prefix inside the bucket (default skiff/backups)
+      --prefix <path>          Key prefix inside the bucket (default yoal/backups)
       --access-key <id>        S3 access key id
       --secret-key <secret>    S3 secret access key (shown once by the server)
       --write-only             The key can put/list but not delete; retention uses a privileged key
@@ -46,10 +46,10 @@ that record. So a target that still holds retained backups cannot be removed (wi
 or have its path, endpoint, bucket or prefix changed.
 
 Examples:
-  skif backup-target add local --kind local --path /var/lib/skiff/backups
-  skif backup-target add garage --kind s3 --endpoint https://s3.internal:3900 --bucket skiff \\
+  yoal backup-target add local --kind local --path /var/lib/yoal/backups
+  yoal backup-target add garage --kind s3 --endpoint https://s3.internal:3900 --bucket yoal \\
     --access-key "$KEY" --secret-key "$SECRET" --write-only
-  skif backup-target test bt_abc123`;
+  yoal backup-target test bt_abc123`;
 
 const baseFlags: FlagSpec = {
 	json: { type: 'boolean' },
@@ -101,7 +101,7 @@ async function listTargets(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif backup-target list [--json]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal backup-target list [--json]');
 	const client = await authenticatedClient();
 	const { targets, raw } = await client.listBackupTargets();
 	if (args.boolean('json')) {
@@ -134,13 +134,13 @@ async function addTarget(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif backup-target add <name> [options]');
+	rejectExtraPositionals(args, 1, 'Usage: yoal backup-target add <name> [options]');
 	const name = requirePositional(args, 0, `backup target name.\n\n${usage}`);
 	const kind = args.string('kind') ?? 's3';
 	let input: BackupTargetCreateInput;
 	if (kind === 'local') {
 		const path = args.string('path');
-		if (!path) throw new UsageError('A local target needs --path, e.g. /var/lib/skiff/backups.');
+		if (!path) throw new UsageError('A local target needs --path, e.g. /var/lib/yoal/backups.');
 		input = { name, kind: 'local', path, ...(args.boolean('write-only') ? { writeOnly: true } : {}) };
 	} else if (kind === 's3') {
 		const bucket = args.string('bucket');
@@ -179,7 +179,7 @@ async function addTarget(argv: string[]): Promise<void> {
 		console.log('');
 		console.log(credentials.note);
 	}
-	console.log(`Test it with: skif backup-target test ${target.id}`);
+	console.log(`Test it with: yoal backup-target test ${target.id}`);
 }
 
 async function testTarget(argv: string[]): Promise<void> {
@@ -188,7 +188,7 @@ async function testTarget(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif backup-target test <id>');
+	rejectExtraPositionals(args, 1, 'Usage: yoal backup-target test <id>');
 	const id = requirePositional(args, 0, `backup target id.\n\n${usage}`);
 	const client = await authenticatedClient();
 	const { result, raw } = await client.testBackupTarget(id);
@@ -207,7 +207,7 @@ async function removeTarget(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif backup-target remove <id> [--force] [--yes]');
+	rejectExtraPositionals(args, 1, 'Usage: yoal backup-target remove <id> [--force] [--yes]');
 	const id = requirePositional(args, 0, `backup target id.\n\n${usage}`);
 	const force = args.boolean('force');
 	const confirmed = await confirmOrRefuse(

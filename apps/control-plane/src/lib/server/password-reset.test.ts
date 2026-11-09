@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
-import type { AuditInput } from '@skiff/core';
+import type { AuditInput } from '@yoal/core';
 import {
 	ResetThrottle,
 	deleteResetTokens,

@@ -13,7 +13,7 @@ interface Seen {
 }
 
 beforeEach(async () => {
-	dir = await mkdtemp(join(tmpdir(), 'skiff-cli-storage-'));
+	dir = await mkdtemp(join(tmpdir(), 'yoal-cli-storage-'));
 });
 
 afterEach(async () => {
@@ -115,11 +115,11 @@ async function cli(...args: string[]) {
 		cwd: join(import.meta.dir, '../..'),
 		env: {
 			...process.env,
-			SKIFF_CONFIG_DIR: dir,
-			SKIFF_URL: `http://127.0.0.1:${server!.port}`,
-			SKIFF_TOKEN: 'skif_test',
-			SKIFF_CONTENT_DOMAIN: '',
-			SKIFF_PROFILE: '',
+			YOAL_CONFIG_DIR: dir,
+			YOAL_URL: `http://127.0.0.1:${server!.port}`,
+			YOAL_TOKEN: 'yoal_test',
+			YOAL_CONTENT_DOMAIN: '',
+			YOAL_PROFILE: '',
 		},
 		stdin: 'ignore',
 		stdout: 'pipe',
@@ -129,7 +129,7 @@ async function cli(...args: string[]) {
 	return { code, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
 }
 
-describe('skif storage', () => {
+describe('yoal storage', () => {
 	test('create sends buckets, project, prefix, public and limits in one call', async () => {
 		const seen = serve({
 			'POST /api/v1/storage': {
@@ -167,7 +167,7 @@ describe('skif storage', () => {
 		expect(result.stdout).toContain('Created storage "media" with 2 buckets on node homelab (pending).');
 		expect(result.stdout).toContain('Public endpoint: https://media--s3.example.com');
 		expect(result.stdout).toContain('Attached to api as S3');
-		expect(result.stdout).not.toContain('skif storage attach');
+		expect(result.stdout).not.toContain('yoal storage attach');
 	});
 
 	test('create --project without --bucket is refused before calling the server', async () => {
@@ -231,7 +231,7 @@ describe('skif storage', () => {
 		let seen = serve({});
 		const missing = await cli('storage', 'detach', 'media');
 		expect(missing.code).toBe(1);
-		expect(missing.stderr).toContain('skif storage detach media --project <slug>');
+		expect(missing.stderr).toContain('yoal storage detach media --project <slug>');
 		server?.stop(true);
 		seen = serve({ 'DELETE /api/v1/projects/api/storage/media': { ok: true } });
 		const result = await cli('storage', 'detach', 'media', '-p', 'api');
@@ -331,7 +331,7 @@ describe('skif storage', () => {
 		const result = await cli('storage', 'delete', 'media', '--yes');
 		expect(result.code).toBe(1);
 		expect(result.stderr).toContain('is attached to api');
-		expect(result.stderr).toContain('skif storage detach media --project api');
+		expect(result.stderr).toContain('yoal storage detach media --project api');
 		expect(seen.some((item) => item.method === 'DELETE')).toBe(false);
 	});
 
@@ -345,7 +345,7 @@ describe('skif storage', () => {
 		const result = await cli('storage', 'delete', 'media', '--yes');
 		expect(result.code).toBe(0);
 		expect(seen.at(-1)?.path).toBe('/api/v1/storage/media');
-		expect(result.stdout).toContain('Undo: skif storage restore media');
+		expect(result.stdout).toContain('Undo: yoal storage restore media');
 	});
 
 	test('purge --yes on a trashed instance sends DELETE ?purge=1; off a terminal it refuses without --yes', async () => {
@@ -378,7 +378,7 @@ describe('skif storage', () => {
 	});
 });
 
-describe('skif storage buckets', () => {
+describe('yoal storage buckets', () => {
 	test('`buckets <name>` lists, like `buckets list <name>`', async () => {
 		const seen = serve({ 'GET /api/v1/storage/media/buckets': { buckets: [bucket()] } });
 		const short = await cli('storage', 'buckets', 'media');
@@ -431,7 +431,7 @@ describe('skif storage buckets', () => {
 	});
 });
 
-describe('skif storage keys, rotate-root and move', () => {
+describe('yoal storage keys, rotate-root and move', () => {
 	function key(overrides: Record<string, unknown> = {}) {
 		return {
 			id: 'stk_1',
@@ -467,7 +467,7 @@ describe('skif storage keys, rotate-root and move', () => {
 			},
 		});
 		expect(result.stdout).toContain('Created key "backup-tool" (stk_1, SKFKEYKEYKEYKEYKEYKE)');
-		expect(result.stdout).toContain('skif storage keys reveal media stk_1');
+		expect(result.stdout).toContain('yoal storage keys reveal media stk_1');
 	});
 
 	test('keys create without --bucket is refused locally', async () => {

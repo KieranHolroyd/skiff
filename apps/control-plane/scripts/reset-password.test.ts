@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { betterAuth } from 'better-auth';
 import { getMigrations } from 'better-auth/db/migration';
 import { verifyPassword } from 'better-auth/crypto';
-import { createDb } from '@skiff/db';
+import { createDb } from '@yoal/db';
 
 const appDir = join(import.meta.dir, '..');
 const script = join(import.meta.dir, 'reset-password.ts');
@@ -14,13 +14,13 @@ let userId: string;
 let passkeyOnlyId: string;
 
 function sqlite() {
-	return createDb({ path: join(dataDir, 'skiff.db') }).sqlite;
+	return createDb({ path: join(dataDir, 'yoal.db') }).sqlite;
 }
 
 async function run(args: string[], stdin?: string) {
 	const proc = Bun.spawn(['bun', script, ...args], {
 		cwd: appDir,
-		env: { ...process.env, SKIFF_DATA_DIR: dataDir },
+		env: { ...process.env, YOAL_DATA_DIR: dataDir },
 		stdin: stdin === undefined ? 'ignore' : new Blob([stdin]),
 		stdout: 'pipe',
 		stderr: 'pipe'
@@ -34,7 +34,7 @@ async function run(args: string[], stdin?: string) {
 }
 
 beforeAll(async () => {
-	dataDir = mkdtempSync(join(tmpdir(), 'skiff-reset-password-'));
+	dataDir = mkdtempSync(join(tmpdir(), 'yoal-reset-password-'));
 	const db = sqlite();
 	const auth = betterAuth({
 		database: db,

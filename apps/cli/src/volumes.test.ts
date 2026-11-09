@@ -85,7 +85,7 @@ describe('app volume formatting', () => {
 			}),
 		);
 		expect(out).toContain('production (single-writer)');
-		expect(out).toContain('skif volume snapshot app-data --project api');
+		expect(out).toContain('yoal volume snapshot app-data --project api');
 		expect(out).not.toContain('not implemented');
 	});
 

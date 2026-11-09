@@ -1,4 +1,4 @@
-import { eventTypesBySource } from '@skiff/contracts';
+import { eventTypesBySource } from '@yoal/contracts';
 import { arr, live, obj, pick, str, strings, type ImportContext, type Item } from './context.ts';
 
 /**
@@ -111,7 +111,7 @@ export function planIntegrations(ctx: ImportContext): void {
 				const secretName = str(secret.name);
 				if (!secretName) continue;
 				const scope = str(secret.environment);
-				plan.manualStep('pipelines', `${name}/${secretName}`, `Set the pipeline secret again: skif secret set ${name} ${secretName}${scope ? ` --environment ${scope}` : ''}`);
+				plan.manualStep('pipelines', `${name}/${secretName}`, `Set the pipeline secret again: yoal secret set ${name} ${secretName}${scope ? ` --environment ${scope}` : ''}`);
 			}
 			const links = existing ? (ctx.maybe(() => core.pipelines.listProjectLinks(principal, name)) ?? []) : [];
 			for (const link of arr(repo.projectLinks)) {

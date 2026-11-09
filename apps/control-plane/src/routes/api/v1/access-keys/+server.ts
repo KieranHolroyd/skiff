@@ -6,7 +6,7 @@ import { requirePrincipal } from '#lib/server/principal.js';
 
 /**
  * Access keys (IAM.md I14, §12). A key is bound to the caller's org and principal. `POST` returns
- * the raw `skif_…` key exactly once; every later read returns only the row view and its `start`.
+ * the raw `yoal_…` key exactly once; every later read returns only the row view and its `start`.
  */
 
 const createSchema = z.object({

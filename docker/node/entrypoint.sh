@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# PID 1 for the Skiff node image.
+# PID 1 for the Yoal node image.
 #
 # Caddy and the agent share one container: the agent drives Caddy's admin API
-# over the unix socket in /run/skiff, and Caddy serves the agent's release
+# over the unix socket in /run/yoal, and Caddy serves the agent's release
 # cache, so both need the same filesystem and user. A supervisor keeps the pair
 # together — if either exits, the container exits and the restart policy runs
 # both again from the same persisted state.
 #
 # Any argument bypasses the supervisor, so one-off commands work:
-#   docker compose run --rm --entrypoint /opt/skiff/skiff-agent node join ...
+#   docker compose run --rm --entrypoint /opt/yoal/yoal-agent node join ...
 
 set -euo pipefail
 
@@ -16,13 +16,13 @@ if [ "$#" -gt 0 ]; then
 	exec "$@"
 fi
 
-/opt/skiff/caddy run \
+/opt/yoal/caddy run \
 	--resume \
-	--config /etc/caddy/skiff.Caddyfile \
+	--config /etc/caddy/yoal.Caddyfile \
 	--adapter caddyfile &
 caddy_pid=$!
 
-/opt/skiff/skiff-agent &
+/opt/yoal/yoal-agent &
 agent_pid=$!
 
 stop() {

@@ -5,8 +5,8 @@ import type { editor } from 'monaco-editor';
  * editor in the dashboard looks the same. Monaco only understands hex, so the OKLCH CSS tokens
  * are read live and converted.
  */
-export const THEME_DARK = 'skiff-dark';
-export const THEME_LIGHT = 'skiff-light';
+export const THEME_DARK = 'yoal-dark';
+export const THEME_LIGHT = 'yoal-light';
 
 type MonacoEditorApi = typeof editor;
 

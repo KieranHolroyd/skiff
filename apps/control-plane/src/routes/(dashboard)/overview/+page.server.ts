@@ -1,5 +1,5 @@
-import type { BuildView, DatabaseView, DomainView, StorageView } from '@skiff/contracts';
-import type { DeploymentView, NodeView, StatusSummary } from '@skiff/core';
+import type { BuildView, DatabaseView, DomainView, StorageView } from '@yoal/contracts';
+import type { DeploymentView, NodeView, StatusSummary } from '@yoal/core';
 import type { PageServerLoad } from './$types';
 import { core } from '#lib/server/core.js';
 import { trafficRanges, parseTrafficRange, trafficRangeHref } from '#lib/server/traffic-range.js';

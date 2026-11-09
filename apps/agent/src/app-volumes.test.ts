@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { appVolumeTaskSchema, type AppVolumeNodeRef, type DesiredState } from '@skiff/contracts';
+import { appVolumeTaskSchema, type AppVolumeNodeRef, type DesiredState } from '@yoal/contracts';
 import { AppVolumeRunner, verifyStream, writersOf } from './app-volumes.ts';
 import type { HelperAppVolumeApi } from './helper-client.ts';
 

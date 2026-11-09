@@ -1,9 +1,9 @@
 ---
 title: GitLab, Gitea and Forgejo
-description: Connect GitLab, Gitea or Forgejo with a token for repository pickers, webhooks Skiff creates, private clones, commit statuses and Deploy from Git.
+description: Connect GitLab, Gitea or Forgejo with a token for repository pickers, webhooks Yoal creates, private clones, commit statuses and Deploy from Git.
 ---
 
-Everything the [GitHub App](/deploying/github) does for GitHub, a **git provider connection** does for GitLab, Gitea and Forgejo. These forges have no App to install, so you give Skiff an API token instead, and Skiff uses it to set things up for you. gitlab.com, Codeberg and self-hosted instances all work.
+Everything the [GitHub App](/deploying/github) does for GitHub, a **git provider connection** does for GitLab, Gitea and Forgejo. These forges have no App to install, so you give Yoal an API token instead, and Yoal uses it to set things up for you. gitlab.com, Codeberg and self-hosted instances all work.
 
 You don't need a connection. Without one, git builds and pipelines work with hand-made webhooks and node credentials, as described in [Git builds](/deploying/git-builds) and [Pipelines](/deploying/pipelines). Those hand-made webhooks accept GitLab, Gitea and Forgejo deliveries too.
 
@@ -12,12 +12,12 @@ You don't need a connection. Without one, git builds and pipelines work with han
 | Area | GitLab | Gitea and Forgejo |
 | --- | --- | --- |
 | Pickers | Projects you can push to appear in the git source, pipeline repository and registry trust forms, and in **Deploy from Git**. | Repositories the token can see appear in the same places. |
-| Events | Skiff creates a project webhook (push and merge request events) for each repository a git source or pipeline uses. | Skiff creates a repository webhook (push and pull request events). |
+| Events | Yoal creates a project webhook (push and merge request events) for each repository a git source or pipeline uses. | Yoal creates a repository webhook (push and pull request events). |
 | Whole groups | **Watch a group** creates one group webhook. It needs GitLab Premium, or a self-managed instance that has group webhooks. | **Watch an organisation** creates one organisation webhook. |
-| Private clones | Build nodes get a read-only **deploy token** for that one project, which expires after two days. Skiff creates it, so the API token needs the *Maintainer* role. Otherwise the clone token is used. | Build nodes get the connection's optional **clone token**, sent only to that host. |
-| Commit statuses | Builds report `skiff-build/<project>` and pipeline runs report `skiff/<workflow>`, shown as *running*, *passed*, *failed* or *canceled*. | The same statuses, under the same names. |
+| Private clones | Build nodes get a read-only **deploy token** for that one project, which expires after two days. Yoal creates it, so the API token needs the *Maintainer* role. Otherwise the clone token is used. | Build nodes get the connection's optional **clone token**, sent only to that host. |
+| Commit statuses | Builds report `yoal-build/<project>` and pipeline runs report `yoal/<workflow>`, shown as *running*, *passed*, *failed* or *canceled*. | The same statuses, under the same names. |
 | Deployments | A promoted build is recorded as a deployment to environment `<project>`. A preview build goes to `<project>-preview`. | Gitea and Forgejo have no deployments API. |
-| Pipelines on push | A push through a group webhook adds a repository that has `.skiff/workflows` to Pipelines. | The same, through an organisation webhook. |
+| Pipelines on push | A push through a group webhook adds a repository that has `.yoal/workflows` to Pipelines. | The same, through an organisation webhook. |
 | Merge and pull requests | A merge request from a fork runs **untrusted**: it gets no secrets, no environments and no deploys. | A pull request from a fork runs untrusted. |
 
 ## Connect a forge
@@ -27,23 +27,23 @@ An organisation owner or admin does this.
 1. Create a token on the forge:
    - **GitLab**: a group access token (role *Maintainer*, scope `api`) is best, because it can create deploy tokens and webhooks for every project in the group. A personal access token with `api` also works.
    - **Gitea or Forgejo**: an access token with `write:repository` and `read:user`. Add `write:organization` if you want to watch an organisation.
-2. Optionally, create a second, read-only token for clones: `read_repository` on GitLab, `read:repository` on Gitea or Forgejo. Build nodes may receive this token, so use a bot account that can read only the repositories Skiff builds.
-3. In Skiff, open **Settings → Git providers** and choose **Connect**. Pick the forge, enter the instance URL (gitlab.com and Codeberg are filled in for you), and paste the token or tokens.
+2. Optionally, create a second, read-only token for clones: `read_repository` on GitLab, `read:repository` on Gitea or Forgejo. Build nodes may receive this token, so use a bot account that can read only the repositories Yoal builds.
+3. In Yoal, open **Settings → Git providers** and choose **Connect**. Pick the forge, enter the instance URL (gitlab.com and Codeberg are filled in for you), and paste the token or tokens.
 
-As soon as you connect, Skiff creates webhooks for the repositories your projects and pipelines already use on that forge, so nothing needs re-saving.
+As soon as you connect, Yoal creates webhooks for the repositories your projects and pipelines already use on that forge, so nothing needs re-saving.
 
-Skiff checks each token with the forge before saving it. Tokens are sealed with your organisation's key and never shown again. The API token never leaves the control plane.
+Yoal checks each token with the forge before saving it. Tokens are sealed with your organisation's key and never shown again. The API token never leaves the control plane.
 
 An instance on a private network (a homelab address such as `192.168.0.9`, or a `.lan` or `.local` name) can only be connected by a platform admin. This stops the control plane from being used to reach machines on its own network.
 
 ## Use it
 
-- **Deploy from Git.** **Projects → Deploy from Git** lists repositories from every connected provider. Pick one, and Skiff reads it, picks a framework preset, creates the project and its git source, makes the webhook, and queues the first build.
-- **Git sources and pipelines.** Choose a repository in the picker, or paste its clone URL. When a connection serves that URL, Skiff creates the webhook as soon as you save, so you don't need a webhook secret.
-- **Pipelines on push.** Watch a group or organisation, and a push that adds `.skiff/workflows` to one of its repositories adds that repository to Pipelines. The **Set up pipelines automatically** switch on **Settings → Git providers** is the same setting as on Settings → GitHub, and it lists removed repositories you can allow again.
-- **Retry or add webhooks.** Each connection on **Settings → Git providers** lists the webhooks Skiff created and any error the forge returned, with a **Retry** button. **Add a repository webhook** re-creates one by hand.
+- **Deploy from Git.** **Projects → Deploy from Git** lists repositories from every connected provider. Pick one, and Yoal reads it, picks a framework preset, creates the project and its git source, makes the webhook, and queues the first build.
+- **Git sources and pipelines.** Choose a repository in the picker, or paste its clone URL. When a connection serves that URL, Yoal creates the webhook as soon as you save, so you don't need a webhook secret.
+- **Pipelines on push.** Watch a group or organisation, and a push that adds `.yoal/workflows` to one of its repositories adds that repository to Pipelines. The **Set up pipelines automatically** switch on **Settings → Git providers** is the same setting as on Settings → GitHub, and it lists removed repositories you can allow again.
+- **Retry or add webhooks.** Each connection on **Settings → Git providers** lists the webhooks Yoal created and any error the forge returned, with a **Retry** button. **Add a repository webhook** re-creates one by hand.
 
-When Skiff's webhook already delivers a repository, a hand-made webhook for the same repository is accepted and ignored, so one push never starts two builds.
+When Yoal's webhook already delivers a repository, a hand-made webhook for the same repository is accepted and ignored, so one push never starts two builds.
 
 ## Hand-made webhooks
 
@@ -61,14 +61,14 @@ GitLab CI jobs can push to the [container registry](/compute/apps-and-containers
 ```yaml
 push-image:
   id_tokens:
-    SKIFF_ID_TOKEN:
+    YOAL_ID_TOKEN:
       aud: registry.example.com
   script:
-    - echo "$SKIFF_ID_TOKEN" | docker login registry.example.com -u gitlab-oidc --password-stdin
+    - echo "$YOAL_ID_TOKEN" | docker login registry.example.com -u gitlab-oidc --password-stdin
     - docker push registry.example.com/acme/app:$CI_COMMIT_SHORT_SHA
 ```
 
-Skiff checks the token's signature against the instance's published keys, then its audience, project path and ref (`refs/heads/<branch>` or `refs/tags/<tag>`).
+Yoal checks the token's signature against the instance's published keys, then its audience, project path and ref (`refs/heads/<branch>` or `refs/tags/<tag>`).
 
 ## Sign in
 

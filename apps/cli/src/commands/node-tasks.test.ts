@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-/** `skif broker` queue tools and `skif function` against a fake control plane (D124). */
+/** `yoal broker` queue tools and `yoal function` against a fake control plane (D124). */
 
 let dir = '';
 let server: ReturnType<typeof Bun.serve> | undefined;
@@ -15,7 +15,7 @@ interface Seen {
 }
 
 beforeEach(async () => {
-	dir = await mkdtemp(join(tmpdir(), 'skiff-cli-node-tasks-'));
+	dir = await mkdtemp(join(tmpdir(), 'yoal-cli-node-tasks-'));
 });
 
 afterEach(async () => {
@@ -66,11 +66,11 @@ async function cli(...args: string[]) {
 		cwd: join(import.meta.dir, '../..'),
 		env: {
 			...process.env,
-			SKIFF_CONFIG_DIR: dir,
-			SKIFF_URL: `http://127.0.0.1:${server!.port}`,
-			SKIFF_TOKEN: 'skif_test',
-			SKIFF_CONTENT_DOMAIN: '',
-			SKIFF_PROFILE: '',
+			YOAL_CONFIG_DIR: dir,
+			YOAL_URL: `http://127.0.0.1:${server!.port}`,
+			YOAL_TOKEN: 'yoal_test',
+			YOAL_CONTENT_DOMAIN: '',
+			YOAL_PROFILE: '',
 		},
 		stdin: 'ignore',
 		stdout: 'pipe',
@@ -80,9 +80,9 @@ async function cli(...args: string[]) {
 	return { code, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
 }
 
-const sent = (seqs: number[]) => task('broker.queue.send', { stream: 'SKIFF_Q_jobs', sent: seqs.length, seqs, durationMs: 4, state: null });
+const sent = (seqs: number[]) => task('broker.queue.send', { stream: 'YOAL_Q_jobs', sent: seqs.length, seqs, durationMs: 4, state: null });
 
-describe('skif broker queue tools', () => {
+describe('yoal broker queue tools', () => {
 	test('send posts the body, content type, delay and count, and prints the sequences', async () => {
 		const seen = serve({ 'POST /api/v1/brokers/mq/queues/jobs/messages': sent([1, 2, 3]) });
 		const result = await cli('queue', 'send', 'mq', 'jobs', '{"a":1}', '--count', '3', '--delay', '5m');
@@ -119,10 +119,10 @@ describe('skif broker queue tools', () => {
 
 	test('peek maps the queue to its stream, passes --limit/--from and prints the messages', async () => {
 		const seen = serve({
-			'GET /api/v1/brokers/mq/streams/SKIFF_Q_jobs/messages?limit=1&from=3': task('broker.stream.peek', {
-				stream: 'SKIFF_Q_jobs',
+			'GET /api/v1/brokers/mq/streams/YOAL_Q_jobs/messages?limit=1&from=3': task('broker.stream.peek', {
+				stream: 'YOAL_Q_jobs',
 				messages: [
-					{ seq: 3, subject: 'skiff.q.jobs', time: '2026-11-07T10:00:00.000Z', size: 9, headers: { 'Skiff-Content-Type': 'json' }, encoding: 'utf8', body: '{"a":[1]}', truncated: false },
+					{ seq: 3, subject: 'yoal.q.jobs', time: '2026-11-07T10:00:00.000Z', size: 9, headers: { 'Yoal-Content-Type': 'json' }, encoding: 'utf8', body: '{"a":[1]}', truncated: false },
 				],
 				total: 2,
 				firstSeq: 3,
@@ -133,10 +133,10 @@ describe('skif broker queue tools', () => {
 		const result = await cli('broker', 'peek', 'mq', 'jobs', '--limit', '1', '--from', '3');
 		expect(result.code).toBe(0);
 		expect(seen[0]?.method).toBe('GET');
-		expect(result.stdout).toContain('jobs (SKIFF_Q_jobs): 2 messages held, seq 3–4. Showing 1.');
+		expect(result.stdout).toContain('jobs (YOAL_Q_jobs): 2 messages held, seq 3–4. Showing 1.');
 		expect(result.stdout).toContain('#3  2026-11-07 10:00:00Z  9 B');
 		expect(result.stdout).toContain('      1');
-		expect(result.stdout).toContain('More: skif broker peek mq jobs --limit 1 --from 4');
+		expect(result.stdout).toContain('More: yoal broker peek mq jobs --limit 1 --from 4');
 	});
 
 	test('peek --stream reads a raw stream and --json prints the task', async () => {
@@ -161,29 +161,29 @@ describe('skif broker queue tools', () => {
 
 	test('queue-purge, queue-rm and message-rm with --yes call their endpoints', async () => {
 		const seen = serve({
-			'POST /api/v1/brokers/mq/streams/SKIFF_Q_jobs/purge': task('broker.stream.purge', { stream: 'SKIFF_Q_jobs', purged: 12, state: null }),
+			'POST /api/v1/brokers/mq/streams/YOAL_Q_jobs/purge': task('broker.stream.purge', { stream: 'YOAL_Q_jobs', purged: 12, state: null }),
 			'DELETE /api/v1/brokers/mq/streams/EVENTS': task('broker.stream.delete', { stream: 'EVENTS', deleted: true }),
-			'DELETE /api/v1/brokers/mq/streams/SKIFF_Q_jobs/messages/5': task('broker.stream.deleteMessage', {
-				stream: 'SKIFF_Q_jobs',
+			'DELETE /api/v1/brokers/mq/streams/YOAL_Q_jobs/messages/5': task('broker.stream.deleteMessage', {
+				stream: 'YOAL_Q_jobs',
 				seq: 5,
 				deleted: true,
-				state: { stream: 'SKIFF_Q_jobs', messages: 11, bytes: 100, firstAt: null, lastAt: null },
+				state: { stream: 'YOAL_Q_jobs', messages: 11, bytes: 100, firstAt: null, lastAt: null },
 			}),
 			'DELETE /api/v1/brokers/mq/streams/EVENTS/messages/7': task('broker.stream.deleteMessage', { stream: 'EVENTS', seq: 7, deleted: false, state: null }),
 		});
 		const purge = await cli('broker', 'queue-purge', 'mq', 'jobs', '-y');
-		expect(purge.stdout).toContain('Purged 12 messages from SKIFF_Q_jobs.');
+		expect(purge.stdout).toContain('Purged 12 messages from YOAL_Q_jobs.');
 		const rmStream = await cli('broker', 'queue-rm', 'mq', '--stream', 'EVENTS', '--yes');
 		expect(rmStream.stdout).toContain('Deleted EVENTS from "mq".');
 		const rmMessage = await cli('broker', 'message-rm', 'mq', 'jobs', '5', '--yes');
-		expect(rmMessage.stdout).toContain('Deleted message #5 from SKIFF_Q_jobs. SKIFF_Q_jobs now holds 11 messages');
+		expect(rmMessage.stdout).toContain('Deleted message #5 from YOAL_Q_jobs. YOAL_Q_jobs now holds 11 messages');
 		const missing = await cli('broker', 'message-rm', 'mq', '7', '--stream', 'EVENTS', '--yes');
 		expect(missing.code).toBe(0);
 		expect(missing.stdout).toContain('Message #7 is not in EVENTS');
 		expect(seen.map((item) => `${item.method} ${item.path}`)).toEqual([
-			'POST /api/v1/brokers/mq/streams/SKIFF_Q_jobs/purge',
+			'POST /api/v1/brokers/mq/streams/YOAL_Q_jobs/purge',
 			'DELETE /api/v1/brokers/mq/streams/EVENTS',
-			'DELETE /api/v1/brokers/mq/streams/SKIFF_Q_jobs/messages/5',
+			'DELETE /api/v1/brokers/mq/streams/YOAL_Q_jobs/messages/5',
 			'DELETE /api/v1/brokers/mq/streams/EVENTS/messages/7',
 		]);
 	});
@@ -203,27 +203,27 @@ describe('skif broker queue tools', () => {
 	});
 
 	test('queue-create reports whether the stream was new', async () => {
-		const seen = serve({ 'POST /api/v1/brokers/mq/queues': task('broker.queue.create', { stream: 'SKIFF_Q_jobs', created: true, state: null }) });
+		const seen = serve({ 'POST /api/v1/brokers/mq/queues': task('broker.queue.create', { stream: 'YOAL_Q_jobs', created: true, state: null }) });
 		const result = await cli('broker', 'queue-create', 'mq', 'jobs');
 		expect(result.code).toBe(0);
 		expect(seen[0]?.body).toEqual({ queue: 'jobs' });
-		expect(result.stdout).toContain('Created SKIFF_Q_jobs on "mq".');
+		expect(result.stdout).toContain('Created YOAL_Q_jobs on "mq".');
 	});
 
 	test('a node failure prints the node message and exits 1', async () => {
 		serve({
-			'POST /api/v1/brokers/mq/streams/SKIFF_Q_jobs/purge': new Response(
+			'POST /api/v1/brokers/mq/streams/YOAL_Q_jobs/purge': new Response(
 				JSON.stringify({ error: 'node_task_failed', message: 'stream not found', task: task('broker.stream.purge', null, { status: 'failed' }).task }),
 				{ status: 502, headers: { 'content-type': 'application/json' } },
 			),
 		});
 		const result = await cli('broker', 'queue-purge', 'mq', 'jobs', '--yes');
 		expect(result.code).toBe(1);
-		expect(result.stderr).toContain('skif: stream not found');
+		expect(result.stderr).toContain('yoal: stream not found');
 	});
 });
 
-describe('skif function', () => {
+describe('yoal function', () => {
 	const invoked = (overrides: Record<string, unknown> = {}) =>
 		task('function.invoke', {
 			status: 200,

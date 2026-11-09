@@ -2,15 +2,15 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PROCESS_NODE_CAPABILITY, workloadSpecSchema } from '@skiff/contracts';
-import { createDb } from '@skiff/db';
+import { PROCESS_NODE_CAPABILITY, workloadSpecSchema } from '@yoal/contracts';
+import { createDb } from '@yoal/db';
 import { buildPrincipal } from './orgs.ts';
 import { createCore, type Core } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import { withEngineCommand } from './workloads.ts';
 
 /** Node.js process apps (D125): engine, default command, placement and desired state. */
-const dir = mkdtempSync(join(tmpdir(), 'skiff-process-node-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-process-node-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 

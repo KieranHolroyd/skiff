@@ -2,7 +2,7 @@
  * GitHub commit statuses for pipeline runs (docs/PIPELINES.md WP3). A repository may store a
  * GitHub token allowed to write commit statuses; every run then reports `pending` when it is
  * created and `success`/`failure`/`error` when it completes, under the context
- * `skiff/<workflow name>`, linking to the run page. Reporting is best-effort: a failure is logged
+ * `yoal/<workflow name>`, linking to the run page. Reporting is best-effort: a failure is logged
  * and never affects the run.
  */
 
@@ -53,7 +53,7 @@ export async function postCommitStatus(input: CommitStatusInput): Promise<void> 
 				accept: 'application/vnd.github+json',
 				'x-github-api-version': '2022-11-28',
 				'content-type': 'application/json',
-				'user-agent': 'skiff-pipelines',
+				'user-agent': 'yoal-pipelines',
 			},
 			body: JSON.stringify({
 				state: input.state,

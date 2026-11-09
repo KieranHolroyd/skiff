@@ -68,34 +68,34 @@ describe('validateDomainSettings', () => {
 
 describe('env changes', () => {
 	test('HTTPS writes https origins, the ACME email and the token on both files', () => {
-		expect(controlPlaneEnvChanges(https, '/etc/skiff/cloudflare.token')).toEqual({
-			SKIFF_PLATFORM_ORIGIN: 'https://control.example.com',
-			SKIFF_CONTENT_DOMAIN: 'example.dev',
-			SKIFF_ACME_EMAIL: 'ops@example.com',
-			SKIFF_CLOUDFLARE_TOKEN_FILE: '/etc/skiff/cloudflare.token',
+		expect(controlPlaneEnvChanges(https, '/etc/yoal/cloudflare.token')).toEqual({
+			YOAL_PLATFORM_ORIGIN: 'https://control.example.com',
+			YOAL_CONTENT_DOMAIN: 'example.dev',
+			YOAL_ACME_EMAIL: 'ops@example.com',
+			YOAL_CLOUDFLARE_TOKEN_FILE: '/etc/yoal/cloudflare.token',
 		});
-		expect(edgeAgentEnvChanges(https, '/etc/skiff/cloudflare.token')).toMatchObject({
-			SKIFF_CONTROL_URL: 'https://control.example.com',
-			SKIFF_CONTROL_SOCKET: '/run/skiff/control.sock',
-			SKIFF_PLATFORM_HOST: 'control.example.com',
-			SKIFF_TLS: '1',
-			SKIFF_CLOUDFLARE_API_TOKEN_FILE: '/etc/skiff/cloudflare.token',
+		expect(edgeAgentEnvChanges(https, '/etc/yoal/cloudflare.token')).toMatchObject({
+			YOAL_CONTROL_URL: 'https://control.example.com',
+			YOAL_CONTROL_SOCKET: '/run/yoal/control.sock',
+			YOAL_PLATFORM_HOST: 'control.example.com',
+			YOAL_TLS: '1',
+			YOAL_CLOUDFLARE_API_TOKEN_FILE: '/etc/yoal/cloudflare.token',
 		});
 	});
 
 	test('HTTP removes the ACME email and the agent token, and turns TLS off', () => {
-		const agent = edgeAgentEnvChanges(ipOnly, '/etc/skiff/cloudflare.token');
-		expect(agent).toMatchObject({ SKIFF_CONTROL_URL: 'http://203.0.113.7', SKIFF_TLS: '0', SKIFF_ACME_EMAIL: null, SKIFF_CLOUDFLARE_API_TOKEN_FILE: null });
+		const agent = edgeAgentEnvChanges(ipOnly, '/etc/yoal/cloudflare.token');
+		expect(agent).toMatchObject({ YOAL_CONTROL_URL: 'http://203.0.113.7', YOAL_TLS: '0', YOAL_ACME_EMAIL: null, YOAL_CLOUDFLARE_API_TOKEN_FILE: null });
 		const env = new Map([
-			['SKIFF_ACME_EMAIL', 'old@example.com'],
-			['SKIFF_TLS', '1'],
-			['SKIFF_NODE_TOKEN', 'kept'],
+			['YOAL_ACME_EMAIL', 'old@example.com'],
+			['YOAL_TLS', '1'],
+			['YOAL_NODE_TOKEN', 'kept'],
 		]);
 		const changed = applyEnvChanges(env, agent);
-		expect(env.has('SKIFF_ACME_EMAIL')).toBe(false);
-		expect(env.get('SKIFF_TLS')).toBe('0');
-		expect(env.get('SKIFF_NODE_TOKEN')).toBe('kept');
-		expect(changed).toContain('SKIFF_ACME_EMAIL');
+		expect(env.has('YOAL_ACME_EMAIL')).toBe(false);
+		expect(env.get('YOAL_TLS')).toBe('0');
+		expect(env.get('YOAL_NODE_TOKEN')).toBe('kept');
+		expect(changed).toContain('YOAL_ACME_EMAIL');
 		expect(applyEnvChanges(env, agent)).toEqual([]);
 	});
 
@@ -128,7 +128,7 @@ describe('the domains request', () => {
 
 describe('cloudflareTokenCreateUrl', () => {
 	test('pre-fills zone read and DNS edit on the user token form', () => {
-		const url = new URL(cloudflareTokenCreateUrl({ name: 'Skiff DNS (example.dev)' }));
+		const url = new URL(cloudflareTokenCreateUrl({ name: 'Yoal DNS (example.dev)' }));
 		expect(url.origin + url.pathname).toBe('https://dash.cloudflare.com/profile/api-tokens');
 		expect(JSON.parse(url.searchParams.get('permissionGroupKeys')!)).toEqual([
 			{ key: 'zone', type: 'read' },
@@ -136,12 +136,12 @@ describe('cloudflareTokenCreateUrl', () => {
 		]);
 		expect(url.searchParams.get('accountId')).toBe('*');
 		expect(url.searchParams.get('zoneId')).toBe('all');
-		expect(url.searchParams.get('name')).toBe('Skiff DNS (example.dev)');
+		expect(url.searchParams.get('name')).toBe('Yoal DNS (example.dev)');
 	});
 
 	test('permissions and name are configurable', () => {
 		const url = new URL(cloudflareTokenCreateUrl({ permissions: [{ key: 'dns', type: 'read' }] }));
 		expect(JSON.parse(url.searchParams.get('permissionGroupKeys')!)).toEqual([{ key: 'dns', type: 'read' }]);
-		expect(url.searchParams.get('name')).toBe('Skiff DNS');
+		expect(url.searchParams.get('name')).toBe('Yoal DNS');
 	});
 });

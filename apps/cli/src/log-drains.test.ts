@@ -54,7 +54,7 @@ describe('log drain output', () => {
 		expect(table).toContain('webhook/ndjson');
 		expect(table).toContain('12 sent, 3 dropped');
 		const details = logDrainDetails(drain);
-		expect(details).toContain('signed (X-Skiff-Signature)');
+		expect(details).toContain('signed (X-Yoal-Signature)');
 		expect(details).toContain('org: runtime,build ≥ warn');
 		expect(details).toContain('Authorization (values hidden)');
 		expect(details).toContain('attempt 3');

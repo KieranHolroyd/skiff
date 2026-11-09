@@ -1,6 +1,6 @@
 import type { RequestHandler } from './$types';
-import { isPermission } from '@skiff/contracts';
-import { ForbiddenError, ValidationError } from '@skiff/core';
+import { isPermission } from '@yoal/contracts';
+import { ForbiddenError, ValidationError } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import { route } from '#lib/server/api.js';
 import { requirePrincipal } from '#lib/server/principal.js';

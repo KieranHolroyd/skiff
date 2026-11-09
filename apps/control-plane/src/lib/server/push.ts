@@ -1,22 +1,22 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { building } from '$app/env';
-import { PushNotifier, PushSubscriptionStore, type VapidConfig } from '@skiff/core';
+import { PushNotifier, PushSubscriptionStore, type VapidConfig } from '@yoal/core';
 import {
 	VAPID_PRIVATE_KEY_ENV,
 	VAPID_PUBLIC_KEY_ENV,
 	generateVapidKeys,
 	validVapidKeys,
 	vapidSubject
-} from '@skiff/contracts/vapid';
+} from '@yoal/contracts/vapid';
 import { dataDir } from './config';
 import { sqlite } from './db';
 
 /**
- * Web Push alerts (D108). The VAPID key pair comes from `/etc/skiff/skiff.env`, written by the
- * installer and by `skiff-update-self` (or by Settings → Notifications → Set up push, through the
+ * Web Push alerts (D108). The VAPID key pair comes from `/etc/yoal/yoal.env`, written by the
+ * installer and by `yoal-update-self` (or by Settings → Notifications → Set up push, through the
  * root helper, on a host updated by an older updater). A dev server makes its own pair in
- * `<SKIFF_DATA_DIR>/vapid.json` so push works without an install.
+ * `<YOAL_DATA_DIR>/vapid.json` so push works without an install.
  */
 function loadVapid(): VapidConfig | null {
 	if (building) return null;

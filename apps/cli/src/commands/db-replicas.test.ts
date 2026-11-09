@@ -15,7 +15,7 @@ interface Seen {
 }
 
 beforeEach(async () => {
-	dir = await mkdtemp(join(tmpdir(), 'skiff-cli-replicas-'));
+	dir = await mkdtemp(join(tmpdir(), 'yoal-cli-replicas-'));
 });
 
 afterEach(async () => {
@@ -34,7 +34,7 @@ const replica = (overrides: Record<string, unknown> = {}) => ({
 	replayLsn: '0/3000148',
 	lagBytes: 0,
 	lagSeconds: 0.2,
-	slot: 'skiff_dbr_1',
+	slot: 'yoal_dbr_1',
 	primaryGeneration: 2,
 	workloadId: 'db_dbr_1',
 	mode: 'async',
@@ -74,11 +74,11 @@ async function cli(...args: string[]) {
 		cwd: join(import.meta.dir, '../..'),
 		env: {
 			...process.env,
-			SKIFF_CONFIG_DIR: dir,
-			SKIFF_URL: `http://127.0.0.1:${server!.port}`,
-			SKIFF_TOKEN: 'skif_test',
-			SKIFF_CONTENT_DOMAIN: '',
-			SKIFF_PROFILE: '',
+			YOAL_CONFIG_DIR: dir,
+			YOAL_URL: `http://127.0.0.1:${server!.port}`,
+			YOAL_TOKEN: 'yoal_test',
+			YOAL_CONTENT_DOMAIN: '',
+			YOAL_PROFILE: '',
 		},
 		stdin: 'ignore',
 		stdout: 'pipe',
@@ -88,7 +88,7 @@ async function cli(...args: string[]) {
 	return { code, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
 }
 
-describe('skif db replica', () => {
+describe('yoal db replica', () => {
 	test('list shows status, lag and the promotion history', async () => {
 		serve({
 			'GET /api/v1/databases/main/replicas': {

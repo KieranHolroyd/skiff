@@ -1,5 +1,5 @@
 /**
- * Skiff's CSRF / Origin policy (DESIGN §5, D19: strict Origin checks on every mutation).
+ * Yoal's CSRF / Origin policy (DESIGN §5, D19: strict Origin checks on every mutation).
  *
  * SvelteKit's built-in check is disabled (vite.config.ts `csrf.trustedOrigins: ['*']`) because it
  * runs before hooks, applies globally, and would block OAuth endpoints that are cross-origin by
@@ -21,7 +21,7 @@ const COOKIELESS_ENDPOINTS = new Set([
 	'/api/v1/cli/token',
 	'/api/domains/ask',
 	'/mcp',
-	'/_skiff/site-login',
+	'/_yoal/site-login',
 ]);
 
 /**

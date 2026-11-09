@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-// A minimal PHP app for Skiff. `/data` style state lives in $STATE_DIRECTORY (writable, private to
+// A minimal PHP app for Yoal. `/data` style state lives in $STATE_DIRECTORY (writable, private to
 // this app, kept across restarts and idle stops).
 $state = getenv('STATE_DIRECTORY') ?: sys_get_temp_dir();
 $counterFile = $state . '/hits';

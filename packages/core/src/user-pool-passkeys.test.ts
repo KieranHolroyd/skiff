@@ -2,8 +2,8 @@ import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import type { Principal } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import type { Principal } from '@yoal/contracts';
 import { ConflictError, RateLimitError, UnauthorizedError } from './errors.ts';
 import { createCore, type Core } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
@@ -32,7 +32,7 @@ import {
  * authenticator or the browser.
  */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-user-pool-passkeys-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-user-pool-passkeys-'));
 const opened = createDb({ path: ':memory:' });
 opened.sqlite.exec(readFileSync(new URL('../../db/migrations/0097_user_pool_engine.sql', import.meta.url), 'utf8'));
 opened.sqlite.exec(readFileSync(new URL('../../db/migrations/0101_user_pool_passkeys.sql', import.meta.url), 'utf8'));

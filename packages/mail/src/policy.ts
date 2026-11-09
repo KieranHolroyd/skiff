@@ -5,7 +5,7 @@ import {
 	policyOrgFromState,
 	type EmailAuthorization,
 	type MailState,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 
 /**
  * The pushed mail state, indexed, plus the local counters SMTP submission needs (EMAIL.md §5.3).

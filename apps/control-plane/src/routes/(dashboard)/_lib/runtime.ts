@@ -8,7 +8,7 @@ import type { Component } from 'svelte';
  * Display vocabulary for the four runtime tiers (D1 as amended by D110). Every list, badge and
  * header that names a runtime reads it from here so a fifth tier is one edit, not a hunt.
  *
- * Skiff already uses "worker" for a no-ingress app (D89) and a non-edge node, so the tier is
+ * Yoal already uses "worker" for a no-ingress app (D89) and a non-edge node, so the tier is
  * always "Function" in the UI; "Workers" appears only when it means Cloudflare's programming model.
  */
 export type RuntimeTier = 'static' | 'process' | 'container' | 'function';

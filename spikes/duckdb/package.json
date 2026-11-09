@@ -1,5 +1,5 @@
 {
-  "name": "@skiff-spike/duckdb",
+  "name": "@yoal-spike/duckdb",
   "private": true,
   "type": "module",
   "scripts": { "spike": "bun run spike.ts" },

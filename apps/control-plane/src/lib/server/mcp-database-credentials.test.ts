@@ -3,16 +3,16 @@ import { principalStub } from './principal-stub.test-support';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_FEATURES } from '@skiff/contracts';
-import { LocalObjectStore, buildPrincipal, createCore, type Core } from '@skiff/core';
-import { createDb } from '@skiff/db';
+import { DEFAULT_FEATURES } from '@yoal/contracts';
+import { LocalObjectStore, buildPrincipal, createCore, type Core } from '@yoal/core';
+import { createDb } from '@yoal/db';
 
 /**
  * Named database credential tools (docs/DATABASES.md §16) against a real core. They carry metadata
  * only: no password ever comes back over MCP, matching D58.
  */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-mcp-db-credentials-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-mcp-db-credentials-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 const realCore: Core = createCore({
@@ -36,7 +36,7 @@ mock.module('./core', () => ({ core: realCore }));
 mock.module('./config', () => ({ platformOrigin: 'https://control.test', authSecret: 'test-secret' }));
 mock.module('./principal', () => principalStub({ principalFromMcp: () => null }));
 
-const { skiffToolDefinitions } = await import('./mcp');
+const { yoalToolDefinitions } = await import('./mcp');
 const { assistantTools } = await import('./assistant/tools');
 
 afterAll(() => {
@@ -64,7 +64,7 @@ describe('database credential MCP tools', () => {
 	});
 
 	test('are registered with the right annotations and confirmation policy', () => {
-		const definitions = new Map(skiffToolDefinitions(owner).map((entry) => [entry.name, entry]));
+		const definitions = new Map(yoalToolDefinitions(owner).map((entry) => [entry.name, entry]));
 		expect(definitions.get('list_database_credentials')?.config.annotations?.readOnlyHint).toBe(true);
 		expect(definitions.get('create_database_credential')?.config.annotations?.destructiveHint).toBe(false);
 		expect(definitions.get('rotate_database_credential')?.config.annotations?.destructiveHint).toBe(false);

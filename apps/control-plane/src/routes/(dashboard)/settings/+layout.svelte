@@ -15,7 +15,7 @@
 		target="page.settings"
 		eyebrow={data.org.name}
 		title="Settings"
-		description="You, the organisation you are signed in to, and the Skiff platform it runs on."
+		description="You, the organisation you are signed in to, and the Yoal platform it runs on."
 	>
 		<span class="flex items-center gap-2 text-sm text-muted-foreground">
 			Signed in as <span class="font-medium text-foreground">{data.user.name}</span>

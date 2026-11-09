@@ -5,7 +5,7 @@ import type {
 	OperationItemView,
 	OperationView,
 	PruneCategory
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 
 /**
  * Browser helpers for the operations REST + SSE endpoints (docs/OPERATIONS.md §6.1, §2.5).

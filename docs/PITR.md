@@ -1,6 +1,6 @@
 # Point-in-time recovery (PITR)
 
-Status: **implemented end to end behind `SKIFF_FEATURE_PITR`, on by default, not yet proven on
+Status: **implemented end to end behind `YOAL_FEATURE_PITR`, on by default, not yet proven on
 Linux.** It does nothing until the pgBackRest repository is configured; the restore drill below has
 not yet passed on a Debian 13 node with Podman.
 Logical dumps and restore-to-new remain the supported path ([DATABASES.md](./DATABASES.md) §8);
@@ -27,7 +27,7 @@ See [What still needs a live check](#what-still-needs-a-live-check).
 ```text
              control plane                          node (agent + helper)
   ┌────────────────────────────────┐      ┌───────────────────────────────────────────────┐
-  │ database_pitr (policy, window) │      │ skiff-workload-db_x  (skiff-postgres-pitr:18-1) │
+  │ database_pitr (policy, window) │      │ yoal-workload-db_x  (yoal-postgres-pitr:18-1) │
   │ database_pitr_tasks            │ ───▶ │   archive_command → pgbackrest archive-push ──┼──▶ S3 repo
   │ tickPitr: full/diff schedule,  │ task │   RunInit=true, /etc/pgbackrest ← config dir  │
   │   status every 15 min          │      │ podman exec: stanza-create, backup, info, psql│
@@ -38,7 +38,7 @@ See [What still needs a live check](#what-still-needs-a-live-check).
 
 ### Image
 
-`ghcr.io/kieranholroyd/skiff-postgres-pitr:<major>-<revision>` (`18-1` today), built from
+`ghcr.io/kieranholroyd/yoal-postgres-pitr:<major>-<revision>` (`18-1` today), built from
 `docker/postgres-pitr/Dockerfile`: the pinned pgvector Postgres 18 image (D124, by digest) plus the
 PGDG `pgbackrest` package at an exact version, with `/usr/local/bin/pgbackrest` symlinked. Nothing
 else changes (entrypoint, uid 70 via nss_wrapper, extensions), so switching a database between the
@@ -64,7 +64,7 @@ unit gets, in addition to the normal Postgres profile:
 
 - `Image=` the PITR image;
 - `-c wal_level=replica -c archive_mode=on -c archive_timeout=60 -c archive_command=/usr/local/bin/pgbackrest --config=/etc/pgbackrest/pgbackrest.conf --stanza=<stanza> archive-push %p`;
-- `Volume=/run/skiff-workloads/<id>/pgbackrest:/etc/pgbackrest:ro,z`: the **directory** is
+- `Volume=/run/yoal-workloads/<id>/pgbackrest:/etc/pgbackrest:ro,z`: the **directory** is
   mounted, so a rewritten config reaches the running container without a restart, and the label is
   shared (`z`) because the restore's one-shot containers mount the same directory while the
   database runs;
@@ -161,7 +161,7 @@ before the task and never reach the desired-state cache. Status results carry th
 | Surface | Status | Enable / disable | Base backup | Restore to a time |
 |---|---|---|---|---|
 | REST | `GET /api/v1/databases/:name/pitr` | `PATCH …/pitr {enabled}` | `POST …/pitr/backups {type}` | `POST …/pitr/restore {name, targetTime}` |
-| CLI | `skif db pitr <name>` | `--enable` / `--disable [--yes]` | `skif db pitr-backup <name> [--type]` | `skif db restore-to <name> --time <ISO> --as <new>` |
+| CLI | `yoal db pitr <name>` | `--enable` / `--disable [--yes]` | `yoal db pitr-backup <name> [--type]` | `yoal db restore-to <name> --time <ISO> --as <new>` |
 | MCP | `get_database_pitr` | `set_database_pitr` | `backup_database_pitr` | `restore_database_to_time` |
 | Dashboard | Database → Backups → **Point-in-time recovery** panel (turn on/off, base backup, restore dialog with a local-time picker) | | | |
 
@@ -178,15 +178,15 @@ Do these in order; do not skip the drill.
    `packages/contracts/src/database.ts` and `apps/helper/src/validate.ts`. Ship that release to the
    control plane and every node.
 2. **Configure the repository** on the control plane (a dedicated bucket or prefix per install):
-   `SKIFF_PITR_REPO_BUCKET`, `SKIFF_PITR_ACCESS_KEY_ID`, `SKIFF_PITR_SECRET_ACCESS_KEY`, and as needed
-   `SKIFF_PITR_REPO_ENDPOINT` (https only; AWS S3 when unset), `SKIFF_PITR_REPO_REGION`
-   (`us-east-1`), `SKIFF_PITR_REPO_PREFIX` (`skiff/pitr`), `SKIFF_PITR_REPO_FORCE_PATH_STYLE`
+   `YOAL_PITR_REPO_BUCKET`, `YOAL_PITR_ACCESS_KEY_ID`, `YOAL_PITR_SECRET_ACCESS_KEY`, and as needed
+   `YOAL_PITR_REPO_ENDPOINT` (https only; AWS S3 when unset), `YOAL_PITR_REPO_REGION`
+   (`us-east-1`), `YOAL_PITR_REPO_PREFIX` (`yoal/pitr`), `YOAL_PITR_REPO_FORCE_PATH_STYLE`
    (`true`; RustFS/MinIO/Garage need it). An incomplete set fails closed.
-3. **Turn the flag on** for a test install: `SKIFF_FEATURE_PITR=on`, restart the control plane.
+3. **Turn the flag on** for a test install: `YOAL_FEATURE_PITR=on`, restart the control plane.
 4. **Run the drill** on a Debian 13 node (below) against a throwaway PostgreSQL 18 database. It must
    print `PASS`.
-5. Only then enable PITR per database: `skif db pitr <name> --enable` (or the dashboard). Watch
-   `skif db pitr <name>` until the first base backup and the recoverable window appear.
+5. Only then enable PITR per database: `yoal db pitr <name> --enable` (or the dashboard). Watch
+   `yoal db pitr <name>` until the first base backup and the recoverable window appear.
 
 ## RPO / RTO
 
@@ -204,16 +204,16 @@ Do these in order; do not skip the drill.
 `database:delete` to clean up):
 
 ```sh
-SKIFF_CONTROL_URL=https://control.example.com SKIFF_API_TOKEN=… \
-SKIFF_PITR_DRILL_DATABASE=pitr-test ./scripts/pitr-drill.sh
+YOAL_CONTROL_URL=https://control.example.com YOAL_API_TOKEN=… \
+YOAL_PITR_DRILL_DATABASE=pitr-test ./scripts/pitr-drill.sh
 ```
 
 It checks that PITR is on with a window and a healthy archive, writes a marker row, records the
 time, writes a second marker, waits for the archive, restores to the recorded time into a new
 database, waits for the verified restore, and requires the first marker present and the second
-absent. It prints the RTO, moves the copy to the trash (`SKIFF_PITR_DRILL_KEEP=1` keeps it) and
-exits non-zero on any failure. `SKIFF_PITR_DRILL_TARGET_TIME` restores to a given time instead, with
-`SKIFF_PITR_CANARY_SQL` as the only check. A scheduled monthly drill is not wired yet.
+absent. It prints the RTO, moves the copy to the trash (`YOAL_PITR_DRILL_KEEP=1` keeps it) and
+exits non-zero on any failure. `YOAL_PITR_DRILL_TARGET_TIME` restores to a given time instead, with
+`YOAL_PITR_CANARY_SQL` as the only check. A scheduled monthly drill is not wired yet.
 
 ## What still needs a live check
 
@@ -243,7 +243,7 @@ first six):
   that has not been applied yet are not supported.
 - **No alerting** for `archiveStatus: failing` or a missed base backup; the state and error are
   recorded and shown, not paged.
-- **The restored cluster carries the source's other roles** (named credentials, `skiff_monitor`)
+- **The restored cluster carries the source's other roles** (named credentials, `yoal_monitor`)
   with the source's passwords. Only the owner is renamed and re-keyed. Drop or re-key named roles
   on the copy before handing it out; the copy's metrics need its monitor role re-keyed (a live
   check: whether the agent's monitor bootstrap re-runs after the restore).

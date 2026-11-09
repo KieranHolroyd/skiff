@@ -1,4 +1,4 @@
-import type { BuilderSpec } from '@skiff/contracts';
+import type { BuilderSpec } from '@yoal/contracts';
 
 /**
  * "Edit as SQL": the builder's SQL (as the server ran it) rewritten to run on its own as a SQL

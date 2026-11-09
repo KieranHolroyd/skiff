@@ -15,7 +15,7 @@ const platformVersion = (() => {
 })();
 
 export default defineConfig({
-	define: { __SKIFF_VERSION__: JSON.stringify(platformVersion) },
+	define: { __YOAL_VERSION__: JSON.stringify(platformVersion) },
 	plugins: [
 		tailwindcss(),
 		sveltekit({

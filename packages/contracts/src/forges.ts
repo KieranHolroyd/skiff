@@ -3,7 +3,7 @@ import * as z from 'zod';
 /**
  * Git providers other than GitHub's App: GitLab, Gitea and Forgejo (docs/FORGES.md, D173–D178).
  *
- * An organisation connects a forge with its base URL and an API token. Skiff then does with that
+ * An organisation connects a forge with its base URL and an API token. Yoal then does with that
  * token what the GitHub App does on GitHub: lists repositories for pickers, creates the webhooks
  * itself, clones private repositories with the narrowest credential the forge offers, posts commit
  * statuses (and GitLab deployments), and reads files for Deploy from Git.
@@ -34,18 +34,18 @@ export const FORGE_PRESETS: Record<ForgeKind, { baseUrl: string; label: string }
 /** What each token needs, shown beside the form. */
 export const FORGE_TOKEN_HELP: Record<ForgeKind, { api: string; clone: string; tokenPage: string }> = {
 	gitlab: {
-		api: 'A group or project access token (role Maintainer, scope api) or a personal access token with the api scope. Maintainer lets Skiff mint per-repository deploy tokens for clones.',
-		clone: 'Optional. A token with read_repository only, used for clones when Skiff cannot mint a deploy token.',
+		api: 'A group or project access token (role Maintainer, scope api) or a personal access token with the api scope. Maintainer lets Yoal mint per-repository deploy tokens for clones.',
+		clone: 'Optional. A token with read_repository only, used for clones when Yoal cannot mint a deploy token.',
 		tokenPage: '/-/user_settings/personal_access_tokens',
 	},
 	gitea: {
 		api: 'An access token with write:repository and read:user (add write:organization to create organisation webhooks).',
-		clone: 'Optional. A token with read:repository only, ideally of a bot account that can read just the repositories Skiff builds. Build nodes receive it.',
+		clone: 'Optional. A token with read:repository only, ideally of a bot account that can read just the repositories Yoal builds. Build nodes receive it.',
 		tokenPage: '/user/settings/applications',
 	},
 	forgejo: {
 		api: 'An access token with write:repository and read:user (add write:organization to create organisation webhooks).',
-		clone: 'Optional. A token with read:repository only, ideally of a bot account that can read just the repositories Skiff builds. Build nodes receive it.',
+		clone: 'Optional. A token with read:repository only, ideally of a bot account that can read just the repositories Yoal builds. Build nodes receive it.',
 		tokenPage: '/user/settings/applications',
 	},
 };
@@ -251,7 +251,7 @@ export interface GitProviderLink {
 	connectionId: string | null;
 	/** Name of the connection or `GitHub App`. */
 	via: string | null;
-	/** Events arrive without a hand-made webhook (App installation or Skiff-created hook). */
+	/** Events arrive without a hand-made webhook (App installation or Yoal-created hook). */
 	delivered: boolean;
 }
 

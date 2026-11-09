@@ -6,18 +6,18 @@ import { authenticatedClient } from './common.ts';
 import { asRecord, parseScope, requestJson, stringValue } from './iam.ts';
 
 /**
- * Skiff Access policies (docs/IAM.md I25, §11.1; docs/API.md §Access policies). A policy is an
+ * Yoal Access policies (docs/IAM.md I25, §11.1; docs/API.md §Access policies). A policy is an
  * ordered allow/deny list; assigning it turns the `access` protection mode on for a project scope.
  * `assign` uses the existing `POST /projects/:slug/access` route with `mode: "access"`. Every check
  * lives on the server.
  */
 
-const usage = `Usage: skif access-policy <command> [options]
+const usage = `Usage: yoal access-policy <command> [options]
 
 Commands:
   list [list]                  Policies you can read (--project to narrow by project id)
   create <name>                Create a policy (--scope, --description, --rule …)
-  assign <name|id>             Turn Skiff Access on for a project scope (--project, --scope)
+  assign <name|id>             Turn Yoal Access on for a project scope (--project, --scope)
 
 Create options:
       --scope <where>          org, project:<id> or environment:<project>/<id> (required)
@@ -43,13 +43,13 @@ Options:
   -h, --help                   Show this help
 
 Assigning writes \`access\` to the scope's protection mode and points it at the policy. To turn it
-off again, set that scope back to public, password or platform with \`skif projects\` or the dashboard.
+off again, set that scope back to public, password or platform with \`yoal projects\` or the dashboard.
 Creating an environment-scoped policy needs the environment's project id.
 
 Examples:
-  skif access-policy create staff-only --scope org --rule "allow group grp_eng"
-  skif access-policy create office --scope project:prj_abc --rule "allow cidr 10.0.0.0/8"
-  skif access-policy assign staff-only --project api --scope production`;
+  yoal access-policy create staff-only --scope org --rule "allow group grp_eng"
+  yoal access-policy create office --scope project:prj_abc --rule "allow cidr 10.0.0.0/8"
+  yoal access-policy assign staff-only --project api --scope production`;
 
 export interface AccessPolicyRuleView {
 	idx: number;
@@ -114,7 +114,7 @@ async function listPolicies(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif access-policy [list] [--project <id>] [--json]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal access-policy [list] [--project <id>] [--json]');
 	const client = await authenticatedClient();
 	const policies = await fetchPolicies(client, args.string('project'));
 	if (args.boolean('json')) {
@@ -122,7 +122,7 @@ async function listPolicies(argv: string[]): Promise<void> {
 		return;
 	}
 	if (policies.length === 0) {
-		console.log('No access policies yet. Create one with `skif access-policy create <name> --scope org`.');
+		console.log('No access policies yet. Create one with `yoal access-policy create <name> --scope org`.');
 		return;
 	}
 	console.log(policyTable(policies));
@@ -134,7 +134,7 @@ async function createPolicy(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif access-policy create <name> --scope <where> [--description <text>] [--rule …]');
+	rejectExtraPositionals(args, 1, 'Usage: yoal access-policy create <name> --scope <where> [--description <text>] [--rule …]');
 	const name = requirePositional(args, 0, `policy name.\n\n${usage}`);
 	const scopeValue = args.string('scope');
 	if (!scopeValue) throw new UsageError('Say where with --scope org, project:<id> or environment:<project>/<id>.');
@@ -163,7 +163,7 @@ async function createPolicy(argv: string[]): Promise<void> {
 	console.log(
 		`Created access policy "${policy.name}" (${policy.id}) at ${formatPolicyScope(policy.scope)} with ${policy.rules.length} rule${policy.rules.length === 1 ? '' : 's'}.`,
 	);
-	console.log(`Assign it with: skif access-policy assign ${policy.name} --project <slug>`);
+	console.log(`Assign it with: yoal access-policy assign ${policy.name} --project <slug>`);
 }
 
 async function assignPolicy(argv: string[]): Promise<void> {
@@ -172,7 +172,7 @@ async function assignPolicy(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif access-policy assign <name|id> --project <slug> [--scope production|previews]');
+	rejectExtraPositionals(args, 1, 'Usage: yoal access-policy assign <name|id> --project <slug> [--scope production|previews]');
 	const value = requirePositional(args, 0, `policy name or id.\n\n${usage}`);
 	const project = args.string('project');
 	if (!project) throw new UsageError('Name the project with --project <slug>.');
@@ -214,7 +214,7 @@ export function resolvePolicy(policies: AccessPolicyView[], value: string): Acce
 	const policy =
 		policies.find((entry) => entry.id === value) ?? policies.find((entry) => entry.name === value);
 	if (!policy)
-		throw new UsageError(`Unknown access policy "${value}". Run \`skif access-policy\` to see them.`);
+		throw new UsageError(`Unknown access policy "${value}". Run \`yoal access-policy\` to see them.`);
 	return policy;
 }
 

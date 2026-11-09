@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { crc32, inflateRawSync } from 'node:zlib';
-import { limits, type DesiredState, type ReleaseSpec } from '@skiff/contracts';
+import { limits, type DesiredState, type ReleaseSpec } from '@yoal/contracts';
 import { isProductionRoute } from './caddy-config.ts';
 
 /**

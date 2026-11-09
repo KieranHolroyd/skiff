@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { roles, systemPermissions } from '@skiff/contracts';
+import { roles, systemPermissions } from '@yoal/contracts';
 import { buildSystemPrincipal } from './system.ts';
 
 describe('buildSystemPrincipal', () => {

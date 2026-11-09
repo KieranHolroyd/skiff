@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { functionBindingTypes } from '@skiff/contracts';
+import { functionBindingTypes } from '@yoal/contracts';
 import {
 	BINDING_INFO,
 	bindingAvailable,

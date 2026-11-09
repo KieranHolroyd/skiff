@@ -4,11 +4,11 @@ import { volumeNameSchema, type VolumeKind } from './volume.ts';
 /**
  * Disks and default storage (docs/STORAGE.md, D169).
  *
- * A **disk** is one mounted filesystem on one node that Skiff may store data on: a local disk or
+ * A **disk** is one mounted filesystem on one node that Yoal may store data on: a local disk or
  * partition, a device the OS already assembled (LVM, mdadm, ZFS, LUKS), or a mounted network
  * share. Each disk is `fast` or `bulk`. Every node also has its **system disk**, which is never a
  * row. A new service goes on a **storage target** — `system`, `fast`, `bulk` or one disk by name —
- * preselected from the kind's default in Settings → Storage. Skiff never picks another tier on its
+ * preselected from the kind's default in Settings → Storage. Yoal never picks another tier on its
  * own, and nothing already placed moves.
  */
 
@@ -134,8 +134,8 @@ export interface DiskView {
 	tier: StorageTier;
 	/** The operator chose the tier; otherwise it follows the hardware. */
 	tierSet: boolean;
-	/** Skiff mounts this filesystem itself (at /mnt/skiff-disks/<name>). */
-	mountedBySkiff: boolean;
+	/** Yoal mounts this filesystem itself (at /mnt/yoal-disks/<name>). */
+	mountedByYoal: boolean;
 	/** The disk came from a network share mount; remove it by unmounting the share. */
 	share: string | null;
 	status: DiskStatus;
@@ -151,11 +151,11 @@ export interface DiskView {
 }
 
 /**
- * Something on a node Skiff could use as a disk (`usable`), or a device the node reports that it
+ * Something on a node Yoal could use as a disk (`usable`), or a device the node reports that it
  * cannot (`reason`). Device names are display only; adding goes by `key`.
  */
 export interface DiskCandidateView {
-	/** `mount:<source key>` (already mounted) or `uuid:<filesystem UUID>` (Skiff mounts it). */
+	/** `mount:<source key>` (already mounted) or `uuid:<filesystem UUID>` (Yoal mounts it). */
 	key: string;
 	usable: boolean;
 	/** Why it cannot be used, when `usable` is false. */
@@ -169,7 +169,7 @@ export interface DiskCandidateView {
 	sizeBytes: number;
 	freeBytes: number | null;
 	remote: boolean;
-	/** Skiff will mount it (it is not mounted yet). */
+	/** Yoal will mount it (it is not mounted yet). */
 	needsMount: boolean;
 	suggestedName: string;
 	suggestedTier: StorageTier;

@@ -1,9 +1,9 @@
 <script lang="ts">
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
+	import DetailList from '#lib/components/yoal/DetailList.svelte';
 	import { resolve } from '$app/paths';
-	import type { NodeView } from '@skiff/core';
-	import type { NodeRole } from '@skiff/contracts';
-	import { NODE_STORAGE_DEFAULTS, compareSemver, parseSemver } from '@skiff/contracts';
+	import type { NodeView } from '@yoal/core';
+	import type { NodeRole } from '@yoal/contracts';
+	import { NODE_STORAGE_DEFAULTS, compareSemver, parseSemver } from '@yoal/contracts';
 	import { invalidateAll } from '$app/navigation';
 	import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
@@ -26,10 +26,10 @@
 	import { toast } from 'svelte-sonner';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import SecretDialog from '#lib/components/skiff/SecretDialog.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
-	import StatusDot from '#lib/components/skiff/StatusDot.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import SecretDialog from '#lib/components/yoal/SecretDialog.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
+	import StatusDot from '#lib/components/yoal/StatusDot.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
@@ -113,7 +113,7 @@
 		if (current && status.status === 'failed')
 			return {
 				tone: 'failed',
-				text: `Storage move failed: ${status.message ?? 'see journalctl -u skiff-storage'}`
+				text: `Storage move failed: ${status.message ?? 'see journalctl -u yoal-storage'}`
 			};
 		if (!current || status.status === 'pending')
 			return { tone: 'pending', text: status.message ?? 'Storage move in progress.' };
@@ -152,7 +152,7 @@
 		const current = data.denied ? undefined : data.nodes.find((item) => item.mode === 'edge');
 		askConfirm({
 			title: `Make ${node.name} the edge node?`,
-			description: `${node.name} takes over ingress and serves every static site${current ? `; ${current.name} becomes a worker and keeps the apps and databases already on it` : ''}. Skiff changes the roles only: if ${node.name} is a different machine, point DNS for the platform and content domains at it and give its agent the TLS settings an edge needs (docs/OPS.md).`,
+			description: `${node.name} takes over ingress and serves every static site${current ? `; ${current.name} becomes a worker and keeps the apps and databases already on it` : ''}. Yoal changes the roles only: if ${node.name} is a different machine, point DNS for the platform and content domains at it and give its agent the TLS settings an edge needs (docs/OPS.md).`,
 			confirmLabel: 'Make edge',
 			tone: 'danger',
 			typeToConfirm: node.name,
@@ -163,7 +163,7 @@
 
 	function removeNode(node: { id: string; name: string }) {
 		askConfirm({
-			title: `Remove ${node.name} from Skiff?`,
+			title: `Remove ${node.name} from Yoal?`,
 			description:
 				'Its token is revoked at once, its disks are dropped and any builds it claimed go back to the queue. Projects, workloads, databases, storage instances or app volumes still on it block the removal. Nothing on the machine is deleted; uninstall the agent there afterwards.',
 			confirmLabel: 'Remove node',
@@ -204,7 +204,7 @@
 	function updateAgent(node: NodeView, target: string) {
 		askConfirm({
 			title: `Update ${node.name} to ${target}?`,
-			description: `The node downloads the signed ${target} release from GitHub, checks its signature and checksum, replaces skiff-agent and skiff-helper, and restarts them. Sites and workloads keep running; the node shows offline for a few seconds while its agent restarts.`,
+			description: `The node downloads the signed ${target} release from GitHub, checks its signature and checksum, replaces yoal-agent and yoal-helper, and restarts them. Sites and workloads keep running; the node shows offline for a few seconds while its agent restarts.`,
 			confirmLabel: 'Update node',
 			action: '?/updateAgent',
 			fields: { nodeId: node.id }
@@ -228,7 +228,7 @@
 				: `Make ${node.name} a Builder?`,
 			description: node.canBuild
 				? 'Queued git builds wait for another Builder node. Existing deployments are unaffected.'
-				: 'This node will claim git builds one at a time. Builds run in a transient sandboxed unit with a 10-minute cap, so they need skiff-builder.service on the node.',
+				: 'This node will claim git builds one at a time. Builds run in a transient sandboxed unit with a 10-minute cap, so they need yoal-builder.service on the node.',
 			confirmLabel: node.canBuild ? 'Remove Builder role' : 'Make Builder',
 			tone: node.canBuild ? 'danger' : 'default',
 			action: '?/setBuilder',
@@ -243,7 +243,7 @@
 </script>
 
 <svelte:head>
-	<title>Nodes · Skiff</title>
+	<title>Nodes · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">
@@ -251,7 +251,7 @@
 		target="page.nodes"
 		eyebrow="Infrastructure"
 		title="Nodes"
-		description="Edge and worker machines running the Skiff agent. Agents pull desired state; the control plane never pushes. App workloads are admitted against each node's workload slice, and a Builder node runs git builds."
+		description="Edge and worker machines running the Yoal agent. Agents pull desired state; the control plane never pushes. App workloads are admitted against each node's workload slice, and a Builder node runs git builds."
 	>
 		{#if !data.denied}
 			<Button href={resolve('/(dashboard)/nodes/vpn')} variant="outline">
@@ -308,7 +308,7 @@
 									{node.name}
 									<Badge variant="secondary" class="capitalize">{node.mode}</Badge>
 									<Badge variant="outline" class="font-mono text-[11px]">{node.zone}</Badge>
-									{#if node.networkMode === 'skiff'}
+									{#if node.networkMode === 'yoal'}
 										<Badge variant="outline" class="font-mono text-[11px]">
 											{node.privateAddress ?? 'overlay'}
 										</Badge>
@@ -323,7 +323,7 @@
 								<Card.Description class="truncate font-mono text-xs" title={node.id}>
 									{node.id}
 								</Card.Description>
-								{#if node.networkMode === 'skiff' && node.wireguardStatus}
+								{#if node.networkMode === 'yoal' && node.wireguardStatus}
 									<p class="text-xs text-muted-foreground">
 										{node.wireguardStatus.peers.length} overlay peer
 										{node.wireguardStatus.peers.length === 1 ? '' : 's'}
@@ -413,7 +413,7 @@
 								{#if update.stale}
 									<TriangleAlertIcon class="mt-px size-3.5 shrink-0 text-warning" />
 									No answer from the node about {update.target} yet. Check
-									<code class="font-mono">journalctl -u skiff-agent -u skiff-helper</code> on it.
+									<code class="font-mono">journalctl -u yoal-agent -u yoal-helper</code> on it.
 								{:else}
 									<LoaderCircleIcon class="mt-px size-3.5 shrink-0 animate-spin" />
 									Updating to {update.target}: downloading and verifying the signed release, then
@@ -539,8 +539,8 @@
 				An agent is marked offline after 30 seconds without a heartbeat and alerts after {data.policies.nodeAlertMinutes}
 				{data.policies.nodeAlertMinutes === 1 ? 'minute' : 'minutes'} (Alerts → System alerts).
 				Draining stops new placements but keeps existing sites and workloads serving. App workloads
-				run in <code class="font-mono">skiff-workloads.slice</code>. Any node can be a Builder: its
-				<code class="font-mono">skiff-builder.service</code> claims one git build at a time and idles
+				run in <code class="font-mono">yoal-workloads.slice</code>. Any node can be a Builder: its
+				<code class="font-mono">yoal-builder.service</code> claims one git build at a time and idles
 				while the role is off.
 			</Alert.Description>
 		</Alert.Root>
@@ -560,9 +560,9 @@
 			<Field.Label>Network</Field.Label>
 			<div class="space-y-2">
 				<label class="flex items-start gap-2 text-sm">
-					<input type="radio" name="networkMode" value="skiff" checked class="mt-1 size-4 accent-brand" />
+					<input type="radio" name="networkMode" value="yoal" checked class="mt-1 size-4 accent-brand" />
 					<span>
-						<span class="font-medium">Skiff network (recommended)</span>
+						<span class="font-medium">Yoal network (recommended)</span>
 						<span class="block text-xs text-muted-foreground">
 							The node generates its key locally and dials out; no inbound ports, no IP planning.
 						</span>
@@ -581,7 +581,7 @@
 		</Field.Field>
 
 		<ol class="space-y-3 text-sm">
-			{#each ['Generate a join command. It works once and expires after one hour.', 'Run it on the new machine, where skiff-agent is installed. It registers the agent with this control plane.', 'The node appears on this page after its first heartbeat, usually within seconds.'] as step, i (i)}
+			{#each ['Generate a join command. It works once and expires after one hour.', 'Run it on the new machine, where yoal-agent is installed. It registers the agent with this control plane.', 'The node appears on this page after its first heartbeat, usually within seconds.'] as step, i (i)}
 				<li class="flex gap-3">
 					<span
 						class="grid size-6 shrink-0 place-items-center rounded-full bg-muted font-mono text-xs font-medium"
@@ -693,7 +693,7 @@
 						class="font-mono text-sm"
 					/>
 					<Field.Description>
-						One key=value per line. Placement constraints can match them; skiff.io/ is reserved.
+						One key=value per line. Placement constraints can match them; yoal.io/ is reserved.
 					</Field.Description>
 				</Field.Field>
 				<Field.Field>
@@ -725,7 +725,7 @@
 						bind:value={editSliceMemory}
 					/>
 					<Field.Description>
-						MemoryMax for <code class="font-mono">skiff-workloads.slice</code> and the admission
+						MemoryMax for <code class="font-mono">yoal-workloads.slice</code> and the admission
 						budget. {editReserved} MB is reserved by workloads now, so you cannot go below that.
 					</Field.Description>
 				</Field.Field>
@@ -789,9 +789,9 @@
 				</div>
 				{#if storageChanging}
 					<p class="text-xs text-muted-foreground">
-						Every parent directory must be reachable by the <code class="font-mono">skiff</code>
+						Every parent directory must be reachable by the <code class="font-mono">yoal</code>
 						user. A move waits for any running build to finish. Needs
-						<code class="font-mono">skiff-storage.path</code> on the node.
+						<code class="font-mono">yoal-storage.path</code> on the node.
 					</p>
 				{/if}
 			</Field.Set>
@@ -828,7 +828,7 @@
 	<SecretDialog
 		bind:open={tokenOpen}
 		title="New token{rotatedNode ? ` for ${rotatedNode.name}` : ''}"
-		description="Set SKIFF_NODE_TOKEN in /etc/skiff/agent.env on the node, then restart the agent."
+		description="Set YOAL_NODE_TOKEN in /etc/yoal/agent.env on the node, then restart the agent."
 		value={result.rotatedToken}
 	/>
 {/if}

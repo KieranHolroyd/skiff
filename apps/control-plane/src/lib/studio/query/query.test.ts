@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { Column, StudioEvent, StudioInfo } from '@skiff/studio/protocol';
+import type { Column, StudioEvent, StudioInfo } from '@yoal/studio/protocol';
 import { cellText, plainCell, toCsv, toJson, uniqueNames } from './export.ts';
 import { applyEvent, emptyRun, errorTitle, resultTitle, rowCap, rowChoices } from './run-state.ts';
 

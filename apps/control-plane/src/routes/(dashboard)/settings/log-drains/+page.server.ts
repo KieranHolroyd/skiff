@@ -6,7 +6,7 @@ import {
 	logDrainSources,
 	type LogDrainCreate,
 	type LogDrainUpdate
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -57,7 +57,7 @@ function headers(text: string): Record<string, string> {
 }
 
 const secretNote =
-	'Copy the signing secret now: it is not shown again. Verify X-Skiff-Signature with it.';
+	'Copy the signing secret now: it is not shown again. Verify X-Yoal-Signature with it.';
 
 export const actions: Actions = {
 	create: async ({ request, locals }) => {

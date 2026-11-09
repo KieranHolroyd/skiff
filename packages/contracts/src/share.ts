@@ -146,7 +146,7 @@ export const shareMountStatuses = ['pending', 'mounted', 'failed', 'unmounting']
 export type ShareMountStatus = (typeof shareMountStatuses)[number];
 
 /** Node directory every share mounts under; the disk inventory reports it (docs/STORAGE.md §3). */
-export const SHARE_MOUNT_ROOT = '/mnt/skiff-shares';
+export const SHARE_MOUNT_ROOT = '/mnt/yoal-shares';
 
 export function shareMountPath(shareName: string): string {
 	return `${SHARE_MOUNT_ROOT}/${shareName}`;

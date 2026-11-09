@@ -7,7 +7,7 @@ const flags: FlagSpec = {
 	help: { type: 'boolean', short: 'h' },
 };
 
-const usage = 'Usage: skif promote <project> <deploymentId> [--json]\n\nMove production to an existing deployment.';
+const usage = 'Usage: yoal promote <project> <deploymentId> [--json]\n\nMove production to an existing deployment.';
 
 export async function promoteCommand(argv: string[]): Promise<void> {
 	const args = parseArgs(argv, flags);

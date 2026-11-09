@@ -1,5 +1,5 @@
 import { fail } from '@sveltejs/kit';
-import { platformRoleDescriptions, platformRoleIds } from '@skiff/contracts';
+import { platformRoleDescriptions, platformRoleIds } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { failStatus, formOptionalString, formString, toFormFailure } from '../../_lib/errors.js';
 import type { Actions, PageServerLoad } from './$types';

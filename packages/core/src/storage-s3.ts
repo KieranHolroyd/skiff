@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { AwsClient } from 'aws4fetch';
-import { STORAGE_REGION, type StorageObjectList } from '@skiff/contracts';
+import { STORAGE_REGION, type StorageObjectList } from '@yoal/contracts';
 import { CoreError, NotFoundError } from './errors.ts';
 
 /**

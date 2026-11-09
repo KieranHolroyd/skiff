@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { BrokerMetricPoint } from '@skiff/contracts';
+import type { BrokerMetricPoint } from '@yoal/contracts';
 import { brokerChart, brokerTotals, streamAgeSeconds } from './broker-series.ts';
 
 const MINUTE = 60_000;

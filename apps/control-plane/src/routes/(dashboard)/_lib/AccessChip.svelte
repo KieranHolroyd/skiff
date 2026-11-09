@@ -13,7 +13,7 @@
 			: mode === 'platform'
 				? { icon: ShieldCheckIcon, label: 'Platform login', tone: 'text-info' }
 				: mode === 'access'
-					? { icon: ShieldCheckIcon, label: 'Skiff Access', tone: 'text-info' }
+					? { icon: ShieldCheckIcon, label: 'Yoal Access', tone: 'text-info' }
 					: { icon: GlobeIcon, label: 'Public', tone: 'text-success' }
 	);
 </script>

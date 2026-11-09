@@ -3,8 +3,8 @@ import { createHash, createHmac } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import type { Principal, UserPoolTotpEnrolment } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import type { Principal, UserPoolTotpEnrolment } from '@yoal/contracts';
 import { createCore, type Core } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import { buildPrincipal } from './orgs.ts';
@@ -20,7 +20,7 @@ import { userPoolSigningPurpose } from './user-pools.ts';
  * are applied from their files because the checked-in bundle is regenerated separately.
  */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-user-pool-mfa-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-user-pool-mfa-'));
 const opened = createDb({ path: ':memory:' });
 for (const migration of [
 	'0097_user_pool_engine.sql',

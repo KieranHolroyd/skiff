@@ -6,11 +6,11 @@ import { asRecord, requestJson, stringValue } from './iam.ts';
 
 /**
  * The active organisation (docs/IAM.md I5, §8.1). The choice lives on the dashboard session, so
- * only a browser session can switch; a CLI key is already bound to one org. `skif org switch`
+ * only a browser session can switch; a CLI key is already bound to one org. `yoal org switch`
  * calls `/api/v1/org/switch` with the target id.
  */
 
-const usage = `Usage: skif org <command> [options]
+const usage = `Usage: yoal org <command> [options]
 
 Commands:
   switch <org-id>              Make that organisation the active one for this session
@@ -23,7 +23,7 @@ A key is bound to the org it was minted in and cannot switch. The dashboard's or
 the same endpoint, and the choice is remembered for the next sign-in.
 
 Examples:
-  skif org switch org_abc123`;
+  yoal org switch org_abc123`;
 
 const baseFlags: FlagSpec = {
 	json: { type: 'boolean' },
@@ -52,7 +52,7 @@ async function switchOrg(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif org switch <org-id>');
+	rejectExtraPositionals(args, 1, 'Usage: yoal org switch <org-id>');
 	const organizationId = requirePositional(args, 0, `organisation id.\n\n${usage}`);
 	const client = await authenticatedClient();
 	const raw = await requestJson(client, 'POST', '/api/v1/org/switch', { organizationId });

@@ -6,10 +6,10 @@
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import TrashIcon from '@lucide/svelte/icons/trash';
-	import type { DatabaseView } from '@skiff/contracts';
+	import type { DatabaseView } from '@yoal/contracts';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
@@ -57,7 +57,7 @@
 	function rotate() {
 		askConfirm({
 			title: 'Rotate the owner password?',
-			description: `The node changes the ${db.engineLabel} owner's password and verifies it before Skiff swaps the stored secret. Attached apps restart with the new value; a failed rotation leaves the old one working.`,
+			description: `The node changes the ${db.engineLabel} owner's password and verifies it before Yoal swaps the stored secret. Attached apps restart with the new value; a failed rotation leaves the old one working.`,
 			confirmLabel: 'Rotate password',
 			tone: 'danger',
 			action: act('rotate'),

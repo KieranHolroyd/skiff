@@ -1,4 +1,4 @@
-import type { DatabasePromotionChoice, DatabaseReplica } from '@skiff/contracts';
+import type { DatabasePromotionChoice, DatabaseReplica } from '@yoal/contracts';
 
 /**
  * Promotion choice for a managed database (docs/CLUSTERING.md §9.3, C7).

@@ -12,7 +12,7 @@ manual promote and switchover are phase C7, and automatic failover is C8 (§9).
 
 ## P2.2 Database branching/clone as a resource
 
-**Why:** Neon's signature; preview data needs it. **Shape:** `skiff db branch <source> --from
+**Why:** Neon's signature; preview data needs it. **Shape:** `yoal db branch <source> --from
 <backup|timestamp>` creates a new instance or an in-instance clone; schema-only by default, data
 opt-in; TTL; delete. **Reality check:** true copy-on-write needs ZFS/btrfs; on ext4 use dump/restore
 or `pg_basebackup`. **Depends on:** 01, 12. **Effort:** M–L.
@@ -46,7 +46,7 @@ reports. **Depends on:** 01, 04, 20. **Effort:** M.
 
 ## P2.7 Custom bucket domains and static site from a bucket
 
-**Why:** Vercel/Netlify/Cloudflare make a bucket a site; Skiff already serves static releases.
+**Why:** Vercel/Netlify/Cloudflare make a bucket a site; Yoal already serves static releases.
 **Shape:** map a verified custom domain to a bucket, index/error documents, cache headers, optional
 SPA fallback; only for public-read buckets; preserve `Host` for SigV4 or use a separate read-only
 route. **Depends on:** 02, 15. **Effort:** M.

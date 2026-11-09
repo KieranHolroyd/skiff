@@ -8,14 +8,14 @@
 	import RocketIcon from '@lucide/svelte/icons/rocket';
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
-	import { EMAIL_SANDBOX_ADDRESS_LIMITS, EMAIL_SANDBOX_LIMITS } from '@skiff/contracts';
+	import { EMAIL_SANDBOX_ADDRESS_LIMITS, EMAIL_SANDBOX_LIMITS } from '@yoal/contracts';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import DataTable, { type DataColumn } from '#lib/components/skiff/DataTable.svelte';
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import DataTable, { type DataColumn } from '#lib/components/yoal/DataTable.svelte';
+	import DetailList from '#lib/components/yoal/DetailList.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
@@ -89,7 +89,7 @@
 </script>
 
 <svelte:head>
-	<title>Sandbox · Email · Skiff</title>
+	<title>Sandbox · Email · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">
@@ -234,7 +234,7 @@
 		bind:open={addOpen}
 		icon={MailPlusIcon}
 		title="Add a sandbox recipient"
-		description="Skiff emails the address a link. Mail can go to it once its owner confirms."
+		description="Yoal emails the address a link. Mail can go to it once its owner confirms."
 		action="?/add"
 		submitLabel="Send link"
 	>

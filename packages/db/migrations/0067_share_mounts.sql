@@ -1,6 +1,6 @@
 -- Share mounts (docs/VOLUMES.md §5, docs/CLUSTERING.md §5.2, C3). Additive only.
--- A share is mounted on a node at /mnt/skiff-shares/<share name> by the node's helper; once the
--- node reports the mount, it can be linked to Skiff as a node volume (`volume_id`).
+-- A share is mounted on a node at /mnt/yoal-shares/<share name> by the node's helper; once the
+-- node reports the mount, it can be linked to Yoal as a node volume (`volume_id`).
 -- SMB credentials are sealed with the platform key; they never enter desired state or the audit log.
 
 ALTER TABLE shares ADD COLUMN credentials_sealed TEXT;

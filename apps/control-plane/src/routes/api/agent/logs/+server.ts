@@ -1,5 +1,5 @@
 import type { RequestHandler } from './$types';
-import { runtimeLogBatchSchema } from '@skiff/contracts';
+import { runtimeLogBatchSchema } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { json, readJson, route } from '#lib/server/api.js';
 

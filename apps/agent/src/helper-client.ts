@@ -13,7 +13,7 @@ import {
 	type WorkloadActivation,
 	type WorkloadDesired,
 	type WorkloadStatus,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { HelperNodeUpdateApi } from './node-update.ts';
 import type { HelperMailApi } from './mail-bridge.ts';
 import type { HelperShareApi } from './share-mounts.ts';
@@ -118,15 +118,15 @@ export interface HelperApi {
 
 /** The native studio process's fixed verbs (plan 22). Kept apart from `HelperApi` so test fakes need not grow. */
 export interface HelperStudioApi {
-	/** `systemctl start skiff-studio.service`; no arguments. */
+	/** `systemctl start yoal-studio.service`; no arguments. */
 	studioStart(): Promise<void>;
-	/** `systemctl stop skiff-studio.service`; no arguments. */
+	/** `systemctl stop yoal-studio.service`; no arguments. */
 	studioStop(): Promise<void>;
 }
 
 /** The read-only studio principal verb (plan 22 track G). Apart from `HelperApi` so test fakes need not grow. */
 export interface HelperStudioPrincipalApi {
-	/** Create or update `skiff_studio_ro` in a managed database; the helper picks the engine. */
+	/** Create or update `yoal_studio_ro` in a managed database; the helper picks the engine. */
 	ensureStudioPrincipal(id: string, user: string, password: string): Promise<void>;
 }
 
@@ -309,7 +309,7 @@ export class HelperClient
 		await this.request('POST', '/v1/studio/stop', undefined, STUDIO_TIMEOUT_MS);
 	}
 
-	/** `systemctl start skiff-mail.service` on the mail node (docs/EMAIL.md). */
+	/** `systemctl start yoal-mail.service` on the mail node (docs/EMAIL.md). */
 	async mailStart(): Promise<void> {
 		await this.request('POST', '/v1/mail/start', undefined, STUDIO_TIMEOUT_MS);
 	}
@@ -318,13 +318,13 @@ export class HelperClient
 		await this.request('POST', '/v1/mail/stop', undefined, STUDIO_TIMEOUT_MS);
 	}
 
-	/** Copy the submission certificate out of Caddy's storage into skiff-mail's TLS dir. */
+	/** Copy the submission certificate out of Caddy's storage into yoal-mail's TLS dir. */
 	async mailTls(host: string): Promise<{ found: boolean; changed: boolean }> {
 		const result = (await this.request('POST', '/v1/mail/tls', { host }, STUDIO_TIMEOUT_MS)) as { found?: unknown; changed?: unknown };
 		return { found: result.found === true, changed: result.changed === true };
 	}
 
-	/** `systemctl start skiff-identity.service` (and its Litestream unit) on the identity node. */
+	/** `systemctl start yoal-identity.service` (and its Litestream unit) on the identity node. */
 	async identityStart(): Promise<void> {
 		await this.request('POST', '/v1/identity/start', undefined, STUDIO_TIMEOUT_MS);
 	}
@@ -494,7 +494,7 @@ export class HelperClient
 		return volumeInventorySchema.parse(asRecord(body).inventory);
 	}
 
-	/** Which shares are mounted at `/mnt/skiff-shares/<id>` (docs/STORAGE.md §3). No credentials. */
+	/** Which shares are mounted at `/mnt/yoal-shares/<id>` (docs/STORAGE.md §3). No credentials. */
 	async shareStatus(ids: string[], signal?: AbortSignal): Promise<Array<{ id: string; mounted: boolean }>> {
 		const body = asRecord(await this.request('POST', '/v1/shares/status', { ids }, VOLUME_TIMEOUT_MS, signal));
 		const shares = Array.isArray(body.shares) ? body.shares : [];
@@ -528,7 +528,7 @@ export class HelperClient
 		};
 	}
 
-	/** Which of the disks Skiff mounts are up at `/mnt/skiff-disks/<id>` (docs/STORAGE.md §3.1). */
+	/** Which of the disks Yoal mounts are up at `/mnt/yoal-disks/<id>` (docs/STORAGE.md §3.1). */
 	async diskStatus(ids: string[], signal?: AbortSignal): Promise<Array<{ id: string; mounted: boolean }>> {
 		const body = asRecord(await this.request('POST', '/v1/disks/status', { ids }, VOLUME_TIMEOUT_MS, signal));
 		const disks = Array.isArray(body.disks) ? body.disks : [];
@@ -651,7 +651,7 @@ export class HelperClient
 			throw new HelperError(`helper snapshot ${input.volume.id} -> ${response.status}${text ? `: ${text.slice(0, 500)}` : ''}`);
 		}
 		if (!response.body) throw new HelperError(`helper snapshot ${input.volume.id} returned no body`);
-		const method = response.headers.get('x-skiff-snapshot-method');
+		const method = response.headers.get('x-yoal-snapshot-method');
 		if (!method || !(appVolumeSnapshotMethods as readonly string[]).includes(method)) {
 			await response.body.cancel().catch(() => undefined);
 			throw new HelperError(`helper snapshot ${input.volume.id} did not say how it copied (${method ?? 'no header'})`);

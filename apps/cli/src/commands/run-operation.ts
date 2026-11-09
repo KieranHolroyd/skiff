@@ -51,7 +51,7 @@ export async function createPlan(
 ): Promise<OperationView> {
 	const created = await client.createOperation(
 		{ ...input, stage: 'plan' },
-		{ idempotencyKey: `skif-${randomUUID()}`, waitSeconds: options.waitSeconds ?? 10 },
+		{ idempotencyKey: `yoal-${randomUUID()}`, waitSeconds: options.waitSeconds ?? 10 },
 	);
 	if (!isPlanning(created.status)) return created;
 	if (!options.showProgress) return followOperation(client, created, { untilDone: false });
@@ -109,7 +109,7 @@ export async function followWithProgress(
 
 	const onInterrupt = (): void => {
 		region?.done();
-		if (mode === 'json') emit({ type: 'detached', id: start.id, hint: `skif operations watch ${start.id}` });
+		if (mode === 'json') emit({ type: 'detached', id: start.id, hint: `yoal operations watch ${start.id}` });
 		process.stderr.write(`\n${watchHint(start.id)}\n`);
 		process.exit(130);
 	};

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import type { OperationActionId } from '@skiff/contracts';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import type { OperationActionId } from '@yoal/contracts';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
@@ -116,7 +116,7 @@
 							</li>{/if}
 						{#if domains}<li>
 								{countLabel(domains)}
-								{domains === 1 ? 'has' : 'have'} custom domains that stop resolving to Skiff.
+								{domains === 1 ? 'has' : 'have'} custom domains that stop resolving to Yoal.
 							</li>{/if}
 					</ul>
 				{/if}

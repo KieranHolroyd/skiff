@@ -1,5 +1,5 @@
 import { and, asc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
-import { backupTargets, databaseBackups, databases } from '@skiff/db';
+import { backupTargets, databaseBackups, databases } from '@yoal/db';
 import {
 	backupTargetCreateSchema,
 	backupTargetUpdateSchema,
@@ -9,7 +9,7 @@ import {
 	type BackupTargetView,
 	type DatabaseBackupLocation,
 	type Principal,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { join } from 'node:path';
 import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
@@ -97,7 +97,7 @@ export type RecordedStore =
 	  }
 	| { available: false; reason: string; location: DatabaseBackupLocation };
 
-/** Backup statuses whose object Skiff may still need to read or delete. */
+/** Backup statuses whose object Yoal may still need to read or delete. */
 const RETAINED_BACKUP_STATUSES = ['pending', 'running', 'ok'] as const;
 const PLATFORM_STORE_NAME = 'platform object store';
 
@@ -294,7 +294,7 @@ export class BackupTargetService {
 
 	/**
 	 * Delete a target. Refused while database backups that are still retained (ok, pending or
-	 * running) were written to it: the sealed credentials are the only way Skiff can restore or
+	 * running) were written to it: the sealed credentials are the only way Yoal can restore or
 	 * prune those objects, so deleting them by accident would be unrecoverable. `force` deletes it
 	 * anyway once nothing is in flight, and the backups are listed as unavailable until a target
 	 * with the same location is added again. Objects are never deleted here.
@@ -306,9 +306,9 @@ export class BackupTargetService {
 		if (held.total > 0) {
 			if (!options.force)
 				throw new ConflictError(
-					`Backup target "${row.name}" still holds ${countLabel(held.total, 'database backup')} that Skiff restores and prunes from it. ` +
-						'Deleting it would discard the only credentials for those objects. Delete the backups first (skif db backup-delete), ' +
-						`wait for retention to remove them, or force the delete (skif backup-target remove ${row.id} --force) to keep them listed as unavailable.`,
+					`Backup target "${row.name}" still holds ${countLabel(held.total, 'database backup')} that Yoal restores and prunes from it. ` +
+						'Deleting it would discard the only credentials for those objects. Delete the backups first (yoal db backup-delete), ' +
+						`wait for retention to remove them, or force the delete (yoal backup-target remove ${row.id} --force) to keep them listed as unavailable.`,
 				);
 			if (held.inFlight > 0)
 				throw new ConflictError(
@@ -455,7 +455,7 @@ export class BackupTargetService {
 		};
 	}
 
-	/** Where a backup lives and whether Skiff can still reach it. Never opens credentials. */
+	/** Where a backup lives and whether Yoal can still reach it. Never opens credentials. */
 	describeRecorded(backup: RecordedBackup): DatabaseBackupLocation {
 		const recorded = this.recordedTarget(backup);
 		return recorded.location;
@@ -518,7 +518,7 @@ export class BackupTargetService {
 		const row = this.ctx.db.select().from(backupTargets).where(eq(backupTargets.id, targetId)).get();
 		if (!row || (row.orgId !== null && row.orgId !== backup.orgId)) {
 			const reason =
-				`Backup target "${base.name}" (${targetId}) that this backup was written to has been deleted, so Skiff has no credentials for ${base.location}. ` +
+				`Backup target "${base.name}" (${targetId}) that this backup was written to has been deleted, so Yoal has no credentials for ${base.location}. ` +
 				'The object was not removed. Add a backup target with the same location to reconnect it.';
 			return { available: false, reason, location: { ...base, available: false, unavailableReason: reason } };
 		}
@@ -530,7 +530,7 @@ export class BackupTargetService {
 		};
 	}
 
-	/** Backups recorded on a target that Skiff may still need to read or delete. */
+	/** Backups recorded on a target that Yoal may still need to read or delete. */
 	private retainedBackups(targetId: string): { total: number; inFlight: number; restoring: number } {
 		const rows = this.ctx.db
 			.select({ id: databaseBackups.id, status: databaseBackups.status })
@@ -753,7 +753,7 @@ export class BackupTargetService {
 
 	private requireMutationsEnabled(): void {
 		if (!featureEnabled(this.ctx.config, 'BACKUPS_RESTORE'))
-			throw new CoreError('feature_disabled', 'Backup management is disabled by SKIFF_FEATURE_BACKUPS_RESTORE.', 403);
+			throw new CoreError('feature_disabled', 'Backup management is disabled by YOAL_FEATURE_BACKUPS_RESTORE.', 403);
 	}
 }
 

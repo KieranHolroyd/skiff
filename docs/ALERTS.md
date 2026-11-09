@@ -1,6 +1,6 @@
 # Alerts
 
-Skiff has two kinds of alert, and both arrive through the same notifiers (email, webhook, SMS,
+Yoal has two kinds of alert, and both arrive through the same notifiers (email, webhook, SMS,
 Discord, Slack, Telegram, ntfy and Web Push; see [OPS.md §7](./OPS.md)):
 
 - **System alerts** are built in and need no setup: node offline, disk above 85%, certificate
@@ -35,7 +35,7 @@ channel. Thresholds are platform policies: `nodeAlertMinutes`, `diskAlertPercent
 against its budget, from the SQLite totals, D123). `systemAlertRepeatMinutes` (30) is how often a still-true built-in
 alert repeats. The maintenance loop reads all of these on every sweep, so a change applies within
 a minute. A turned-off kind sends nothing and is not recorded. `OnFailure=` alerts from systemd
-(`skiff-alert`) still go to every channel, because they must work with the control plane down.
+(`yoal-alert`) still go to every channel, because they must work with the control plane down.
 
 ## 1. Rules
 
@@ -114,12 +114,12 @@ as down. A normal series that has been missing for 24 hours is forgotten.
 - **Payload.** Notifiers receive `{ key, title, detail, severity, status, url, labels }`. `status`
   is `firing` or `resolved`, and resolved messages have severity `info`. `url` links to the rule.
   `key` is `alert_rule:<id>`, so a webhook receiver can deduplicate on it. The generic webhook
-  (`SKIFF_ALERT_WEBHOOK`) POSTs JSON `{ title, message, severity, key, status, url, labels }`:
+  (`YOAL_ALERT_WEBHOOK`) POSTs JSON `{ title, message, severity, key, status, url, labels }`:
   `message` is the detail, and `title`/`message`/`severity`/`key` are the original fields, so
   receivers written for them keep working. `url` is null only where no dashboard page exists.
   A Discord or Slack URL there gets that service's own payload instead.
-- **Signature.** With `SKIFF_ALERT_WEBHOOK_SECRET` set (Settings → Notifications), each generic
-  webhook request carries `X-Skiff-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256(secret,
+- **Signature.** With `YOAL_ALERT_WEBHOOK_SECRET` set (Settings → Notifications), each generic
+  webhook request carries `X-Yoal-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256(secret,
   "<t>.<raw body>")>` (Stripe's scheme, `packages/core/src/webhook-signature.ts`). The timestamp
   is inside the MAC, so a receiver that rejects a `t` older than five minutes also rejects replays.
   Several `v1` values may appear during a rotation; any match is valid. Log drains (DESIGN §8) sign
@@ -145,7 +145,7 @@ The evaluator fails safe. It never resolves or fires anything because of its own
   store is back.
 - **Concurrency.** Each rule is claimed with a conditional `UPDATE` on `next_eval_at`, so a
   standby or a second process never evaluates a rule twice. Standbys do not run the loop (see
-  `SKIFF_STANDBY`).
+  `YOAL_STANDBY`).
 
 The control plane checks for due rules every 20 seconds, so a rule runs at most about 20 s after
 its interval. The time from failure to page is roughly the window filling, plus `forSeconds`,

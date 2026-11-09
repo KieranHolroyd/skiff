@@ -11,7 +11,7 @@ afterEach(async () => {
 });
 
 async function tempDir(): Promise<string> {
-	const dir = await fs.mkdtemp(join(tmpdir(), 'skiff-helper-mail-'));
+	const dir = await fs.mkdtemp(join(tmpdir(), 'yoal-helper-mail-'));
 	dirs.push(dir);
 	return dir;
 }

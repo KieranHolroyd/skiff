@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { invalidateAll } from '$app/navigation';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
-	import type { DatabaseStudioPrincipalState } from '@skiff/contracts';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import type { DatabaseStudioPrincipalState } from '@yoal/contracts';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Spinner } from '#lib/components/ui/spinner/index.js';
 

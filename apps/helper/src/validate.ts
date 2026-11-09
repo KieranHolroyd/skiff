@@ -3,7 +3,7 @@
  * defence for a privileged process: it never trusts the control plane or the agent, never sees a
  * shell string, and rejects anything it cannot render as a fixed systemd unit.
  *
- * This module deliberately does not import `@skiff/contracts`: the helper ships without runtime
+ * This module deliberately does not import `@yoal/contracts`: the helper ships without runtime
  * dependencies and validates the wire shape itself, so a compromised contract package cannot
  * widen the privileged surface.
  */
@@ -27,7 +27,7 @@ export type FunctionModuleType = (typeof FUNCTION_MODULE_TYPES)[number];
 
 /**
  * Binding kinds the helper accepts. Keep in step with `functionBindingTypes` in
- * `@skiff/contracts` (function.ts): a kind missing here makes every deploy that uses it fail on
+ * `@yoal/contracts` (function.ts): a kind missing here makes every deploy that uses it fail on
  * the node with a 400 while the control plane accepted it.
  */
 export const FUNCTION_BINDING_TYPES = [
@@ -69,11 +69,11 @@ export const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export const SECRET_NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 export const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 /** The legacy shared network; kept as the fallback for desired state without an org id. */
-export const DEFAULT_WORKLOAD_NETWORK = 'skiff-workloads';
-export const ORG_NETWORK_PREFIX = 'skiff-org-';
-export const NETWORK_NAME_PATTERN = /^skiff-(?:org-[a-z0-9][a-z0-9_-]*|workloads)$/;
+export const DEFAULT_WORKLOAD_NETWORK = 'yoal-workloads';
+export const ORG_NETWORK_PREFIX = 'yoal-org-';
+export const NETWORK_NAME_PATTERN = /^yoal-(?:org-[a-z0-9][a-z0-9_-]*|workloads)$/;
 
-/** Derive `skiff-org-<orgId>` exactly like the contract; it is never stored. */
+/** Derive `yoal-org-<orgId>` exactly like the contract; it is never stored. */
 export function orgNetworkName(orgId: string): string {
 	const label = orgId
 		.trim()
@@ -300,15 +300,15 @@ export interface WorkloadDesired {
 	 */
 	runner?: { provider: 'github' };
 	/**
-	 * Workload identity (IAM.md I18): mount `/run/skiff/identity/<id>/token` at
-	 * `/var/run/skiff/token`. Only the marker travels in desired state; the token is activation.
+	 * Workload identity (IAM.md I18): mount `/run/yoal/identity/<id>/token` at
+	 * `/var/run/yoal/token`. Only the marker travels in desired state; the token is activation.
 	 */
 	identity?: true;
 }
 
 /**
  * The helper's own copy of the engine registry (D61). It is deliberately not imported from
- * `@skiff/contracts`: a wider contract must not widen what the privileged helper will run.
+ * `@yoal/contracts`: a wider contract must not widen what the privileged helper will run.
  */
 /**
  * The helper's own engine registry (D61, D95). It maps `engine` + `version` from the wire to a
@@ -417,17 +417,17 @@ export const DATABASE_ENGINES = {
 export type DatabaseEngine = keyof typeof DATABASE_ENGINES;
 
 /**
- * Skiff-built Postgres image variants (D126): the pinned pgvector image plus PostGIS or pg_cron,
+ * Yoal-built Postgres image variants (D126): the pinned pgvector image plus PostGIS or pg_cron,
  * built from `docker/postgres/Dockerfile`. Same uid, entrypoint and lockdown as the base image.
- * The contract has its own copy (`SKIFF_POSTGRES_IMAGE`); a mismatch is rejected like any image.
+ * The contract has its own copy (`YOAL_POSTGRES_IMAGE`); a mismatch is rejected like any image.
  */
 export const POSTGRES_VARIANTS = {
 	postgis: { versions: ['18'] },
 	pg_cron: { versions: ['18'] },
 } as const;
 export type PostgresVariant = keyof typeof POSTGRES_VARIANTS;
-const SKIFF_POSTGRES_IMAGE = 'ghcr.io/kieranholroyd/skiff-postgres';
-const SKIFF_POSTGRES_IMAGE_REVISION = '1';
+const YOAL_POSTGRES_IMAGE = 'ghcr.io/kieranholroyd/yoal-postgres';
+const YOAL_POSTGRES_IMAGE_REVISION = '1';
 
 /**
  * The Postgres image a PITR-enabled database runs (docs/PITR.md): the pinned pgvector image plus
@@ -439,7 +439,7 @@ const SKIFF_POSTGRES_IMAGE_REVISION = '1';
  * and lockdown as the base image.
  */
 export const POSTGRES_PITR_VERSIONS = ['18'] as const;
-const POSTGRES_PITR_IMAGE = 'ghcr.io/kieranholroyd/skiff-postgres-pitr';
+const POSTGRES_PITR_IMAGE = 'ghcr.io/kieranholroyd/yoal-postgres-pitr';
 const POSTGRES_PITR_IMAGE_REVISION = '1';
 const POSTGRES_PITR_IMAGE_DIGEST: string | null = null;
 
@@ -454,11 +454,11 @@ export function postgresPitrImage(version: string): string {
 export interface WorkloadDatabase {
 	engine: DatabaseEngine;
 	version: string;
-	/** Skiff-built Postgres variant (D126); absent means the engine's own image. */
+	/** Yoal-built Postgres variant (D126); absent means the engine's own image. */
 	variant?: PostgresVariant;
 	/** WAL archiving for PITR (docs/PITR.md); omitted when the feature is off. */
 	pitr?: { stanza: string; archiveTimeoutSeconds: number };
-	/** Render Postgres with the helper-generated certificate (SKIFF_FEATURE_DB_TLS). */
+	/** Render Postgres with the helper-generated certificate (YOAL_FEATURE_DB_TLS). */
 	tls?: boolean;
 	/** Streaming read replica (C7): the standby unit variant, streaming from this slot. */
 	replica?: { slot: string };
@@ -474,7 +474,7 @@ export function databaseImage(database: WorkloadDatabase): string {
 	// WAL archiving needs pgBackRest inside the Postgres container (docs/PITR.md).
 	if (database.pitr) return postgresPitrImage(database.version);
 	if (database.variant)
-		return `${SKIFF_POSTGRES_IMAGE}:${database.version}-${database.variant}-${SKIFF_POSTGRES_IMAGE_REVISION}`;
+		return `${YOAL_POSTGRES_IMAGE}:${database.version}-${database.variant}-${YOAL_POSTGRES_IMAGE_REVISION}`;
 	return DATABASE_ENGINES[database.engine].image(database.version);
 }
 
@@ -542,8 +542,8 @@ export function parseDatabase(value: unknown, label = 'workload.database'): Work
 		const replica = assertRecord(record.replica, `${label}.replica`);
 		for (const key of Object.keys(replica))
 			if (key !== 'slot') throw new ValidationError(`${label}.replica.${key} is not supported`);
-		if (typeof replica.slot !== 'string' || !/^skiff_[a-z0-9_]{1,56}$/.test(replica.slot))
-			throw new ValidationError(`${label}.replica.slot must match ^skiff_[a-z0-9_]{1,56}$`);
+		if (typeof replica.slot !== 'string' || !/^yoal_[a-z0-9_]{1,56}$/.test(replica.slot))
+			throw new ValidationError(`${label}.replica.slot must match ^yoal_[a-z0-9_]{1,56}$`);
 		parsed.replica = { slot: replica.slot };
 	}
 	return parsed;
@@ -803,7 +803,7 @@ export function assertSlug(value: unknown, label = 'projectSlug'): string {
 export function assertNetworkName(value: unknown, label = 'networkName'): string {
 	const name = assertString(value, label, { max: 100 });
 	if (!NETWORK_NAME_PATTERN.test(name))
-		throw new ValidationError(`${label} must be "skiff-workloads" or "skiff-org-<id>"`);
+		throw new ValidationError(`${label} must be "yoal-workloads" or "yoal-org-<id>"`);
 	return name;
 }
 

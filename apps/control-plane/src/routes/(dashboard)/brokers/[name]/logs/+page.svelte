@@ -7,7 +7,7 @@
 </script>
 
 <svelte:head>
-	<title>Logs · {data.broker.name} · Skiff</title>
+	<title>Logs · {data.broker.name} · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">

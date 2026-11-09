@@ -13,7 +13,7 @@ import {
 	type EventSource,
 	type PlatformEventBody,
 	type StorageEventBody,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { hmac, newId, parseJson, safeEqual } from './util.ts';
@@ -28,9 +28,9 @@ import { hmac, newId, parseJson, safeEqual } from './util.ts';
  * - **Emit.** Sources call `emit*` after their own work is done. Matching is in-process and cheap;
  *   an emit never throws into the caller, so a broken rule can't fail a deploy or an alert.
  * - **Publish.** The node that runs the target broker leases pending deliveries over the agent
- *   protocol, publishes each one to `skiff.q.<queue>` (JetStream dedupes on the delivery id) and
+ *   protocol, publishes each one to `yoal.q.<queue>` (JetStream dedupes on the delivery id) and
  *   acks. A failure backs off up to 5 minutes; a delivery still pending after 24 hours fails.
- * - **Storage** events come from RustFS itself: the instance's `skiff` webhook target posts to
+ * - **Storage** events come from RustFS itself: the instance's `yoal` webhook target posts to
  *   `/api/webhooks/storage/<id>` with a token derived from the master key and the instance id.
  */
 
@@ -235,9 +235,9 @@ export class EventService {
 						account: row.org_id,
 						action: 'PutObject',
 						bucket: filter.bucket ?? 'test',
-						object: { key: `${filter.prefix ?? ''}skiff-test-event${filter.suffix ?? ''}`, size: 0, eTag: 'd41d8cd98f00b204e9800998ecf8427e' },
+						object: { key: `${filter.prefix ?? ''}yoal-test-event${filter.suffix ?? ''}`, size: 0, eTag: 'd41d8cd98f00b204e9800998ecf8427e' },
 						eventTime: new Date(now).toISOString(),
-						skiff: { type: 'storage.object-create', storage: filter.storage ?? '', eventName: 's3:TestEvent' },
+						yoal: { type: 'storage.object-create', storage: filter.storage ?? '', eventName: 's3:TestEvent' },
 					}
 				: { type, id: newId('evt_'), time: new Date(now).toISOString(), account: row.org_id, data: { test: true } };
 		const deliveryId = this.enqueue(row, type, body, now);
@@ -354,7 +354,7 @@ export class EventService {
 					...(eTag ? { eTag } : {}),
 				},
 				eventTime: typeof record.eventTime === 'string' ? record.eventTime : new Date(now).toISOString(),
-				skiff: { type: `storage.${mapped.type}`, storage: instance.name, eventName: `s3:${eventName}` },
+				yoal: { type: `storage.${mapped.type}`, storage: instance.name, eventName: `s3:${eventName}` },
 			};
 			for (const rule of rules) {
 				const filter = parseJson<StoredFilter>(rule.filter_json, {});
@@ -362,7 +362,7 @@ export class EventService {
 				if (!this.ruleEvents(rule).includes(mapped.type)) continue;
 				if (filter.prefix && !key.startsWith(filter.prefix)) continue;
 				if (filter.suffix && !key.endsWith(filter.suffix)) continue;
-				if (this.enqueue(rule, body.skiff.type, body, now)) queued += 1;
+				if (this.enqueue(rule, body.yoal.type, body, now)) queued += 1;
 			}
 		}
 		return queued;
@@ -457,7 +457,7 @@ export class EventService {
 		data: Record<string, unknown>,
 		matches: (filter: StoredFilter) => boolean,
 	): void {
-		// Workflows subscribed with `on: skiff_event` (docs/PIPELINES.md); never throws.
+		// Workflows subscribed with `on: yoal_event` (docs/PIPELINES.md); never throws.
 		this.ctx.pipelines?.onPlatformEvent(orgId, `${source}.${event}`, data);
 		try {
 			const rules = this.rulesFor(orgId, source).filter((rule) => this.ruleEvents(rule).includes(event) && matches(parseJson<StoredFilter>(rule.filter_json, {})));

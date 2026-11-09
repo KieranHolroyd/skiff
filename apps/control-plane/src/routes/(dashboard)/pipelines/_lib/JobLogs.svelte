@@ -2,7 +2,7 @@
 	import { tick, untrack } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
 	import { createVirtualizer } from '@tanstack/svelte-virtual';
-	import type { PipelineJobView, PipelineLogLine } from '@skiff/contracts';
+	import type { PipelineJobView, PipelineLogLine } from '@yoal/contracts';
 	import ArrowDownToLineIcon from '@lucide/svelte/icons/arrow-down-to-line';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import { Button } from '#lib/components/ui/button/index.js';

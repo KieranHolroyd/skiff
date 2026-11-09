@@ -1,6 +1,6 @@
 import type { RequestHandler } from './$types';
 import { eq } from 'drizzle-orm';
-import { projects } from '@skiff/db';
+import { projects } from '@yoal/db';
 import { core } from '#lib/server/core.js';
 import { json, route } from '#lib/server/api.js';
 

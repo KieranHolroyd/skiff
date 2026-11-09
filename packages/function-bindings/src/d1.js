@@ -1,5 +1,5 @@
 /**
- * Skiff D1 binding service (docs/FUNCTIONS.md §4.5, FN10).
+ * Yoal D1 binding service (docs/FUNCTIONS.md §4.5, FN10).
  *
  * workerd has no native D1. It ships an internal module, `cloudflare-internal:d1-api`, which turns a
  * `wrapped` binding into a `D1Database` for the user's Worker: `prepare()`, `bind()`, `all()`,
@@ -32,13 +32,13 @@ const MAX_REQUEST_BYTES = 1024 * 1024;
 /** One request is one transaction; cap the batch so a hostile body cannot hold the DO open. */
 const MAX_STATEMENTS = 100;
 /**
- * Skiff's own result cap. Cloudflare limits D1 responses by byte size instead; bounding rows here
+ * Yoal's own result cap. Cloudflare limits D1 responses by byte size instead; bounding rows here
  * keeps a `SELECT *` from materialising the whole database inside the function host's memory.
  */
 const MAX_RESULT_ROWS = 100_000;
 
 /** `meta.served_by`: local, so no region/colo claims. */
-const SERVED_BY = 'skiff.d1';
+const SERVED_BY = 'yoal.d1';
 
 const RESULTS_FORMATS = new Set(['ARRAY_OF_OBJECTS', 'ROWS_AND_COLUMNS', 'NONE']);
 

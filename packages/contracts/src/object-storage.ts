@@ -57,8 +57,8 @@ export const STORAGE_REGION = 'us-east-1';
 export const STORAGE_STS_CAPABILITY = 'storage-sts';
 /** The first pinned RustFS version with the STS/OIDC handler (verified on the 1.0.4 image). */
 export const STORAGE_STS_MIN_VERSION = '1.0.4';
-/** Audience and OIDC client id Skiff's workload tokens use for RustFS. */
-export const STORAGE_STS_AUDIENCE = 'skiff';
+/** Audience and OIDC client id Yoal's workload tokens use for RustFS. */
+export const STORAGE_STS_AUDIENCE = 'yoal';
 /** Claim RustFS maps to IAM policy names; a workload token carries its scoped policy here. */
 export const STORAGE_STS_CLAIM = 'groups';
 /** Requested temporary-credential lifetime; RustFS clamps values to 900–43200 seconds. */
@@ -494,7 +494,7 @@ export const storageBucketDesiredSchema = z
 		configVersion: z.number().int().nonnegative().default(1),
 		/**
 		 * Event notifications (D122): when on, the agent points the bucket's create/delete events at
-		 * the instance's `skiff` webhook target; the control plane filters and routes them.
+		 * the instance's `yoal` webhook target; the control plane filters and routes them.
 		 */
 		notifications: z.boolean().default(false),
 	})
@@ -518,7 +518,7 @@ export const workloadObjectStorageSchema = z.object({
 	buckets: z.array(storageBucketDesiredSchema).max(200).default([]),
 	users: z.array(storageUserDesiredSchema).max(200).default([]),
 	/**
-	 * Buckets deleted in Skiff. The agent never deletes a bucket just because it is missing from
+	 * Buckets deleted in Yoal. The agent never deletes a bucket just because it is missing from
 	 * `buckets` (a transient desired-state bug must not wipe data, as D59). `force` empties it first;
 	 * otherwise a non-empty bucket is left alone and reported as blocked.
 	 */
@@ -627,7 +627,7 @@ export const storageBucketConfigReportSchema = z.object({
 });
 export type StorageBucketConfigReport = z.infer<typeof storageBucketConfigReportSchema>;
 
-/** Access key ids Skiff mints: `SKF` + 17 base32 chars (root keys use `SKR`). The agent owns `SKF*` users. */
+/** Access key ids Yoal mints: `SKF` + 17 base32 chars (root keys use `SKR`). The agent owns `SKF*` users. */
 export const STORAGE_USER_KEY_PREFIX = 'SKF';
 export const STORAGE_ROOT_KEY_PREFIX = 'SKR';
 
@@ -777,7 +777,7 @@ export function storageImage(engine: StorageEngine, version: string): string {
 
 /** Canned IAM policy name for one access key (the agent owns policies with this prefix). */
 export function storagePolicyName(accessKeyId: string): string {
-	return `skiff-${accessKeyId.toLowerCase()}`;
+	return `yoal-${accessKeyId.toLowerCase()}`;
 }
 
 const READ_ACTIONS = ['s3:GetObject', 's3:GetObjectVersion', 's3:ListBucket', 's3:GetBucketLocation'];

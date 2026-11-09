@@ -41,7 +41,7 @@ describe('buildTokenExchangeBody', () => {
 	test('includes a narrowed scope and a chosen trust', () => {
 		const body = buildTokenExchangeBody({
 			subjectToken: 'eyJ.header.signature',
-			audience: 'skiff',
+			audience: 'yoal',
 			scope: 'project:read deployment:create',
 			trustId: 'ft_github',
 		});

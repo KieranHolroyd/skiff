@@ -1,9 +1,9 @@
-# Skiff REST API (v1)
+# Yoal REST API (v1)
 
 Base URL: `https://<platformOrigin>/api/v1`. "Platform admin" means a `platform-admin` binding at
 platform scope (seeded from the Better Auth admin-plugin `user.role = admin`, D187), never an org
 owner/admin. Authentication is either the Better Auth session cookie (dashboard) or
-`Authorization: Bearer skif_…` (API key, CLI). Every mutation also sends `Origin: <platformOrigin>`
+`Authorization: Bearer yoal_…` (API key, CLI). Every mutation also sends `Origin: <platformOrigin>`
 (CSRF policy). Errors are JSON:
 
 ```json
@@ -32,7 +32,7 @@ owner/admin. Authentication is either the Better Auth session cookie (dashboard)
 | GET | `/operations/flows` | the run's read permission | flows (docs/FLOWS.md): `?kind&status&subjectKind&subjectId&limit` → `{ flows }` |
 | GET | `/operations/flw_…` | the run's read permission (else 404) | `{ flow }`; `?wait=<s≤25>` until terminal; `?steps=1` adds the step log. `/stream` emits `progress` then `done` |
 | POST | `/operations/flw_…/cancel` | the run's cancel permission | `{ flow }`; `409` with the reason when the current step cannot be cancelled (a database move after its cut-over) |
-| POST | `/blueprints/validate` | `project:read` | `{ document }` (YAML/JSON text or object) → `{ validation }`; no live state read. All blueprint routes need `SKIFF_FEATURE_BLUEPRINTS` (docs/OPERATIONS.md §12) |
+| POST | `/blueprints/validate` | `project:read` | `{ document }` (YAML/JSON text or object) → `{ validation }`; no live state read. All blueprint routes need `YOAL_FEATURE_BLUEPRINTS` (docs/OPERATIONS.md §12) |
 | POST | `/blueprints/plan` | `project:read` + every step's permission | `{ document, prune? }` → `{ plan }` (steps, `planHash`, `operationId`); stored as a planned `blueprint.apply` operation (1 h); problems → `422` with every issue's path |
 | POST | `/blueprints/apply` | planner only, each step's permission | `{ planHash, confirm? }` (`confirm` = stack name when the plan deletes) → `202 { run }`; `?wait=<s≤25>`; live state moved → `409`; same hash again returns the same run |
 | GET | `/blueprints/apply/:operationId` | creator or `project:read` | `{ run }` with every step's status |
@@ -41,7 +41,7 @@ owner/admin. Authentication is either the Better Auth session cookie (dashboard)
 | POST | `/import/plan` | each step's own permission | `{ document (export text or object), only?, skip?, projects?, secrets? }` → `{ import }`: steps (`create`/`exists`/`skip`), `manual`, `warnings`, `summary`; reads only (docs/OPERATIONS.md §14) |
 | POST | `/import/apply` | each step's own permission | same body → `{ import }` with each step `done`/`exists`/`skipped`/`failed`; create-only, a failed step skips its dependants; audited as `config.import` |
 | GET | `/export` | each section's own read permission | `{ export }`: the org's configuration (docs/OPERATIONS.md §13), secrets by name only; `?project=<slug>` (repeatable or comma-separated) limits projects; unreadable sections are listed in `skipped`; audited as `config.export` |
-| POST | `/projects/:slug/access` | `project:update` | `{ scope: production\|previews, mode: public\|password\|platform\|access, password?, policyId? }`; each scope has its own password. `password` is required to switch a scope to `password` and may be omitted to keep the current one; leaving password mode clears only that scope's. `policyId` is required for `access` (Skiff Access) |
+| POST | `/projects/:slug/access` | `project:update` | `{ scope: production\|previews, mode: public\|password\|platform\|access, password?, policyId? }`; each scope has its own password. `password` is required to switch a scope to `password` and may be omitted to keep the current one; leaving password mode clears only that scope's. `policyId` is required for `access` (Yoal Access) |
 | POST | `/projects/:slug/deploy` | `deployment:create` | inline files (`deploy_files`); the URL slug is the target (`project` in the body is optional and must match); `environment` selects a named environment. Process/container projects run one workload, so only the latest deployment is active |
 | GET | `/projects/:slug/deployments` | `deployment:read` | |
 | GET | `/projects/:slug/deployments/:id` | `deployment:read` | id or short id |
@@ -64,13 +64,13 @@ owner/admin. Authentication is either the Better Auth session cookie (dashboard)
 | GET | `/databases/:name/move` | `database:read` | `{ move: DatabaseMoveView \| null }`: phase (`quiescing`, `dumping`, `restoring`, `purging`, `done`, `failed`), outcome (`moved`, `rolled_back`), source/target, attached projects, error, `operationId` (its flow run) |
 | GET | `/nodes` | platform admin | any surface (session, API key, MCP) of a platform-admin user |
 | GET | `/nodes/capacity` | platform admin | workload-slice budget per node (`sliceMemoryMb`, reserved, free) |
-| PATCH | `/nodes/:id` | platform admin **session** | any of `{ name, publicAddress (host[:port] or null), sliceMemoryMb (32–65536, ≥ reserved), sliceCpuWeight (1–10000), canBuild, dataDir, buildDir, zone, roles, labels, lanEndpoint, cpuBudgetMillis }`; agents apply it on their next pull. `zone` is the failure domain; `roles` is the set the node may run (removing a role in use is 409); `labels` are operator `key=value` pairs (`skiff.io/*` reserved); `cpuBudgetMillis` is the CPU admission ceiling (null = uncapped). `dataDir`/`buildDir` (absolute paths, `null` = default) move node storage (D48); progress is in `storage.status` on the node. Where new services go is set per kind in Settings → Storage, not per node (docs/STORAGE.md) |
+| PATCH | `/nodes/:id` | platform admin **session** | any of `{ name, publicAddress (host[:port] or null), sliceMemoryMb (32–65536, ≥ reserved), sliceCpuWeight (1–10000), canBuild, dataDir, buildDir, zone, roles, labels, lanEndpoint, cpuBudgetMillis }`; agents apply it on their next pull. `zone` is the failure domain; `roles` is the set the node may run (removing a role in use is 409); `labels` are operator `key=value` pairs (`yoal.io/*` reserved); `cpuBudgetMillis` is the CPU admission ceiling (null = uncapped). `dataDir`/`buildDir` (absolute paths, `null` = default) move node storage (D48); progress is in `storage.status` on the node. Where new services go is set per kind in Settings → Storage, not per node (docs/STORAGE.md) |
 | DELETE | `/nodes/:id` | platform admin **session** | removes a worker node: its token is revoked, its disk registrations and studio sessions are dropped, and builds it claimed are requeued (`{ ok, requeuedBuilds }`). History keeps the node id. 409 for the edge node, or while projects are placed on it or workloads, databases, storage instances or app volumes still live there. Nothing on the machine changes; uninstall the agent there |
 | POST | `/nodes/:id/builder` | platform admin **session** | `{ builder: boolean }`; lets the node claim git builds |
 | POST | `/nodes/join-token` | platform admin **session** | single-use, 1 h; 403 for API keys / OAuth tokens |
 | POST | `/nodes/:id/drain` \| `/resume` | platform admin **session** | |
 | POST | `/nodes/:id/rotate-token` | platform admin **session** | |
-| POST | `/nodes/:id/edge` | platform admin **session** | makes this online node the edge; the old edge becomes a worker (D98). 409 while `SKIFF_EDGE_NODE_ID` is set, for a node that is not online, or when the old edge hosts apps or data but has no public address |
+| POST | `/nodes/:id/edge` | platform admin **session** | makes this online node the edge; the old edge becomes a worker (D98). 409 while `YOAL_EDGE_NODE_ID` is set, for a node that is not online, or when the old edge hosts apps or data but has no public address |
 | GET | `/storage/:name/replicas` | `storage:read` | bucket replication targets and status (C9) |
 | POST | `/storage/:name/replicas` | `storage:update` | `{ target }`; another node, private target |
 | DELETE | `/storage/:name/replicas/:id` | `storage:update` | remove the replication intent |
@@ -79,9 +79,9 @@ owner/admin. Authentication is either the Better Auth session cookie (dashboard)
 | DELETE | `/databases/:name/replicas/:id` | `database:update` | 202; stops it, its node purges the copy and the primary drops the slot, then the row goes |
 | POST | `/databases/:name/replicas/:id/promote` | `database:update` | `{ confirm: true, acceptDataLoss? }` + `If-Match: <primaryGeneration>` (412 when stale); 202 with the failover (fencing → promoting → repointing → completed). Never MCP |
 | GET | `/platform/storage` | platform admin | storage overview: `{ onboarding, defaults, tiers, nodes }`; each node lists its system disk, its disks and the candidates it reports, usable ones under **Add a disk** and the rest with a reason (docs/STORAGE.md) |
-| POST | `/platform/storage/disks` | platform admin **session** | `{ node, candidate, name?, tier? }`; `candidate` is a key from the listing (`mount:<sourceKey>` or `uuid:<fs UUID>`). A mounted filesystem is registered `ready` at once; an unmounted one is mounted by UUID at `/mnt/skiff-disks/<name>` (agent capability `disk-mounts`) and turns `ready` when the node reports it. Skiff never formats |
+| POST | `/platform/storage/disks` | platform admin **session** | `{ node, candidate, name?, tier? }`; `candidate` is a key from the listing (`mount:<sourceKey>` or `uuid:<fs UUID>`). A mounted filesystem is registered `ready` at once; an unmounted one is mounted by UUID at `/mnt/yoal-disks/<name>` (agent capability `disk-mounts`) and turns `ready` when the node reports it. Yoal never formats |
 | PATCH | `/platform/storage/disks/:id` | platform admin **session** | `{ name?, tier? }` (`fast`\|`bulk`); a tier change affects new services only |
-| DELETE | `/platform/storage/disks/:id` | platform admin **session** | unregister a disk; 409 while anything is stored on it, or for a share's disk (unmount the share instead). A disk Skiff mounted is unmounted by its node; its files stay |
+| DELETE | `/platform/storage/disks/:id` | platform admin **session** | unregister a disk; 409 while anything is stored on it, or for a share's disk (unmount the share instead). A disk Yoal mounted is unmounted by its node; its files stay |
 | POST | `/platform/storage/disks/:id/profile` | platform admin **session** | benchmark the disk (seq MB/s, 4 KiB IOPS, sync-write latency) → 202; the result lands on the disk (`profile`) |
 | PUT | `/platform/storage/defaults` | platform admin **session** | `{ defaults: [{ kind: databases\|object-storage\|brokers\|app-volumes\|builds\|site-data, target: system\|fast\|bulk }] }`. The target each create form preselects (and the API uses when `storage` is omitted); a kind with no default uses the system disk. Never moves existing services |
 | POST | `/platform/storage/onboarding` | platform admin **session** | `{ state: done\|skipped }` |
@@ -91,7 +91,7 @@ owner/admin. Authentication is either the Better Auth session cookie (dashboard)
 | POST | `/shares` | platform admin **session** | `{ name, protocol: nfs\|smb, server, exportPath, zone?, readOnly?, credentials?: { username, password, domain? } }`; SMB credentials are sealed and never returned |
 | GET/PATCH/DELETE | `/shares/:name` | platform admin **session** | read (with `mounts`), update or remove a share; server/export/mode changes and delete are refused while mounted; `credentials` rotates |
 | PUT | `/shares/:name/grants` | platform admin **session** | `{ grants: [{ orgId, mode: ro\|rw, pathPrefix? }] }`; replaces the set |
-| POST | `/shares/:name/mounts` | platform admin **session** | `{ node, diskName? }`: mount at `/mnt/skiff-shares/<name>` on that node. A read-write share becomes a `bulk`, network disk named `diskName` (default: the share name) once mounted; a read-only share stays a plain mount (docs/STORAGE.md §3) |
+| POST | `/shares/:name/mounts` | platform admin **session** | `{ node, diskName? }`: mount at `/mnt/yoal-shares/<name>` on that node. A read-write share becomes a `bulk`, network disk named `diskName` (default: the share name) once mounted; a read-only share stays a plain mount (docs/STORAGE.md §3) |
 | DELETE | `/shares/:name/mounts/:node` | platform admin **session** | remove the share's disk (refused while anything is stored on it), then unmount |
 | PUT/DELETE | `/shares/:name/mounts/:node/disk` | platform admin **session** | `{ diskName }` uses a mounted share as a disk (**Use as disk**); DELETE stops using it as a disk (**Stop using as disk**; refused while anything is stored on it; the share stays mounted) |
 | GET | `/cluster/config` | platform admin | cluster tunables: overlay, endpoints, replicas, database/storage limits, lease, failover, shares |
@@ -112,7 +112,7 @@ owner/admin. Authentication is either the Better Auth session cookie (dashboard)
 | PATCH/DELETE | `/projects/:slug/environments/:env` | `project:update` | rename/access (`{ name?, access?, password? }`; the environment's own password, kept when omitted) or remove (production is built in) |
 | POST | `/projects/:slug/environments/:env/promote` | `deployment:promote` | `{ deploymentId }`; moves only that environment's pointer (production also re-points a process/container workload) |
 | GET/PUT/DELETE | `/projects/:slug/workload` | `deployment:read` / `project:update` | tier 2/3 runtime spec for the project. `idleStopSeconds` (process only; needs `socketActivation`, HTTP ingress and one replica; 0 or absent = always on) scales the app to zero after that many seconds without a request (D121) | The view carries `image` and `imageDigest` (the digest the running deployment is pinned to, D145; null when it runs a tag)
-| POST | `/projects/:slug/deploy-image` | `deployment:create` + `project:update` | `{ image, promote?, message?, environment? }` → `201 { deployment, workload }`. Container projects only: keeps the rest of the spec, sets `image`, deploys a one-file `skiff-image.json` release and pins the tag to its digest (D145) |
+| POST | `/projects/:slug/deploy-image` | `deployment:create` + `project:update` | `{ image, promote?, message?, environment? }` → `201 { deployment, workload }`. Container projects only: keeps the rest of the spec, sets `image`, deploys a one-file `yoal-image.json` release and pins the tag to its digest (D145) |
 | GET/POST | `/registry/credentials` | `image:pull` / `image:credentials` | registry logins for external registries (D146). POST `{ name, registry, username, password }` → `201 { credential }`; one per registry host per org (Docker Hub aliases fold into `docker.io`); the password is write-only |
 | PATCH/DELETE | `/registry/credentials/:name` | `image:credentials` | `{ registry?, username?, password? }`; delete leaves running containers alone |
 | GET/PATCH | `/registry` | `image:pull` / platform admin **session** | the platform registry: `{ enabled, host, node, status, engine, version, keepTags, realm }`; PATCH `{ enabled?, node?, host?, keepTags?, memoryMb?, mirrors?, signatures?: off\|warn\|enforce, cosignKeys?: [pem], cveScanning?, s3?: { endpoint, bucket, region?, accessKeyId, secretAccessKey, cacheUrl }\|null }` (D154, D159) |
@@ -122,7 +122,7 @@ owner/admin. Authentication is either the Better Auth session cookie (dashboard)
 | GET | `/registry/scan?repository=<org>/<name>&reference=<tag\|sha256:…>` | `image:pull` | Trivy summary and the 50 most severe CVEs; 400 while CVE scanning is off (D159) |
 | GET/POST | `/registry/trusts` | `image:pull` / `image:credentials` | GitHub Actions OIDC trusts: `{ githubRepository: owner/repo, ref?: glob, repository: <org>/<name>\|<org>/*, push? }` (D158) |
 | DELETE | `/registry/trusts/:id` | `image:credentials` | remove a trust |
-| GET | `/api/registry/token` (not under `/api/v1`) | Basic: any user + `skif_` API key, a per-workload login, a job token, a GitHub/GitLab OIDC token, or a Skiff workload/STS token (also accepted as `Bearer`) | the Docker token realm (D155): `?service=<host>&scope=repository:<org>/<name>:pull,push` → `{ token, access_token, expires_in, issued_at }`; the grant is intersected with the caller's `image:*` permissions in its own org and the token's restriction |
+| GET | `/api/registry/token` (not under `/api/v1`) | Basic: any user + `yoal_` API key, a per-workload login, a job token, a GitHub/GitLab OIDC token, or a Yoal workload/STS token (also accepted as `Bearer`) | the Docker token realm (D155): `?service=<host>&scope=repository:<org>/<name>:pull,push` → `{ token, access_token, expires_in, issued_at }`; the grant is intersected with the caller's `image:*` permissions in its own org and the token's restriction |
 | GET | `/projects/:slug/container/targets` | `container:inspect` | container projects (D127): one entry per replica, `{ replica, nodeId, nodeName, desiredId }`. Every console call takes `?replica=<n>` for a multi-copy workload |
 | GET | `/projects/:slug/container/inspect` | `container:inspect` | `{ targets, container }`: state, unit restarts, image and digest, entrypoint/command, env **names**, ports, networks, mounts, sandbox flags, raw counters (`stats`: CPU µs, memory/peak/limit, OOM kills, PIDs, net and block bytes, `sampledAt`; rates are the difference of two calls) and processes |
 | GET | `/projects/:slug/container/files?path=` | `container:files` | `{ listing }` of one directory, symlinks resolved inside the container, ≤ 2,000 entries (`truncated`). 403 for the secrets dir and tmpfs, 409 while the container is not running |
@@ -133,9 +133,9 @@ owner/admin. Authentication is either the Better Auth session cookie (dashboard)
 | POST | `/projects/:slug/container/exec/:execId/input` · `/resize` | `container:exec` | raw input bytes (≤ 64 KiB) · `{ cols, rows }`. A shell is bound to the person who opened it |
 | DELETE | `/projects/:slug/container/exec/:execId` | `container:exec` | hang up the shell and everything it started |
 | POST | `/projects/:slug/container/restart` | `project:update` | restart every replica through desired state (`{ ok, generation }`); open shells close |
-| POST | `/projects/:slug/function/invoke` | `deployment:create` | Test request (D124), run on the function's node straight to its host: `{ method? (default GET), path? (default /, not under /__skiff/), headers?, body? }` → the node-task answer above with result `{ status, statusText, headers: [name, value][], encoding, body (≤ 256 KiB), size, truncated, durationMs, coldStart }` |
+| POST | `/projects/:slug/function/invoke` | `deployment:create` | Test request (D124), run on the function's node straight to its host: `{ method? (default GET), path? (default /, not under /__yoal/), headers?, body? }` → the node-task answer above with result `{ status, statusText, headers: [name, value][], encoding, body (≤ 256 KiB), size, truncated, durationMs, coldStart }` |
 | POST | `/projects/:slug/function/scheduled` | `deployment:create` | `{ cron }` (one of the active deployment's crons) runs `scheduled()` now → result `{ status, error, durationMs, coldStart }` |
-| GET | `/projects/:slug/function` | `deployment:read` | Functions view (D110): main module, compatibility date/flags, resolved bindings (no secret values), assets and `run_worker_first`, idle stop and the pinned workerd version. 404 when the project is not a function. A deploy of a bundle containing `skiff-function.json` validates it against the org; unsupported binding types and cron triggers fail with the phase that will serve them |
+| GET | `/projects/:slug/function` | `deployment:read` | Functions view (D110): main module, compatibility date/flags, resolved bindings (no secret values), assets and `run_worker_first`, idle stop and the pinned workerd version. 404 when the project is not a function. A deploy of a bundle containing `yoal-function.json` validates it against the org; unsupported binding types and cron triggers fail with the phase that will serve them |
 | GET | `/projects/:slug/runners` | `deployment:read` | GitHub Actions runner pool as GitHub reports it (`null` for other projects); `error` is set when GitHub cannot be reached (docs/RUNNERS.md) |
 | GET | `/templates` | `project:read` | first-party app templates and their form fields (plan 21) |
 | GET | `/templates/:id` | `project:read` | one template |
@@ -184,7 +184,7 @@ wire protocol is versioned in `packages/studio/src/protocol.ts` and may change b
 | GET/DELETE | `/databases/:name/backups/:id` | `database:read` / `database:delete` | one artifact; delete removes the object first |
 | POST | `/databases/:name/backups/:id/restore` | `database:create` (+ `project:update` with `project`) | `{ name, placement?, memoryMb?, cpus?, storageMb?, storage?, project?, envPrefix? }` → `202 { database }`; restore always creates a new database and verifies it |
 | GET/PATCH | `/databases/:name/backup-policy` | `database:read` / `database:update` | `{ enabled, schedule (five-field UTC cron), retentionDays }` |
-| GET/PATCH | `/databases/:name/pitr` | `database:read` / `database:update` | `SKIFF_FEATURE_PITR` ([PITR.md](./PITR.md)). `{ pitr }` with archive health, last base backup and `recoverableFrom`/`recoverableTo`/`windowCheckedAt`; PATCH `{ enabled }` (PostgreSQL 18 standard only; enabling queues the first full base backup) |
+| GET/PATCH | `/databases/:name/pitr` | `database:read` / `database:update` | `YOAL_FEATURE_PITR` ([PITR.md](./PITR.md)). `{ pitr }` with archive health, last base backup and `recoverableFrom`/`recoverableTo`/`windowCheckedAt`; PATCH `{ enabled }` (PostgreSQL 18 standard only; enabling queues the first full base backup) |
 | POST | `/databases/:name/pitr/backups` | `database:update` | `{ type: full\|diff\|incr }` → `202 { task }`; 409 while one is queued |
 | POST | `/databases/:name/pitr/restore` | `database:create` | `{ name, targetTime (ISO with offset), memoryMb?, cpus?, storageMb?, storage? }` → `202 { database }` on the source's node; 400 outside the recoverable window |
 | GET/POST | `/databases/:name/rotate` | `database:read` / `database:credentials` + `database:update` | `{ role: owner\|monitor }` → `202 { rotation }`; the node applies ALTER ROLE before the secret swaps |
@@ -205,9 +205,9 @@ cache hit ratio), `create_database` (same input as `POST /databases`; step-up ad
 envPrefix? }`), `detach_database` (`{ project, database }`) and `delete_database` (soft delete,
 confirmed by multi-round-trip input bound to the database, refused before prompting while
 attached; 2025-era clients get a dashboard link). There is **no credentials tool and no purge**
-over MCP (D58, D53). Guide: `skiff://guides/databases`.
+over MCP (D58, D53). Guide: `yoal://guides/databases`.
 
-**CLI.** `skif db list [--all]`, `create <name> [-p <project>] [--prefix P] [--version 16|17]
+**CLI.** `yoal db list [--all]`, `create <name> [-p <project>] [--prefix P] [--version 16|17]
 [--placement …] [--memory 256M] [--cpus 1] [--storage 10G]`, `info <name>` (status, node, size
 vs budget, attachments, top tables), `attach|detach <name> -p <project> [--prefix P]`,
 `delete <name>` (asks; `--yes`), `restore <name>`, `purge <name>` (type the name, or `--yes`),
@@ -250,7 +250,7 @@ secret keys, except `/credentials`.
 | DELETE | `/projects/:slug/storage/:name` | `storage:update` + `project:update` | detach and revoke the key; the app re-activates without the variables → `{ ok: true }` |
 | GET | `/storage/:name/objects` | `storage:read` | `?bucket&prefix&delimiter=/&token&limit` → `{ bucket, prefix, delimiter, objects: [{ key, sizeBytes, etag, lastModified, storageClass }], prefixes, isTruncated, nextToken }`. `delimiter=/` gives the folder view; `token` continues a truncated listing (D82) |
 | GET/HEAD | `/storage/:name/objects/item` | `storage:read` | `?bucket&key[&inline=1]`: GET streams the object (`content-disposition: attachment`, `etag`, `content-type`); HEAD returns the same headers without a body. Object keys travel in the query, never the path, so slashes are unambiguous |
-| PUT | `/storage/:name/objects/item` | `storage:update` | `?bucket&key`, raw body. Limited to `SKIFF_STORAGE_OBJECT_MAX_BYTES` (default 100 MiB); `content-type` is stored. Larger files need a presigned PUT (public instances) or the CLI |
+| PUT | `/storage/:name/objects/item` | `storage:update` | `?bucket&key`, raw body. Limited to `YOAL_STORAGE_OBJECT_MAX_BYTES` (default 100 MiB); `content-type` is stored. Larger files need a presigned PUT (public instances) or the CLI |
 | DELETE | `/storage/:name/objects/item` | `storage:update` | `?bucket&key` → `{ deleted, errors }`; idempotent |
 | POST | `/storage/:name/objects/delete` | `storage:update` | `{ keys }` (1–1000) in one S3 DeleteObjects call → `{ deleted, errors }` |
 | POST | `/storage/:name/objects/folder` | `storage:update` | `{ prefix }` creates a zero-byte folder marker ending in `/` |
@@ -281,9 +281,9 @@ bound to the instance, refused before prompting while attached; 2025-era clients
 link). Object tools: `list_objects` (folder view, pagination), `presign_object` (public instances
 only) and `create_object_folder`; `restart_storage` restarts the RustFS container with data and
 keys intact, and `get_storage_logs` pages the container log stream. There is **no key reveal, bucket delete, object delete or purge** over MCP (S6, D82). Guide:
-`skiff://guides/storage`.
+`yoal://guides/storage`.
 
-**CLI.** `skif storage list [--all]`, `create <name> [-b <bucket>]… [-p <project>] [--prefix P]
+**CLI.** `yoal storage list [--all]`, `create <name> [-b <bucket>]… [-p <project>] [--prefix P]
 [--public] [--placement …] [--memory 512M] [--cpus 1] [--storage 10G]`, `info <name>`,
 `update <name> [--memory] [--cpus] [--storage] [--version] [--public|--no-public]`,
 `restart <name>`, `logs <name> [--follow] [--limit] [--level] [--q]`, `buckets [list] <name>`, `buckets create|update <name> <bucket> [--access private|public-read]`,
@@ -292,7 +292,7 @@ keys intact, and `get_storage_logs` pages the container log stream. There is **n
 `detach <name> -p <project>`, `delete <name>` (asks; `--yes`), `restore <name>`, `purge <name>`
 (type the name, or `--yes`), `credentials <name> [--prefix AWS]` (prints the root key as env
 lines; `--json` prints everything), `metrics <name> [--since 1h | --from … --to …] [--interval
-1m|1h]`. All accept `--json`; `skif s3` is an alias.
+1m|1h]`. All accept `--json`; `yoal s3` is an alias.
 
 ## Managed queue brokers
 
@@ -302,7 +302,7 @@ server (JetStream on) per broker, placed once and reachable only on its node.
 | Method | Path | Permission | Notes |
 |---|---|---|---|
 | GET | `/brokers` | `broker:read` | `?includeDeleted=1` adds the trash → `{ brokers: BrokerView[] }` |
-| POST | `/brokers` | `broker:create` (+ `project:update` with `project`) | `{ name, engine? (nats), version? (2.12\|2.11), placement? (auto\|edge\|node id), memoryMb? (≥64, default 256), cpus? (default 0.5), storageMb? (message-store cap, default 2048), storage? (`system`, `fast`, `bulk` or a disk name; default: the kind's default from Settings → Storage, docs/STORAGE.md §2.2), project?, envPrefix? (default NATS) }` → `201 { broker }`. Only nodes whose agent advertises the `brokers` capability are candidates; `project` places it on that project's node. 422 when `SKIFF_FEATURE_BROKERS=0` |
+| POST | `/brokers` | `broker:create` (+ `project:update` with `project`) | `{ name, engine? (nats), version? (2.12\|2.11), placement? (auto\|edge\|node id), memoryMb? (≥64, default 256), cpus? (default 0.5), storageMb? (message-store cap, default 2048), storage? (`system`, `fast`, `bulk` or a disk name; default: the kind's default from Settings → Storage, docs/STORAGE.md §2.2), project?, envPrefix? (default NATS) }` → `201 { broker }`. Only nodes whose agent advertises the `brokers` capability are candidates; `project` places it on that project's node. 422 when `YOAL_FEATURE_BROKERS=0` |
 | GET | `/brokers/:name` | `broker:read` | `?includeDeleted=1` to read a trashed one → `{ broker }` |
 | PATCH | `/brokers/:name` | `broker:update` | any of `{ memoryMb, cpus, storageMb, version }`; more memory re-checks admission and the memory quota; `version` only moves forward (409 on a downgrade) → `{ broker }` |
 | DELETE | `/brokers/:name` | `broker:delete` | soft delete, restorable for the trash period; 409 while projects are attached → `{ broker }` |
@@ -312,7 +312,7 @@ server (JetStream on) per broker, placed once and reachable only on its node.
 | GET | `/brokers/:name/credentials` | `broker:credentials` | `{ credentials: { username, password, url, host, port, connectionSnippets, note } }`; loopback URL on the broker's node; `cache-control: no-store`; every read is audited. Not available over MCP (as D58) |
 | GET | `/brokers/:name/logs` | `logs:read` (+ `broker:read`) | `?after&limit&level&q` → the same page shape as `/storage/:name/logs`, `kind: "broker"` |
 | GET | `/brokers/:name/metrics` | `broker:read` | `?from&to&interval` (as `/databases/:name/metrics`; default the last hour at `1m`, ranges over 48 h use `1h`) → `{ points: BrokerMetricPoint[], interval }`: connections, store used/budget, messages, pending, awaiting ack, redelivered, oldest message age, and per-bucket published / messages and bytes in and out / slow consumers. Empty without ClickHouse (D123) |
-| GET | `/brokers/:name/queues` | `broker:read` | the newest stream listing the node reported (once a minute, SQLite, so it works without ClickHouse) → `{ brokerId, name, at, truncated, streams: [{ stream, queue, subjects, storage, retention, messages, bytes, maxBytes, firstAt, lastAt, consumerCount, pending, ackPending, redelivered, consumers: [{ name, pending, ackPending, redelivered, waiting, lastDeliveredAt }] }] }`. `queue` is the function queue name for `SKIFF_Q_<queue>` streams, else null |
+| GET | `/brokers/:name/queues` | `broker:read` | the newest stream listing the node reported (once a minute, SQLite, so it works without ClickHouse) → `{ brokerId, name, at, truncated, streams: [{ stream, queue, subjects, storage, retention, messages, bytes, maxBytes, firstAt, lastAt, consumerCount, pending, ackPending, redelivered, consumers: [{ name, pending, ackPending, redelivered, waiting, lastDeliveredAt }] }] }`. `queue` is the function queue name for `YOAL_Q_<queue>` streams, else null |
 | GET | `/projects/:slug/brokers` | `broker:read` | `{ attachments: [{ brokerName, envPrefix, envNames, … }] }` |
 | POST | `/projects/:slug/brokers` | `broker:update` + `project:update` | `{ broker, envPrefix? }` → `201 { attachment, warning }`; the app gets `<PREFIX>_URL/_HOST/_PORT/_USER/_PASSWORD` at activation and is placed on the broker's node at its next deploy. 409 for a duplicate prefix; 422 for static projects or services on another node (function projects attach brokers for their queues, D112) |
 | DELETE | `/projects/:slug/brokers/:name` | `broker:update` + `project:update` | detach; the app restarts without the variables |
@@ -325,7 +325,7 @@ is not running, its node is offline, or its agent predates `node-tasks`.
 
 | Method | Path | Permission | Notes |
 |---|---|---|---|
-| POST | `/brokers/:name/queues` | `broker:update` | `{ queue }` creates `SKIFF_Q_<queue>` → result `{ stream, created, state }` |
+| POST | `/brokers/:name/queues` | `broker:update` | `{ queue }` creates `YOAL_Q_<queue>` → result `{ stream, created, state }` |
 | POST | `/brokers/:name/queues/:queue/messages` | `broker:update` | `{ body, contentType? (json\|text, default json), delaySeconds? (≤ 43,200), count? (1–100) }` → `{ stream, sent, seqs, durationMs, state }` |
 | POST | `/brokers/:name/queues/:queue/redrive` | `broker:update` | `{ to, limit? (≤ 1,000) }` moves messages from `:queue` into `to` → `{ moved, remaining, state, source }` |
 | GET | `/brokers/:name/streams/:stream/messages` | `broker:update` | `?limit (≤ 50, default 20)&from=<seq>` reads without consuming → `{ stream, messages: [{ seq, subject, time, size, headers, encoding (utf8\|base64), body, truncated }], total, firstSeq, lastSeq, nextSeq }` |
@@ -358,7 +358,7 @@ RustFS posts bucket events to `POST /api/webhooks/storage/:id` with the instance
 
 Docs: [EMAIL.md](./EMAIL.md) (D114–D120). Sending domains, credentials, suppressions and the
 message log are org resources; the mail node and an org's sandbox state are platform settings.
-With `SKIFF_FEATURE_EMAIL=0`, configuring, creating domains or credentials, attaching and sending
+With `YOAL_FEATURE_EMAIL=0`, configuring, creating domains or credentials, attaching and sending
 return 403 `feature_disabled`, and the MCP tools are not offered.
 
 | Method | Path | Permission | Notes |
@@ -370,7 +370,7 @@ return 403 `feature_disabled`, and the MCP tools are not offered.
 | POST | `/email/domains` | `email:update` | `{ name, sending? (default true), autoDns? (default true) }`; generates the DKIM key, creates the records through Cloudflare when the zone is the platform's, then checks DNS → `201 { domain }`. 409 when the name is taken; `receiving` is refused until inbound ships |
 | GET | `/email/domains/:name` | `email:read` | `{ domain }` |
 | PATCH | `/email/domains/:name` | `email:update` | `{ sending? }` → `{ domain }` |
-| DELETE | `/email/domains/:name` | `email:delete` | removes the domain and the records Skiff created → `204` |
+| DELETE | `/email/domains/:name` | `email:delete` | removes the domain and the records Yoal created → `204` |
 | POST | `/email/domains/:name/check` | `email:read` | looks the records up in public DNS now; verified once DKIM is found → `{ domain }` |
 | POST | `/email/send` | `email:send` | `EmailSendInput` (`from`, `to/cc/bcc` ≤ 50 in total, `replyTo`, `subject`, `text`/`html`/`raw`, `attachments`, `headers`, `tags`, `unsubscribe`, `idempotencyKey`) → `202 { id, accepted, suppressed }`. Suppressed recipients are dropped; 403 `email_paused`, 429 `rate_limited`/`daily_quota`, 422 for the other policy codes (`from_not_verified`, `sandbox_recipient`, `all_suppressed`, …) |
 | POST | `/email/send-batch` | `email:send` | `{ messages: EmailSendInput[] }` (≤ 100) → `{ results }`, where `results[i]` is `{ id, accepted, suppressed }` or `{ error: { code, message } }` for `messages[i]` |
@@ -380,7 +380,7 @@ return 403 `feature_disabled`, and the MCP tools are not offered.
 | POST | `/email/suppressions` | `email:update` | `{ address, reason? (manual\|bounce\|complaint\|unsubscribe, default manual) }` → `201 { suppression }` |
 | DELETE | `/email/suppressions/:address` | `email:update` | takes the address off the list → `204` (404 when it is not on it) |
 | GET | `/email/addresses` | `email:read` | sandbox recipients (EMAIL.md §4.3) → `{ addresses: EmailSandboxAddressView[] }` (`status` pending\|verified, `verifiedAt`, `sentAt`, `expiresAt`) |
-| POST | `/email/addresses` | `email:update` | `{ address }` mails a 24 h single-use link through the mail node from `no-reply@<mail domain>` (platform SMTP when no mail node is set, D170) → `201 { address }`; again for a pending address sends a fresh link (429 under a minute or after 5 per link); a verified one → `200` unchanged. 409 `platform_mail_unavailable` with neither a mail node nor `SKIFF_SMTP_*`, 409 `email_paused` while sending is paused, 422 `recipient_suppressed`, 409 `quota_exceeded` over 50 addresses / 10 pending, 502 `platform_mail_failed` |
+| POST | `/email/addresses` | `email:update` | `{ address }` mails a 24 h single-use link through the mail node from `no-reply@<mail domain>` (platform SMTP when no mail node is set, D170) → `201 { address }`; again for a pending address sends a fresh link (429 under a minute or after 5 per link); a verified one → `200` unchanged. 409 `platform_mail_unavailable` with neither a mail node nor `YOAL_SMTP_*`, 409 `email_paused` while sending is paused, 422 `recipient_suppressed`, 409 `quota_exceeded` over 50 addresses / 10 pending, 502 `platform_mail_failed` |
 | DELETE | `/email/addresses/:address` | `email:update` | → `204` (404 when unknown) |
 | GET | `/email/access-request` | `email:read` | the org's latest production access request → `{ request: EmailAccessRequestView \| null }` |
 | POST | `/email/access-request` | `email:update`, org owner/admin | `{ useCase (20–2000), expectedDailyVolume (1–10,000,000), website? (http/https URL) }` → `201 { request }`; 409 when active, paused or a request is pending; notifies platform admins |
@@ -401,26 +401,26 @@ credential, settings, org-state or access-request tools.
 
 ## CLI browser login (`/cli/login`, `/api/v1/cli/token`)
 
-`skif login` (browser sign-in is the default) opens
+`yoal login` (browser sign-in is the default) opens
 `GET /cli/login?redirect_uri=http://127.0.0.1:<port>/callback&state=…&code_challenge=…&code_challenge_method=S256`.
 The page requires a signed-in dashboard session and, on approval, redirects a one-time code to the
 loopback URI. `POST /cli/token` with `{ code, codeVerifier }` verifies the PKCE challenge, redeems
-the code once, and returns `{ token, platform, contentDomain }`; `token` is a normal `skif_…` API
+the code once, and returns `{ token, platform, contentDomain }`; `token` is a normal `yoal_…` API
 key for the REST API. Codes expire after five minutes and are stored hashed.
 
 ## Agent protocol (`/api/agent`)
 
 Machine-authenticated with a node bearer token; no cookies. `POST /api/agent/join` consumes a
 single-use join token and returns the node's long-lived token. A managed overlay join adds
-`{ networkMode: "skiff", wireguardPublicKey }` and receives a `wireguard` block (address, CIDR, MTU,
+`{ networkMode: "yoal", wireguardPublicKey }` and receives a `wireguard` block (address, CIDR, MTU,
 listen port and peer list); an external/BYO join omits both and keeps `publicAddress`.
 
 - `GET /api/agent/desired-state` — desired-state JSON; ETag `"v<version>"`; `?wait=<seconds>` long-polls
   (server cap 25). The agent sends `wait=8` to stay under Bun's default 10 s idle timeout
   (`CONNECTION_IDLE_TIMEOUT`), and re-pulls without `If-None-Match` after a failed converge so
   expired presigned release URLs are reissued. The token is checked before the wait.
-- `POST /api/agent/heartbeat` — stats + actual state version every ~10 s, plus `storage` (what `skiff-storage.service` last applied) and, on a managed overlay node, `wireguard` peer health (public keys, endpoints, handshake times and byte counters).
-- `GET /api/agent/storage` — `{ dataDir, buildDir }` for the node's root `skiff-storage.service`, which re-reads the paths here instead of trusting the agent (D48).
+- `POST /api/agent/heartbeat` — stats + actual state version every ~10 s, plus `storage` (what `yoal-storage.service` last applied) and, on a managed overlay node, `wireguard` peer health (public keys, endpoints, handshake times and byte counters).
+- `GET /api/agent/storage` — `{ dataDir, buildDir }` for the node's root `yoal-storage.service`, which re-reads the paths here instead of trusting the agent (D48).
 - `POST /api/agent/telemetry` — pre-aggregated 1-minute access buckets (never raw requests), plus
   `databases` / `databaseSnapshots` and `objectStorage` / `objectStorageBuckets` samples. Database
   and storage sizes land in SQLite even when DuckDB telemetry is disabled; samples for instances
@@ -534,7 +534,7 @@ extending a request, and all platform bindings, remain dashboard/CLI-only.
 An issuer → service-account mapping for RFC 8693 token exchange ([IAM.md](./IAM.md) I17, §7.3;
 D190). A trust is org-scoped and holds no secret. `GET` needs `federation:read`; writes need
 `federation:create`, `federation:update` or `federation:delete`. Deleting a trust stops new
-exchanges; tokens already minted keep their TTL. The CLI is `skif federation list|create|delete`.
+exchanges; tokens already minted keep their TTL. The CLI is `yoal federation list|create|delete`.
 
 | Method | Path | Permission | Notes |
 |---|---|---|---|
@@ -564,13 +564,13 @@ repository, `deployment:create`/`project:update` at its linked projects and `ima
 | PATCH | `/service-accounts/:id` | `serviceAccount:update` | `{ name?, description?, ownerGroupId?, disabled? }` → `{ serviceAccount }`; disabling bumps the org's IAM version |
 | DELETE | `/service-accounts/:id` | `serviceAccount:delete` | `{ ok: true }`; 409 while a binding still references it |
 | GET | `/service-accounts/:id/keys` | `serviceAccount:read` + `serviceAccount:manage-keys` (or `accessKey:read-all`) | `{ accessKeys }` for that account, newest first; no raw key |
-| POST | `/service-accounts/:id/keys` | `serviceAccount:manage-keys` | `{ name, permissions?, resources?, expiresInSeconds?, allowedCidrs? }` → 201 `{ accessKey, key }`; the `skif_…` key is shown once |
+| POST | `/service-accounts/:id/keys` | `serviceAccount:manage-keys` | `{ name, permissions?, resources?, expiresInSeconds?, allowedCidrs? }` → 201 `{ accessKey, key }`; the `yoal_…` key is shown once |
 | DELETE | `/service-accounts/:id/keys?keyId=…` | `serviceAccount:manage-keys` | revoke one key owned by the account → `{ ok: true, accessKey }`; 400 without `keyId`, 404 for another account's key |
-| POST | `/service-accounts/:id/token` | `serviceAccount:impersonate` | `{ ttl? (≤3600, default 3600), audience? (default the platform origin) }` → 201 `{ access_token, token_type, expires_in, audience, service_account }`; an STS token carrying `act` and `impersonated_by`, audited as `service_account.impersonate`. `skif sa token` |
+| POST | `/service-accounts/:id/token` | `serviceAccount:impersonate` | `{ ttl? (≤3600, default 3600), audience? (default the platform origin) }` → 201 `{ access_token, token_type, expires_in, audience, service_account }`; an STS token carrying `act` and `impersonated_by`, audited as `service_account.impersonate`. `yoal sa token` |
 
 ### Access keys
 
-A key belongs to one org and one principal; the raw `skif_…` key is returned exactly once, from
+A key belongs to one org and one principal; the raw `yoal_…` key is returned exactly once, from
 `POST`, and only its hash and visible `start` are stored ([IAM.md](./IAM.md) I14, §7.2).
 
 | Method | Path | Permission | Notes |
@@ -633,7 +633,7 @@ writes need a platform administrator **session** (D129), and platform guardrail 
 "Please verify it's you" before a sensitive action ([STEP-UP.md](./STEP-UP.md); D186). These are
 Better Auth endpoints under `/api/auth`, not `/api/v1`, and need the dashboard session cookie. A
 guarded action answers `403 { error: "step_up_required", permission, level }`; the client opens the
-dialog and retries the original request once. Enforcement is off unless `SKIFF_STEP_UP=1`.
+dialog and retries the original request once. Enforcement is off unless `YOAL_STEP_UP=1`.
 
 | Method | Path | Notes |
 |---|---|---|
@@ -667,7 +667,7 @@ write-only; a blank `clientSecret` on update keeps the stored one.
 | PUT | `/sso/policy` | `sso:manage` | a partial of those fields; session limits are seconds, `null` turns a limit off; `autoDisableUnusedServiceAccounts` lets the daily pass disable service accounts unused for 90 days (off by default) |
 | GET | `/sso/presets` | signed in | `{ presets }`: the ready-made IdP set-ups and the values each needs (D180) |
 | GET | `/sso/resolve?email=` | public | email → `{ provider: { id, name, orgId, domain } \| null }`; only a verified domain routes |
-| GET | `/sso/group-mappings` | `sso:read` | `{ mappings }`: IdP group claim value → Skiff group |
+| GET | `/sso/group-mappings` | `sso:read` | `{ mappings }`: IdP group claim value → Yoal group |
 | POST | `/sso/group-mappings` | `sso:manage` | `{ providerId, claimValue, groupId }` → 201; the mapping applies on the next sign-in |
 | DELETE | `/sso/group-mappings/:id` | `sso:manage` | `{ ok: true }` |
 | GET | `/sso/scim` | `sso:read` | `{ endpoint, tokens }`; the protocol endpoint is `/api/auth/scim/v2` and no token value is returned |
@@ -687,13 +687,13 @@ during a rollover, but only the current private key decrypts, so import the new 
 IdP before the old one is used to encrypt. Rotate either key in Settings → SSO; there is no REST
 rotate route.
 
-### Access policies (Skiff Access)
+### Access policies (Yoal Access)
 
 Ordered allow/deny rules for the `access` protection mode ([IAM.md](./IAM.md) I25, §11.1; D188,
 D192). A matching deny beats every allow; no match denies. Rules match an org group, any member, an
 email or domain, an SSO provider, a user pool and its groups, a CIDR, or a service-token header.
 
-A **machine token** is a named `skiff_svc_…` secret stored as a header name and its SHA-256
+A **machine token** is a named `yoal_svc_…` secret stored as a header name and its SHA-256
 (legacy `serviceToken` rule matchers still work and the edge merges both). The raw value is
 returned once from `POST` and never again; Settings → Access policies → Machines is the same
 surface. Desired state carries only header names, hashes and actions, and the agent decides a
@@ -711,16 +711,16 @@ allow rule does not sign existing visitors out.
 | PATCH | `/access-policies/:id` | `accessPolicy:update` at its scope | `{ name?, description?, enabled?, rules? }` (rules replace the ordered list) |
 | DELETE | `/access-policies/:id` | `accessPolicy:delete` at its scope | `{ ok: true }`; refused while a project or environment still assigns it |
 | GET | `/access-policies/:id/service-tokens` | `accessPolicy:read` at its scope | the array directly: each item has id, name, header, creation/last-used/revocation times; never the secret or hash |
-| POST | `/access-policies/:id/service-tokens` | `accessPolicy:update` at its scope | `{ name, header? (default X-Skiff-Access-Token) }` → 201 `{ token, secret }`; `secret` is the `skiff_svc_…` value and is shown once. At most 100 active tokens plus legacy matchers per policy. `cache-control: no-store` |
+| POST | `/access-policies/:id/service-tokens` | `accessPolicy:update` at its scope | `{ name, header? (default X-Yoal-Access-Token) }` → 201 `{ token, secret }`; `secret` is the `yoal_svc_…` value and is shown once. At most 100 active tokens plus legacy matchers per policy. `cache-control: no-store` |
 | DELETE | `/access-policies/:id/service-tokens/:tokenId` | `accessPolicy:update` at its scope | revoke one token → `{ ok: true }`; the row is kept for history and the policy version is bumped, signing out browser sessions issued under that policy. Idempotent |
 | POST | `/access/service-tokens/touch` | signed in or a valid API key (the request hook still authenticates this path) | `{ policyId, header?, tokenHash (64 hex) }` → 204 always; the agent reports a matched machine token's last use, throttled to once a minute. It never reveals whether a token exists. Note: the edge calls it without credentials today, so a 401 from the hook leaves last-used unchanged |
 | POST | `/projects/:slug/access` | `project:update` | assign one with `{ scope: production\|previews, mode: "access", policyId }`; this is the same route as the other protection modes. Named-environment assignment exists only in the dashboard |
-| GET | `/access/authorize?host=&return=` | public (platform session optional) | the Skiff Access login page. The agent redirects an unauthenticated visitor here; the platform evaluates the host's ordered policy and, on `allow`, redirects to the agent's `/_skiff/access/callback` with a single-use host-bound token, else renders an HTML 403. A `userPool` rule accepts the pool's session cookie or bearer access token and matches `groups`/`poolGroups` metadata; a person with no pool session is sent to that pool's hosted login. SSO sessions are attributed to their linked provider. Service-token rules are deliberately not evaluated here, so a leaked token cannot mint a browser session. Only content hosts this platform serves may be a `return` target |
+| GET | `/access/authorize?host=&return=` | public (platform session optional) | the Yoal Access login page. The agent redirects an unauthenticated visitor here; the platform evaluates the host's ordered policy and, on `allow`, redirects to the agent's `/_yoal/access/callback` with a single-use host-bound token, else renders an HTML 403. A `userPool` rule accepts the pool's session cookie or bearer access token and matches `groups`/`poolGroups` metadata; a person with no pool session is sent to that pool's hosted login. SSO sessions are attributed to their linked provider. Service-token rules are deliberately not evaluated here, so a leaked token cannot mint a browser session. Only content hosts this platform serves may be a `return` target |
 
 ### User pools and OIDC clients
 
 A pool is an org resource: a hosted OIDC provider for one app's own users ([IAM.md](./IAM.md)
-I26–I29, §11.2). The native `skiff-identity` engine runs in the control plane by default: pool users,
+I26–I29, §11.2). The native `yoal-identity` engine runs in the control plane by default: pool users,
 sessions, authorization codes, access/ID tokens, magic links, password reset, email verification and
 invites live in the control plane's `user_pool_*` tables, signed by the pool's `pool:<id>` key. A
 pool assigned to the separate identity process is served from that process's own database (see
@@ -741,12 +741,12 @@ dashboard action (there is no REST attachment route): it injects `<P>_ISSUER`, `
 | Method | Path | Permission | Notes |
 |---|---|---|---|
 | GET | `/user-pools` | `userPool:read` (org or per pool) | `{ pools }`; an org grant sees every pool |
-| POST | `/user-pools` | `userPool:create` | `{ name, description?, engine? (skiff-identity), signupMode? (invite\|open), requireEmailVerification?, mfaRequired?, breachCheckEnabled?, theme? }` → 201 with the pool; 409 for a duplicate name |
+| POST | `/user-pools` | `userPool:create` | `{ name, description?, engine? (yoal-identity), signupMode? (invite\|open), requireEmailVerification?, mfaRequired?, breachCheckEnabled?, theme? }` → 201 with the pool; 409 for a duplicate name |
 | GET | `/user-pools/:id` | `userPool:read` on the pool | `{ pool }` with issuer, active signing `kid`, `mfaRequired` and `breachCheckEnabled` |
 | PATCH | `/user-pools/:id` | `userPool:update` on the pool | `{ name?, description?, signupMode?, requireEmailVerification?, mfaRequired?, breachCheckEnabled?, theme?, disabled? }` → `{ pool }`; disabling keeps clients and keys |
 | DELETE | `/user-pools/:id` | `userPool:delete` on the pool | `{ ok: true }`; removes the clients, signing key, users, passkeys, TOTP rows and groups; refused while a project is attached |
-| GET | `/user-pools/:id/export` | `userPool:manage-users` on the pool | `skiff.user-pool/v1` JSON download with pool settings, users (password hashes included), groups, clients (secrets omitted) and OAuth providers (secrets omitted); `content-disposition: attachment`, `cache-control: no-store` |
-| POST | `/user-pools/:id/import` | `userPool:manage-users` on the pool | `{ format? (auto\|skiff\|auth0\|cognito\|firebase), dryRun?, data }` → 200 for a dry run, 201 for an apply. Users are matched by email and never overwritten; unsupported hashes force a reset; confidential clients get a fresh secret once (`clientSecrets`); providers import disabled with `needsSecret`. The report gives create/skip/invalid counts and per-email outcomes |
+| GET | `/user-pools/:id/export` | `userPool:manage-users` on the pool | `yoal.user-pool/v1` JSON download with pool settings, users (password hashes included), groups, clients (secrets omitted) and OAuth providers (secrets omitted); `content-disposition: attachment`, `cache-control: no-store` |
+| POST | `/user-pools/:id/import` | `userPool:manage-users` on the pool | `{ format? (auto\|yoal\|auth0\|cognito\|firebase), dryRun?, data }` → 200 for a dry run, 201 for an apply. Users are matched by email and never overwritten; unsupported hashes force a reset; confidential clients get a fresh secret once (`clientSecrets`); providers import disabled with `needsSecret`. The report gives create/skip/invalid counts and per-email outcomes |
 | GET | `/user-pools/:id/clients` | `userPool:read` on the pool | `{ clients }`: public `clientId`, redirect allowlist, no secret |
 | POST | `/user-pools/:id/clients` | `userPool:credentials` on the pool | `{ name, redirectUris, public? }` → 201 `{ client, clientSecret }`; `clientSecret` is `null` for a public (PKCE) client and is shown once |
 | DELETE | `/user-pools/:id/clients/:clientId` | `userPool:credentials` on the pool | `{ ok: true }`; `:clientId` may be the row id or the public OIDC `client_id`; refused while attached |
@@ -763,7 +763,7 @@ dashboard action (there is no REST attachment route): it injects `<P>_ISSUER`, `
 | GET | `/user-pools/:id/.well-known/openid-configuration` | public | OpenID Connect Discovery for the pool; 404 while the pool is disabled |
 | GET | `/user-pools/:id/.well-known/jwks.json` | public | the pool's `pool:<id>` signing keys; 404 while disabled |
 
-**Pool export and import (D204).** `GET /user-pools/:id/export` returns a `skiff.user-pool/v1`
+**Pool export and import (D204).** `GET /user-pools/:id/export` returns a `yoal.user-pool/v1`
 document with users and their password hashes, groups, clients (secrets always omitted) and
 providers (secrets always omitted). `POST /user-pools/:id/import` accepts that document or an
 Auth0, Cognito (JSON or CSV) or Firebase export, with `format: "auto"` by default. Run
@@ -800,10 +800,10 @@ magic-link token is single use; verification marks the address verified.
 
 ### Identity process on the auth host
 
-When a pool is assigned to `skiff-identity`, Caddy sends that pool's `/<pool>/…` and
+When a pool is assigned to `yoal-identity`, Caddy sends that pool's `/<pool>/…` and
 `/pool/<pool>/…` paths to the identity process on loopback instead of the control-plane fallback.
 The process has no public admin API; the node agent pushes its non-secret projection over
-`/run/skiff/identity.sock`. Its public surface is:
+`/run/yoal/identity.sock`. Its public surface is:
 
 | Method | Path | Notes |
 |---|---|---|
@@ -831,18 +831,18 @@ narrowed by the matching federation trust's restriction and the optional `scope`
 |---|---|---|---|
 | POST | `/api/iam/token` (not under `/api/v1`) | none; the subject token is the credential | form-urlencoded (JSON accepted): `grant_type=urn:ietf:params:oauth:grant-type:token-exchange`, `subject_token`, `subject_token_type?` (`access_token\|jwt\|id_token`), `audience?`, `scope?`, `trust_id?` → `{ access_token, issued_token_type, token_type: "Bearer", expires_in }`; 400 with RFC 8693 `error`/`error_description`. `cache-control: no-store` |
 | GET | `/.well-known/jwks.json` (platform origin) | public | every signing-key purpose except `pool:*`; 5-minute cache |
-| GET | `/.well-known/openid-configuration` (platform origin) | public | issuer, `jwks_uri`, `token_endpoint`, token-exchange grant, subject token types and the claims Skiff mints |
+| GET | `/.well-known/openid-configuration` (platform origin) | public | issuer, `jwks_uri`, `token_endpoint`, token-exchange grant, subject token types and the claims Yoal mints |
 
-From a workload, `skif identity token --audience <aud>` reads `$SKIFF_TOKEN_FILE` (or
-`/var/run/skiff/token`) and uses the node metadata endpoint for a non-`skiff` audience;
-`skif sts exchange --subject-token-file <path> --audience <aud> [--scope <p>]` runs this exchange.
+From a workload, `yoal identity token --audience <aud>` reads `$YOAL_TOKEN_FILE` (or
+`/var/run/yoal/token`) and uses the node metadata endpoint for a non-`yoal` audience;
+`yoal sts exchange --subject-token-file <path> --audience <aud> [--scope <p>]` runs this exchange.
 Neither prints the subject token. The full setup, including AWS, GCP and Azure trust policies, is
 in [CLOUD-IDENTITY.md](./CLOUD-IDENTITY.md).
 
 A workload or STS token is accepted as `Bearer` by the REST API, MCP and the registry realm; the
 registry also accepts one as the Basic password. It resolves to the service account's principal,
-narrowed by the token's `scope` and `resources`. A workload token must carry `aud: skiff`; an STS
-token may carry `skiff`, the platform origin or the MCP resource, depending on the surface. A
+narrowed by the token's `scope` and `resources`. A workload token must carry `aud: yoal`; an STS
+token may carry `yoal`, the platform origin or the MCP resource, depending on the surface. A
 missing or disabled service account, or a token whose `org_id` no longer matches it, is refused even
 with a valid signature. Storage STS is built but activation-only: the control plane exchanges a
 workload token for short-lived RustFS credentials when the node advertises `storage-sts`, and the
@@ -854,14 +854,14 @@ minted.
 
 ## Objects (local store only)
 
-With `SKIFF_OBJECT_STORE=local`, presigned URLs point at `/api/objects/<key>?exp=&sig=` and are
+With `YOAL_OBJECT_STORE=local`, presigned URLs point at `/api/objects/<key>?exp=&sig=` and are
 verified with HMAC. With R2, URLs point directly at R2.
 
 ## Site access bridge
 
-`GET|POST /_skiff/site-login?project=<id>&return=<content url>` authenticates a visitor (platform
+`GET|POST /_yoal/site-login?project=<id>&return=<content url>` authenticates a visitor (platform
 session or password), redeems share links, and redirects to
-`https://<host>/_skiff/callback?token=<host-bound token>` where the agent sets the host-only cookie.
+`https://<host>/_yoal/callback?token=<host-bound token>` where the agent sets the host-only cookie.
 The token is valid for 60 s and is redeemed once (the agent remembers its `jti`); the cookie
 carries the session expiry (`sexp`).
 

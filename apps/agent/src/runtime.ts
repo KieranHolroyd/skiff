@@ -1,5 +1,5 @@
 import { promises as fs } from 'node:fs';
-import { databaseCapabilities, functionIsPython } from '@skiff/contracts';
+import { databaseCapabilities, functionIsPython } from '@yoal/contracts';
 import type {
 	BrokerEngine,
 	DatabaseEngine,
@@ -10,7 +10,7 @@ import type {
 	WorkloadActivation,
 	WorkloadDesired,
 	WorkloadStatus,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { DatabaseTarget, DatabaseTargetSource } from './database-stats.ts';
 import { renderWorkerdConfigParts } from './function-config.ts';
 import { renderFunctionShim } from './function-shim.ts';
@@ -118,7 +118,7 @@ interface HeldStorageAdmin {
 /** RustFS answers 200 here once the S3 API is up (verified on 1.0.4). */
 export const STORAGE_HEALTH_PATH = '/health';
 
-export const DEFAULT_WORKLOAD_SOCKET_DIR = '/run/skiff-workloads';
+export const DEFAULT_WORKLOAD_SOCKET_DIR = '/run/yoal-workloads';
 const DEFAULT_HEALTH_TIMEOUT_MS = 30_000;
 const DEFAULT_RETRY_DELAY_MS = 60_000;
 const HEALTH_PROBE_INTERVAL_MS = 500;
@@ -925,7 +925,7 @@ export async function probeWorkloadHealth(
 		const response = await fetcher(url, {
 			method: 'GET',
 			redirect: 'manual',
-			headers: { 'user-agent': 'skiff-agent-health' },
+			headers: { 'user-agent': 'yoal-agent-health' },
 			signal: AbortSignal.any([signal, AbortSignal.timeout(HEALTH_PROBE_TIMEOUT_MS)]),
 			...(socketPath ? { unix: socketPath } : {}),
 		});
@@ -1196,7 +1196,7 @@ export function withOptionalSpec(workload: WorkloadDesired): WorkloadDesired {
 		extras.database = {
 			engine: database.engine as NonNullable<WorkloadDesired['database']>['engine'],
 			version: database.version,
-			// Skiff-built Postgres image variants (D126); absent means the engine's own image.
+			// Yoal-built Postgres image variants (D126); absent means the engine's own image.
 			...(database.variant === 'postgis' || database.variant === 'pg_cron' ? { variant: database.variant } : {}),
 			...((candidate.database as { tls?: unknown } | undefined)?.tls === true ? { tls: true } : {}),
 			// Point-in-time recovery (docs/PITR.md): without it the helper renders no WAL archiving.

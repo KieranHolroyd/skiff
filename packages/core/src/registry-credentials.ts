@@ -1,5 +1,5 @@
 import { and, eq } from 'drizzle-orm';
-import { registryCredentials } from '@skiff/db';
+import { registryCredentials } from '@yoal/db';
 import {
 	MAX_REGISTRY_CREDENTIALS_PER_ORG,
 	parseImageReference,
@@ -10,7 +10,7 @@ import {
 	type RegistryCredentialCreate,
 	type RegistryCredentialUpdate,
 	type RegistryCredentialView,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, NotFoundError, ValidationError } from './errors.ts';
 import { newId } from './util.ts';
@@ -143,7 +143,7 @@ export class RegistryCredentialService {
 	 */
 	authForImage(orgId: string, image: string | undefined, desiredId?: string): RegistryAuthEntry[] {
 		if (!image) return [];
-		// Skiff's own registry: a per-workload login valid only for this image's repository (G1).
+		// Yoal's own registry: a per-workload login valid only for this image's repository (G1).
 		if (desiredId && this.ctx.registry.isOwnImage(image)) return [this.ctx.registry.workloadLogin(desiredId)];
 		const entries: RegistryAuthEntry[] = [];
 		const row = this.rowForImage(orgId, image);

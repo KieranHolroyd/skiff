@@ -1,14 +1,14 @@
-# Skiff — Email (a self-hosted SES)
+# Yoal — Email (a self-hosted SES)
 
 Status: **E1 (outbound) built 2026-11-07**, not yet exercised on the prod node (the PTR still has
 to be set, §2). Decisions **D114–D120** in [DECISIONS.md](./DECISIONS.md); D114 amends D22.
 Execution plan and what's left: [plan 24](./build-plan/plans/24-email.md). Inbound routes, the
 function binding and tenant webhooks (E2) are designed here but not built.
 
-Skiff Email lets apps send and receive mail on their own domains: verified sending domains with
+Yoal Email lets apps send and receive mail on their own domains: verified sending domains with
 DKIM, a REST send API, SMTP submission, a `send_email` binding and an `email()` handler for
 functions, inbound routing, a suppression list, bounce and complaint handling, delivery events and
-signed webhooks. It is Amazon SES's job done on the user's own nodes, by **Skiff's own MTA
+signed webhooks. It is Amazon SES's job done on the user's own nodes, by **Yoal's own MTA
 delivering straight to recipients' MX hosts**.
 
 Everything tenant-facing goes through `packages/core` (`EmailService`); REST, MCP, CLI and the
@@ -31,16 +31,16 @@ dashboard (**Email** in the sidebar) stay thin surfaces, as with brokers (D111).
 
 **Non-goals (v1)**
 
-- Mailboxes, IMAP/POP or webmail. Skiff routes inbound mail; it does not store it for humans.
+- Mailboxes, IMAP/POP or webmail. Yoal routes inbound mail; it does not store it for humans.
 - Marketing features: contact lists, campaigns, a template designer, open/click tracking (tracking
   is phase 3, §11).
 - Dedicated IPs per org, IP warm-up automation across many IPs, or multi-region sending.
-- Replacing the platform's own mail. Sign-in links, invites and alerts keep `SKIFF_SMTP_*` (D22),
+- Replacing the platform's own mail. Sign-in links, invites and alerts keep `YOAL_SMTP_*` (D22),
   so they still work when the mail node is down (§10).
 
 ---
 
-## 2. Delivery reality (why this is harder than the rest of Skiff)
+## 2. Delivery reality (why this is harder than the rest of Yoal)
 
 D22 rejected self-hosted delivery because mail from a fresh VPS IP lands in spam. Choosing our own
 MTA (D114) means owning the things SES hides. The design makes each one explicit:
@@ -48,18 +48,18 @@ MTA (D114) means owning the things SES hides. The design makes each one explicit
 | Requirement | Who enforces it | Where |
 |---|---|---|
 | Port 25 egress allowed by the provider (Scaleway: security group "Enable SMTP", after KYC) | Operator, checked by preflight | §3.3 |
-| Forward-confirmed reverse DNS: the IP's PTR names the HELO host and that host resolves back to the IP | Operator sets the PTR at the provider; Skiff publishes the A record and checks the round trip | §3.3 |
+| Forward-confirmed reverse DNS: the IP's PTR names the HELO host and that host resolves back to the IP | Operator sets the PTR at the provider; Yoal publishes the A record and checks the round trip | §3.3 |
 | IP not on major blocklists (Spamhaus, Barracuda, …) | Preflight + daily check, alert on listing | §3.3, §7.2 |
-| DKIM on every message, aligned with `From:` | Skiff (per-domain keys, signed in the MTA) | §4 |
-| SPF covering the sending IPs | Skiff publishes `_spf.<mailDomain>`; domains include it | §4.2 |
-| DMARC record on the `From:` domain (Gmail/Yahoo bulk rules) | Domain owner; Skiff checks and suggests | §4.2 |
+| DKIM on every message, aligned with `From:` | Yoal (per-domain keys, signed in the MTA) | §4 |
+| SPF covering the sending IPs | Yoal publishes `_spf.<mailDomain>`; domains include it | §4.2 |
+| DMARC record on the `From:` domain (Gmail/Yahoo bulk rules) | Domain owner; Yoal checks and suggests | §4.2 |
 | TLS to recipient MX when offered; valid cert on our MX and submission ports | MTA; cert from Caddy | §3.2 |
 | Bounce rate < 5 %, complaint rate < 0.3 % (Gmail's line) | Suppression + automatic pause per org | §7 |
 | One-click unsubscribe (RFC 8058) on bulk mail | Sender (we pass headers through), optional helper in the send API | §5.1 |
 | Gradual ramp on a new IP | Per-destination traffic shaping + org sandbox | §3.2, §7.3 |
 | Escape hatch when port 25 is blocked or the IP is listed | Optional smarthost relay per destination (SES, any SMTP) | §3.4 |
 
-Skiff cannot make a bad IP good. Preflight refuses to enable direct delivery until port 25, FCrDNS
+Yoal cannot make a bad IP good. Preflight refuses to enable direct delivery until port 25, FCrDNS
 and the blocklist check pass, and says which one failed.
 
 ---
@@ -71,7 +71,7 @@ and the blocklist check pass, and says which one failed.
 The mail node is a platform setting (Email → Mail server, `settings` key `email.node_id`), not a
 placement role: a platform admin picks one node whose agent advertises the `mail` capability, and
 its public IPv4 (`email.ipv4`). That IP is its own setting because `nodes.public_address` is the
-WireGuard upstream the edge proxies to, which the edge itself never has. Left blank, Skiff uses a
+WireGuard upstream the edge proxies to, which the edge itself never has. Left blank, Yoal uses a
 public IPv4 in the node's address, or for the edge the platform host's A record in the managed
 Cloudflare zone (its origin, even when proxied), and otherwise asks. It never takes it from public
 DNS (a proxied host answers with Cloudflare's IPs). Private, CGNAT and loopback ranges are refused. It runs the MTA and accepts SMTP on public
@@ -86,14 +86,14 @@ weighted MX records and spool failover are a clustering phase (§11, E4).
 Agents advertise a `mail` capability in the heartbeat (as `brokers` does); only those nodes can
 be chosen. Desired state carries `mail` (generation + hostnames, no secrets) only for that node.
 
-### 3.2 The engine: `skiff-mail`, Skiff's own MTA (D115)
+### 3.2 The engine: `yoal-mail`, Yoal's own MTA (D115)
 
-The MTA is Skiff code: `packages/mail`, run as **`skiff-agent mail`** under its own unit,
-`skiff-mail.service`. This is the studio pattern: the same signed binary as the agent, with its own
+The MTA is Yoal code: `packages/mail`, run as **`yoal-agent mail`** under its own unit,
+`yoal-mail.service`. This is the studio pattern: the same signed binary as the agent, with its own
 cgroup and sandbox, and the agent as its only client. It needs no new release artifact or upstream
 pin. The protocol work comes from the nodemailer family (MIT / MIT-0, one maintainer, all mature):
 `smtp-server` for the listeners, nodemailer's `SMTPConnection` for outbound, `mailauth` for DKIM
-sign and verify, SPF and DMARC, and `mailparser` for inbound parsing. Skiff writes the rest.
+sign and verify, SPF and DMARC, and `mailparser` for inbound parsing. Yoal writes the rest.
 
 | Part | What it does | Module |
 |---|---|---|
@@ -107,51 +107,51 @@ sign and verify, SPF and DMARC, and `mailparser` for inbound parsing. Skiff writ
 | Classification | SMTP replies → `delivered` / transient / permanent with a bounce class (`invalid-recipient`, `bad-domain`, `mailbox-full`, `spam-block`, `policy`, `auth`, `throttled`, `expired`, …) | `classify.ts` |
 | Bounces and complaints | VERP replies on `bounces.<mailDomain>` (RFC 3464 DSN) and ARF complaint reports become events | `inbound.ts` |
 | Events | Append-only table; the agent pulls by cursor and acknowledges | `events.ts` |
-| Control socket | `PUT /state`, `POST /inject`, `GET /events`, `POST /events/ack`, `GET /health` on `/run/skiff/mail.sock` | `control.ts` |
+| Control socket | `PUT /state`, `POST /inject`, `GET /events`, `POST /events/ack`, `GET /health` on `/run/yoal/mail.sock` | `control.ts` |
 
-**The agent drives it; skiff-mail holds no credentials.** It never talks to the control plane. The
+**The agent drives it; yoal-mail holds no credentials.** It never talks to the control plane. The
 agent pushes the mail state (§3.5) with the DKIM keys and credential hashes it fetched for this node,
-injects outbox messages, and pulls events. DKIM keys stay in memory. After a restart, `skiff-mail`
+injects outbox messages, and pulls events. DKIM keys stay in memory. After a restart, `yoal-mail`
 answers `451 4.3.0` to submissions and holds deliveries until the agent pushes state again; the
 agent checks `GET /health` every few seconds and pushes immediately.
 
-**Spool.** `/var/lib/skiff/mail` (`SKIFF_MAIL_DATA_DIR`) on the node's system disk. Queued mail
-survives restarts of `skiff-mail` and of the agent, but not the loss of the node (§12).
+**Spool.** `/var/lib/yoal/mail` (`YOAL_MAIL_DATA_DIR`) on the node's system disk. Queued mail
+survives restarts of `yoal-mail` and of the agent, but not the loss of the node (§12).
 
 **TLS.** Caddy already obtains certificates (DNS-01). The agent asks Caddy to manage
-`mx.<mailDomain>` and `smtp.<mailDomain>`, copies the files to `/run/skiff/mail-tls/`, and
+`mx.<mailDomain>` and `smtp.<mailDomain>`, copies the files to `/run/yoal/mail-tls/`, and
 pushes a reload when they change. Outbound uses opportunistic STARTTLS. Required TLS for MTA-STS
 domains comes in phase 3.
 
 **Why our own.** KumoMTA was the first candidate. Its documented floor is 4 cores / 4 GB, it has no
 Debian package, and its policy would have been Lua calling back into the agent for every decision.
 Most of its machinery (egress pools, a throttle daemon shared across a fleet, millions of messages
-an hour) serves a volume Skiff doesn't have. Spike E0 (SPIKES.md) showed the pieces Skiff needs
+an hour) serves a volume Yoal doesn't have. Spike E0 (SPIKES.md) showed the pieces Yoal needs
 work under Bun 1.4: STARTTLS and implicit TLS on `smtp-server`, AUTH, DKIM sign and verify, and
 200 messages over TLS in 149 ms at about 130 MB RSS with every library loaded.
 
 ### 3.3 Preflight and the Email → Mail server page
 
 A platform admin enables Email from **Email → Mail server** by choosing the mail node. It's a setting
-(no restart): the node's agent sees `mail` in its desired state and starts `skiff-mail`, and Skiff
+(no restart): the node's agent sees `mail` in its desired state and starts `yoal-mail`, and Yoal
 publishes the platform records below through Cloudflare. **Not built yet:** the automated preflight
 checks. Until they are, the operator runs them by hand. The checks, each re-runnable and shown as a list:
 
 1. Port 25 egress: an `EHLO` to two large providers' MX hosts (no `MAIL FROM`).
 2. Inbound reachability: the control plane connects to `<node ip>:25` from outside the node.
-3. FCrDNS: `PTR(ip)` = `mx1.<mailDomain>` and `A(mx1.<mailDomain>)` = ip. Skiff creates the
+3. FCrDNS: `PTR(ip)` = `mx1.<mailDomain>` and `A(mx1.<mailDomain>)` = ip. Yoal creates the
    A record through Cloudflare; the PTR is a provider-console step, with the exact value to paste.
 4. Blocklists: Spamhaus ZEN (queried with a DQS key when given; public resolvers get refused),
    Barracuda, SpamCop, and the IPv6 equivalents when v6 is on.
 5. Budget: free memory against the MTA's `MemoryMax`.
-6. Platform DNS that Skiff publishes: `mx.<mailDomain>` (A), `mx1.<mailDomain>` (A),
+6. Platform DNS that Yoal publishes: `mx.<mailDomain>` (A), `mx1.<mailDomain>` (A),
    `_spf.<mailDomain>` (TXT `v=spf1 ip4:<ips> -all`), `bounces.<mailDomain>` (MX →
    `mx.<mailDomain>`, plus SPF), `smtp.<mailDomain>` (A, for submission), and
    `<selector>._domainkey.<mailDomain>` (TXT, the platform sender's DKIM key, §4.3).
 
-`<mailDomain>` is the **content domain** (`SKIFF_CONTENT_DOMAIN`) unless a custom one is set: the
+`<mailDomain>` is the **content domain** (`YOAL_CONTENT_DOMAIN`) unless a custom one is set: the
 **Mail domain** field on this page (a domain or a URL; `PATCH /api/v1/email/settings`
-`{ mailDomain }`, `null` resets), else `SKIFF_MAIL_DOMAIN`. A content domain that is not a domain
+`{ mailDomain }`, `null` resets), else `YOAL_MAIL_DOMAIN`. A content domain that is not a domain
 name (`localhost`, an IP) falls back to the platform host's parent. The project slugs `mx1`, `smtp`
 and `bounces` are reserved so no site shadows a mail host. Changing the mail domain moves every
 host name: the PTR, the platform records and each org's SPF include and MX must follow.
@@ -164,10 +164,10 @@ reputation summary (§7.2).
 
 ### 3.4 Smarthost relay (optional)
 
-Per destination pattern (`*` or e.g. `outlook.com, hotmail.com`), `skiff-mail` can hand mail to a smarthost
+Per destination pattern (`*` or e.g. `outlook.com, hotmail.com`), `yoal-mail` can hand mail to a smarthost
 (SES SMTP, any relay) instead of the MX. It covers a blocked port 25, a listed IP while delisting,
 or a provider that keeps junking a new IP. Credentials are sealed platform secrets. Through SES, the
-domain must also be verified in SES; Skiff can register it there with its own DKIM key (SES
+domain must also be verified in SES; Yoal can register it there with its own DKIM key (SES
 "BYODKIM") when SES API keys are given (phase 3).
 
 ### 3.5 Desired state for mail nodes
@@ -176,7 +176,7 @@ domain must also be verified in SES; Skiff can register it there with its own DK
 
 ```ts
 mail: {
-  generation: number;                  // bumps on any change; skiff-mail ignores a push it already has
+  generation: number;                  // bumps on any change; yoal-mail ignores a push it already has
   hostnames: { helo: string; mx: string; submission: string; bounce: string };
   domains: Array<{ id; orgId; name; sending: boolean; receiving: boolean;
                    dkim: { selector; algorithm: 'rsa-sha256' | 'ed25519-sha256'; keyRef } [] }>;
@@ -212,7 +212,7 @@ Unique across the platform; a second org claiming a verified domain gets 409.
 - **Rotation.** `rotate_dkim` creates the next selector, publishes or shows its record, signs with
   both until the new one verifies, then retires the old key after 7 days.
 - **Cloudflare.** When the domain sits in the platform's Cloudflare zone, or the org supplies a
-  zone-scoped token, Skiff creates the records itself (grey, `comment: skiff-email`). Otherwise the
+  zone-scoped token, Yoal creates the records itself (grey, `comment: yoal-email`). Otherwise the
   dashboard and `get_email_domain` show them to copy. The setup guide's **Set up for me** button
   (`publishDomain`) writes them on demand when the zone is covered, for a domain added with
   automatic records off or before the token was saved; unlike the quiet publish in `checkDomain`,
@@ -221,7 +221,7 @@ Unique across the platform; a second org claiming a verified domain gets 409.
 
 ### 4.2 Records per domain
 
-| Record | Value | Required for | Created by Skiff |
+| Record | Value | Required for | Created by Yoal |
 |---|---|---|---|
 | `skf<yyyymm>._domainkey.<domain>` TXT | `v=DKIM1; k=rsa; p=<key>` | Verification, sending | When the zone is reachable |
 | `<domain>` TXT (SPF) | `v=spf1 include:_spf.<mailDomain> ~all`, merged into an existing SPF record, never a second one | Sending (SPF pass for custom MAIL FROM; recommended always) | Only when no SPF record exists; otherwise shown as an edit |
@@ -243,18 +243,18 @@ domains or to verified addresses (§7.3).
 
 - **Adding** one (`email:update`) stores the lowercased address with the SHA-256 of a single-use
   32-byte token and mails `<platform origin>/verify-email-address?token=…` (D170). With a mail node
-  set, the mail goes through **Skiff Email itself** from the platform sender
-  `Skiff <no-reply@<mailDomain>>`, never from the org's domains (the org isn't trusted yet): it is
-  queued in the org's outbox (tag `skiff: sandbox-verification`, `Auto-Submitted: auto-generated`),
+  set, the mail goes through **Yoal Email itself** from the platform sender
+  `Yoal <no-reply@<mailDomain>>`, never from the org's domains (the org isn't trusted yet): it is
+  queued in the org's outbox (tag `yoal: sandbox-verification`, `Auto-Submitted: auto-generated`),
   passes the org's sandbox, quota and sending-domain checks by design, still honours the suppression
   lists (`422 recipient_suppressed`), and shows in the org's activity, where a bounce suppresses the
   address for that org. While sending is paused platform-wide the add is refused (`409 email_paused`).
-  Without a mail node it falls back to platform SMTP (D22, `SKIFF_SMTP_*`); with neither the add is
+  Without a mail node it falls back to platform SMTP (D22, `YOAL_SMTP_*`); with neither the add is
   refused (`409 platform_mail_unavailable`). If the send fails nothing is stored. Adding an address
   that is already verified changes nothing.
 - **The platform sender** signs with a platform DKIM key for `<mailDomain>` (setting
   `email.platform_dkim`, sealed with the platform key, created on first use). Its record
-  `<selector>._domainkey.<mailDomain>` is one of the platform records (§3.3), and `skiff-mail` gets it
+  `<selector>._domainkey.<mailDomain>` is one of the platform records (§3.3), and `yoal-mail` gets it
   as a sending domain with `orgId: '*'` that may sign mail injected for any org. SMTP submission can't
   use it: no org can add the mail domain, so it is never in an org's sending domains.
 - **The link** lasts 24 hours. Adding a pending address again sends a fresh link and voids the old
@@ -298,14 +298,14 @@ must carry a `From:` on a verified domain.
 
 | Path | Auth | Enters at | Notes |
 |---|---|---|---|
-| **REST** `POST /api/v1/email/send` | Skiff API key (or session) with `email:send`. Email credentials as Bearer are not accepted yet | Control plane `EmailService.send` → **outbox** | Batch form `POST /api/v1/email/send-batch` (≤ 100 messages) |
-| **SMTP submission** `smtp.<mailDomain>:587/465` | AUTH PLAIN/LOGIN with an email credential | `skiff-mail` directly; authorised in-process against the pushed state | For any framework mailer |
+| **REST** `POST /api/v1/email/send` | Yoal API key (or session) with `email:send`. Email credentials as Bearer are not accepted yet | Control plane `EmailService.send` → **outbox** | Batch form `POST /api/v1/email/send-batch` (≤ 100 messages) |
+| **SMTP submission** `smtp.<mailDomain>:587/465` | AUTH PLAIN/LOGIN with an email credential | `yoal-mail` directly; authorised in-process against the pushed state | For any framework mailer |
 | **Function `send_email` binding** | The binding itself (project + binding name) | Local agent's mail sink → control plane `/api/agent/email-send` → outbox | §5.5 |
 
 **The outbox.** REST and binding sends land in `email_outbox` (SQLite, the body as a blob) in the
 same transaction as the `email_messages` row. The mail node's agent long-polls
-`/api/agent/email-outbox`, injects each message into `skiff-mail` (`POST /inject` on its control socket, message id
-included), and acknowledges it once `skiff-mail` has spooled it. The row is then
+`/api/agent/email-outbox`, injects each message into `yoal-mail` (`POST /inject` on its control socket, message id
+included), and acknowledges it once `yoal-mail` has spooled it. The row is then
 deleted. This keeps the pull model (agents dial the control plane, never the reverse), lets the API
 accept mail while the mail node restarts, and survives a mail node that isn't the control plane's
 node. Outbox rows older than 24 h fail with `rejected: mail node unavailable`.
@@ -313,7 +313,7 @@ node. Outbox rows older than 24 h fail with `rejected: mail node unavailable`.
 ### 5.3 One policy function
 
 `authorizeSend(snapshot, envelope) → { ok } | { reason }` lives in `packages/contracts` (pure, no
-I/O) and runs in both places: in `EmailService.send` against the database, and in `skiff-mail` against
+I/O) and runs in both places: in `EmailService.send` against the database, and in `yoal-mail` against
 the pushed state for SMTP. It checks, in order: org state (paused → refuse; sandbox → recipients
 allowed?), `From` domain verified and sending-enabled for the org (and in the credential's
 `allowedFromDomains`), recipient count and size, rate and daily quota, then suppression. Suppressed
@@ -326,13 +326,13 @@ An **email credential** (`email_credentials`): username `skf_<id>`, a 40-byte se
 stored as a scrypt hash for authentication plus a sealed copy for injection. It is scoped to an org,
 optionally to a project, and optionally to a list of from-domains.
 
-`skif email attach --project api [--prefix SMTP]` creates a project-scoped credential and injects at
+`yoal email attach --project api [--prefix SMTP]` creates a project-scoped credential and injects at
 activation (the brokers pattern, `consumerEnv`):
 
 ```
 SMTP_HOST=smtp.<mailDomain>  SMTP_PORT=587  SMTP_SECURE=starttls
 SMTP_USER=skf_…  SMTP_PASSWORD=…  SMTP_URL=smtp://skf_…:…@smtp.<mailDomain>:587
-SKIFF_EMAIL_API=https://<platformDomain>/api/v1/email   # the same credential works as Bearer
+YOAL_EMAIL_API=https://<platformDomain>/api/v1/email   # the same credential works as Bearer
 ```
 
 Apps on the mail node use the public name too: the certificate matches, and nothing depends on
@@ -363,8 +363,8 @@ enabled or the project's org has no verified sending domain.
 ### 6.1 Turning it on
 
 Receiving is per domain and opt-in: `receiving: true` adds the MX record (or shows it). If the domain
-already has MX records (Google Workspace, Microsoft 365), Skiff refuses unless the request says
-`replaceMx: true`. The dashboard suggests a subdomain (`in.example.com`) instead. `skiff-mail` accepts mail
+already has MX records (Google Workspace, Microsoft 365), Yoal refuses unless the request says
+`replaceMx: true`. The dashboard suggests a subdomain (`in.example.com`) instead. `yoal-mail` accepts mail
 on port 25 only for recipient domains that are verified, receiving-enabled and have at least one
 route; everything else gets `550 5.1.1` at `RCPT`, so the mail node is never an open relay.
 
@@ -374,7 +374,7 @@ At `RCPT`/`DATA` time, before anything is routed:
 
 - Connecting IP against Spamhaus ZEN (DQS key) → `554` on a listing.
 - SPF, DKIM and DMARC evaluated and written as an `Authentication-Results` header. A DMARC `reject`
-  policy failure is rejected; `quarantine` is marked (`X-Skiff-Spam: dmarc-quarantine`).
+  policy failure is rejected; `quarantine` is marked (`X-Yoal-Spam: dmarc-quarantine`).
 - Size ≤ 25 MB; per-IP connection and message rate limits.
 - rspamd is an optional add-on in phase 3, because it costs roughly 150 MB of RSS.
 
@@ -386,8 +386,8 @@ Actions:
 
 | Action | Delivery | Failure behaviour |
 |---|---|---|
-| `function` | **Synchronous, during SMTP `DATA`.** The agent POSTs the raw message and envelope to the function shim's `/__skiff/email` and waits ≤ 30 s. `message.setReject(reason)` → `550 <reason>`. A crash or timeout → `451` and the sender retries. Same semantics as Cloudflare Email Workers. | Sender's retry queue |
-| `webhook` | Accepted (`250`), then spooled by `skiff-mail` and POSTed by the agent as JSON (envelope, parsed headers, text/html, attachment metadata, and the raw message as base64 or a presigned URL above 1 MB), signed (§8.2) | Retried for 24 h, then `dropped` event |
+| `function` | **Synchronous, during SMTP `DATA`.** The agent POSTs the raw message and envelope to the function shim's `/__yoal/email` and waits ≤ 30 s. `message.setReject(reason)` → `550 <reason>`. A crash or timeout → `451` and the sender retries. Same semantics as Cloudflare Email Workers. | Sender's retry queue |
+| `webhook` | Accepted (`250`), then spooled by `yoal-mail` and POSTed by the agent as JSON (envelope, parsed headers, text/html, attachment metadata, and the raw message as base64 or a presigned URL above 1 MB), signed (§8.2) | Retried for 24 h, then `dropped` event |
 | `bucket` | Accepted, then the raw `.eml` is written to a storage bucket attached to the org (`<prefix>/<yyyy>/<mm>/<dd>/<messageId>.eml`) with a scoped key | Retried for 24 h |
 | `drop` | Accepted and discarded (for routes that only silence a catch-all) | — |
 
@@ -404,7 +404,7 @@ original DKIM signature. `reply` must come from the receiving domain.
 ### 6.4 Bounces and complaints arriving on port 25
 
 `bounces.<mailDomain>` is handled before routing: DSNs for `b-<messageId>@…` become `bounced`
-events (RFC 3464 DSN parsing in `skiff-mail`). ARF complaint reports (Yahoo CFL, Microsoft JMRP and other
+events (RFC 3464 DSN parsing in `yoal-mail`). ARF complaint reports (Yahoo CFL, Microsoft JMRP and other
 feedback loops, which the operator must enrol in by hand; preflight links to them) become
 `complained` events. Neither is ever routed to a tenant.
 
@@ -421,7 +421,7 @@ feedback loops, which the operator must enrol in by hand; preflight links to the
   immediately. Soft bounces add it after 3 consecutive failed messages over at least 72 h.
 - A complaint adds the address immediately.
 - RFC 8058 one-click unsubscribe POSTs to our `List-Unsubscribe` endpoint (when the send used
-  `unsubscribe.oneClick` with Skiff hosting it) and add an `unsubscribe` suppression.
+  `unsubscribe.oneClick` with Yoal hosting it) and add an `unsubscribe` suppression.
 - Entries stay until removed (`manual` removal is audited). Bounce entries can carry an expiry.
 - The agent holds the list as a versioned set (incremental pulls, sized for tens of thousands of
   rows), so SMTP authorisation stays local.
@@ -473,7 +473,7 @@ limits are org quota fields alongside the existing quotas (plan 16).
 
 ### 8.1 Events
 
-`skiff-mail` writes each attempt as an `EmailEvent`, and the agent forwards them:
+`yoal-mail` writes each attempt as an `EmailEvent`, and the agent forwards them:
 `accepted | delivered | deferred | bounced | complained | rejected | suppressed | received | dropped`
 (phase 3 adds `opened | clicked | unsubscribed`), with message id, org, project, domain, recipient,
 attempt number, remote MX and response, bounce class, TLS, tags, and timestamps.
@@ -519,11 +519,11 @@ recipients), `list_email_messages`, `get_email_message`, `list_email_suppression
 `list/create/delete_email_route`. There are no credential tools, and none to request or decide
 production access; `get_email_status` points a sandboxed org at the request.
 
-**CLI:** `skif email domains add|list|check|rotate|rm`, `skif email send --from … --to … --subject …
-[--html file] [--text file]`, `skif email log [--follow]`, `skif email suppressions
-list|add|rm`, `skif email addresses list|add|rm`, `skif email request-access --use-case …
---volume … [--website …]` (no flags: show the latest request), `skif email credentials
-create|list|revoke`, `skif email attach|detach`, `skif email routes …`, `skif email webhooks …`.
+**CLI:** `yoal email domains add|list|check|rotate|rm`, `yoal email send --from … --to … --subject …
+[--html file] [--text file]`, `yoal email log [--follow]`, `yoal email suppressions
+list|add|rm`, `yoal email addresses list|add|rm`, `yoal email request-access --use-case …
+--volume … [--website …]` (no flags: show the latest request), `yoal email credentials
+create|list|revoke`, `yoal email attach|detach`, `yoal email routes …`, `yoal email webhooks …`.
 
 **Dashboard: Email.** Every email surface lives in the Email area (D179); Settings keeps only an
 entry that opens Mail server, and Settings → Notifications keeps the platform SMTP relay (§10).
@@ -564,7 +564,7 @@ entry that opens Mail server, and Settings → Notifications keeps the platform 
   HTML) through `EmailService.send`, so limits, suppressions and the sandbox apply; it is tagged
   `source=dashboard-test` and opens the message's timeline in Activity. Domain pages link to it.
 
-**Flag:** `SKIFF_FEATURE_EMAIL`, default on. Until a mail node is configured, the overview leads
+**Flag:** `YOAL_FEATURE_EMAIL`, default on. Until a mail node is configured, the overview leads
 with the checklist and every other Email page shows a calm "not set up" banner pointing to it,
 which is the telemetry pattern.
 
@@ -572,9 +572,9 @@ which is the telemetry pattern.
 
 ## 10. Platform mail stays on D22
 
-Sign-in links, invites and alerts keep the platform's own SMTP settings (`SKIFF_SMTP_*`, normally
+Sign-in links, invites and alerts keep the platform's own SMTP settings (`YOAL_SMTP_*`, normally
 SES). The alert path must work while the mail node is down or the IP is listed. Once Email is
-healthy, an owner *may* point `SKIFF_SMTP_*` at `smtp.<mailDomain>` with a platform credential;
+healthy, an owner *may* point `YOAL_SMTP_*` at `smtp.<mailDomain>` with a platform credential;
 Email → Mail server shows which path each kind of platform mail takes (§9).
 
 ---
@@ -598,11 +598,11 @@ Email → Mail server shows which path each kind of platform mail takes (§9).
 | The prod IP has poor or no reputation; mail goes to spam even with a perfect setup | Sandbox + low default rates as an implicit warm-up; Gmail Postmaster Tools and Microsoft SNDS enrolment linked from preflight; the smarthost relay per destination as the escape hatch |
 | One org burns the shared IP for everyone | Sandbox by default, auto-pause thresholds below the providers' lines, platform suppression list, global pause |
 | Our MTA gets a delivery edge case wrong | Tests against a fake MX for every reply class; conservative retries and expiry; the smarthost relay as the escape hatch; per-attempt events make every failure visible |
-| Losing the mail node loses queued mail | Outbox only deletes after `skiff-mail` has spooled the message; E4 for real HA. Documented as an L0 resource in CLUSTERING terms |
+| Losing the mail node loses queued mail | Outbox only deletes after `yoal-mail` has spooled the message; E4 for real HA. Documented as an L0 resource in CLUSTERING terms |
 | Open relay or open submission by mistake | Port 25 accepts only receiving domains with routes; submission requires TLS + AUTH; tests enforce both, and preflight probes an open-relay attempt from outside |
 | Backscatter (bouncing spam to forged senders) | Reject at SMTP time (`RCPT`/`DATA`) rather than accept-then-bounce, except for webhook/bucket retry exhaustion, which drops with an event and never sends a DSN to an unauthenticated sender |
 | Function email handler latency holds SMTP sessions open | 30 s budget, per-route concurrency cap, `451` on overflow |
-| Private keys leaking through desired state or logs | Keys sealed per org, opened for the mail node only, held in agent and `skiff-mail` memory, never in desired state, the spool or logs; passed over the 0660 unix socket |
+| Private keys leaking through desired state or logs | Keys sealed per org, opened for the mail node only, held in agent and `yoal-mail` memory, never in desired state, the spool or logs; passed over the 0660 unix socket |
 
 ---
 
@@ -610,27 +610,27 @@ Email → Mail server shows which path each kind of platform mail takes (§9).
 
 These are summaries; the rows in [DECISIONS.md](./DECISIONS.md) are authoritative.
 
-- **D114 (amends D22).** Tenant email is delivered by Skiff's own MTA directly to recipients' MX
+- **D114 (amends D22).** Tenant email is delivered by Yoal's own MTA directly to recipients' MX
   hosts. D22 keeps the platform's own mail (sign-in, invites, alerts) on an external SMTP relay so
   that it works when the mail node does not. *Why:* the user wants SES's job on their own nodes, and
   SES's tenant model (identities, suppression, events) can't be layered on a relay we don't
   control. *Rejected:* SES as the only transport (keeps the D22 constraint, but tenants on a shared
   AWS account); Postal (Ruby + MariaDB + RabbitMQ, too heavy).
-- **D115.** The MTA is Skiff's own: `packages/mail`, run as `skiff-agent mail` under
-  `skiff-mail.service` (the studio pattern), built on `smtp-server`, nodemailer's SMTP client,
-  `mailauth` and `mailparser`. Skiff writes the spool, scheduler, delivery, shaping, classification
+- **D115.** The MTA is Yoal's own: `packages/mail`, run as `yoal-agent mail` under
+  `yoal-mail.service` (the studio pattern), built on `smtp-server`, nodemailer's SMTP client,
+  `mailauth` and `mailparser`. Yoal writes the spool, scheduler, delivery, shaping, classification
   and policy. The agent pushes state, injects outbox mail and pulls events over a unix socket;
-  `skiff-mail` holds no credentials. *Why:* one language and one binary, in-process policy, no
+  `yoal-mail` holds no credentials. *Why:* one language and one binary, in-process policy, no
   upstream pin, and a footprint that fits the edge. *Rejected:* KumoMTA (4-core floor, no Debian
   package, Lua calling back into the agent for every decision); Postfix (policy and events through
   log parsing); a per-org MTA (one IP, so one reputation anyway).
-- **D116.** A domain is verified by its DKIM record alone. Skiff generates per-domain RSA keys sealed
+- **D116.** A domain is verified by its DKIM record alone. Yoal generates per-domain RSA keys sealed
   with the org key, and the default return path is VERP on `bounces.<mailDomain>`, with DMARC
   aligned through DKIM. Records are created through Cloudflare when the zone is reachable, never
   overwriting SPF or DMARC. *Rejected:* a separate TXT token (the DKIM record already proves
   control); requiring custom MAIL FROM in v1 (one more record per domain for little gain).
 - **D117.** Three send paths share one pure `authorizeSend`. REST and binding sends go through a
-  SQLite outbox that the mail node's agent pulls and injects; SMTP submission enters `skiff-mail`
+  SQLite outbox that the mail node's agent pulls and injects; SMTP submission enters `yoal-mail`
   directly and is authorised there against the pushed state. *Rejected:* the control plane pushing to the MTA (breaks the pull model);
   everything through SMTP (the binding and REST would need credentials).
 - **D118.** Inbound is opt-in per domain and refused over existing MX records unless confirmed. Mail
@@ -648,7 +648,7 @@ These are summaries; the rows in [DECISIONS.md](./DECISIONS.md) are authoritativ
 
 ## 14. Open questions
 
-1. Resolved by D115: `skiff-agent mail` as a native unit.
+1. Resolved by D115: `yoal-agent mail` as a native unit.
 2. Templates: store them per org in v1 (SES parity), or leave rendering to the app? (Proposed: E3.)
 3. Whether to accept `raw` MIME on REST at all in v1, or only through SMTP and the binding.
 4. Dedicated IPs per org once more than one IP exists.

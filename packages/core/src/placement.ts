@@ -1,4 +1,4 @@
-import type { NodeRole, PlacementSpec, Runtime } from '@skiff/contracts';
+import type { NodeRole, PlacementSpec, Runtime } from '@yoal/contracts';
 import { diskAdmissionProblem } from './app-volumes.ts';
 
 /**
@@ -18,7 +18,7 @@ export interface PlacementCandidate {
 	name: string;
 	mode: string;
 	status: string;
-	/** `skiff-workloads.slice` memory budget for this node. */
+	/** `yoal-workloads.slice` memory budget for this node. */
 	sliceMemoryMb: number;
 	/** Memory already reserved by workloads on this node (pending, starting or running). */
 	reservedMemoryMb: number;
@@ -30,7 +30,7 @@ export interface PlacementCandidate {
 	zone?: string;
 	/** Roles the node may run, already derived from mode/can_build when unset. */
 	roles?: NodeRole[];
-	/** Operator labels plus derived `skiff.io/*` facts. */
+	/** Operator labels plus derived `yoal.io/*` facts. */
 	labels?: Record<string, string>;
 	/** Tiers of the disks on this node, plus `remote` when one is a network share (D169). */
 	volumeClasses?: string[];

@@ -5,7 +5,7 @@ import type {
 	AppVolumeTaskResult,
 	AppVolumeUsageSample,
 	DesiredState,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { HelperAppVolumeApi } from './helper-client.ts';
 
 /**

@@ -41,14 +41,14 @@
 		databaseVariantRegistry,
 		databaseVariants,
 		type DatabaseCredentials
-	} from '@skiff/contracts';
+	} from '@yoal/contracts';
 	import { notify, runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import MetricChart from '#lib/components/skiff/MetricChart.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import DetailList from '#lib/components/yoal/DetailList.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import MetricChart from '#lib/components/yoal/MetricChart.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
@@ -530,7 +530,7 @@
 </script>
 
 <svelte:head>
-	<title>{db.name} · Databases · Skiff</title>
+	<title>{db.name} · Databases · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">
@@ -665,7 +665,7 @@
 								{/if}
 							</div>
 							<p class="mt-1 text-[11px] text-muted-foreground">
-								Skiff keeps Postgres loopback-only. Store the URL from your TCP proxy or tunnel.
+								Yoal keeps Postgres loopback-only. Store the URL from your TCP proxy or tunnel.
 							</p>
 						{/if}
 					</dd>

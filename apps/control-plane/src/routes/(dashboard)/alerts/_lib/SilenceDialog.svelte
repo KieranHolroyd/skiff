@@ -1,5 +1,5 @@
 <script lang="ts" module>
-	import type { AlertMatcher } from '@skiff/contracts';
+	import type { AlertMatcher } from '@yoal/contracts';
 
 	export interface SilencePreset {
 		ruleId: string | null;

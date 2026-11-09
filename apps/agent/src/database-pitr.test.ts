@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { desiredStateSchema, type DatabasePitrTask, type DesiredState } from '@skiff/contracts';
+import { desiredStateSchema, type DatabasePitrTask, type DesiredState } from '@yoal/contracts';
 import { DatabasePitrRunner } from './database-pitr.ts';
 import type { HelperPitrStatus } from './helper-client.ts';
 
@@ -8,9 +8,9 @@ const TARGET = 'db_target';
 const repo = {
 	kind: 's3' as const,
 	endpoint: 'https://s3.example.test',
-	bucket: 'skiff-pitr',
+	bucket: 'yoal-pitr',
 	region: 'us-east-1',
-	pathPrefix: 'skiff/pitr',
+	pathPrefix: 'yoal/pitr',
 	forcePathStyle: true,
 	accessKeyId: 'access-key',
 	secretAccessKey: 'super-secret-key',
@@ -79,7 +79,7 @@ function state(databasePitrTasks: DatabasePitrTask[]): DesiredState {
 const status: HelperPitrStatus = {
 	configured: true,
 	stanza: SOURCE,
-	repo: { bucket: 'skiff-pitr', region: 'us-east-1', endpoint: 's3.example.test', path: '/skiff/pitr/db_source' },
+	repo: { bucket: 'yoal-pitr', region: 'us-east-1', endpoint: 's3.example.test', path: '/yoal/pitr/db_source' },
 	archiveStatus: 'ok',
 	recoverableFrom: 1_000,
 	recoverableTo: 5_000,
@@ -101,7 +101,7 @@ function harness() {
 		helper: {
 			async pitrConfigure(id) {
 				calls.push(`configure:${id}`);
-				return { stanza: id, configPath: `/run/skiff-workloads/${id}/pgbackrest/pgbackrest.conf` };
+				return { stanza: id, configPath: `/run/yoal-workloads/${id}/pgbackrest/pgbackrest.conf` };
 			},
 			async pitrBaseBackup(id, type) {
 				calls.push(`backup:${id}:${type}`);

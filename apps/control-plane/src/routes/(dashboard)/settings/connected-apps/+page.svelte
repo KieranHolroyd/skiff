@@ -32,7 +32,7 @@
 		askConfirm({
 			title: `Disconnect ${label(app)}?`,
 			description: owner
-				? `${owner} will have to approve it again before it can call Skiff. Its tokens stop working on the next request.`
+				? `${owner} will have to approve it again before it can call Yoal. Its tokens stop working on the next request.`
 				: 'Its tokens stop working on the next request, and it has to ask for your approval again to reconnect.',
 			confirmLabel: 'Disconnect',
 			tone: 'danger',
@@ -43,7 +43,7 @@
 </script>
 
 <svelte:head>
-	<title>Connected apps · Settings · Skiff</title>
+	<title>Connected apps · Settings · Yoal</title>
 </svelte:head>
 
 <SettingsHeader id="connected-apps" />

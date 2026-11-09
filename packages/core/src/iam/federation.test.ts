@@ -2,14 +2,14 @@ import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import type { Permission, Principal } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import type { Permission, Principal } from '@yoal/contracts';
 import { ForbiddenError, NotFoundError, ValidationError } from '../errors.ts';
 import { createCore, type Core } from '../index.ts';
 import { LocalObjectStore } from '../object-store.ts';
 import { buildPrincipal, type Membership } from '../orgs.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-federation-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-federation-'));
 const opened = createDb({ path: ':memory:' });
 let now = Date.parse('2026-11-09T12:00:00Z');
 let core: Core;
@@ -105,7 +105,7 @@ describe('federation trusts', () => {
 		const trust = core.federation.create(owner, {
 			serviceAccountId: sa.id,
 			issuer: 'https://gitlab.example.com',
-			audiences: ['skiff']
+			audiences: ['yoal']
 		});
 		expect(trust).toMatchObject({
 			subjectPattern: '*',
@@ -190,7 +190,7 @@ describe('federation trusts', () => {
 			core.federation.create(owner, {
 				serviceAccountId: foreign.id,
 				issuer: 'https://issuer.test',
-				audiences: ['skiff']
+				audiences: ['yoal']
 			}),
 		).toThrow(/service account in this organisation/);
 	});
@@ -202,7 +202,7 @@ describe('federation trusts', () => {
 		const trust = core.federation.create(owner, {
 			serviceAccountId: sa.id,
 			issuer: 'https://issuer.test',
-			audiences: ['skiff']
+			audiences: ['yoal']
 		});
 
 		expect(core.federation.list(other)).toEqual([]);
@@ -222,13 +222,13 @@ describe('federation trusts', () => {
 		const trust = core.federation.create(owner, {
 			serviceAccountId: sa.id,
 			issuer: 'https://issuer.test',
-			audiences: ['skiff']
+			audiences: ['yoal']
 		});
 
 		expect(() => core.federation.create(viewer, {
 			serviceAccountId: sa.id,
 			issuer: 'https://other.test',
-			audiences: ['skiff']
+			audiences: ['yoal']
 		})).toThrow(ForbiddenError);
 		expect(() => core.federation.update(viewer, trust.id, { maxTtlSeconds: 60 })).toThrow(
 			ForbiddenError,

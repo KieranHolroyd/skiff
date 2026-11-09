@@ -1,4 +1,4 @@
-import type { ReplicaPlan, ReplicaRefusal, ReplicaSpread, WorkloadReplica } from '@skiff/contracts';
+import type { ReplicaPlan, ReplicaRefusal, ReplicaSpread, WorkloadReplica } from '@yoal/contracts';
 
 /**
  * Replica placement across nodes (docs/CLUSTERING.md §8.2, C4).

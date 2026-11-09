@@ -1,6 +1,6 @@
 /**
  * Native database studio (plan 22, D96). The control plane mints a per-user session; the node's
- * agent fronts an on-demand `skiff-studio` process that runs the engine plugin. The session
+ * agent fronts an on-demand `yoal-studio` process that runs the engine plugin. The session
  * token reaches the node only in a request header and in the node-authenticated activation
  * fetch, never in desired state.
  */
@@ -21,8 +21,8 @@ export const STUDIO_DEFAULT_PORT = 8083;
 /** Internal host suffix the gateway matches for a node's studio (never public DNS). */
 export const STUDIO_GATEWAY_SUFFIX = 'studio.internal';
 /** Request headers the control plane adds on the gateway hop. Never sent by a browser. */
-export const STUDIO_SESSION_HEADER = 'x-skiff-studio-session';
-export const STUDIO_TOKEN_HEADER = 'x-skiff-studio-token';
+export const STUDIO_SESSION_HEADER = 'x-yoal-studio-session';
+export const STUDIO_TOKEN_HEADER = 'x-yoal-studio-token';
 /** Wire protocol version; both hops reject other versions. */
 export const STUDIO_PROTOCOL_VERSION = 1;
 
@@ -80,7 +80,7 @@ export interface DatabaseStudioView {
 	path: string;
 	/**
 	 * What the session's connection waits on (track G). A write session uses the owner and is
-	 * always `ready`; a read-only one waits for the database's `skiff_studio_ro` principal.
+	 * always `ready`; a read-only one waits for the database's `yoal_studio_ro` principal.
 	 */
 	principal: DatabaseStudioPrincipalState;
 	/** Why the principal failed, when `principal` is `failed`. Never a credential. */

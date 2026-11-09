@@ -1,9 +1,9 @@
 #!/bin/sh
 # GitGuardian secret scan of the commits being pushed (ggshield secret scan pre-push).
 # Setup: `brew install ggshield` (or `pipx install ggshield`), then `ggshield auth login`.
-# Skip once with `git push --no-verify`, or set SKIFF_NO_SECRET_SCAN=1.
-if [ "${SKIFF_NO_SECRET_SCAN:-}" = "1" ]; then
-	echo "pre-push: SKIFF_NO_SECRET_SCAN=1; skipping the GitGuardian secret scan" >&2
+# Skip once with `git push --no-verify`, or set YOAL_NO_SECRET_SCAN=1.
+if [ "${YOAL_NO_SECRET_SCAN:-}" = "1" ]; then
+	echo "pre-push: YOAL_NO_SECRET_SCAN=1; skipping the GitGuardian secret scan" >&2
 	exit 0
 fi
 if ! command -v ggshield >/dev/null 2>&1; then

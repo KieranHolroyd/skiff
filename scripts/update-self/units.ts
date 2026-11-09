@@ -1,13 +1,13 @@
 /**
  * systemd units that let the dashboard request an update without giving the control plane any
  * privilege: the control plane drops a file, systemd (root) runs the updater. Shared by the
- * installer and by `skiff-update-self` itself, which re-creates them if missing so existing hosts
+ * installer and by `yoal-update-self` itself, which re-creates them if missing so existing hosts
  * get the dashboard button on their next CLI run.
  */
 import { SELF_UPDATE_DEFAULTS } from '../../packages/contracts/src/self-update.ts';
 
-export const TRIGGER_PATH_UNIT = 'skiff-update-self.path';
-export const TRIGGER_SERVICE_UNIT = 'skiff-update-self.service';
+export const TRIGGER_PATH_UNIT = 'yoal-update-self.path';
+export const TRIGGER_SERVICE_UNIT = 'yoal-update-self.service';
 
 export interface TriggerPaths {
 	requestFile: string;
@@ -16,14 +16,14 @@ export interface TriggerPaths {
 
 export const DEFAULT_TRIGGER_PATHS: TriggerPaths = {
 	requestFile: SELF_UPDATE_DEFAULTS.requestFile,
-	command: '/usr/local/sbin/skiff-update-self',
+	command: '/usr/local/sbin/yoal-update-self',
 };
 
 export function triggerUnits(paths: TriggerPaths = DEFAULT_TRIGGER_PATHS): Record<string, string> {
 	return {
 		[TRIGGER_PATH_UNIT]: `[Unit]
-Description=Start a Skiff self-update when the dashboard requests one
-Documentation=https://github.com/KieranHolroyd/skiff/blob/main/docs/OPS.md
+Description=Start a Yoal self-update when the dashboard requests one
+Documentation=https://github.com/KieranHolroyd/yoal/blob/main/docs/OPS.md
 
 [Path]
 PathExists=${paths.requestFile}
@@ -33,9 +33,9 @@ Unit=${TRIGGER_SERVICE_UNIT}
 WantedBy=paths.target
 `,
 		[TRIGGER_SERVICE_UNIT]: `[Unit]
-Description=Skiff self-update (requested from the dashboard)
-Documentation=https://github.com/KieranHolroyd/skiff/blob/main/docs/OPS.md
-# Deliberately no dependency on skiff-control-plane.service: this unit stops and starts it.
+Description=Yoal self-update (requested from the dashboard)
+Documentation=https://github.com/KieranHolroyd/yoal/blob/main/docs/OPS.md
+# Deliberately no dependency on yoal-control-plane.service: this unit stops and starts it.
 
 [Service]
 Type=oneshot
@@ -61,16 +61,16 @@ export interface UpdateCommandPaths {
 }
 
 /**
- * /usr/local/sbin/skiff-update-self. Prefers the qualified stage-0 binary; if it is missing or
+ * /usr/local/sbin/yoal-update-self. Prefers the qualified stage-0 binary; if it is missing or
  * does not even run (`--version`), falls back to the TypeScript updater shipped in the current,
- * then the previous, release. Set SKIFF_UPDATER=source to force the fallback.
+ * then the previous, release. Set YOAL_UPDATER=source to force the fallback.
  */
 export function updateCommandScript(paths: UpdateCommandPaths): string {
 	return `#!/bin/sh
-# Installed by Skiff. See docs/OPS.md §4.1.
+# Installed by Yoal. See docs/OPS.md §4.1.
 set -eu
-stage0=${paths.updaterDir}/current/skiff-updated
-if [ "\${SKIFF_UPDATER:-}" != source ] && [ -x "$stage0" ] && "$stage0" --version >/dev/null 2>&1; then
+stage0=${paths.updaterDir}/current/yoal-updated
+if [ "\${YOAL_UPDATER:-}" != source ] && [ -x "$stage0" ] && "$stage0" --version >/dev/null 2>&1; then
 	exec "$stage0" "$@"
 fi
 for release in ${paths.optDir}/current ${paths.optDir}/previous; do
@@ -78,7 +78,7 @@ for release in ${paths.optDir}/current ${paths.optDir}/previous; do
 		exec ${paths.bunBin} "$release/repo/scripts/update-self/main.ts" "$@"
 	fi
 done
-echo "skiff-update-self: no working updater; see skiff-recover (docs/OPS.md)" >&2
+echo "yoal-update-self: no working updater; see yoal-recover (docs/OPS.md)" >&2
 exit 1
 `;
 }

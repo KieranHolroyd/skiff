@@ -1,5 +1,5 @@
 <script lang="ts">
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
 	import HighlightedCode from '#lib/highlight/HighlightedCode.svelte';
 	import { resolveLang } from '#lib/highlight/highlight.js';
 

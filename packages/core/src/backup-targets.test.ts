@@ -2,13 +2,13 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
+import { createDb } from '@yoal/db';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import type { Core } from './index.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-backup-targets-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-backup-targets-'));
 const opened = createDb({ path: ':memory:' });
 let clock = Date.parse('2026-11-04T10:00:00Z');
 
@@ -84,7 +84,7 @@ function s3Input(name: string, extra: Record<string, unknown> = {}) {
 		kind: 's3' as const,
 		endpoint: 'https://s3.example.test',
 		bucket: 'backups',
-		pathPrefix: 'skiff/backups',
+		pathPrefix: 'yoal/backups',
 		accessKeyId: 'AKIAEXAMPLE',
 		secretAccessKey: secret,
 		...extra,
@@ -102,7 +102,7 @@ describe('backup targets', () => {
 			kind: 's3',
 			hasCredentials: true,
 			status: 'pending',
-			pathPrefix: 'skiff/backups',
+			pathPrefix: 'yoal/backups',
 		});
 		expect(JSON.stringify(created.target)).not.toContain(secret);
 		expect(JSON.stringify(core.backupTargets.list(owner))).not.toContain(secret);
@@ -140,7 +140,7 @@ describe('backup targets', () => {
 		const result = await core.backupTargets.testConnection(owner, target.id);
 		expect(result.ok).toBe(true);
 		expect(result.message).toContain('Connected');
-		expect(remote.calls.some((call) => call.includes('skiff/backups/skiff/healthcheck/'))).toBe(true);
+		expect(remote.calls.some((call) => call.includes('yoal/backups/yoal/healthcheck/'))).toBe(true);
 	});
 
 	test('database backup tasks use the resolved target store', async () => {
@@ -150,7 +150,7 @@ describe('backup targets', () => {
 		const tasks = await core.databases.backupTasksForNode(joined.nodeId);
 		const task = tasks.find((row) => row.id === backup.id)!;
 		expect(task.url).toContain('s3.example.test');
-		expect(new URL(task.url).pathname).toContain('/skiff/backups/database-backups/');
+		expect(new URL(task.url).pathname).toContain('/yoal/backups/database-backups/');
 		// A failed dump left nothing on the target, so it does not hold the target (deleted below).
 		core.databases.applyBackupResults(joined.nodeId, [
 			{ taskId: backup.id, action: 'backup', databaseId: task.databaseId, backupId: null, status: 'failed', error: 'test' },
@@ -159,7 +159,7 @@ describe('backup targets', () => {
 			name: 'org-s3',
 			kind: 's3',
 			available: true,
-			location: expect.stringContaining('s3://backups/skiff/backups/database-backups/'),
+			location: expect.stringContaining('s3://backups/yoal/backups/database-backups/'),
 		});
 	});
 

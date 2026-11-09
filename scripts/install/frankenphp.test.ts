@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 function temp(): string {
-	const dir = mkdtempSync(join(tmpdir(), 'skiff-frankenphp-'));
+	const dir = mkdtempSync(join(tmpdir(), 'yoal-frankenphp-'));
 	dirs.push(dir);
 	return dir;
 }

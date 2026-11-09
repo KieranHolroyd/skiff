@@ -23,9 +23,9 @@ const flags: FlagSpec = {
 	help: { type: 'boolean', short: 'h' },
 };
 
-const usage = `Usage: skif operations [list|show|watch|cancel] [options]
+const usage = `Usage: yoal operations [list|show|watch|cancel] [options]
 
-Mass actions (\`skif projects delete|restore|purge\`) and prune runs are operations that run
+Mass actions (\`yoal projects delete|restore|purge\`) and prune runs are operations that run
 on the server. These commands inspect and steer them.
 
 Commands:
@@ -169,7 +169,7 @@ async function cancel(args: ParsedArgs): Promise<void> {
 	}
 	if (operation.status === 'cancelled') console.log(`Cancelled ${id}.`);
 	else if (isTerminal(operation.status)) console.log(`${id} had already finished (${operation.status}).`);
-	else console.log(`Cancel requested for ${id}: it stops after the current item. Follow it with \`skif operations watch ${id}\`.`);
+	else console.log(`Cancel requested for ${id}: it stops after the current item. Follow it with \`yoal operations watch ${id}\`.`);
 }
 
 function describe(operation: OperationView): string[] {
@@ -192,7 +192,7 @@ function waitingForApply(operation: OperationView): string {
 	const left = operation.planExpiresAt ? formatDurationShort(Date.parse(operation.planExpiresAt) - Date.now()) : undefined;
 	const apply =
 		operation.action === 'prune'
-			? `Apply it: skif prune --apply --plan ${operation.id}`
+			? `Apply it: yoal prune --apply --plan ${operation.id}`
 			: 'Bulk plans are applied by the command that made them; plan again to run it.';
 	return `${operation.id} is planned and waiting to be applied${left ? ` (expires in ${left})` : ''}.\n${apply}`;
 }

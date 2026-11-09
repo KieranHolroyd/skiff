@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { workloadDesiredSchema, type FunctionRuntimeBinding, type WorkloadDesired } from '@skiff/contracts';
+import { workloadDesiredSchema, type FunctionRuntimeBinding, type WorkloadDesired } from '@yoal/contracts';
 import { renderAnalyticsEngineBinding } from './analytics-engine.ts';
 import type { BindingRenderContext } from './types.ts';
 
@@ -18,11 +18,11 @@ function functionWorkload(
 		runtime: 'function',
 		status: 'running',
 		release: SHA,
-		upstream: 'unix//run/skiff-workloads/wl_1.sock',
+		upstream: 'unix//run/yoal-workloads/wl_1.sock',
 		memoryMb: 128,
 		cpus: 1,
 		port: 3000,
-		healthPath: '/__skiff/health',
+		healthPath: '/__yoal/health',
 		socketActivation: true,
 		activationVersion: SHA,
 		function: {
@@ -69,7 +69,7 @@ describe('renderAnalyticsEngineBinding', () => {
 	test('declares the wrapper as a Config.extensions module', () => {
 		const rendered = render(ANALYTICS_BINDING);
 		expect(rendered.extensions).toEqual([
-			'    ( modules = [ ( name = "skiff-analytics:writer", internal = true, esModule = embed "binding-analytics" ) ] )',
+			'    ( modules = [ ( name = "yoal-analytics:writer", internal = true, esModule = embed "binding-analytics" ) ] )',
 		]);
 	});
 
@@ -77,7 +77,7 @@ describe('renderAnalyticsEngineBinding', () => {
 		const rendered = render(ANALYTICS_BINDING);
 		expect(rendered.mainBindings).toEqual([
 			[
-				'        ( name = "ANALYTICS", wrapped = ( moduleName = "skiff-analytics:writer", innerBindings = [',
+				'        ( name = "ANALYTICS", wrapped = ( moduleName = "yoal-analytics:writer", innerBindings = [',
 				'          ( name = "sink", service = "analytics-sink-0" ),',
 				'          ( name = "dataset", text = "web_events" ),',
 				'          ( name = "projectId", text = "prj_1" ),',
@@ -146,7 +146,7 @@ describe('renderAnalyticsEngineBinding', () => {
 			runtime: 'process',
 			status: 'running',
 			release: SHA,
-			upstream: 'unix//run/skiff-workloads/wl_2.sock',
+			upstream: 'unix//run/yoal-workloads/wl_2.sock',
 			memoryMb: 128,
 			cpus: 1,
 			port: 3000,

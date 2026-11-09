@@ -1,23 +1,23 @@
 /**
- * Build the standalone docs site: plain static files that deploy anywhere, including to Skiff
- * itself (`skif deploy dist`). Pages come from packages/docs/content, the same Markdown the
+ * Build the standalone docs site: plain static files that deploy anywhere, including to Yoal
+ * itself (`yoal deploy dist`). Pages come from packages/docs/content, the same Markdown the
  * dashboard's /docs renders.
  *
  *   bun src/build.ts [--out dist] [--base /] [--site-url https://docs.example.com]
  *
- * `--base` (or DOCS_BASE) serves the site under a path prefix, e.g. `/skiff/` on GitHub Pages.
+ * `--base` (or DOCS_BASE) serves the site under a path prefix, e.g. `/yoal/` on GitHub Pages.
  * `--site-url` (or DOCS_SITE_URL) adds canonical links and a sitemap.
  */
 import { createHash } from 'node:crypto';
 import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { createLibrary } from '@skiff/docs';
-import { readContent } from '@skiff/docs/disk';
+import { createLibrary } from '@yoal/docs';
+import { readContent } from '@yoal/docs/disk';
 import { pageUrl, renderDocPage, renderHome, renderNotFound, type SiteContext } from './template.ts';
 
 const APP_DIR = resolve(import.meta.dir, '..');
 const REPO_ROOT = resolve(APP_DIR, '..', '..');
-const REPO_URL = 'https://github.com/KieranHolroyd/skiff';
+const REPO_URL = 'https://github.com/KieranHolroyd/yoal';
 
 export interface BuildOptions {
 	outDir: string;
@@ -65,7 +65,7 @@ export async function buildSite(options: BuildOptions): Promise<BuildResult> {
 	rmSync(out, { recursive: true, force: true });
 	mkdirSync(join(out, 'assets'), { recursive: true });
 
-	// Fonts, stylesheet and script get content-hashed names, which Skiff (and most CDNs) cache
+	// Fonts, stylesheet and script get content-hashed names, which Yoal (and most CDNs) cache
 	// as immutable.
 	const fonts: Record<'sans' | 'mono', string> = { sans: '', mono: '' };
 	for (const [key, pkg, file] of [
@@ -89,7 +89,7 @@ export async function buildSite(options: BuildOptions): Promise<BuildResult> {
 	write(join(out, cssName), css);
 
 	// Code splitting keeps Mermaid (large) out of the entry script: it loads only on pages with a
-	// diagram. Bun names every file by content hash, which Skiff caches as immutable.
+	// diagram. Bun names every file by content hash, which Yoal caches as immutable.
 	const bundle = await Bun.build({
 		entrypoints: [join(APP_DIR, 'src/client.ts')],
 		outdir: join(out, 'assets'),
@@ -138,9 +138,9 @@ export async function buildSite(options: BuildOptions): Promise<BuildResult> {
 	write(join(out, '404.html'), renderNotFound(ctx));
 	write(join(out, 'search.json'), JSON.stringify(await library.searchIndex()));
 
-	// Skiff site config: pages are `<slug>/index.html`, so canonical URLs end in a slash.
+	// Yoal site config: pages are `<slug>/index.html`, so canonical URLs end in a slash.
 	write(
-		join(out, 'skiff.json'),
+		join(out, 'yoal.json'),
 		JSON.stringify({ trailingSlash: 'always', notFound: `${base}404.html` }, null, 2) + '\n'
 	);
 

@@ -6,7 +6,7 @@ import { json, route } from '#lib/server/api.js';
 const MAX_BODY_BYTES = 256 * 1024;
 
 /**
- * RustFS bucket events for one storage instance (docs/EVENTS.md, D122). The instance's `skiff`
+ * RustFS bucket events for one storage instance (docs/EVENTS.md, D122). The instance's `yoal`
  * webhook target posts here with a bearer token derived from the instance id, never a cookie, so
  * this sits under the CSRF-exempt `/api/webhooks/` prefix. A non-2xx answer makes RustFS keep the
  * event in its queue dir and retry, so only a bad token or body is refused.

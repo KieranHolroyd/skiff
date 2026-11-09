@@ -2,7 +2,7 @@ import * as z from 'zod';
 
 /**
  * Config import (docs/OPERATIONS.md §14): recreate an organisation's configuration on another
- * Skiff instance from a config export (`skiff.export/v1`, §13).
+ * Yoal instance from a config export (`yoal.export/v1`, §13).
  *
  * Import is create-only. Resources are matched by their natural name (project slug, database
  * name, role name, …): one that already exists is left exactly as it is and reported as

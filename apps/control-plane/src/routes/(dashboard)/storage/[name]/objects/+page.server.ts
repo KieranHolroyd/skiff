@@ -1,11 +1,11 @@
 import { error, fail, redirect } from '@sveltejs/kit';
-import { CoreError } from '@skiff/core';
+import { CoreError } from '@yoal/core';
 import {
 	hasPermission,
 	storageObjectDeleteSchema,
 	type StorageObjectList,
 	type StorageView
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { failStatus, formString, toFormFailure } from '../../../_lib/errors.js';
 import { storageCan } from '../../_lib/forms.server.js';

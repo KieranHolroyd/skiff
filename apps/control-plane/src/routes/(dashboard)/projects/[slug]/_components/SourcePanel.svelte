@@ -173,7 +173,7 @@
 	);
 	const previewUrl = $derived(view?.deployment.previewUrl ?? null);
 	const entries = $derived(
-		['index.html', '404.html', 'skiff.json', '_redirects', '_headers', 'robots.txt'].filter(
+		['index.html', '404.html', 'yoal.json', '_redirects', '_headers', 'robots.txt'].filter(
 			(path) => files.some((file) => file.path === path)
 		)
 	);

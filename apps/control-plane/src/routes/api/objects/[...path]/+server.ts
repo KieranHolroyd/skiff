@@ -1,6 +1,6 @@
 import type { RequestHandler } from './$types';
-import { LocalObjectStore } from '@skiff/core';
-import { limits } from '@skiff/contracts';
+import { LocalObjectStore } from '@yoal/core';
+import { limits } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 
 /**

@@ -1,4 +1,4 @@
-import { storageGrantModes, type StorageGrant } from '@skiff/contracts';
+import { storageGrantModes, type StorageGrant } from '@yoal/contracts';
 
 /** Form field name for one bucket's grant in `GrantsFields`. */
 export const GRANT_FIELD_PREFIX = 'grant:';

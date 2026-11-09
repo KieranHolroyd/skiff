@@ -3,18 +3,18 @@ title: Organisations, members and roles
 description: How organisations contain projects and people, how invitations work, what each role can do, and how roles limit API keys and OAuth tokens.
 ---
 
-Everything in Skiff belongs to an **organisation**, and what you can do inside it depends on your **role**. This page explains how organisations work, how to invite and manage members in **Settings → Members**, what each built-in role allows, and how roles interact with API keys and OAuth tokens. For the vocabulary used throughout the docs, see [core concepts](/getting-started/concepts).
+Everything in Yoal belongs to an **organisation**, and what you can do inside it depends on your **role**. This page explains how organisations work, how to invite and manage members in **Settings → Members**, what each built-in role allows, and how roles interact with API keys and OAuth tokens. For the vocabulary used throughout the docs, see [core concepts](/getting-started/concepts).
 
 ## Organisations
 
 An organisation is the tenant boundary. Projects, managed services, API keys, secrets and share links all belong to exactly one organisation, and quotas are set per organisation. Members see only what their role allows inside it.
 
-You normally belong to one organisation. The dashboard has no organisation switcher: if a user has more than one membership, Skiff uses the earliest one.
+You normally belong to one organisation. The dashboard has no organisation switcher: if a user has more than one membership, Yoal uses the earliest one.
 
 You cannot create an organisation from the dashboard. Organisations come from two places:
 
 - **Setup.** The first owner created by the setup wizard gets an organisation of their own.
-- **Open sign-up.** On an install that runs with `SKIFF_OPEN_SIGNUP=1`, each new user gets a personal organisation, with them as its owner. See [configuration](/self-hosting/configuration).
+- **Open sign-up.** On an install that runs with `YOAL_OPEN_SIGNUP=1`, each new user gets a personal organisation, with them as its owner. See [configuration](/self-hosting/configuration).
 
 On a normal invite-only install, everyone else joins an existing organisation by accepting an invitation.
 
@@ -41,7 +41,7 @@ Owners and admins hold the same permissions. The difference is the ownership rul
 
 ## Permissions
 
-Each role is a set of permissions written as `resource:action`, for example `deployment:promote`. The table lists every permission in Skiff and shows which roles hold it. Owners and admins hold all of them.
+Each role is a set of permissions written as `resource:action`, for example `deployment:promote`. The table lists every permission in Yoal and shows which roles hold it. Owners and admins hold all of them.
 
 | Permission | What it allows | Deployer | Viewer |
 | --- | --- | --- | --- |
@@ -108,7 +108,7 @@ Each role is a set of permissions written as `resource:action`, for example `dep
 
 1. Open **Settings → Members** and select **Invite member**. This needs `member:invite`, so owners and admins can do it.
 2. Enter the person's email address and choose a role. Only owners see the owner role in the list.
-3. Select **Send invitation**. Skiff emails them a link to `/accept-invitation/<id>` on your platform address. The invitation also appears under **Pending invitations**, where you can copy the link.
+3. Select **Send invitation**. Yoal emails them a link to `/accept-invitation/<id>` on your platform address. The invitation also appears under **Pending invitations**, where you can copy the link.
 
 An invitation expires after 48 hours. Inviting an address that already has a pending invitation sends the invitation again and renews its expiry. An address that is already a member cannot be invited.
 
@@ -116,9 +116,9 @@ An invitation expires after 48 hours. Inviting an address that already has a pen
 
 The invitee follows the link and does the following:
 
-1. **Signs in with the invited address.** Skiff is invite-only, so only invited addresses can create an account. Password sign-up is disabled on invite-only installs. The invitee signs in or creates an account with GitHub, a passkey or an email sign-in link. If they are not signed in, the link sends them to sign-in first.
-2. **Checks the account.** The accept page shows the address they are signed in as. Skiff refuses the invitation if that address does not match the invited one, so the invitation must be opened from the right account.
-3. **Selects Accept invitation.** Skiff adds them to the organisation with the invited role and opens the overview.
+1. **Signs in with the invited address.** Yoal is invite-only, so only invited addresses can create an account. Password sign-up is disabled on invite-only installs. The invitee signs in or creates an account with GitHub, a passkey or an email sign-in link. If they are not signed in, the link sends them to sign-in first.
+2. **Checks the account.** The accept page shows the address they are signed in as. Yoal refuses the invitation if that address does not match the invited one, so the invitation must be opened from the right account.
+3. **Selects Accept invitation.** Yoal adds them to the organisation with the invited role and opens the overview.
 
 An expired or cancelled invitation cannot be accepted. Send the invitation again from **Settings → Members**.
 
@@ -145,7 +145,7 @@ An organisation always keeps at least one owner. The rules are:
 - Only an owner can change or remove an owner.
 - To step down as the only owner, first make someone else an owner.
 
-If you try one of these actions, Skiff refuses it with a message such as "An organisation needs at least one owner. Make someone else an owner first."
+If you try one of these actions, Yoal refuses it with a message such as "An organisation needs at least one owner. Make someone else an owner first."
 
 ## Platform admins
 

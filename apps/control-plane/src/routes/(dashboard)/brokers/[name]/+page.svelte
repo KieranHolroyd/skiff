@@ -23,13 +23,13 @@
 	import TerminalIcon from '@lucide/svelte/icons/terminal';
 	import TrashIcon from '@lucide/svelte/icons/trash';
 	import UnplugIcon from '@lucide/svelte/icons/unplug';
-	import { brokerEnvNames, type BrokerCredentials } from '@skiff/contracts';
+	import { brokerEnvNames, type BrokerCredentials } from '@yoal/contracts';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import MetricChart from '#lib/components/skiff/MetricChart.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import DetailList from '#lib/components/yoal/DetailList.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import MetricChart from '#lib/components/yoal/MetricChart.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
@@ -261,7 +261,7 @@
 </script>
 
 <svelte:head>
-	<title>{broker.name} · Queues · Skiff</title>
+	<title>{broker.name} · Queues · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">
@@ -458,7 +458,7 @@
 			title="Streams"
 			icon={ListOrderedIcon}
 			count={streams.length}
-			description="JetStream streams on this broker. Function queues are SKIFF_Q_<queue> streams; apps can create their own."
+			description="JetStream streams on this broker. Function queues are YOAL_Q_<queue> streams; apps can create their own."
 			flush
 		>
 			{#snippet actions()}
@@ -783,7 +783,7 @@
 					A newer version is available ({broker.upgradeVersions.join(', ')}); upgrading restarts the
 					broker in place and keeps its streams. Downgrades are refused.
 				{:else}
-					This is the newest version Skiff ships for {broker.engineLabel}.
+					This is the newest version Yoal ships for {broker.engineLabel}.
 				{/if}
 			</p>
 			{#if can.update && !deleted && broker.upgradeVersions.length > 0}
@@ -952,7 +952,7 @@
 		bind:open={createQueueOpen}
 		icon={PlusIcon}
 		title="New queue"
-		description="Creates the queue's stream now instead of on first use: a work queue (SKIFF_Q_<name>) that a function consumes with a queue trigger and producers reach with a queue binding."
+		description="Creates the queue's stream now instead of on first use: a work queue (YOAL_Q_<name>) that a function consumes with a queue trigger and producers reach with a queue binding."
 		action="?/createQueue"
 		submitLabel="Create queue"
 	>

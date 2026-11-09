@@ -9,7 +9,7 @@ import {
 } from './config-export.ts';
 
 const doc: ConfigExportDocument = {
-	apiVersion: 'skiff.export/v1',
+	apiVersion: 'yoal.export/v1',
 	exportedAt: '2026-11-09T10:00:00.000Z',
 	platform: { url: 'https://control.example.com', contentDomain: 'example.dev', version: '1.2.3' },
 	org: { id: 'org_1', name: 'Acme', slug: 'acme' },
@@ -46,16 +46,16 @@ describe('toYaml', () => {
 
 	test('renders the whole export as YAML a parser reads back', () => {
 		const text = renderExport(doc, 'yaml');
-		expect(text.startsWith('# Skiff config export')).toBe(true);
+		expect(text.startsWith('# Yoal config export')).toBe(true);
 		expect(Bun.YAML.parse(text)).toEqual(JSON.parse(JSON.stringify(doc)));
 	});
 });
 
 describe('export helpers', () => {
 	test('names the file after the org slug and date', () => {
-		expect(defaultExportFileName(doc, 'yaml')).toBe('skiff-config-acme-2026-11-09.yaml');
+		expect(defaultExportFileName(doc, 'yaml')).toBe('yoal-config-acme-2026-11-09.yaml');
 		expect(defaultExportFileName({ ...doc, org: { id: 'org_1', name: null, slug: null } }, 'json')).toBe(
-			'skiff-config-control.example.com-2026-11-09.json',
+			'yoal-config-control.example.com-2026-11-09.json',
 		);
 	});
 

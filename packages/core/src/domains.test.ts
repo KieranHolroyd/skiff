@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { eq } from 'drizzle-orm';
-import { createDb, domains as domainsTable } from '@skiff/db';
+import { createDb, domains as domainsTable } from '@yoal/db';
 import { buildPrincipal } from './orgs.ts';
 import { createCore, type Core } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
@@ -20,7 +20,7 @@ import {
 	type DnsResolver,
 } from './domains.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-domains-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-domains-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 let clock = Date.now();
@@ -150,8 +150,8 @@ describe('custom domains', () => {
 		expect(view.hostname).toBe('app.example.com');
 		expect(view.kind).toBe('custom');
 		expect(view.status).toBe('pending');
-		expect(view.verification?.recordName).toBe('_skiff.app.example.com');
-		expect(view.verification?.recordValue).toStartWith('skiff-verify=');
+		expect(view.verification?.recordName).toBe('_yoal.app.example.com');
+		expect(view.verification?.recordValue).toStartWith('yoal-verify=');
 		expect(view.wwwHostname).toBeNull();
 
 		const record = cloudflare.records.find((candidate) => candidate.name === 'app.example.com');
@@ -176,11 +176,11 @@ describe('custom domains', () => {
 
 		const pending = await service.check(principal, view.id);
 		expect(pending.domain.status).toBe('pending');
-		expect(pending.detail).toContain('_skiff.verify.example.com');
+		expect(pending.detail).toContain('_yoal.verify.example.com');
 		expect(pending.records.map((record) => record.type)).toEqual(['TXT', 'CNAME']);
 		expect(service.approve('verify.example.com')).toBe(false);
 
-		dns.setTxt('_skiff.verify.example.com', token);
+		dns.setTxt('_yoal.verify.example.com', token);
 		const drifted = await service.check(principal, view.id);
 		expect(drifted.domain.status).toBe('verified');
 		expect(drifted.domain.lastError).toContain('No CNAME record');
@@ -233,7 +233,7 @@ describe('custom domains', () => {
 			.sort();
 		expect(names).toEqual(['example.com', 'www.example.com']);
 
-		dns.setTxt('_skiff.example.com', view.verification!.recordValue);
+		dns.setTxt('_yoal.example.com', view.verification!.recordValue);
 		dns.setCname('example.com', 'blog.sites.test');
 		const missingWww = await service.check(principal, view.id);
 		expect(missingWww.domain.status).toBe('verified');
@@ -303,11 +303,11 @@ describe('custom domains', () => {
 	});
 
 	test('the Cloudflare client stays grey-cloud, scoped and network-injectable', async () => {
-		expect(cloudflareConfigFromEnv({ SKIFF_CLOUDFLARE_API_TOKEN: 'token-only' })).toBeNull();
+		expect(cloudflareConfigFromEnv({ YOAL_CLOUDFLARE_API_TOKEN: 'token-only' })).toBeNull();
 		expect(
 			cloudflareConfigFromEnv({
-				SKIFF_CLOUDFLARE_API_TOKEN: 'token',
-				SKIFF_CLOUDFLARE_ZONE_ID: 'zone_1',
+				YOAL_CLOUDFLARE_API_TOKEN: 'token',
+				YOAL_CLOUDFLARE_ZONE_ID: 'zone_1',
 			}),
 		).toEqual({ apiToken: 'token', zoneId: 'zone_1', zoneName: undefined });
 
@@ -343,13 +343,13 @@ describe('custom domains', () => {
 			content: 'blog.sites.test',
 			proxied: false,
 			ttl: 1,
-			comment: 'Managed by Skiff',
+			comment: 'Managed by Yoal',
 		});
 		expect(created.id).toBe('record_1');
 		expect(calls[0]!.url).toBe('https://api.cloudflare.com/client/v4/zones?name=example.com');
 		for (const call of calls) {
 			expect((call.init?.headers as Record<string, string>).authorization).toBe('Bearer secret-token');
-			expect(JSON.stringify(call)).not.toContain('skiff-verify');
+			expect(JSON.stringify(call)).not.toContain('yoal-verify');
 		}
 		const createCall = calls.at(-1)!;
 		expect(createCall.init?.method).toBe('POST');
@@ -420,7 +420,7 @@ describe('domain status lifecycle', () => {
 		service.applyServedCertificates([{ host: 'live.example.com', notAfter: new Date(clock + 60 * 86_400_000).toISOString() }]);
 		expect(statusOf(view.id)).toBe('pending');
 
-		dns.setTxt('_skiff.live.example.com', view.verification!.recordValue);
+		dns.setTxt('_yoal.live.example.com', view.verification!.recordValue);
 		dns.setCname('live.example.com', 'blog.sites.test');
 		expect((await service.check(principal, view.id)).domain.status).toBe('verified');
 
@@ -504,7 +504,7 @@ describe('domain status lifecycle', () => {
 		clock += HOUR;
 		await service.recheckDue();
 		expect(lastChecked()).toBe(failedAt);
-		dns.setTxt('_skiff.late.example.com', view.verification!.recordValue);
+		dns.setTxt('_yoal.late.example.com', view.verification!.recordValue);
 		clock += DOMAIN_RECHECK_FAILED_MS;
 		await service.recheckDue();
 		const recovered = service.get(principal, view.id);
@@ -513,7 +513,7 @@ describe('domain status lifecycle', () => {
 		expect(service.approve('late.example.com')).toBe(true);
 
 		// Once verified it never fails on a later missing TXT record (it may be removed after verifying).
-		dns.setTxt('_skiff.late.example.com', 'something-else');
+		dns.setTxt('_yoal.late.example.com', 'something-else');
 		clock += DOMAIN_FAIL_AFTER_MS;
 		const later = await service.check(principal, view.id);
 		expect(later.domain.status).toBe('verified');

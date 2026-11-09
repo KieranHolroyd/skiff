@@ -13,7 +13,7 @@ interface Seen {
 }
 
 beforeEach(async () => {
-	dir = await mkdtemp(join(tmpdir(), 'skiff-cli-pitr-'));
+	dir = await mkdtemp(join(tmpdir(), 'yoal-cli-pitr-'));
 });
 
 afterEach(async () => {
@@ -29,7 +29,7 @@ function pitr(overrides: Record<string, unknown> = {}) {
 		enabled: true,
 		stanza: 'db_1',
 		status: 'ok',
-		repo: { kind: 's3', endpoint: null, bucket: 'skiff-pitr', region: 'us-east-1', pathPrefix: 'skiff/pitr', forcePathStyle: true },
+		repo: { kind: 's3', endpoint: null, bucket: 'yoal-pitr', region: 'us-east-1', pathPrefix: 'yoal/pitr', forcePathStyle: true },
 		archiveStatus: 'ok',
 		archiveAt: '2026-11-07T10:00:00.000Z',
 		lastBaseBackupAt: '2026-11-07T02:00:00.000Z',
@@ -68,11 +68,11 @@ async function cli(...args: string[]) {
 		cwd: join(import.meta.dir, '../..'),
 		env: {
 			...process.env,
-			SKIFF_CONFIG_DIR: dir,
-			SKIFF_URL: `http://127.0.0.1:${server!.port}`,
-			SKIFF_TOKEN: 'skif_test',
-			SKIFF_CONTENT_DOMAIN: '',
-			SKIFF_PROFILE: '',
+			YOAL_CONFIG_DIR: dir,
+			YOAL_URL: `http://127.0.0.1:${server!.port}`,
+			YOAL_TOKEN: 'yoal_test',
+			YOAL_CONTENT_DOMAIN: '',
+			YOAL_PROFILE: '',
 		},
 		stdin: 'ignore',
 		stdout: 'pipe',
@@ -82,13 +82,13 @@ async function cli(...args: string[]) {
 	return { code, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
 }
 
-describe('skif db pitr', () => {
+describe('yoal db pitr', () => {
 	test('shows the archive and the recoverable window', async () => {
 		serve({ 'GET /api/v1/databases/main/pitr': { pitr: pitr() } });
 		const result = await cli('db', 'pitr', 'main');
 		expect(result.code).toBe(0);
 		expect(result.stdout).toContain('enabled (ok)');
-		expect(result.stdout).toContain('s3://skiff-pitr/skiff/pitr/db_1');
+		expect(result.stdout).toContain('s3://yoal-pitr/yoal/pitr/db_1');
 		expect(result.stdout).toContain('Recoverable:');
 		expect(result.stdout).toContain('and later while the archive is healthy');
 	});

@@ -3,8 +3,8 @@
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
-	import type { Cell, Column } from '@skiff/studio/protocol';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import type { Cell, Column } from '@yoal/studio/protocol';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Spinner } from '#lib/components/ui/spinner/index.js';

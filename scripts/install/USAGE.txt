@@ -1,26 +1,26 @@
-Skiff installer
+Yoal installer
 
 Usage: curl -fsSL <install.sh> | sudo sh
        bun scripts/install/main.ts [options]
 
 Options:
   --yes                       Non-interactive; required values must be flags/env.
-                              Also SKIFF_YES=1.
+                              Also YOAL_YES=1.
   --dry-run                   Print the plan; change nothing.
-  --upgrade                   Reuse /etc/skiff and data, build and activate a new release.
-  --uninstall                 Stop and remove the Skiff units (keeps data/config).
-  --purge                     With --uninstall, also delete /opt/skiff, /var/lib/skiff, /etc/skiff.
+  --upgrade                   Reuse /etc/yoal and data, build and activate a new release.
+  --uninstall                 Stop and remove the Yoal units (keeps data/config).
+  --purge                     With --uninstall, also delete /opt/yoal, /var/lib/yoal, /etc/yoal.
   --platform-host <host>      Dashboard/API/MCP domain. Blank: http://<server-ip>.
   --content-domain <domain>   Domain for deployed sites. Blank: <server-ip>.sslip.io (HTTP).
   --acme-email <email>        ACME account email; turns on HTTPS (needs real domains).
   --public-address <ipv4>     This server's IPv4 for IP-only installs (default: detected).
   --skip-deps                 Don't install Caddy, Podman or the storage tools (fio, nfs-common, cifs-utils).
-                              Also SKIFF_SKIP_DEPS=1.
+                              Also YOAL_SKIP_DEPS=1.
   --admin-email <email>       Prefills the owner email in the setup wizard (optional).
   --cloudflare-token-file <path>
                               Caddy DNS-01 token file (default /etc/caddy/cloudflare.token).
                               Asked for when HTTPS is on: the sites wildcard certificate needs it.
-                              Also SKIFF_CLOUDFLARE_TOKEN_FILE.
+                              Also YOAL_CLOUDFLARE_TOKEN_FILE.
   --skip-dns-check            Skip checking that the domains resolve before installing.
   --github-client-id <id>     Optional GitHub OAuth app.
   --github-client-secret <s>  Optional GitHub OAuth secret.
@@ -28,7 +28,7 @@ Options:
   --smtp-port <port>          SMTP port (default 587).
   --smtp-user <user>          SMTP username.
   --smtp-password <pass>      SMTP password.
-  --smtp-from <address>       From address (default Skiff <noreply@<content-domain>>).
+  --smtp-from <address>       From address (default Yoal <noreply@<content-domain>>).
   --object-store local|r2     Artifact storage (default local).
   --r2-account-id <id>        R2 account id.
   --r2-bucket <bucket>        R2 bucket.
@@ -36,22 +36,22 @@ Options:
   --r2-secret-access-key <s>  R2 secret.
   --no-agent                  Install the control plane only.
   --no-node                   Skip the pinned Node.js LTS that Node.js process apps run on
-                              (~190 MB on disk). Also SKIFF_NO_NODE=1.
+                              (~190 MB on disk). Also YOAL_NO_NODE=1.
   --no-python                 Don't warm the Pyodide cache that Python functions load (~36 MB);
-                              they stay unavailable on this node. Also SKIFF_NO_PYTHON=1.
+                              they stay unavailable on this node. Also YOAL_NO_PYTHON=1.
   --with-php                  Install the pinned FrankenPHP runtime for PHP process apps
-                              (~175 MB; off by default). Also SKIFF_INSTALL_PHP=1.
+                              (~175 MB; off by default). Also YOAL_INSTALL_PHP=1.
   --clickhouse                Also install the optional ClickHouse telemetry store (traffic
                               charts, dashboards; ~240 MB download, ~300–800 MB RAM).
-                              Asked interactively; off with --yes. Also SKIFF_INSTALL_CLICKHOUSE=1.
+                              Asked interactively; off with --yes. Also YOAL_INSTALL_CLICKHOUSE=1.
   --no-clickhouse             Skip it without asking (an installed one is left in place).
   --version <label>           Release label (default: the repository VERSION file).
-                              Also SKIFF_VERSION.
+                              Also YOAL_VERSION.
   --canary                    Install the head of main and follow the canary channel (every
                               release). Default: the newest stable release, stable channel.
-                              Also SKIFF_CHANNEL=canary.
+                              Also YOAL_CHANNEL=canary.
   -h, --help                  Print this help and exit.
 
 Bootstrap environment:
-  SKIFF_REPO, SKIFF_CHANNEL (stable or canary), SKIFF_REF, SKIFF_GITHUB_TOKEN,
-  SKIFF_BUN_VERSION, SKIFF_SOURCE_DIR.
+  YOAL_REPO, YOAL_CHANNEL (stable or canary), YOAL_REF, YOAL_GITHUB_TOKEN,
+  YOAL_BUN_VERSION, YOAL_SOURCE_DIR.

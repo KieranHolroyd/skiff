@@ -108,7 +108,7 @@ export const actions: Actions = {
 		if (availability === 'not-enabled')
 			return fail(409, {
 				message:
-					'Dashboard updates are not enabled on this host. Run `sudo skiff-update-self check` on the server once.'
+					'Dashboard updates are not enabled on this host. Run `sudo yoal-update-self check` on the server once.'
 			});
 		if (updateInFlight()) return fail(409, { message: 'An update is already queued or running.' });
 		// Destructive migrations approved in the review dialog: only ones the updater reported.

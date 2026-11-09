@@ -162,7 +162,7 @@ export function createToolbox(catalog: readonly AssistantTool[]): Toolbox {
 		name: SEARCH_TOOL,
 		title: 'Search tools',
 		description:
-			'Find and load Skiff tools that are not loaded yet. The system prompt lists every deferred tool by name; call this with keywords or "select:name1,name2", and the matching tools become callable on your next step. Load everything a task needs in one call where you can.',
+			'Find and load Yoal tools that are not loaded yet. The system prompt lists every deferred tool by name; call this with keywords or "select:name1,name2", and the matching tools become callable on your next step. Load everything a task needs in one call where you can.',
 		destructive: false,
 		schema: searchSchema,
 		run: async (args) => {

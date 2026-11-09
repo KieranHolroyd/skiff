@@ -18,9 +18,9 @@ import {
 } from './database.ts';
 
 describe('database image variants (D126)', () => {
-	test('PostGIS and pg_cron are Skiff-built Postgres 18 images', () => {
-		expect(databaseImage('postgres', '18', 'postgis')).toBe('ghcr.io/kieranholroyd/skiff-postgres:18-postgis-1');
-		expect(databaseImage('postgres', '18', 'pg_cron')).toBe('ghcr.io/kieranholroyd/skiff-postgres:18-pg_cron-1');
+	test('PostGIS and pg_cron are Yoal-built Postgres 18 images', () => {
+		expect(databaseImage('postgres', '18', 'postgis')).toBe('ghcr.io/kieranholroyd/yoal-postgres:18-postgis-1');
+		expect(databaseImage('postgres', '18', 'pg_cron')).toBe('ghcr.io/kieranholroyd/yoal-postgres:18-pg_cron-1');
 		expect(databaseImage('postgres', '18')).toBe('docker.io/pgvector/pgvector:0.8.7-pg18-trixie');
 		expect(databaseVariantsFor('postgres', '18')).toEqual(['standard', 'postgis', 'pg_cron']);
 		expect(databaseVariantsFor('postgres', '17')).toEqual(['standard']);

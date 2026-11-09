@@ -1,9 +1,9 @@
 import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 /**
- * Skiff platform schema (SQLite; DESIGN §6.2, D9, D17). Better Auth owns the `user`,
+ * Yoal platform schema (SQLite; DESIGN §6.2, D9, D17). Better Auth owns the `user`,
  * `session`, `organization`, `member`, `apikey` and related tables; this file owns everything
- * Skiff adds. User/org ids are stored as text without declared foreign keys so the two
+ * Yoal adds. User/org ids are stored as text without declared foreign keys so the two
  * migration streams stay independent; `migrations/0001_init.sql` adds the real constraints.
  *
  * Timestamps are epoch milliseconds (integer) — SQLite has no date type and this keeps
@@ -29,9 +29,9 @@ export const nodes = sqliteTable(
 		desiredStateVersion: integer('desired_state_version').notNull().default(1),
 		lastHeartbeatAt: integer('last_heartbeat_at'),
 		statsJson: text('stats_json'),
-		/** Memory budget for `skiff-workloads.slice` on this node (DESIGN §3.4.1). */
+		/** Memory budget for `yoal-workloads.slice` on this node (DESIGN §3.4.1). */
 		sliceMemoryMb: integer('slice_memory_mb').notNull().default(1024),
-		/** CPU weight for the workload slice; lower than skiff-cp/agent/caddy so apps yield first. */
+		/** CPU weight for the workload slice; lower than yoal-cp/agent/caddy so apps yield first. */
 		sliceCpuWeight: integer('slice_cpu_weight').notNull().default(200),
 		/** This node is allowed to claim git build jobs (D3: the homelab Builder). */
 		canBuild: integer('can_build', { mode: 'boolean' }).notNull().default(false),
@@ -39,7 +39,7 @@ export const nodes = sqliteTable(
 		zone: text('zone').notNull().default('default'),
 		/** Operator-set roles; NULL keeps the derivation from mode/can_build for older rows. */
 		rolesJson: text('roles_json'),
-		/** Operator labels for placement constraints (`owner=media`); never `skiff.io/*`. */
+		/** Operator labels for placement constraints (`owner=media`); never `yoal.io/*`. */
 		labelsJson: text('labels_json'),
 		/** Last hardware fact block (`NodeHardware`, CLUSTERING §3.1). */
 		hardwareJson: text('hardware_json'),
@@ -55,8 +55,8 @@ export const nodes = sqliteTable(
 		privateCidr: text('private_cidr'),
 		/** The node's WireGuard public key; the private key never leaves the node. */
 		wgPublicKey: text('wg_public_key'),
-		/** `skiff` managed, `external` host-provisioned/BYO, `edge` legacy edge interface. */
-		networkMode: text('network_mode', { enum: ['skiff', 'external', 'edge'] }).notNull().default('external'),
+		/** `yoal` managed, `external` host-provisioned/BYO, `edge` legacy edge interface. */
+		networkMode: text('network_mode', { enum: ['yoal', 'external', 'edge'] }).notNull().default('external'),
 		wgEndpoint: text('wg_endpoint'),
 		wgListenPort: integer('wg_listen_port'),
 		/** Last `wg show` peer health reported by the agent (public data only). */
@@ -66,7 +66,7 @@ export const nodes = sqliteTable(
 		storageDataDir: text('storage_data_dir'),
 		/** Requested Builder scratch directory; null keeps the install default (D48). */
 		storageBuildDir: text('storage_build_dir'),
-		/** Last report from the node's skiff-storage.service (`NodeStorageStatus`). */
+		/** Last report from the node's yoal-storage.service (`NodeStorageStatus`). */
 		storageStatusJson: text('storage_status_json'),
 		/** Latest raw volume inventory (`VolumeInventory`), from which Settings → Storage lists disk candidates. */
 		diskInventoryJson: text('volume_inventory_json'),
@@ -283,7 +283,7 @@ export const databaseReplication = sqliteTable('database_replication', {
 	updatedAt: integer('updated_at').notNull().$defaultFn(now),
 });
 
-/** Failover controller history (C8, migration 0060); see `@skiff/contracts` FailoverEventView. */
+/** Failover controller history (C8, migration 0060); see `@yoal/contracts` FailoverEventView. */
 export const failoverEvents = sqliteTable(
 	'failover_events',
 	{
@@ -369,10 +369,10 @@ export const nodeJoinTokens = sqliteTable(
 );
 
 /**
- * Disks (docs/STORAGE.md, D169): a mounted filesystem on one node that Skiff may store data on.
+ * Disks (docs/STORAGE.md, D169): a mounted filesystem on one node that Yoal may store data on.
  * The SQL table keeps its 0010 name. `source_key` is the stable node-reported identity
- * (`fs:<UUID>`, `zfs:pool/dataset`, `nfs:host:/export`); `mount_uuid` is set when Skiff mounts the
- * filesystem itself at /mnt/skiff-disks/<name>. Names are unique per node.
+ * (`fs:<UUID>`, `zfs:pool/dataset`, `nfs:host:/export`); `mount_uuid` is set when Yoal mounts the
+ * filesystem itself at /mnt/yoal-disks/<name>. Names are unique per node.
  */
 export const disks = sqliteTable(
 	'node_volumes',
@@ -390,9 +390,9 @@ export const disks = sqliteTable(
 		/** `fast` or `bulk`; derived from the hardware on every report unless `tierSet` (0083). */
 		tier: text('tier', { enum: ['fast', 'bulk'] }).notNull().default('bulk'),
 		tierSet: integer('tier_set', { mode: 'boolean' }).notNull().default(false),
-		/** Filesystem UUID when Skiff mounts it (the node's `diskMounts`); null for a mount Skiff found. */
+		/** Filesystem UUID when Yoal mounts it (the node's `diskMounts`); null for a mount Yoal found. */
 		mountUuid: text('mount_uuid'),
-		/** `pending` until a Skiff mount appears; `removing` while the node unmounts it. */
+		/** `pending` until a Yoal mount appears; `removing` while the node unmounts it. */
 		status: text('status', { enum: ['pending', 'ready', 'missing', 'failed', 'removing'] })
 			.notNull()
 			.default('pending'),
@@ -519,7 +519,7 @@ export const registryOidcTrusts = sqliteTable(
 	(t) => [index('registry_oidc_trusts_subject_idx').on(t.provider, t.subjectRepository), index('registry_oidc_trusts_org_idx').on(t.orgId)],
 );
 
-/** Deployment pins (R11, 0073): the hidden `skiff-d-<deployment>` tag on a deployment's digest. */
+/** Deployment pins (R11, 0073): the hidden `yoal-d-<deployment>` tag on a deployment's digest. */
 export const registryPins = sqliteTable(
 	'registry_pins',
 	{
@@ -638,7 +638,7 @@ export const appVolumeSnapshots = sqliteTable(
 );
 
 /**
- * One-time codes for `skif login --web`. The CLI generates a PKCE verifier, the dashboard
+ * One-time codes for `yoal login --web`. The CLI generates a PKCE verifier, the dashboard
  * approves the request and redirects the code to loopback, and the CLI exchanges it for an API
  * key. Only the hash is stored, the code expires quickly, and each code can be redeemed once.
  */
@@ -683,7 +683,7 @@ export const projects = sqliteTable(
 			.notNull()
 			.default('platform'),
 		/**
-		 * Skiff Access policy ids (IAM.md I25). Present = the scope's effective mode is `access`;
+		 * Yoal Access policy ids (IAM.md I25). Present = the scope's effective mode is `access`;
 		 * the legacy mode column stores `platform` so older agents fail closed.
 		 */
 		productionAccessPolicyId: text('production_access_policy_id'),
@@ -704,7 +704,7 @@ export const projects = sqliteTable(
 		siteSessionEpoch: integer('site_session_epoch').notNull().default(0),
 		/** Last parsed site config, used to compile routes before a deployment exists. */
 		siteConfigJson: text('site_config_json'),
-		/** Tier 2/3 runtime spec applied to new deployments (validated by @skiff/contracts). */
+		/** Tier 2/3 runtime spec applied to new deployments (validated by @yoal/contracts). */
 		workloadJson: text('workload_json'),
 		createdBy: text('created_by').notNull(),
 		deletedAt: integer('deleted_at'),
@@ -782,7 +782,7 @@ export const configSnapshots = sqliteTable('config_snapshots', {
 	id: text('id').primaryKey(),
 	orgId: text('org_id').notNull(),
 	hash: text('hash').notNull(),
-	/** Parsed `skiff.json`, `_redirects` and `_headers`. */
+	/** Parsed `yoal.json`, `_redirects` and `_headers`. */
 	siteConfigJson: text('site_config_json').notNull(),
 	/** Plain environment variables (readable). Secret references are separate. */
 	envJson: text('env_json').notNull().default('{}'),
@@ -908,7 +908,7 @@ export const environments = sqliteTable(
 		access: text('access', { enum: ['public', 'password', 'platform'] })
 			.notNull()
 			.default('platform'),
-		/** Skiff Access policy for this environment; present = effective mode `access` (I25). */
+		/** Yoal Access policy for this environment; present = effective mode `access` (I25). */
 		accessPolicyId: text('access_policy_id'),
 		/**
 		 * Hashed password (scrypt) when `access` is `password`. Never returned by the API. Unused for
@@ -972,13 +972,13 @@ export const databases = sqliteTable(
 		id: text('id').primaryKey(),
 		orgId: text('org_id').notNull(),
 		name: text('name').notNull(),
-		// Mirrors `databaseEngines` in @skiff/contracts. Stored in `engine_name` (0028): the original
+		// Mirrors `databaseEngines` in @yoal/contracts. Stored in `engine_name` (0028): the original
 		// `engine` column has a Postgres-only CHECK and is left at its default.
 		engine: text('engine_name', { enum: ['postgres', 'mysql', 'mariadb', 'mongodb', 'valkey', 'redis', 'clickhouse'] })
 			.notNull()
 			.default('postgres'),
 		version: text('version').notNull(),
-		/** Image variant chosen at create (D126); mirrors `databaseVariants` in @skiff/contracts. */
+		/** Image variant chosen at create (D126); mirrors `databaseVariants` in @yoal/contracts. */
 		variant: text('variant', { enum: ['standard', 'postgis', 'pg_cron'] }).notNull().default('standard'),
 		nodeId: text('node_id').notNull(),
 		hostPort: integer('host_port').notNull(),
@@ -1342,7 +1342,7 @@ export const brokers = sqliteTable(
 		id: text('id').primaryKey(),
 		orgId: text('org_id').notNull(),
 		name: text('name').notNull(),
-		// Mirrors `brokerEngines` in @skiff/contracts.
+		// Mirrors `brokerEngines` in @yoal/contracts.
 		engine: text('engine', { enum: ['nats'] }).notNull().default('nats'),
 		version: text('version').notNull(),
 		nodeId: text('node_id').notNull(),
@@ -2025,8 +2025,8 @@ export const githubRunnerRegistrations = sqliteTable(
 );
 
 /**
- * Installations of Skiff's GitHub App (docs/GITHUB.md, 0077). GitHub's installation id is the key;
- * `orgId` is the Skiff organisation it is linked to, null while unclaimed. No credential is stored:
+ * Installations of Yoal's GitHub App (docs/GITHUB.md, 0077). GitHub's installation id is the key;
+ * `orgId` is the Yoal organisation it is linked to, null while unclaimed. No credential is stored:
  * installation tokens are minted on demand from the App key in `settings` (`github.app`).
  */
 export const githubInstallations = sqliteTable(
@@ -2079,7 +2079,7 @@ export const forgeConnections = sqliteTable(
 	(t) => [uniqueIndex('forge_connections_org_base_idx').on(t.orgId, t.baseUrl)],
 );
 
-/** Hooks Skiff created on a forge (D174, 0094): per repository, or per group/organisation. */
+/** Hooks Yoal created on a forge (D174, 0094): per repository, or per group/organisation. */
 export const forgeWebhooks = sqliteTable(
 	'forge_webhooks',
 	{
@@ -2199,7 +2199,7 @@ export const emailDomains = sqliteTable(
 		dkimPrivateSealed: text('dkim_private_sealed').notNull(),
 		/** EmailRecordCheck[] from the last check. */
 		recordsJson: text('records_json').notNull().default('[]'),
-		/** purpose → Cloudflare record id, for records Skiff created. */
+		/** purpose → Cloudflare record id, for records Yoal created. */
 		managedJson: text('managed_json').notNull().default('{}'),
 		lastCheckedAt: integer('last_checked_at'),
 		verifiedAt: integer('verified_at'),
@@ -2350,7 +2350,7 @@ export const emailSuppressions = sqliteTable(
 
 const pipelineConclusion = ['success', 'failure', 'cancelled', 'skipped', 'timed_out'] as const;
 
-/** A git repository whose `.skiff/workflows` run as pipelines (W3). Org-owned, name unique per org. */
+/** A git repository whose `.yoal/workflows` run as pipelines (W3). Org-owned, name unique per org. */
 export const pipelineRepositories = sqliteTable(
 	'pipeline_repositories',
 	{
@@ -2390,7 +2390,7 @@ export const pipelineTriggers = sqliteTable(
 		id: text('id').primaryKey(),
 		orgId: text('org_id').notNull(),
 		repositoryId: text('repository_id').notNull(),
-		event: text('event', { enum: ['push', 'pull_request', 'workflow_dispatch', 'schedule', 'skiff_event'] }).notNull(),
+		event: text('event', { enum: ['push', 'pull_request', 'workflow_dispatch', 'schedule', 'yoal_event'] }).notNull(),
 		ref: text('ref').notNull(),
 		sha: text('sha'),
 		actor: text('actor'),
@@ -2505,7 +2505,7 @@ export const pipelineSteps = sqliteTable(
 		status: text('status', { enum: ['pending', 'in_progress', 'completed'] }).notNull().default('pending'),
 		conclusion: text('conclusion', { enum: pipelineConclusion }),
 		outputsJson: text('outputs_json').notNull().default('{}'),
-		/** `$SKIFF_STEP_SUMMARY` Markdown (0074). */
+		/** `$YOAL_STEP_SUMMARY` Markdown (0074). */
 		summary: text('summary'),
 		startedAt: integer('started_at'),
 		finishedAt: integer('finished_at'),
@@ -2615,7 +2615,7 @@ export const pipelineEnvironments = sqliteTable(
 	(t) => [uniqueIndex('pipeline_environments_name_idx').on(t.repositoryId, t.name)],
 );
 
-/** Projects a repository's jobs may deploy to with `skiff/deploy` (§4.4). */
+/** Projects a repository's jobs may deploy to with `yoal/deploy` (§4.4). */
 export const pipelineProjectLinks = sqliteTable(
 	'pipeline_project_links',
 	{

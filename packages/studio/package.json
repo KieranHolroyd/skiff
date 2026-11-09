@@ -1,5 +1,5 @@
 {
-	"name": "@skiff/studio",
+	"name": "@yoal/studio",
 	"private": true,
 	"version": "0.1.0",
 	"type": "module",
@@ -14,7 +14,7 @@
 		"test": "bun test"
 	},
 	"dependencies": {
-		"@skiff/contracts": "workspace:*",
+		"@yoal/contracts": "workspace:*",
 		"mongodb": "^7.8.0",
 		"mysql2": "^3.24.6",
 		"zod": "^4.6.7"

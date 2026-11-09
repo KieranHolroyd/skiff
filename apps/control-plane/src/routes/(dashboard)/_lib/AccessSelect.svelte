@@ -28,7 +28,7 @@
 		},
 		{
 			value: 'access',
-			label: 'Skiff Access',
+			label: 'Yoal Access',
 			hint: 'A policy: groups, email, SSO or a pool',
 			icon: ShieldCheckIcon
 		}

@@ -1,4 +1,4 @@
-import { ValidationError } from '@skiff/core';
+import { ValidationError } from '@yoal/core';
 
 /**
  * Query parameters for `GET /api/v1/databases/:name/metrics` (docs/DATABASES.md §5).

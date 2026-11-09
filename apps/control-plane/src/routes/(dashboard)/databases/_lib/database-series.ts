@@ -1,4 +1,4 @@
-import type { DatabaseMetricPoint } from '@skiff/contracts';
+import type { DatabaseMetricPoint } from '@yoal/contracts';
 import { MAX_CHART_POINTS, spanLabel, type BaseInterval } from '../../_lib/traffic-series.js';
 
 /**

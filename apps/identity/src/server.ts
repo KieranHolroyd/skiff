@@ -1,10 +1,10 @@
 import type { Database } from 'bun:sqlite';
-import { CoreError, randomToken, safeEqual, type Core } from '@skiff/core';
+import { CoreError, randomToken, safeEqual, type Core } from '@yoal/core';
 import {
 	identityDesiredSchema,
 	identityKeyBundleSchema,
 	identitySecretsSchema,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import {
 	allowAttempt,
 	clearSessionCookie,
@@ -139,7 +139,7 @@ const PASSKEY_SCRIPT = `<script>
     window.location.reload();
   };
   const supported = () => window.isSecureContext && 'PublicKeyCredential' in window;
-  window.skiffPasskey = { supported, submit, register };
+  window.yoalPasskey = { supported, submit, register };
 })();
 </script>`;
 
@@ -150,7 +150,7 @@ const PASSKEY_SCRIPT = `<script>
  */
 export function createIdentityHandler(options: IdentityHandlerOptions): (request: Request) => Promise<Response> {
 	const { core, secureCookies, sqlite } = options;
-	const version = options.version ?? process.env.SKIFF_IDENTITY_VERSION?.trim() ?? 'dev';
+	const version = options.version ?? process.env.YOAL_IDENTITY_VERSION?.trim() ?? 'dev';
 	const requests = new Map<string, number>();
 	const record = (route: string, status: number): void => {
 		const key = `${route}|${status}`;
@@ -175,7 +175,7 @@ export function createIdentityHandler(options: IdentityHandlerOptions): (request
 				...(csrf ? { headers: { 'set-cookie': csrfCookie(poolId, csrf, secureCookies) } } : {}),
 			});
 		} catch {
-			return renderPage({ poolName: 'Skiff Identity', title, body, status });
+			return renderPage({ poolName: 'Yoal Identity', title, body, status });
 		}
 	};
 
@@ -253,14 +253,14 @@ export function createIdentityHandler(options: IdentityHandlerOptions): (request
 			   <script>
 			   (() => {
 			     const button = document.getElementById('passkey-login');
-			     if (!button || !window.skiffPasskey.supported()) return;
+			     if (!button || !window.yoalPasskey.supported()) return;
 			     button.hidden = false;
 			     button.addEventListener('click', async () => {
 			       button.disabled = true;
 			       try {
 			         const email = document.getElementById('email').value;
 			         const returnTo = ${JSON.stringify(returnTo)};
-			         await window.skiffPasskey.submit(${JSON.stringify(poolId)}, ${JSON.stringify(csrf)}, email, returnTo);
+			         await window.yoalPasskey.submit(${JSON.stringify(poolId)}, ${JSON.stringify(csrf)}, email, returnTo);
 			       } catch (error) {
 			         alert(error instanceof Error ? error.message : 'Could not use a passkey.');
 			         button.disabled = false;
@@ -629,11 +629,11 @@ export function createIdentityHandler(options: IdentityHandlerOptions): (request
 			 <script>
 			 (() => {
 			   const button = document.getElementById('add-passkey');
-			   if (!button || !window.skiffPasskey.supported()) return;
+			   if (!button || !window.yoalPasskey.supported()) return;
 			   button.hidden = false;
 			   button.addEventListener('click', async () => {
 			     button.disabled = true;
-			     try { await window.skiffPasskey.register(${JSON.stringify(poolId)}, ${JSON.stringify(csrf)}, 'Passkey'); }
+			     try { await window.yoalPasskey.register(${JSON.stringify(poolId)}, ${JSON.stringify(csrf)}, 'Passkey'); }
 			     catch (error) { alert(error instanceof Error ? error.message : 'Could not add a passkey.'); button.disabled = false; }
 			   });
 			 })();
@@ -733,25 +733,25 @@ export function createIdentityHandler(options: IdentityHandlerOptions): (request
 	const metrics = (): Response => {
 		const health = identityHealth(sqlite, version);
 		const lines = [
-			'# HELP skiff_identity_ready Whether the identity process has a usable database and state.',
-			'# TYPE skiff_identity_ready gauge',
-			`skiff_identity_ready ${health.ready ? 1 : 0}`,
-			'# HELP skiff_identity_pools Pools in the last applied projection.',
-			'# TYPE skiff_identity_pools gauge',
-			`skiff_identity_pools ${health.pools}`,
-			'# HELP skiff_identity_generation Last applied desired-state generation.',
-			'# TYPE skiff_identity_generation gauge',
-			`skiff_identity_generation ${health.generation ?? 0}`,
-			'# HELP skiff_identity_secrets_generation Last applied secret-bundle generation.',
-			'# TYPE skiff_identity_secrets_generation gauge',
-			`skiff_identity_secrets_generation ${health.secretsGeneration ?? 0}`,
-			'# HELP skiff_identity_requests_total HTTP requests by route and status.',
-			'# TYPE skiff_identity_requests_total counter',
+			'# HELP yoal_identity_ready Whether the identity process has a usable database and state.',
+			'# TYPE yoal_identity_ready gauge',
+			`yoal_identity_ready ${health.ready ? 1 : 0}`,
+			'# HELP yoal_identity_pools Pools in the last applied projection.',
+			'# TYPE yoal_identity_pools gauge',
+			`yoal_identity_pools ${health.pools}`,
+			'# HELP yoal_identity_generation Last applied desired-state generation.',
+			'# TYPE yoal_identity_generation gauge',
+			`yoal_identity_generation ${health.generation ?? 0}`,
+			'# HELP yoal_identity_secrets_generation Last applied secret-bundle generation.',
+			'# TYPE yoal_identity_secrets_generation gauge',
+			`yoal_identity_secrets_generation ${health.secretsGeneration ?? 0}`,
+			'# HELP yoal_identity_requests_total HTTP requests by route and status.',
+			'# TYPE yoal_identity_requests_total counter',
 			...[...requests.entries()]
 				.sort(([a], [b]) => a.localeCompare(b))
 				.map(([key, count]) => {
 					const [route, status] = key.split('|');
-					return `skiff_identity_requests_total{route="${route}",status="${status}"} ${count}`;
+					return `yoal_identity_requests_total{route="${route}",status="${status}"} ${count}`;
 				}),
 		];
 		return new Response(`${lines.join('\n')}\n`, {
@@ -862,9 +862,9 @@ export function createIdentityHandler(options: IdentityHandlerOptions): (request
 }
 
 /**
- * The unix-socket control surface. `skiff-identity` never dials the control plane; the node's
+ * The unix-socket control surface. `yoal-identity` never dials the control plane; the node's
  * agent pushes the non-secret projection, the opened-then-resealed secret bundle and key bundles
- * here and reads health back (the `skiff-mail` pattern).
+ * here and reads health back (the `yoal-mail` pattern).
  */
 export function createIdentityControlHandler(options: {
 	core?: Core;
@@ -872,7 +872,7 @@ export function createIdentityControlHandler(options: {
 	version?: string;
 	log?: Log;
 }): (request: Request) => Promise<Response> {
-	const version = options.version ?? process.env.SKIFF_IDENTITY_VERSION?.trim() ?? 'dev';
+	const version = options.version ?? process.env.YOAL_IDENTITY_VERSION?.trim() ?? 'dev';
 	return async (request: Request): Promise<Response> => {
 		const url = new URL(request.url);
 		if (url.pathname === '/health' && request.method === 'GET') return jsonResponse(identityHealth(options.sqlite, version));

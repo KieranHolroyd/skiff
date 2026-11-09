@@ -24,9 +24,9 @@
 	import { toast } from 'svelte-sonner';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import DetailList from '#lib/components/yoal/DetailList.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
@@ -202,7 +202,7 @@
 </script>
 
 <svelte:head>
-	<title>{deployment.shortId} · {data.project.name} · Skiff</title>
+	<title>{deployment.shortId} · {data.project.name} · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">

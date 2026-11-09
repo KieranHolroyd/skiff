@@ -1,14 +1,14 @@
 /**
  * End-to-end test for mass operations and prune (docs/OPERATIONS.md). Run against a dev server
- * started with SKIFF_DEV_PASSWORD_LOGIN=1 and a fresh data dir:
- *   SKIFF_BASE=http://localhost:5173 bun tests/operations.e2e.ts
+ * started with YOAL_DEV_PASSWORD_LOGIN=1 and a fresh data dir:
+ *   YOAL_BASE=http://localhost:5173 bun tests/operations.e2e.ts
  *
  * Covers: plan → verdicts → apply, the SSE progress stream, the trash listing, bulk restore and
  * purge, prune plan/apply, idempotency keys and the error contract.
  */
 export {};
 
-const BASE = process.env.SKIFF_BASE ?? 'http://localhost:5173';
+const BASE = process.env.YOAL_BASE ?? 'http://localhost:5173';
 const results: Array<{ name: string; ok: boolean; detail?: string }> = [];
 const check = (name: string, ok: boolean, detail?: string) => {
 	results.push({ name, ok, detail });
@@ -59,7 +59,7 @@ const slugs = ['a', 'b', 'c'].map((letter) => `ops-${letter}-${suffix}`);
 // 1. Sign up and create projects (one deployed, so it is live).
 const signUp = await http(
 	'/api/auth/sign-up/email',
-	post({ email: `ops-${suffix}@skiff.test`, password: 'correct horse battery staple', name: 'Ops' }),
+	post({ email: `ops-${suffix}@yoal.test`, password: 'correct horse battery staple', name: 'Ops' }),
 );
 check('dev sign-up', signUp.status === 200, `status ${signUp.status}`);
 for (const slug of slugs) await http('/api/v1/projects', post({ name: slug, slug }));

@@ -11,13 +11,13 @@
  * - Only a verified row routes. A pending token, or one whose record has disappeared, must never
  *   send a user to an IdP (or let an unverified domain claim an organisation).
  *
- * The TXT value is `skiff-verify=<token>` published on the domain itself, mirroring the email
+ * The TXT value is `yoal-verify=<token>` published on the domain itself, mirroring the email
  * domain check (D116). This module is deliberately free of I/O so the API, the dashboard and tests
  * all agree; the DNS lookup and token generation live in the control plane.
  */
 
 /** The DNS TXT value an organisation publishes to prove it owns a domain. */
-export const SSO_VERIFY_PREFIX = 'skiff-verify=';
+export const SSO_VERIFY_PREFIX = 'yoal-verify=';
 
 /** The sign-in protocols `@better-auth/sso` supports for one provider (IAM.md §8.3). */
 export type SsoProtocol = 'oidc' | 'saml';
@@ -519,7 +519,7 @@ export const MAX_GROUP_CLAIM_LENGTH = 200;
  * Normalise one IdP group claim for storage and comparison. Directory services disagree about
  * whitespace and case (`Engineering`, ` engineering `), and a mapping that silently stops matching
  * after an IdP rename defeats the point of syncing groups. Matching is therefore case-insensitive;
- * the display value from the IdP is not used anywhere, only the Skiff group id is.
+ * the display value from the IdP is not used anywhere, only the Yoal group id is.
  */
 export function normalizeGroupClaim(value: string): string | null {
 	const claim = value.trim().toLowerCase();
@@ -569,7 +569,7 @@ export interface GroupClaimMapping {
 
 /**
  * Resolve the IdP claims a user presented against the organisation's mappings. Returns unique
- * Skiff group ids; unknown claims are ignored, so adding a new IdP group never grants access
+ * Yoal group ids; unknown claims are ignored, so adding a new IdP group never grants access
  * until an administrator maps it. Local groups are not involved here — only membership rows.
  */
 export function groupIdsForClaims(

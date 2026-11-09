@@ -54,7 +54,7 @@ valkey: {
 
 - The helper's fixed map adds `valkey` → pinned image, uid/gid, data dir `/data`, command args.
 - Render a container unit with:
-  - `--requirepass <file>` or an ACL file `0400` under `/run/skiff-workloads/<id>/`; never env.
+  - `--requirepass <file>` or an ACL file `0400` under `/run/yoal-workloads/<id>/`; never env.
   - `--appendonly yes` or `--save` per config; `--maxmemory`, `--maxmemory-policy`.
   - `PublishPort=127.0.0.1:<port>:6379`; org network only; no public port by default.
   - Health: `valkey-cli -a <file> PING` via a fixed helper probe or TCP connect.
@@ -101,7 +101,7 @@ valkey: {
 
 ## Acceptance criteria
 
-- [ ] `skif db create cache --engine valkey` creates a running Valkey instance with a generated
+- [ ] `yoal db create cache --engine valkey` creates a running Valkey instance with a generated
       password; `redis-cli` connects over loopback/org network.
 - [ ] An attached app receives `REDIS_URL` and can `SET`/`GET`.
 - [ ] No public port; a cross-org container cannot connect.
@@ -129,7 +129,7 @@ valkey: {
 
 ## Rollout
 
-`SKIFF_FEATURE_VALKEY` off by default. New engine only; no migration of existing databases.
+`YOAL_FEATURE_VALKEY` off by default. New engine only; no migration of existing databases.
 Enable after the restart/persistence test passes on Debian 13.
 
 ## Open questions

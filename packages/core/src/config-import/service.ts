@@ -5,7 +5,7 @@ import {
 	type ConfigImportRequest,
 	type ConfigImportView,
 	type Principal,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { ValidationError } from '../errors.ts';
 import { ImportContext, obj, str, type Doc, type Sources } from './context.ts';
 import { ImportPlan, runPlan, viewOf } from './engine.ts';
@@ -104,7 +104,7 @@ export function parseDocument(document: string | Record<string, unknown>): Doc {
 		throw new ValidationError(
 			root.apiVersion
 				? `This file is ${String(root.apiVersion)}; this platform imports ${CONFIG_EXPORT_VERSION}.`
-				: `This is not a Skiff config export (no apiVersion: ${CONFIG_EXPORT_VERSION}). Create one with \`skif export\`.`,
+				: `This is not a Yoal config export (no apiVersion: ${CONFIG_EXPORT_VERSION}). Create one with \`yoal export\`.`,
 		);
 	return root;
 }

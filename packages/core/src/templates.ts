@@ -7,7 +7,7 @@ import {
 	type AppTemplateView,
 	type Principal,
 	type TemplatePlan,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import type { DeploymentView } from './deployments.ts';
 import { NotFoundError, ValidationError } from './errors.ts';
@@ -21,7 +21,7 @@ export interface TemplateResult {
 }
 
 /** The release a template deployment carries instead of uploaded files (D92). */
-export const TEMPLATE_MANIFEST_PATH = 'skiff-template.json';
+export const TEMPLATE_MANIFEST_PATH = 'yoal-template.json';
 
 /**
  * First-party app templates (plan 21, D92). `instantiate` runs the template's pure plan through

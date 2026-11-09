@@ -15,7 +15,7 @@ import {
 	storageAttachments,
 	storageInstances,
 	workloads,
-} from '@skiff/db';
+} from '@yoal/db';
 import {
 	databaseCapabilities,
 	serviceMoveSchema,
@@ -24,7 +24,7 @@ import {
 	type DatabaseMoveView,
 	type Principal,
 	type StorageMoveResult,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { nextCronTime } from './cron.ts';
 import { ConflictError, NotFoundError, ValidationError } from './errors.ts';
@@ -76,7 +76,7 @@ export const MOVE_STEP_TIMEOUT_MS = 2 * 60 * 60_000;
 /**
  * Moving services between nodes (D97).
  *
- * Apps are stateless from Skiff's point of view, so a move re-points the workload at the target
+ * Apps are stateless from Yoal's point of view, so a move re-points the workload at the target
  * and the agents converge: the old node removes the unit, the new one starts it.
  *
  * A managed database keeps its row (id, name, credentials, attachments) and moves in phases:
@@ -120,12 +120,12 @@ export class ServiceMoveService {
 			.all();
 		if (volumes.length > 0)
 			throw new ConflictError(
-				`"${project.slug}" has app volumes (${volumes.map((v) => `"${v.name}"`).join(', ')}) whose data stays on its node. Skiff cannot copy volume data yet.`,
+				`"${project.slug}" has app volumes (${volumes.map((v) => `"${v.name}"`).join(', ')}) whose data stays on its node. Yoal cannot copy volume data yet.`,
 			);
 		const spec = workloadSpecSchema.safeParse(parseJson<unknown>(workload.specJson, null));
 		if (spec.success && spec.data.data)
 			throw new ConflictError(
-				`"${project.slug}" has a persistent data directory on its node. Skiff cannot copy it yet, so the app cannot move.`,
+				`"${project.slug}" has a persistent data directory on its node. Yoal cannot copy it yet, so the app cannot move.`,
 			);
 
 		const decision = resolvePlacement({
@@ -164,7 +164,7 @@ export class ServiceMoveService {
 		const caps = databaseCapabilities(db.engine);
 		if (!caps.backups && input.from !== 'empty')
 			throw new ValidationError(
-				`${db.engine} databases have no backups, so Skiff cannot copy "${db.name}"'s data. Use from: "empty" to start it fresh on the target, discarding its data.`,
+				`${db.engine} databases have no backups, so Yoal cannot copy "${db.name}"'s data. Use from: "empty" to start it fresh on the target, discarding its data.`,
 			);
 		if (target === source) throw new ConflictError(`"${db.name}" already runs on that node.`);
 		// `latest-backup` and `empty` are for a database that cannot be dumped (down, or its node is).
@@ -182,7 +182,7 @@ export class ServiceMoveService {
 			throw new ConflictError(
 				`"${db.name}" is running, so a final dump keeps every write. Move it without "from" (or with from: "dump") instead.`,
 			);
-		// The newest completed backup whose recorded target Skiff can still reach (0053).
+		// The newest completed backup whose recorded target Yoal can still reach (0053).
 		const latest =
 			input.from === 'latest-backup'
 				? this.ctx.db
@@ -693,7 +693,7 @@ export class ServiceMoveService {
 		return { items, warnings };
 	}
 
-	/** Why an app cannot follow a service to another node: local state Skiff cannot copy. */
+	/** Why an app cannot follow a service to another node: local state Yoal cannot copy. */
 	private cannotFollow(projectId: string, slug: string, specJson: string | null): string[] {
 		const problems: string[] = [];
 		const volumes = this.ctx.db
@@ -743,7 +743,7 @@ export class ServiceMoveService {
 		this.ctx.iam.require(principal, 'storage:update', { type: 'storage', id: row.id });
 		if (input.from !== 'empty')
 			throw new ConflictError(
-				`Skiff cannot copy objects between nodes yet, so "${row.name}" can only move empty: its buckets, keys and attached apps' credentials come back on the target, its objects do not. Move it with from: "empty".`,
+				`Yoal cannot copy objects between nodes yet, so "${row.name}" can only move empty: its buckets, keys and attached apps' credentials come back on the target, its objects do not. Move it with from: "empty".`,
 			);
 		const source = row.nodeId;
 		const target = input.node;

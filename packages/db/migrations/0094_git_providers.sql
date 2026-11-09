@@ -1,7 +1,7 @@
 -- GitLab, Gitea and Forgejo (docs/FORGES.md, D173–D178).
 -- 1. forge_connections: one row per (org, base URL). Tokens and the webhook secret are sealed with
 --    the org's data key and never returned by the API.
--- 2. forge_webhooks: the hooks Skiff created on a forge (per repository or per namespace), so a
+-- 2. forge_webhooks: the hooks Yoal created on a forge (per repository or per namespace), so a
 --    hand-made webhook for a covered repository is ignored and removing a connection removes them.
 -- 3. pipeline_repositories.provider and registry_oidc_trusts.provider had CHECKs listing GitHub
 --    only. SQLite cannot alter a CHECK, so both tables are rebuilt with the same columns and

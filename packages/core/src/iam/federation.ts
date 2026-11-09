@@ -17,7 +17,7 @@
  * directly, like the other IAM writes, until every call site goes through `iam.require`.
  */
 import type { Database } from 'bun:sqlite';
-import { isPermission, type Permission, type Principal } from '@skiff/contracts';
+import { isPermission, type Permission, type Principal } from '@yoal/contracts';
 import type { CoreContext } from '../context.ts';
 import { ForbiddenError, NotFoundError, ValidationError } from '../errors.ts';
 import { newId, parseJson } from '../util.ts';

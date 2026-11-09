@@ -1,4 +1,4 @@
-import type { Permission } from '@skiff/contracts';
+import type { Permission } from '@yoal/contracts';
 import type { CoreContext } from '../context.ts';
 
 /**

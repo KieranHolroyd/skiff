@@ -6,7 +6,7 @@ import { requirePrincipal } from '#lib/server/principal.js';
 
 /**
  * Access keys for one service account (IAM.md I13–I14, §7.2). `serviceAccount:manage-keys` covers
- * all three operations. `POST` returns the raw `skif_…` key exactly once; every later read carries
+ * all three operations. `POST` returns the raw `yoal_…` key exactly once; every later read carries
  * only its `start`. Key creation and revocation are the generic `AccessKeyService` paths, bound to
  * this account's id and the caller's org.
  */

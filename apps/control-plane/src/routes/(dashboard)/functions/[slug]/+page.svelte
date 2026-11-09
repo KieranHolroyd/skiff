@@ -21,11 +21,11 @@
 	import { toast } from 'svelte-sonner';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
+	import DetailList from '#lib/components/yoal/DetailList.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
@@ -298,7 +298,7 @@
 </script>
 
 <svelte:head>
-	<title>{fn.name} · Functions · Skiff</title>
+	<title>{fn.name} · Functions · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">
@@ -496,7 +496,7 @@
 			<EmptyState
 				icon={RocketIcon}
 				title="No deployments yet"
-				description="Run skif deploy in the Wrangler project, or upload a bundle built in CI. Every deploy gets an immutable preview URL."
+				description="Run yoal deploy in the Wrangler project, or upload a bundle built in CI. Every deploy gets an immutable preview URL."
 			>
 				{#if data.can.deploy}
 					<Button onclick={() => (deployOpen = true)}><RocketIcon />Deploy</Button>
@@ -893,7 +893,7 @@
 		bind:open={deployOpen}
 		icon={UploadIcon}
 		title="Deploy {fn.name}"
-		description="From the Wrangler project, skif deploy bundles and uploads for you. Upload here a Worker built elsewhere, such as in CI."
+		description="From the Wrangler project, yoal deploy bundles and uploads for you. Upload here a Worker built elsewhere, such as in CI."
 		action="?/deploy"
 		submitLabel="Deploy"
 		onsuccess={() => setTab('deployments')}
@@ -913,7 +913,7 @@
 					A built Worker: <code class="font-mono">index.js</code> or
 					<code class="font-mono">worker.js</code> at the root, plus a
 					<code class="font-mono">public/</code> directory for assets. Without a
-					<code class="font-mono">skiff-function.json</code> the previous deployment's bindings are kept;
+					<code class="font-mono">yoal-function.json</code> the previous deployment's bindings are kept;
 					a first upload binds this function's secrets and nothing else.
 				</Field.Description>
 				{#if result?.fieldErrors?.artifact}<Field.Error>{result.fieldErrors.artifact}</Field.Error

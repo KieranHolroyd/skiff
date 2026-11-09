@@ -1,5 +1,5 @@
 import { promises as fs } from 'node:fs';
-import type { AnalyticsEvent, FunctionTailEvent, MetricBucket, TelemetryBatch } from '@skiff/contracts';
+import type { AnalyticsEvent, FunctionTailEvent, MetricBucket, TelemetryBatch } from '@yoal/contracts';
 import { normalizeHost } from './verify.ts';
 
 /**

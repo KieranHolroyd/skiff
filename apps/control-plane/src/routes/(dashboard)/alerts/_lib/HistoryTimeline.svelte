@@ -4,7 +4,7 @@
 	 * rule errors, acknowledgements, silences and, for platform admins, the built-in platform
 	 * alerts. Kind filters narrow the list; "Load more" pages back with `before`.
 	 */
-	import type { AlertEventKind, AlertEventView } from '@skiff/contracts';
+	import type { AlertEventKind, AlertEventView } from '@yoal/contracts';
 	import { createInfiniteQuery } from '@tanstack/svelte-query';
 	import { resolve } from '$app/paths';
 	import ActivityIcon from '@lucide/svelte/icons/activity';
@@ -14,7 +14,7 @@
 	import HistoryIcon from '@lucide/svelte/icons/history';
 	import SendIcon from '@lucide/svelte/icons/send';
 	import ServerIcon from '@lucide/svelte/icons/server';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Skeleton } from '#lib/components/ui/skeleton/index.js';

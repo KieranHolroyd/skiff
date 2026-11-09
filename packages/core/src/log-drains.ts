@@ -17,7 +17,7 @@ import {
 	type LogLevel,
 	type Principal,
 	type ResourceRef,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { newId, parseJson, randomBytes } from './util.ts';
@@ -156,7 +156,7 @@ export class LogDrainService {
 		return row.project_id ? { type: 'project', id: row.project_id } : { type: 'org' };
 	}
 
-	/** A drain copies every log line out of Skiff, so `logDrain:update` (owners and admins) manages them. */
+	/** A drain copies every log line out of Yoal, so `logDrain:update` (owners and admins) manages them. */
 	canEdit(principal: Principal): boolean {
 		return this.ctx.iam.can(principal, 'logDrain:update', { type: 'org' });
 	}
@@ -373,7 +373,7 @@ export class LogDrainService {
 			id: `test:${now}`,
 			ts: now,
 			level: 'info',
-			message: `Test line from the Skiff log drain "${row.name}".`,
+			message: `Test line from the Yoal log drain "${row.name}".`,
 			source: 'system',
 			stream: 'system',
 			projectId: row.project_id,
@@ -690,9 +690,9 @@ export class LogDrainService {
 				headers: {
 					...headers,
 					'content-type': contentType,
-					'user-agent': `Skiff-Log-Drain/${this.version}`,
-					'x-skiff-drain': row.id,
-					'x-skiff-batch': batchId,
+					'user-agent': `Yoal-Log-Drain/${this.version}`,
+					'x-yoal-drain': row.id,
+					'x-yoal-batch': batchId,
 					...(row.kind === 'webhook' ? signatureHeaders(secret, body, this.ctx.now()) : {}),
 				},
 				body,
@@ -873,12 +873,12 @@ export function otlpLogsPayload(lines: DrainLine[], options: { orgId: string; ve
 			group = {
 				attributes: [
 					...attr('service.name', line.service ? (line.service.name ?? line.service.id) : (line.project ?? line.projectId)),
-					...attr('service.namespace', 'skiff'),
-					...attr('skiff.org.id', options.orgId),
-					...attr('skiff.project.id', line.projectId),
+					...attr('service.namespace', 'yoal'),
+					...attr('yoal.org.id', options.orgId),
+					...attr('yoal.project.id', line.projectId),
 					...attr('deployment.id', line.deploymentId),
-					...attr('skiff.service.kind', line.service?.kind),
-					...attr('skiff.service.id', line.service?.id),
+					...attr('yoal.service.kind', line.service?.kind),
+					...attr('yoal.service.id', line.service?.id),
 				],
 				records: [],
 			};
@@ -893,8 +893,8 @@ export function otlpLogsPayload(lines: DrainLine[], options: { orgId: string; ve
 			attributes: [
 				...attr('log.record.uid', line.id),
 				...attr('log.iostream', line.stream === 'stdout' || line.stream === 'stderr' ? line.stream : null),
-				...attr('skiff.log.source', line.source),
-				...attr('skiff.build.id', line.buildId),
+				...attr('yoal.log.source', line.source),
+				...attr('yoal.build.id', line.buildId),
 				...attr('host.id', line.nodeId),
 			],
 		});
@@ -902,7 +902,7 @@ export function otlpLogsPayload(lines: DrainLine[], options: { orgId: string; ve
 	return {
 		resourceLogs: [...groups.values()].map((group) => ({
 			resource: { attributes: group.attributes },
-			scopeLogs: [{ scope: { name: 'skiff.log-drain', version: options.version }, logRecords: group.records }],
+			scopeLogs: [{ scope: { name: 'yoal.log-drain', version: options.version }, logRecords: group.records }],
 		})),
 	};
 }

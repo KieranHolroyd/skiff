@@ -1,9 +1,9 @@
 import { eq } from 'drizzle-orm';
 import { unzipSync } from 'fflate';
-import { deployments, releases } from '@skiff/db';
-import { contentUrl } from '@skiff/contracts';
-import { hmac, safeEqual } from '@skiff/core';
-import { compilePattern } from '@skiff/site-config';
+import { deployments, releases } from '@yoal/db';
+import { contentUrl } from '@yoal/contracts';
+import { hmac, safeEqual } from '@yoal/core';
+import { compilePattern } from '@yoal/site-config';
 import type { RequestEvent } from '@sveltejs/kit';
 import { platformOrigin } from './config.js';
 import { core } from './core.js';
@@ -19,7 +19,7 @@ import { core } from './core.js';
  * Never enabled in production, and only for `*.localhost` hosts (RFC 6761 loopback), so a public
  * content domain can never be served by the control plane.
  */
-const COOKIE_NAME = '__skiff_dev_site';
+const COOKIE_NAME = '__yoal_dev_site';
 /** A handful of recent deploys is plenty; releases are immutable and content-addressed. */
 const MAX_CACHED_RELEASES = 8;
 const filesByRelease = new Map<string, Map<string, Uint8Array>>();
@@ -80,13 +80,13 @@ export async function serveDevContent(event: RequestEvent): Promise<Response> {
 	const siteKey = core.access.siteKeyFor(route.project, route.policyId);
 	const now = Math.floor(Date.now() / 1000);
 
-	if (event.url.pathname === '/_skiff/callback')
+	if (event.url.pathname === '/_yoal/callback')
 		return redeemCallback(event, route.project.id, host, siteKey, now, route.policyId);
 
 	if (route.access !== 'public') {
 		const cookie = cookieValue(event.request.headers.get('cookie'), COOKIE_NAME);
 		if (!cookie || !verifySiteCookie(cookie, siteKey, host, now)) {
-			const login = new URL('/_skiff/site-login', platformOrigin);
+			const login = new URL('/_yoal/site-login', platformOrigin);
 			login.searchParams.set('project', route.project.id);
 			login.searchParams.set('return', `${contentUrl(platformOrigin, host)}${event.url.pathname}${event.url.search}`);
 			return new Response(null, {

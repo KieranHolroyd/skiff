@@ -1,12 +1,12 @@
 import type { RequestEvent } from '@sveltejs/kit';
-import { MetricsExporter, PROMETHEUS_CONTENT_TYPE, UnauthorizedError } from '@skiff/core';
+import { MetricsExporter, PROMETHEUS_CONTENT_TYPE, UnauthorizedError } from '@yoal/core';
 import { core } from './core';
 import { route } from './api';
 
 /**
  * Prometheus scrape for `/metrics[/<section>[/<name>]]` and `/api/v1/metrics/...` (docs/METRICS.md).
  * No credentials: the fleet summary, when Settings → Metrics allows it. A session or
- * `Authorization: Bearer skif_…` key: the key's org, scoped by the path. A bearer header that does
+ * `Authorization: Bearer yoal_…` key: the key's org, scoped by the path. A bearer header that does
  * not resolve is a 401, never a silent fall-back to the public view.
  */
 export function scrape(event: RequestEvent, segments: string[]): Promise<Response> {

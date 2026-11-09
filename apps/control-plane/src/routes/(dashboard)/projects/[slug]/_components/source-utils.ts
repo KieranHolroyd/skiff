@@ -10,7 +10,7 @@ import FileIcon from '@lucide/svelte/icons/file';
 import FileMusicIcon from '@lucide/svelte/icons/file-music';
 import FileVideoIcon from '@lucide/svelte/icons/file-video';
 
-/** Mirrors `SourceFileView` in @skiff/core. */
+/** Mirrors `SourceFileView` in @yoal/core. */
 export interface SourceFile {
 	path: string;
 	size: number;

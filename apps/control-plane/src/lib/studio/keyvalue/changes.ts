@@ -19,7 +19,7 @@
  * TTL changes and key deletes always go to the key table (the keyspace object), because the
  * in-key contract has no TTL column.
  */
-import type { Cell, RowChange } from '@skiff/studio/protocol';
+import type { Cell, RowChange } from '@yoal/studio/protocol';
 
 export const KEY_TYPES = ['string', 'hash', 'list', 'set', 'zset', 'stream'] as const;
 export type KeyType = (typeof KEY_TYPES)[number];

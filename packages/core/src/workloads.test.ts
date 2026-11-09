@@ -3,15 +3,15 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { eq } from 'drizzle-orm';
-import { createDb, nodes } from '@skiff/db';
-import { workloadReplicaId, workloadSpecSchema } from '@skiff/contracts';
+import { createDb, nodes } from '@yoal/db';
+import { workloadReplicaId, workloadSpecSchema } from '@yoal/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { upstreamFor } from './workloads.ts';
 import { LocalObjectStore } from './object-store.ts';
 import type { Core } from './index.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-workloads-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-workloads-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 let clock = Date.now();
@@ -98,7 +98,7 @@ describe('tier 2 workloads', () => {
 			projectSlug: 'app',
 			runtime: 'process',
 			command: ['bun', 'run', 'start'],
-			upstream: `unix//run/skiff-workloads/${project.id}.sock`,
+			upstream: `unix//run/yoal-workloads/${project.id}.sock`,
 			env: { NODE_ENV: 'production' },
 		});
 		expect(state.sliceMemoryMb).toBe(1024);
@@ -292,13 +292,13 @@ describe('workload upstreams', () => {
 	});
 
 	test('a function socket is named after the desired-state id, one per replica', () => {
-		expect(upstreamFor(workloadReplicaId('wld_1', 0), fnSpec)).toBe('unix//run/skiff-workloads/wld_1.sock');
-		expect(upstreamFor(workloadReplicaId('wld_1', 2), fnSpec)).toBe('unix//run/skiff-workloads/wld_1-r2.sock');
+		expect(upstreamFor(workloadReplicaId('wld_1', 0), fnSpec)).toBe('unix//run/yoal-workloads/wld_1.sock');
+		expect(upstreamFor(workloadReplicaId('wld_1', 2), fnSpec)).toBe('unix//run/yoal-workloads/wld_1-r2.sock');
 	});
 
 	test('a process socket keeps the project id it has always used', () => {
 		const processSpec = workloadSpecSchema.parse({ runtime: 'process', command: ['bun', 'run', 'start'] });
-		expect(upstreamFor('prj_1', processSpec)).toBe('unix//run/skiff-workloads/prj_1.sock');
+		expect(upstreamFor('prj_1', processSpec)).toBe('unix//run/yoal-workloads/prj_1.sock');
 	});
 });
 
@@ -351,7 +351,7 @@ services:
         limits:
           memory: 512M
           cpus: "0.5"
-x-skiff:
+x-yoal:
   routes:
     - service: web
       port: 3000

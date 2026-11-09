@@ -1,5 +1,5 @@
 /**
- * Skiff's org-level permissions (DESIGN §6.2, IAM.md).
+ * Yoal's org-level permissions (DESIGN §6.2, IAM.md).
  *
  * The catalog in `iam/catalog.ts` is the source of truth for the permission strings and their
  * metadata. This file keeps the parts every existing surface already imports: the built-in roles,

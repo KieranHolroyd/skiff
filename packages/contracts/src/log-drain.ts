@@ -5,7 +5,7 @@ import { z } from 'zod';
  *
  * Two targets, both plain HTTPS so the control plane ships them with `fetch`:
  *  - `webhook`: NDJSON (one line object per line) or a JSON array, signed with HMAC-SHA256 in
- *    `X-Skiff-Signature` (the same scheme as the alert webhook).
+ *    `X-Yoal-Signature` (the same scheme as the alert webhook).
  *  - `otlp`: OpenTelemetry OTLP/HTTP logs, JSON encoding (`/v1/logs`). Grafana Loki, Grafana Cloud,
  *    Datadog, Honeycomb, New Relic, Axiom, SigNoz and any OpenTelemetry Collector accept it, and
  *    the Collector can re-export to syslog, Splunk, Elasticsearch and the rest.
@@ -36,7 +36,7 @@ export const MAX_LOG_DRAIN_HEADERS = 10;
 /** RFC 9110 token; the value is one printable line. */
 const HEADER_NAME = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/;
 const HEADER_VALUE = /^[\x20-\x7e]{1,4096}$/;
-/** Headers Skiff sets itself (or the transport owns); a drain can't override them. */
+/** Headers Yoal sets itself (or the transport owns); a drain can't override them. */
 const RESERVED_HEADERS = new Set([
 	'host',
 	'content-type',
@@ -54,7 +54,7 @@ const RESERVED_HEADERS = new Set([
 export function logDrainHeaderError(name: string, value: string): string | null {
 	if (!HEADER_NAME.test(name)) return `"${name}" is not a valid header name.`;
 	const lower = name.toLowerCase();
-	if (RESERVED_HEADERS.has(lower) || lower.startsWith('x-skiff-')) return `${name} is set by Skiff and can't be overridden.`;
+	if (RESERVED_HEADERS.has(lower) || lower.startsWith('x-yoal-')) return `${name} is set by Yoal and can't be overridden.`;
 	if (!HEADER_VALUE.test(value)) return `The ${name} value must be one line of printable ASCII (at most 4096 characters).`;
 	return null;
 }
@@ -156,7 +156,7 @@ export interface LogDrainView {
 	minLevel: (typeof logDrainLevels)[number] | null;
 	/** Names only; values are write-only. */
 	headerNames: string[];
-	/** Webhook requests carry `X-Skiff-Signature`. */
+	/** Webhook requests carry `X-Yoal-Signature`. */
 	signed: boolean;
 	allowPrivateNetwork: boolean;
 	enabled: boolean;

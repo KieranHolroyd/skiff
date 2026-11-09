@@ -39,11 +39,11 @@ import { SLUG_PATTERN } from './slugs.ts';
  * Plain `env:` values are visible configuration and must not hold credentials.
  */
 
-export const BLUEPRINT_API_VERSION = 'skiff/v1';
+export const BLUEPRINT_API_VERSION = 'yoal/v1';
 export const blueprintApiVersionSchema = z.literal(BLUEPRINT_API_VERSION);
 
 /** File names the CLI looks for, in order, when no path is given. */
-export const BLUEPRINT_FILE_NAMES = ['skiff.blueprint.yaml', 'skiff.blueprint.yml', 'skiff.blueprint.json'] as const;
+export const BLUEPRINT_FILE_NAMES = ['yoal.blueprint.yaml', 'yoal.blueprint.yml', 'yoal.blueprint.json'] as const;
 
 /** Largest blueprint text a surface accepts. */
 export const BLUEPRINT_MAX_BYTES = 512 * 1024;
@@ -362,7 +362,7 @@ export const blueprintSchema = z
 			}
 		});
 	})
-	.describe('Skiff blueprint v1 (skiff.blueprint.yaml).');
+	.describe('Yoal blueprint v1 (yoal.blueprint.yaml).');
 export type Blueprint = z.infer<typeof blueprintSchema>;
 export type BlueprintInput = z.input<typeof blueprintSchema>;
 

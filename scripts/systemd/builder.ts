@@ -1,28 +1,28 @@
 /**
- * `skiff-builder.service`: the git Builder on every node (D47). It runs `skiff-agent builder`
+ * `yoal-builder.service`: the git Builder on every node (D47). It runs `yoal-agent builder`
  * from the agent binary already on the node, authenticates with the agent's own node token, and
  * idles until a platform admin gives the node the Builder role in the dashboard.
  *
  * It is root only so it can start each build as a transient unit for the unprivileged
- * `skiff-build` account (`systemd-run` needs the system manager); the build never runs as root and
+ * `yoal-build` account (`systemd-run` needs the system manager); the build never runs as root and
  * never inherits this unit's environment, so user code cannot read the node token.
  *
- * Shared by the installer and `skiff-update-self` (which installs it on hosts that predate it).
+ * Shared by the installer and `yoal-update-self` (which installs it on hosts that predate it).
  */
 import { existsSync, lstatSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-export const BUILDER_UNIT = 'skiff-builder.service';
+export const BUILDER_UNIT = 'yoal-builder.service';
 /**
- * `agent/skiff-builder -> skiff-agent` in a release. It marks an agent binary that has the
+ * `agent/yoal-builder -> yoal-agent` in a release. It marks an agent binary that has the
  * `builder` subcommand: an older binary would ignore the argument and start a second agent, so
  * the unit only starts when the active release carries this link (a rollback simply skips it).
  */
-export const BUILDER_LINK = 'skiff-builder';
-/** Same idea for `skiff-agent storage apply` (D48), used by skiff-storage.service. */
-export const STORAGE_LINK = 'skiff-storage';
-export const BUILD_USER = 'skiff-build';
-export const BUILD_DIR = '/var/lib/skiff-builder';
+export const BUILDER_LINK = 'yoal-builder';
+/** Same idea for `yoal-agent storage apply` (D48), used by yoal-storage.service. */
+export const STORAGE_LINK = 'yoal-storage';
+export const BUILD_USER = 'yoal-build';
+export const BUILD_DIR = '/var/lib/yoal-builder';
 
 export interface BuilderUnitPaths {
 	optDir?: string;
@@ -30,19 +30,19 @@ export interface BuilderUnitPaths {
 }
 
 export function builderUnit(paths: BuilderUnitPaths = {}): string {
-	const optDir = paths.optDir ?? '/opt/skiff';
-	const agentEnvFile = paths.agentEnvFile ?? '/etc/skiff/agent.env';
+	const optDir = paths.optDir ?? '/opt/yoal';
+	const agentEnvFile = paths.agentEnvFile ?? '/etc/yoal/agent.env';
 	return `[Unit]
-Description=Skiff git Builder (idle unless this node has the Builder role)
-Documentation=https://github.com/KieranHolroyd/skiff/blob/main/docs/OPS.md
-After=network-online.target skiff-agent.service
+Description=Yoal git Builder (idle unless this node has the Builder role)
+Documentation=https://github.com/KieranHolroyd/yoal/blob/main/docs/OPS.md
+After=network-online.target yoal-agent.service
 Wants=network-online.target
 # Enrolment writes the node token here; a node that has not joined has nothing to build with.
 ConditionPathExists=${agentEnvFile}
 # Only releases whose agent has the builder subcommand ship this link (see BUILDER_LINK).
 ConditionPathExists=${optDir}/current/agent/${BUILDER_LINK}
 # Restarted with the agent, so a release update switches both to the new binary.
-PartOf=skiff-agent.service
+PartOf=yoal-agent.service
 StartLimitIntervalSec=60
 StartLimitBurst=5
 
@@ -50,11 +50,11 @@ StartLimitBurst=5
 Type=simple
 User=root
 EnvironmentFile=${agentEnvFile}
-Environment=SKIFF_BUILD_DIR=${BUILD_DIR}
-Environment=SKIFF_BUILDER_USER=${BUILD_USER}
+Environment=YOAL_BUILD_DIR=${BUILD_DIR}
+Environment=YOAL_BUILDER_USER=${BUILD_USER}
 # ProtectHome hides /root; keep git's config lookups inside the scratch directory.
 Environment=HOME=${BUILD_DIR}
-StateDirectory=skiff-builder
+StateDirectory=yoal-builder
 StateDirectoryMode=0711
 WorkingDirectory=${BUILD_DIR}
 ExecStart=${optDir}/current/agent/${BUILDER_LINK} builder
@@ -86,18 +86,18 @@ WantedBy=multi-user.target
 }
 
 /**
- * Add the subcommand links (`skiff-builder`, `skiff-storage`) to a release whose agent binary was
+ * Add the subcommand links (`yoal-builder`, `yoal-storage`) to a release whose agent binary was
  * built from this source.
  */
 export function linkAgentCommands(release: string): void {
 	const agentDir = join(release, 'agent');
-	if (!existsSync(join(agentDir, 'skiff-agent'))) return;
+	if (!existsSync(join(agentDir, 'yoal-agent'))) return;
 	for (const name of [BUILDER_LINK, STORAGE_LINK]) {
 		const link = join(agentDir, name);
 		try {
 			lstatSync(link);
 		} catch {
-			symlinkSync('skiff-agent', link);
+			symlinkSync('yoal-agent', link);
 		}
 	}
 }
@@ -138,7 +138,7 @@ export function ensureBuilder(options: EnsureBuilderOptions): boolean {
 		options.log?.(`installed ${BUILDER_UNIT}; it idles until the node has the Builder role`);
 	}
 	options.run(['systemctl', 'enable', BUILDER_UNIT]);
-	if (options.start !== false && existsSync(options.agentEnvFile ?? '/etc/skiff/agent.env'))
+	if (options.start !== false && existsSync(options.agentEnvFile ?? '/etc/yoal/agent.env'))
 		options.run(['systemctl', changed ? 'restart' : 'start', BUILDER_UNIT]);
 	return changed;
 }

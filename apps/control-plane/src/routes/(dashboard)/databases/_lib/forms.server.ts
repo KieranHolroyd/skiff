@@ -1,4 +1,4 @@
-import { hasPermission, type Principal } from '@skiff/contracts';
+import { hasPermission, type Principal } from '@yoal/contracts';
 
 /** What the viewer may do with databases; the dashboard hides actions they can't take. */
 export function databaseCan(principal: Principal) {

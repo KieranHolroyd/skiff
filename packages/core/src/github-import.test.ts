@@ -3,8 +3,8 @@ import { createHmac, generateKeyPairSync } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import { FRAMEWORK_PRESETS, detectFramework, githubImportSchema } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import { FRAMEWORK_PRESETS, detectFramework, githubImportSchema } from '@yoal/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
@@ -12,7 +12,7 @@ import type { Core } from './index.ts';
 
 /** Deploy from GitHub and automatic pipeline setup (docs/GITHUB.md §9–§10, D172). */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-github-import-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-github-import-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -34,15 +34,15 @@ const file = (path: string, content?: string) => ({ name: path.split('/').pop(),
 const folder = (path: string) => ({ name: path.split('/').pop(), path, type: 'dir' });
 /** `owner/repo:path@ref` → contents API answer. */
 const contents: Record<string, unknown> = {
-	'Acme/web:@main': [file('package.json'), file('bun.lock'), folder('src'), folder('node_modules'), folder('.skiff'), folder('apps')],
+	'Acme/web:@main': [file('package.json'), file('bun.lock'), folder('src'), folder('node_modules'), folder('.yoal'), folder('apps')],
 	'Acme/web:package.json@main': file('package.json', b64({ name: 'web', devDependencies: { vite: '^6' }, scripts: { build: 'vite build' } })),
 	'Acme/web:apps@main': [folder('apps/docs')],
 	'Acme/web:apps/docs@main': [file('apps/docs/package.json')],
 	'Acme/web:apps/docs/package.json@main': file('apps/docs/package.json', b64({ name: '@acme/docs', dependencies: { astro: '^5' } })),
-	'Acme/web:.skiff/workflows@main': [file('.skiff/workflows/ci.yml'), file('.skiff/workflows/README.md')],
+	'Acme/web:.yoal/workflows@main': [file('.yoal/workflows/ci.yml'), file('.yoal/workflows/README.md')],
 	'Acme/api:@trunk': [file('package.json'), file('index.ts')],
 	'Acme/api:package.json@trunk': file('package.json', b64({ name: 'api', scripts: { start: 'bun index.ts' }, devDependencies: { '@types/bun': '1' } })),
-	[`Acme/api:.skiff/workflows@${'a'.repeat(40)}`]: [file('.skiff/workflows/test.yaml')],
+	[`Acme/api:.yoal/workflows@${'a'.repeat(40)}`]: [file('.yoal/workflows/test.yaml')],
 };
 
 const githubFetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -51,7 +51,7 @@ const githubFetch = (async (input: string | URL | Request, init?: RequestInit) =
 	const path = url.pathname;
 	calls.push({ method, path: `${path}${url.search}` });
 	if (method === 'GET' && path === '/app')
-		return Response.json({ id: 42, slug: 'skiff-test', name: 'Skiff test', html_url: 'https://github.com/apps/skiff-test', owner: { login: 'Acme' } });
+		return Response.json({ id: 42, slug: 'yoal-test', name: 'Yoal test', html_url: 'https://github.com/apps/yoal-test', owner: { login: 'Acme' } });
 	const installation = {
 		id: INSTALLATION,
 		account: { login: 'Acme', id: 99, type: 'Organization' },
@@ -164,7 +164,7 @@ describe('coverage', () => {
 		expect(await core.githubApp.coverage('org_1', 'https://github.com/acme/web')).toMatchObject({ status: 'covered', installationId: INSTALLATION });
 		expect(await core.githubApp.coverage('org_1', 'https://github.com/someone/else')).toMatchObject({
 			status: 'not-installed',
-			manageUrl: 'https://github.com/apps/skiff-test/installations/new',
+			manageUrl: 'https://github.com/apps/yoal-test/installations/new',
 		});
 		repositorySelection = 'selected';
 		await core.githubApp.syncInstallations();
@@ -294,13 +294,13 @@ describe('automatic pipeline setup', () => {
 		repos['Acme/plain'] = { default_branch: 'main', private: false };
 		const first = await push('Acme/plain', { ref: 'refs/heads/main', after: other, commits: [] });
 		expect(first.triggers).toEqual([]);
-		const asked = calls.filter((call) => call.path.includes('/contents/.skiff/workflows')).length;
+		const asked = calls.filter((call) => call.path.includes('/contents/.yoal/workflows')).length;
 		expect(asked).toBe(1);
 		await push('Acme/plain', { ref: 'refs/heads/main', after: other, commits: [{ added: ['README.md'] }] });
-		expect(calls.filter((call) => call.path.includes('/contents/.skiff/workflows')).length).toBe(1);
+		expect(calls.filter((call) => call.path.includes('/contents/.yoal/workflows')).length).toBe(1);
 		// A push that touches workflows is checked straight away.
-		contents[`Acme/plain:.skiff/workflows@${'c'.repeat(40)}`] = [file('.skiff/workflows/ci.yml')];
-		const third = await push('Acme/plain', { ref: 'refs/heads/main', after: 'c'.repeat(40), commits: [{ added: ['.skiff/workflows/ci.yml'] }] });
+		contents[`Acme/plain:.yoal/workflows@${'c'.repeat(40)}`] = [file('.yoal/workflows/ci.yml')];
+		const third = await push('Acme/plain', { ref: 'refs/heads/main', after: 'c'.repeat(40), commits: [{ added: ['.yoal/workflows/ci.yml'] }] });
 		expect(third.triggers).toHaveLength(1);
 		expect(core.pipelines.getRepository(owner, 'plain').cloneUrl).toBe('https://github.com/Acme/plain.git');
 	});
@@ -308,7 +308,7 @@ describe('automatic pipeline setup', () => {
 	test('a removed repository stays removed until it is added by hand or forgotten', async () => {
 		await core.pipelines.deleteRepository(owner, 'api');
 		expect(core.pipelines.autoSetup(owner).ignored).toEqual(['Acme/api']);
-		const again = await push('Acme/api', { ref: 'refs/heads/trunk', after: sha, commits: [{ added: ['.skiff/workflows/test.yaml'] }] });
+		const again = await push('Acme/api', { ref: 'refs/heads/trunk', after: sha, commits: [{ added: ['.yoal/workflows/test.yaml'] }] });
 		expect(again.triggers).toEqual([]);
 		expect(core.pipelines.setAutoSetup(owner, { unignore: 'acme/api' }).ignored).toEqual([]);
 		const back = await push('Acme/api', { ref: 'refs/heads/trunk', after: sha, commits: [] });

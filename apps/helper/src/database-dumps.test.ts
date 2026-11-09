@@ -16,7 +16,7 @@ import {
 import { SystemdDriver, type CommandRunOptions, type CommandRunner, type RunResult } from './systemd.ts';
 
 const DB_ID = 'db_0123456789abcdef0123456789abcdef';
-const CONTAINER = `skiff-workload-${DB_ID}`;
+const CONTAINER = `yoal-workload-${DB_ID}`;
 const PASSWORD = 'pw-0123456789abcdef';
 const directories: string[] = [];
 
@@ -25,7 +25,7 @@ afterEach(async () => {
 });
 
 describe('native dump commands (docs/DATABASES.md §8)', () => {
-	test('valkey-cli --rdb writes into /data/skiff-dumps and never puts the password in argv', () => {
+	test('valkey-cli --rdb writes into /data/yoal-dumps and never puts the password in argv', () => {
 		const file = stagingFileName('dump', '0123abcd-0000-4000-8000-000000000000', 'rdb');
 		const argv = keyValueRdbDumpArgv({ podmanPath: '/usr/bin/podman', container: CONTAINER, engine: 'valkey', user: 'shop_cache', file });
 		expect(argv).toEqual([
@@ -39,14 +39,14 @@ describe('native dump commands (docs/DATABASES.md §8)', () => {
 			'--user',
 			'shop_cache',
 			'--rdb',
-			`/data/skiff-dumps/${file}`,
+			`/data/yoal-dumps/${file}`,
 		]);
 		expect(keyValueCheckRdbArgv({ podmanPath: '/usr/bin/podman', container: CONTAINER, engine: 'redis', file })).toEqual([
 			'/usr/bin/podman',
 			'exec',
 			CONTAINER,
 			'redis-check-rdb',
-			`/data/skiff-dumps/${file}`,
+			`/data/yoal-dumps/${file}`,
 		]);
 	});
 
@@ -60,10 +60,10 @@ describe('native dump commands (docs/DATABASES.md §8)', () => {
 
 	test('ClickHouse backs up under a fixed name and restores it into the target database', () => {
 		expect(clickhouseBackupQuery('shop_events', 'dump-0123abcd.zip')).toBe(
-			"BACKUP DATABASE `shop_events` AS `skiff_backup` TO File('/data/skiff-dumps/dump-0123abcd.zip')",
+			"BACKUP DATABASE `shop_events` AS `yoal_backup` TO File('/data/yoal-dumps/dump-0123abcd.zip')",
 		);
 		expect(clickhouseRestoreQuery('restored_events', 'restore-0123abcd.zip')).toBe(
-			"RESTORE DATABASE `skiff_backup` AS `restored_events` FROM File('/data/skiff-dumps/restore-0123abcd.zip') SETTINGS allow_different_database_def = 1",
+			"RESTORE DATABASE `yoal_backup` AS `restored_events` FROM File('/data/yoal-dumps/restore-0123abcd.zip') SETTINGS allow_different_database_def = 1",
 		);
 		const argv = clickhouseClientArgv({ podmanPath: '/usr/bin/podman', container: CONTAINER, user: 'shop_events', query: 'SELECT 1' });
 		expect(argv.slice(0, 6)).toEqual(['/usr/bin/podman', 'exec', '-e', 'CLICKHOUSE_PASSWORD', CONTAINER, 'clickhouse-client']);
@@ -123,13 +123,13 @@ class EngineRunner implements CommandRunner {
 			return ok(`some-id\tBACKUP_CREATED`);
 		}
 		if (query.startsWith('RESTORE ')) return { code: this.restoreCode, stdout: '', stderr: this.restoreCode ? 'Code: 598' : '' };
-		if (query.startsWith("SELECT 'skiff-ok'")) return ok('skiff-ok\n');
+		if (query.startsWith("SELECT 'yoal-ok'")) return ok('yoal-ok\n');
 		return ok();
 	}
 }
 
 async function engineFixture(engine: 'valkey' | 'clickhouse') {
-	const root = await fs.mkdtemp(join(tmpdir(), 'skiff-helper-dumps-'));
+	const root = await fs.mkdtemp(join(tmpdir(), 'yoal-helper-dumps-'));
 	directories.push(root);
 	const runtimeDir = join(root, 'run');
 	const stateDir = join(root, 'state');
@@ -138,8 +138,8 @@ async function engineFixture(engine: 'valkey' | 'clickhouse') {
 	await fs.mkdir(dataDir, { recursive: true });
 	const env =
 		engine === 'valkey'
-			? `SKIFF_DB_ENGINE=valkey\nVALKEY_USER=shop_cache\nVALKEY_PASSWORD=${PASSWORD}\n`
-			: `SKIFF_DB_ENGINE=clickhouse\nCLICKHOUSE_USER=shop_events\nCLICKHOUSE_PASSWORD=${PASSWORD}\nCLICKHOUSE_DB=shop_events\n`;
+			? `YOAL_DB_ENGINE=valkey\nVALKEY_USER=shop_cache\nVALKEY_PASSWORD=${PASSWORD}\n`
+			: `YOAL_DB_ENGINE=clickhouse\nCLICKHOUSE_USER=shop_events\nCLICKHOUSE_PASSWORD=${PASSWORD}\nCLICKHOUSE_DB=shop_events\n`;
 	await fs.writeFile(join(runtimeDir, DB_ID, 'env'), env);
 	const runner = new EngineRunner(dataDir);
 	const chowns: Array<[string, number, number]> = [];
@@ -169,7 +169,7 @@ describe('Valkey/Redis backups through the driver', () => {
 		const f = await engineFixture('valkey');
 		const dump = await f.driver.dumpDatabase(DB_ID);
 		expect(dump.filename).toBe(`${DB_ID}.rdb`);
-		expect(dump.path.startsWith(join(f.dataDir, 'skiff-dumps', 'dump-'))).toBe(true);
+		expect(dump.path.startsWith(join(f.dataDir, 'yoal-dumps', 'dump-'))).toBe(true);
 		expect(await fs.readFile(dump.path, 'utf8')).toBe('REDIS0012-snapshot');
 		expect(dump.sizeBytes).toBe(18);
 		expect((await fs.stat(dump.path)).mode & 0o777).toBe(0o400);
@@ -178,14 +178,14 @@ describe('Valkey/Redis backups through the driver', () => {
 		expect(rdb!.env).toEqual({ REDISCLI_AUTH: PASSWORD });
 		expect(rdb!.argv.join(' ')).not.toContain(PASSWORD);
 		expect(check!.argv[3]).toBe('valkey-check-rdb');
-		expect(f.chowns).toContainEqual([join(f.dataDir, 'skiff-dumps'), 999, 1000]);
+		expect(f.chowns).toContainEqual([join(f.dataDir, 'yoal-dumps'), 999, 1000]);
 	});
 
 	test('a snapshot that fails check-rdb is deleted and the dump fails', async () => {
 		const f = await engineFixture('valkey');
 		f.runner.checkCode = 1;
 		await expect(f.driver.dumpDatabase(DB_ID)).rejects.toThrow(/check-rdb rejected/);
-		expect(await fs.readdir(join(f.dataDir, 'skiff-dumps'))).toEqual([]);
+		expect(await fs.readdir(join(f.dataDir, 'yoal-dumps'))).toEqual([]);
 	});
 
 	test('restore installs the snapshot as the AOF base, restarts the unit and waits for PONG', async () => {
@@ -201,8 +201,8 @@ describe('Valkey/Redis backups through the driver', () => {
 		expect(await fs.readFile(join(aof, 'appendonly.aof.1.base.rdb'), 'utf8')).toBe('REDIS0012-restored');
 		expect(await fs.readFile(join(aof, 'appendonly.aof.manifest'), 'utf8')).toBe('file appendonly.aof.1.base.rdb seq 1 type b\n');
 		expect(await fs.stat(join(f.dataDir, 'dump.rdb')).catch(() => null)).toBeNull();
-		expect(await fs.readdir(join(f.dataDir, 'skiff-dumps'))).toEqual([]);
-		expect(f.runner.units).toEqual([`stop skiff-workload-${DB_ID}.service`, `start skiff-workload-${DB_ID}.service`]);
+		expect(await fs.readdir(join(f.dataDir, 'yoal-dumps'))).toEqual([]);
+		expect(f.runner.units).toEqual([`stop yoal-workload-${DB_ID}.service`, `start yoal-workload-${DB_ID}.service`]);
 		// check-rdb runs before the stop; PING is retried while the dataset loads.
 		const kinds = f.runner.calls.map((call) => (call.argv[0]!.endsWith('systemctl') ? call.argv[1] : call.argv.at(-1)!.split('/').pop()));
 		expect(kinds[1]).toBe('stop');
@@ -215,14 +215,14 @@ describe('Valkey/Redis backups through the driver', () => {
 		f.runner.checkCode = 1;
 		await expect(f.driver.restoreDatabase(DB_ID, bodyOf('garbage'))).rejects.toThrow(/check-rdb rejected the backup/);
 		expect(f.runner.units).toEqual([]);
-		expect(await fs.readdir(join(f.dataDir, 'skiff-dumps'))).toEqual([]);
+		expect(await fs.readdir(join(f.dataDir, 'yoal-dumps'))).toEqual([]);
 	});
 
 	test('a restore that never answers PING fails after starting the unit again', async () => {
 		const f = await engineFixture('valkey');
 		f.runner.pingReplies = Array.from({ length: 600 }, () => 'LOADING');
 		await expect(f.driver.restoreDatabase(DB_ID, bodyOf('REDIS0012'))).rejects.toThrow(/did not answer PING/);
-		expect(f.runner.units.at(-1)).toBe(`start skiff-workload-${DB_ID}.service`);
+		expect(f.runner.units.at(-1)).toBe(`start yoal-workload-${DB_ID}.service`);
 	});
 });
 
@@ -233,31 +233,31 @@ describe('ClickHouse backups through the driver', () => {
 		expect(dump.filename).toBe(`${DB_ID}.zip`);
 		expect(await fs.readFile(dump.path, 'utf8')).toBe('PK-archive');
 		const [backup] = f.runner.calls;
-		expect(backup!.argv.at(-1)).toMatch(/^BACKUP DATABASE `shop_events` AS `skiff_backup` TO File\('\/data\/skiff-dumps\/dump-[a-f0-9-]+\.zip'\)$/);
+		expect(backup!.argv.at(-1)).toMatch(/^BACKUP DATABASE `shop_events` AS `yoal_backup` TO File\('\/data\/yoal-dumps\/dump-[a-f0-9-]+\.zip'\)$/);
 		expect(backup!.env).toEqual({ CLICKHOUSE_PASSWORD: PASSWORD });
-		expect(f.chowns).toContainEqual([join(f.dataDir, 'skiff-dumps'), 101, 101]);
+		expect(f.chowns).toContainEqual([join(f.dataDir, 'yoal-dumps'), 101, 101]);
 	});
 
 	test('restore runs RESTORE into the target, verifies it and removes the staged archive', async () => {
 		const f = await engineFixture('clickhouse');
 		await f.driver.restoreDatabase(DB_ID, bodyOf('PK-archive'));
 		const queries = f.runner.calls.map((call) => call.argv.at(-1)!);
-		expect(queries[0]).toMatch(/^RESTORE DATABASE `skiff_backup` AS `shop_events` FROM File\('\/data\/skiff-dumps\/restore-[a-f0-9-]+\.zip'\)/);
-		expect(queries[1]).toBe("SELECT 'skiff-ok' FROM system.databases WHERE name = 'shop_events'");
+		expect(queries[0]).toMatch(/^RESTORE DATABASE `yoal_backup` AS `shop_events` FROM File\('\/data\/yoal-dumps\/restore-[a-f0-9-]+\.zip'\)/);
+		expect(queries[1]).toBe("SELECT 'yoal-ok' FROM system.databases WHERE name = 'shop_events'");
 		expect(f.runner.units).toEqual([]);
-		expect(await fs.readdir(join(f.dataDir, 'skiff-dumps'))).toEqual([]);
+		expect(await fs.readdir(join(f.dataDir, 'yoal-dumps'))).toEqual([]);
 	});
 
 	test('a failed RESTORE surfaces the server error and still removes the archive', async () => {
 		const f = await engineFixture('clickhouse');
 		f.runner.restoreCode = 1;
 		await expect(f.driver.restoreDatabase(DB_ID, bodyOf('PK-archive'))).rejects.toThrow(/RESTORE failed \(1\): Code: 598/);
-		expect(await fs.readdir(join(f.dataDir, 'skiff-dumps'))).toEqual([]);
+		expect(await fs.readdir(join(f.dataDir, 'yoal-dumps'))).toEqual([]);
 	});
 
 	test('stale staging leftovers are pruned before the next run', async () => {
 		const f = await engineFixture('clickhouse');
-		const staging = join(f.dataDir, 'skiff-dumps');
+		const staging = join(f.dataDir, 'yoal-dumps');
 		await fs.mkdir(staging);
 		const old = join(staging, 'dump-0123abcd.zip');
 		await fs.writeFile(old, 'stale');

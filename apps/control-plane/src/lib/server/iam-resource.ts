@@ -1,4 +1,4 @@
-import type { ResourceRef } from '@skiff/contracts';
+import type { ResourceRef } from '@yoal/contracts';
 
 /**
  * `?resourceType=project&resourceId=prj_1&projectId=…&environmentId=…` into an engine `ResourceRef`.

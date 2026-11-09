@@ -1,4 +1,4 @@
-import type { TrafficSeriesPoint } from '@skiff/core';
+import type { TrafficSeriesPoint } from '@yoal/core';
 
 /**
  * Downsampling for the traffic chart. A day of minute buckets is too many SVG points, so

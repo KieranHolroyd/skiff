@@ -11,7 +11,7 @@ export function readTab<T extends string>(
 
 /** `href` with `?tab=` set (or cleared for the default section). */
 export function tabHref(href: string, tab: string, fallback: string): string {
-	const url = new URL(href, 'http://skiff.local');
+	const url = new URL(href, 'http://yoal.local');
 	if (tab === fallback) url.searchParams.delete('tab');
 	else url.searchParams.set('tab', tab);
 	return `${url.pathname}${url.search}`;

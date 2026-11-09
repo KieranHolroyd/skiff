@@ -3,7 +3,7 @@ import {
 	storageMetricBucketSchema,
 	type StorageBucketSnapshot,
 	type StorageMetricBucket,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { rustfsApiFor, scrub, type StorageApi, type StorageTarget, type StorageTargetSource } from './storage-admin.ts';
 
 /**

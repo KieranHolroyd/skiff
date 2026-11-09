@@ -1,4 +1,4 @@
-import type { NodeView } from '@skiff/core';
+import type { NodeView } from '@yoal/core';
 
 /** One node's last heartbeat stats, typed. Missing figures stay null (older agents, non-Linux hosts). */
 export interface NodeResources {

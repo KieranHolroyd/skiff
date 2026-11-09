@@ -3,7 +3,7 @@
 	 * Draws one panel's result in its visualisation: pivots the rows into series, assigns colours,
 	 * owns the legend (and which series it hides), and sizes the chart to the space left over.
 	 */
-	import type { DashboardPanel, QueryResult } from '@skiff/contracts';
+	import type { DashboardPanel, QueryResult } from '@yoal/contracts';
 	import Markdown from '#lib/assistant/Markdown.svelte';
 	import { resolveOptions } from '../panel.js';
 	import { toFrame, toItems, type Names } from '../series.js';

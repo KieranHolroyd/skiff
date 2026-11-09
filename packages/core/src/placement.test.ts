@@ -98,7 +98,7 @@ describe('resolvePlacement', () => {
 });
 
 describe('placement spec', () => {
-	const edge = node({ id: 'nod_edge', name: 'edge', mode: 'edge', zone: 'cloud-a', roles: ['ingress', 'control', 'compute', 'data'], labels: { 'skiff.io/arch': 'arm64' } });
+	const edge = node({ id: 'nod_edge', name: 'edge', mode: 'edge', zone: 'cloud-a', roles: ['ingress', 'control', 'compute', 'data'], labels: { 'yoal.io/arch': 'arm64' } });
 	const cloud = node({ id: 'nod_cloud', name: 'cloud-b', zone: 'cloud-b', roles: ['compute', 'data'], labels: { tier: 'critical' }, volumeClasses: ['fast'] });
 	const home = node({ id: 'nod_home', name: 'home', zone: 'home', roles: ['compute', 'data', 'build'], labels: { tier: 'bulk' }, volumeClasses: ['bulk', 'remote'], sliceMemoryMb: 4096 });
 
@@ -122,7 +122,7 @@ describe('placement spec', () => {
 
 	test('matches labels including derived facts', () => {
 		expect(resolvePlacement({ ...base, spec: { labels: { tier: 'critical' } } })).toMatchObject({ ok: true, nodeId: cloud.id });
-		expect(resolvePlacement({ ...base, spec: { labels: { 'skiff.io/arch': 'arm64' } } })).toMatchObject({ ok: true, nodeId: edge.id });
+		expect(resolvePlacement({ ...base, spec: { labels: { 'yoal.io/arch': 'arm64' } } })).toMatchObject({ ok: true, nodeId: edge.id });
 	});
 
 	test('requires a volume class', () => {

@@ -27,7 +27,7 @@ export type PipelineConclusion = (typeof pipelineConclusions)[number];
 export const pipelineStepStatuses = ['pending', 'in_progress', 'completed'] as const;
 export type PipelineStepStatus = (typeof pipelineStepStatuses)[number];
 
-export const pipelineEvents = ['push', 'pull_request', 'workflow_dispatch', 'schedule', 'skiff_event'] as const;
+export const pipelineEvents = ['push', 'pull_request', 'workflow_dispatch', 'schedule', 'yoal_event'] as const;
 export type PipelineEventName = (typeof pipelineEvents)[number];
 
 /** W10: `trusted` runs get secrets and deploy rights; `untrusted` (fork PRs) get neither. */
@@ -35,33 +35,33 @@ export const pipelineTrustLevels = ['trusted', 'untrusted'] as const;
 export type PipelineTrust = (typeof pipelineTrustLevels)[number];
 
 /** Directory workflows are read from at the triggering commit (W1). */
-export const PIPELINE_WORKFLOW_DIR = '.skiff/workflows';
+export const PIPELINE_WORKFLOW_DIR = '.yoal/workflows';
 
 /** Built-in actions (`uses:`). GitHub action names in `PIPELINE_ACTION_ALIASES` map onto these. */
 export const pipelineBuiltinActions = [
-	'skiff/checkout',
-	'skiff/cache',
-	'skiff/upload-artifact',
-	'skiff/download-artifact',
-	'skiff/deploy',
-	'skiff/build-image',
-	'skiff/image-index',
-	'skiff/oidc-token',
+	'yoal/checkout',
+	'yoal/cache',
+	'yoal/upload-artifact',
+	'yoal/download-artifact',
+	'yoal/deploy',
+	'yoal/build-image',
+	'yoal/image-index',
+	'yoal/oidc-token',
 ] as const;
 export type PipelineBuiltinAction = (typeof pipelineBuiltinActions)[number];
 
 /**
- * W13: popular GitHub actions run as Skiff built-ins (any version), so most workflows need no
+ * W13: popular GitHub actions run as Yoal built-ins (any version), so most workflows need no
  * edit. Key is the `owner/repo` part of `uses:` (the `@ref` is ignored).
  */
 export const PIPELINE_ACTION_ALIASES: Readonly<Record<string, PipelineBuiltinAction>> = {
-	'actions/checkout': 'skiff/checkout',
-	'actions/cache': 'skiff/cache',
-	'actions/upload-artifact': 'skiff/upload-artifact',
-	'actions/download-artifact': 'skiff/download-artifact',
+	'actions/checkout': 'yoal/checkout',
+	'actions/cache': 'yoal/cache',
+	'actions/upload-artifact': 'yoal/upload-artifact',
+	'actions/download-artifact': 'yoal/download-artifact',
 };
 
-/** Resolve `uses:` to a built-in, or null when Skiff cannot run it. */
+/** Resolve `uses:` to a built-in, or null when Yoal cannot run it. */
 export function resolvePipelineAction(uses: string): PipelineBuiltinAction | null {
 	const name = uses.split('@')[0]!.trim().toLowerCase();
 	if ((pipelineBuiltinActions as readonly string[]).includes(name)) return name as PipelineBuiltinAction;
@@ -131,7 +131,7 @@ export interface PipelineJobSpec {
 	services: Record<string, PipelineContainerSpec>;
 	steps: PipelineStepSpec[];
 	/**
-	 * A job that calls a reusable workflow (`uses: ./.skiff/workflows/x.yml`) instead of running
+	 * A job that calls a reusable workflow (`uses: ./.yoal/workflows/x.yml`) instead of running
 	 * steps. Only on parsed workflows: the engine replaces the caller with the called workflow's
 	 * jobs (keys `<caller>--<callee>`) before anything is claimed.
 	 */
@@ -179,8 +179,8 @@ export interface PipelineTriggers {
 	schedule: string[];
 	/** Optional on older parsed workflows. */
 	workflowCall?: PipelineWorkflowCall | null;
-	/** `skiff_event: { types: [deployment.failed, …] }` (EventService event types; empty = any). */
-	skiffEvent?: { types: string[] } | null;
+	/** `yoal_event: { types: [deployment.failed, …] }` (EventService event types; empty = any). */
+	yoalEvent?: { types: string[] } | null;
 }
 
 /** Isolation tiers, weakest first (W14). `sandbox` is the Builder's systemd unit, no container. */
@@ -191,7 +191,7 @@ export const pipelineContainerRuntimes = ['runc', 'runsc', 'kata'] as const;
 export type PipelineContainerRuntime = (typeof pipelineContainerRuntimes)[number];
 
 export interface PipelineWorkflow {
-	/** Path relative to the repository root, e.g. `.skiff/workflows/ci.yml`. */
+	/** Path relative to the repository root, e.g. `.yoal/workflows/ci.yml`. */
 	path: string;
 	name: string;
 	runName: string | null;
@@ -223,7 +223,7 @@ export interface PipelineTriggerEvent {
 	workflowPath?: string | null;
 	/** For schedule: the cron expression that fired. */
 	schedule?: string | null;
-	/** For skiff_event: the event type (`deployment.failed`, …). */
+	/** For yoal_event: the event type (`deployment.failed`, …). */
 	eventType?: string | null;
 }
 
@@ -240,9 +240,9 @@ export interface PipelineStepContext {
 	outputs: Record<string, string>;
 }
 
-/** Everything `${{ }}` can see. `github` is an alias of `skiff` (W1). */
+/** Everything `${{ }}` can see. `github` is an alias of `yoal` (W1). */
 export interface PipelineExpressionContext {
-	skiff: Record<string, unknown>;
+	yoal: Record<string, unknown>;
 	env?: Record<string, string>;
 	vars?: Record<string, string>;
 	secrets?: Record<string, string>;
@@ -282,7 +282,7 @@ export interface PipelineResolveClaim {
 	ref: string;
 	sha: string | null;
 	/**
-	 * A one-hour read-only token for this repository from Skiff's GitHub App (D164), used instead of
+	 * A one-hour read-only token for this repository from Yoal's GitHub App (D164), used instead of
 	 * the node's own git credentials. Absent when the App does not cover the repository. Forge
 	 * connections (D175) send a deploy or clone token with the host and user name it is for.
 	 */
@@ -309,7 +309,7 @@ export interface PipelineJobClaim {
 	/** Workflow-level `env`, applied under the job's own `env`. */
 	workflowEnv: TemplateMap;
 	workflowDefaults: { shell: string | null; workingDirectory: string | null };
-	/** Static expression context: skiff, inputs, vars, matrix, strategy, needs, job. */
+	/** Static expression context: yoal, inputs, vars, matrix, strategy, needs, job. */
 	context: PipelineExpressionContext;
 	/** Names of the secrets this job may read; values come from `GET /api/pipeline/secrets`. */
 	secretNames: string[];
@@ -328,7 +328,7 @@ export interface PipelineJobClaim {
 	 * Only set when the node claimed with container isolation. Absent from older control planes.
 	 */
 	runtime?: PipelineContainerRuntime | null;
-	/** Start a per-job rootless BuildKit sidecar (W6): a step uses `skiff/build-image`. */
+	/** Start a per-job rootless BuildKit sidecar (W6): a step uses `yoal/build-image`. */
 	buildkit?: boolean;
 	/** BuildKit cache scope (W10): never shared between trusted and untrusted runs. */
 	buildkitCacheScope?: string | null;
@@ -384,7 +384,7 @@ export const pipelineStepReportSchema = z.object({
 	/** Resolved display name (templates evaluated). */
 	name: z.string().max(500).optional(),
 	outputs: z.record(z.string(), z.string().max(1_000_000)).optional(),
-	/** What the step wrote to `$SKIFF_STEP_SUMMARY` (Markdown), shown on the run page. */
+	/** What the step wrote to `$YOAL_STEP_SUMMARY` (Markdown), shown on the run page. */
 	summary: z.string().max(1_000_000).optional(),
 });
 export type PipelineStepReport = z.infer<typeof pipelineStepReportSchema>;
@@ -477,7 +477,7 @@ export interface PipelineCacheReservation {
 }
 
 /**
- * `skiff/deploy`: deploy to a linked project. Exactly one of `image` (a container project; a
+ * `yoal/deploy`: deploy to a linked project. Exactly one of `image` (a container project; a
  * digest reference is recommended) or an uploaded zip (`archive: true`, static/process/function).
  */
 export const pipelineDeploySchema = z
@@ -584,7 +584,7 @@ export interface PipelineRepositoryView {
 
 export const pipelineDispatchSchema = z
 	.object({
-		/** Workflow file path (`.skiff/workflows/ci.yml`) or its file name (`ci.yml`). */
+		/** Workflow file path (`.yoal/workflows/ci.yml`) or its file name (`ci.yml`). */
 		workflow: z.string().min(1).max(512).optional(),
 		/** Inline workflow YAML, run against `ref` instead of a file in the repository. */
 		workflowText: z.string().min(1).max(512_000).optional(),
@@ -607,7 +607,7 @@ export interface PipelineTriggerView {
 export interface PipelineStepView {
 	index: number;
 	name: string;
-	/** `$SKIFF_STEP_SUMMARY` Markdown, when the step wrote one. */
+	/** `$YOAL_STEP_SUMMARY` Markdown, when the step wrote one. */
 	summary?: string | null;
 	status: PipelineStepStatus;
 	conclusion: PipelineConclusion | null;
@@ -686,7 +686,7 @@ const secretName = z
 	.min(1)
 	.max(100)
 	.regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'Secret names are letters, digits and underscores')
-	.refine((value) => !/^(SKIFF|GITHUB)_/i.test(value), 'Names starting with SKIFF_ or GITHUB_ are reserved');
+	.refine((value) => !/^(YOAL|GITHUB)_/i.test(value), 'Names starting with YOAL_ or GITHUB_ are reserved');
 
 export const pipelineSecretSetSchema = z.object({
 	value: z.string().max(64 * 1024),
@@ -725,7 +725,7 @@ export interface PipelineEnvironmentView {
 	updatedAt: string;
 }
 
-/** Link a project so `skiff/deploy` may target it (W3, §4.4). */
+/** Link a project so `yoal/deploy` may target it (W3, §4.4). */
 export const pipelineProjectLinkSchema = z.object({
 	/** Only jobs in this environment may deploy; null = any trusted job of this repository. */
 	environment: z.string().min(1).max(100).nullable().default(null),

@@ -6,7 +6,7 @@ describe('installer DNS check', () => {
 		expect(dnsTargets('control.example.com', 'examplecloud.com', 'abcd')).toEqual([
 			{ display: 'control.example.com', name: 'control.example.com' },
 			{ display: 'examplecloud.com', name: 'examplecloud.com' },
-			{ display: '*.examplecloud.com', name: 'skiff-dns-check-abcd.examplecloud.com' },
+			{ display: '*.examplecloud.com', name: 'yoal-dns-check-abcd.examplecloud.com' },
 		]);
 		const [, , first] = dnsTargets('control.example.com', 'examplecloud.com');
 		const [, , second] = dnsTargets('control.example.com', 'examplecloud.com');

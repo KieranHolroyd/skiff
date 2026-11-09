@@ -14,13 +14,13 @@ import { ensureStorageTools } from './storage-tools.ts';
 import { dirname, join } from 'node:path';
 
 /**
- * `skiff-helper`: the only privileged Skiff process (D26). It listens on a root-owned,
+ * `yoal-helper`: the only privileged Yoal process (D26). It listens on a root-owned,
  * group-restricted unix socket, validates every field itself and renders fixed units. The agent
  * never runs as root.
  */
 
 function log(level: 'info' | 'warn' | 'error', message: string): void {
-	const line = `[skiff-helper ${new Date().toISOString()}] ${level.toUpperCase()} ${message}`;
+	const line = `[yoal-helper ${new Date().toISOString()}] ${level.toUpperCase()} ${message}`;
 	if (level === 'error') console.error(line);
 	else if (level === 'warn') console.warn(line);
 	else console.log(line);
@@ -30,7 +30,7 @@ export async function runHelper(): Promise<void> {
 	const config = loadHelperConfig();
 	const uid = typeof process.getuid === 'function' ? process.getuid() : -1;
 	if (uid !== 0) {
-		throw new Error(`skiff-helper must run as root (uid 0); running as uid ${uid}`);
+		throw new Error(`yoal-helper must run as root (uid 0); running as uid ${uid}`);
 	}
 
 	const driver = new SystemdDriver({
@@ -119,7 +119,7 @@ export async function runHelper(): Promise<void> {
 			runner: spawnRunner(),
 			podmanPath: config.podmanPath,
 			runtimeDir: config.runtimeDir,
-			buildsRoot: () => resolveBuildsRoot({ override: process.env.SKIFF_HELPER_BUILDS_DIR?.trim() || null, unitDir: config.unitDir }),
+			buildsRoot: () => resolveBuildsRoot({ override: process.env.YOAL_HELPER_BUILDS_DIR?.trim() || null, unitDir: config.unitDir }),
 			stepBinary: config.nodeUpdate.agentBinary,
 			apparmorProfile: config.apparmorProfile,
 			subidFiles: DEFAULT_SUBID_FILES,
@@ -159,7 +159,7 @@ export async function runHelper(): Promise<void> {
 if (import.meta.main) {
 	await runHelper().catch((error: unknown) => {
 		console.error(
-			`[skiff-helper] fatal: ${error instanceof Error ? error.message : String(error)}`,
+			`[yoal-helper] fatal: ${error instanceof Error ? error.message : String(error)}`,
 		);
 		process.exitCode = 1;
 	});

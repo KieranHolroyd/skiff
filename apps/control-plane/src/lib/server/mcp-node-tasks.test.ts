@@ -8,16 +8,16 @@ import {
 	nodeCapabilities,
 	type AgentNodeTaskLease,
 	type InlineFile
-} from '@skiff/contracts';
-import { LocalObjectStore, buildPrincipal, createCore, sha256Hex, type Core } from '@skiff/core';
-import { createDb } from '@skiff/db';
+} from '@yoal/contracts';
+import { LocalObjectStore, buildPrincipal, createCore, sha256Hex, type Core } from '@yoal/core';
+import { createDb } from '@yoal/db';
 
 /**
  * The queue and function MCP tools (D124) against a real core: the node is simulated by leasing
  * and completing tasks while the tool waits. Stream purge/delete stay off MCP (D111).
  */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-mcp-node-tasks-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-mcp-node-tasks-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(
 	join(dir, 'objects'),
@@ -45,7 +45,7 @@ mock.module('./core', () => ({ core: realCore }));
 mock.module('./config', () => ({ platformOrigin: 'https://control.test', authSecret: 'test-secret' }));
 mock.module('./principal', () => principalStub({ principalFromMcp: () => null }));
 
-const { skiffToolDefinitions } = await import('./mcp');
+const { yoalToolDefinitions } = await import('./mcp');
 const { assistantTools } = await import('./assistant/tools');
 
 afterAll(() => {
@@ -104,7 +104,7 @@ function nodeAnswers(answer: (task: AgentNodeTaskLease['tasks'][number]) => unkn
 }
 
 function definition(principal: typeof owner, name: string) {
-	const found = skiffToolDefinitions(principal).find((entry) => entry.name === name);
+	const found = yoalToolDefinitions(principal).find((entry) => entry.name === name);
 	if (!found) throw new Error(`no tool ${name}`);
 	return found;
 }
@@ -136,7 +136,7 @@ describe('node task MCP tools', () => {
 	});
 
 	test('are registered, while stream purge and delete stay off MCP', () => {
-		const names = new Set(skiffToolDefinitions(owner).map((entry) => entry.name));
+		const names = new Set(yoalToolDefinitions(owner).map((entry) => entry.name));
 		for (const name of NEW_TOOLS) expect(names.has(name)).toBe(true);
 		expect(
 			[...names].filter((name) => /purge|delete_stream|delete_message|delete_queue/.test(name))
@@ -174,7 +174,7 @@ describe('node task MCP tools', () => {
 		const seen: unknown[] = [];
 		const stop = nodeAnswers((task) => {
 			seen.push(task);
-			return { stream: 'SKIFF_Q_jobs', sent: 2, seqs: [7, 8], durationMs: 3, state: null };
+			return { stream: 'YOAL_Q_jobs', sent: 2, seqs: [7, 8], durationMs: 3, state: null };
 		});
 		try {
 			const result = await call(owner, 'send_queue_message', {
@@ -213,14 +213,14 @@ describe('node task MCP tools', () => {
 		const stop = nodeAnswers((task) => {
 			expect(task).toMatchObject({
 				kind: 'broker.stream.peek',
-				input: { stream: 'SKIFF_Q_jobs', limit: 1 }
+				input: { stream: 'YOAL_Q_jobs', limit: 1 }
 			});
 			return {
-				stream: 'SKIFF_Q_jobs',
+				stream: 'YOAL_Q_jobs',
 				messages: [
 					{
 						seq: 7,
-						subject: 'skiff.q.jobs',
+						subject: 'yoal.q.jobs',
 						time: null,
 						size: 11,
 						headers: {},
@@ -250,7 +250,7 @@ describe('node task MCP tools', () => {
 		const both = await call(owner, 'peek_queue_messages', {
 			broker: 'jobs',
 			queue: 'jobs',
-			stream: 'SKIFF_Q_jobs'
+			stream: 'YOAL_Q_jobs'
 		});
 		expect(both.ok).toBe(false);
 		expect(both.text).toContain('exactly one of queue or stream');
@@ -267,7 +267,7 @@ describe('node task MCP tools', () => {
 					results: lease.tasks.map((task) => ({
 						id: task.id,
 						ok: false,
-						error: 'Stream SKIFF_Q_dead does not exist on this broker.'
+						error: 'Stream YOAL_Q_dead does not exist on this broker.'
 					}))
 				});
 		}, 20);
@@ -309,7 +309,7 @@ describe('node task MCP tools', () => {
 			project,
 			[
 				file(
-					'skiff-function.json',
+					'yoal-function.json',
 					JSON.stringify({
 						version: 1,
 						main: 'index.js',

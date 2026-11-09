@@ -21,7 +21,7 @@ import { confirmOrRefuse } from './run-operation.ts';
  * check lives on the server; this is a thin client.
  */
 
-const usage = `Usage: skif log-drain <command> [options]
+const usage = `Usage: yoal log-drain <command> [options]
 
 Commands:
   list                         List drains with their status and counters (the default)
@@ -52,16 +52,16 @@ Options:
       --json                   JSON output
   -h, --help                   Show this help
 
-Webhook requests carry X-Skiff-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, "<t>.<body>")>.
+Webhook requests carry X-Yoal-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, "<t>.<body>")>.
 The secret is printed once, on create and on --rotate-secret. Org owners and admins manage drains;
 a drain to a private address can only be set up by a platform admin in the dashboard.
 
 Examples:
-  skif log-drain create archive --url https://logs.example.com/skiff -H "Authorization: Bearer …"
-  skif log-drain create grafana --otlp --url https://otlp-gateway.grafana.net/otlp \\
+  yoal log-drain create archive --url https://logs.example.com/yoal -H "Authorization: Bearer …"
+  yoal log-drain create grafana --otlp --url https://otlp-gateway.grafana.net/otlp \\
     -H "Authorization: Basic …" --min-level info
-  skif log-drain create shop-errors -p shop --source runtime --min-level error --url https://hooks.example.com/in
-  skif log-drain test ldr_…`;
+  yoal log-drain create shop-errors -p shop --source runtime --min-level error --url https://hooks.example.com/in
+  yoal log-drain test ldr_…`;
 
 const baseFlags: FlagSpec = {
 	json: { type: 'boolean' },
@@ -123,7 +123,7 @@ function parseOne(argv: string[], spec: FlagSpec, command: string, what = 'id') 
 		console.log(usage);
 		return null;
 	}
-	const line = `Usage: skif log-drain ${command} <${what}>`;
+	const line = `Usage: yoal log-drain ${command} <${what}>`;
 	rejectExtraPositionals(args, 1, line);
 	return { args, value: requirePositional(args, 0, `drain ${what}.\n\n${line}`) };
 }
@@ -131,7 +131,7 @@ function parseOne(argv: string[], spec: FlagSpec, command: string, what = 'id') 
 function printSecret(secret: string | null): void {
 	if (!secret) return;
 	console.log(`\nSigning secret (shown once; store it with the receiver):\n  ${secret}`);
-	console.log('Verify X-Skiff-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>.');
+	console.log('Verify X-Yoal-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>.');
 }
 
 async function listDrains(argv: string[]): Promise<void> {
@@ -140,7 +140,7 @@ async function listDrains(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif log-drain list [--json]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal log-drain list [--json]');
 	const client = await authenticatedClient();
 	const { drains, raw } = await client.listLogDrains();
 	if (args.boolean('json')) {
@@ -148,7 +148,7 @@ async function listDrains(argv: string[]): Promise<void> {
 		return;
 	}
 	if (drains.length === 0) {
-		console.log('No log drains yet. Create one with `skif log-drain create <name> --url https://…`.');
+		console.log('No log drains yet. Create one with `yoal log-drain create <name> --url https://…`.');
 		return;
 	}
 	console.log(logDrainTable(drains));
@@ -183,7 +183,7 @@ async function createDrain(argv: string[]): Promise<void> {
 	}
 	console.log(`Created ${drain.id} (${drain.name}) → ${drain.url}. Lines logged from now on are forwarded within a few seconds.`);
 	printSecret(signingSecret);
-	console.log(`\nCheck the receiver: skif log-drain test ${drain.id}`);
+	console.log(`\nCheck the receiver: yoal log-drain test ${drain.id}`);
 }
 
 async function showDrain(argv: string[]): Promise<void> {

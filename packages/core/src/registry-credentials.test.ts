@@ -2,8 +2,8 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import { DEFAULT_FEATURES } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import { DEFAULT_FEATURES } from '@yoal/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
@@ -39,7 +39,7 @@ const registryFetch = (async (input: string | URL | Request, init?: RequestInit)
 	return new Response('not found', { status: 404 });
 }) as typeof fetch;
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-registry-credentials-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-registry-credentials-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 const core: Core = createCore({

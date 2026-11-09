@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { RequestEvent } from '@sveltejs/kit';
-import type { ServerErrorCapture } from '@skiff/core';
+import type { ServerErrorCapture } from '@yoal/core';
 import {
 	reportBackgroundError,
 	reportErrorResponse,

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { Column, StudioInfo, TreeNode, TreePath } from '@skiff/studio/protocol';
+import type { Column, StudioInfo, TreeNode, TreePath } from '@yoal/studio/protocol';
 import {
 	LEVEL_CAP,
 	MONGO_COMMANDS,

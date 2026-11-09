@@ -1,5 +1,5 @@
-import type { Role } from '@skiff/contracts';
-import { isRole } from '@skiff/core';
+import type { Role } from '@yoal/contracts';
+import { isRole } from '@yoal/core';
 import { sqlite } from './db';
 
 /**

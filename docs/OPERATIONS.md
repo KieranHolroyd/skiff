@@ -1,4 +1,4 @@
-# Skiff — Mass actions and prune (design proposal)
+# Yoal — Mass actions and prune (design proposal)
 
 Status: **implemented, 2026-11-04.** The decisions in §9 are recorded in [DECISIONS.md](./DECISIONS.md)
 as D49–D54. This doc covers:
@@ -142,7 +142,7 @@ class OperationService {
 }
 ```
 
-Action definitions live in a registry (`operations/registry.ts`). `@skiff/contracts` exports the
+Action definitions live in a registry (`operations/registry.ts`). `@yoal/contracts` exports the
 public metadata (id, label, permission, destructive, reversible), so the dashboard bulk bar, the CLI
 help and the MCP tool list are generated from it. **Adding a future mass action means writing one
 `ActionDefinition`, with no new routes, tables or UI plumbing.**
@@ -181,7 +181,7 @@ Plan verdicts that matter for the confirm UX:
 
 - `ok` + `flags: ['live']`: production is serving, so deleting takes a site offline.
 - `ok` + `flags: ['workload']`: a process/container app will be stopped.
-- `ok` + `flags: ['custom_domain']`: custom domains will stop resolving to Skiff.
+- `ok` + `flags: ['custom_domain']`: custom domains will stop resolving to Yoal.
 - `skip: already_in_trash | not_in_trash | not_found`
 - `blocked: forbidden`: the principal lacks the permission for that item. This is per item so it
   stays correct when project-level roles arrive.
@@ -236,7 +236,7 @@ parents, rows before objects):
 | `upload_sessions` | `expired/failed` for more than 24 h | org | the object is handled under `objects` |
 | `config_snapshots` | not referenced by any deployment | org | L4 |
 | `releases` | not referenced by any non-deleted deployment | org | reuses `runGc`'s guarded delete |
-| `registry_images` | a tag older than the retention window (default 90 days) beyond the newest tags kept per repository | org | never removes `latest`, a deployment pin (`skiff-d-*`), or a tag a live workload still names. Blobs go when zot's GC finds them unreferenced |
+| `registry_images` | a tag older than the retention window (default 90 days) beyond the newest tags kept per repository | org | never removes `latest`, a deployment pin (`yoal-d-*`), or a tag a live workload still names. Blobs go when zot's GC finds them unreferenced |
 | `runner_registrations` | a GitHub Actions runner registration for a deleted project/workload, a workload with no runner profile, or a replica below the current pool size, **older than 7 days** | org | deletes the runner on GitHub best-effort, then the row |
 | `volume_snapshots` | an unpinned app-volume snapshot older than the retention window (default 30 days), or one whose volume is gone | org | never removes pinned snapshots or one a restore is reading |
 | `objects` | a key in the store under `releases/` or `uploads/` with no `releases`/`upload_sessions` row, **and older than 24 h** | platform | needs `ObjectStore.list(prefix)` (L6). Keys are content-addressed and shared across orgs, so this is platform-only |
@@ -296,18 +296,18 @@ monthly, plan-only, with a notification if it finds anything).
 Convenience aliases such as `POST /projects/bulk-delete` are not added. One generic endpoint keeps
 future actions free.
 
-### 6.2 CLI (`skif`)
+### 6.2 CLI (`yoal`)
 
 ```
-skif projects delete <slug…> [--match <glob>] [--not-deployed] [--older-than 30d] [--stdin] [--yes] [--json]
-skif projects restore <slug…> [--yes] [--json]
-skif projects trash [--json]                       # list the trash with purge dates
-skif projects purge <slug…> [--yes]                # irreversible; trash only
-skif prune [--apply] [--scope org|platform] [--only releases,registry_images,…] [--older-than <days>] [--keep-tags <n>] [--yes] [--json]
-skif registry prune [--apply] [--older-than <days>] [--keep-tags <n>]   # --only registry_images
-skif runners prune [--apply] [--older-than <days>]                       # --only runner_registrations
-skif volume prune [--apply] [--older-than <days>]                        # --only volume_snapshots
-skif operations [list | show <id> | watch <id> | cancel <id>]
+yoal projects delete <slug…> [--match <glob>] [--not-deployed] [--older-than 30d] [--stdin] [--yes] [--json]
+yoal projects restore <slug…> [--yes] [--json]
+yoal projects trash [--json]                       # list the trash with purge dates
+yoal projects purge <slug…> [--yes]                # irreversible; trash only
+yoal prune [--apply] [--scope org|platform] [--only releases,registry_images,…] [--older-than <days>] [--keep-tags <n>] [--yes] [--json]
+yoal registry prune [--apply] [--older-than <days>] [--keep-tags <n>]   # --only registry_images
+yoal runners prune [--apply] [--older-than <days>]                       # --only runner_registrations
+yoal volume prune [--apply] [--older-than <days>]                        # --only volume_snapshots
+yoal operations [list | show <id> | watch <id> | cancel <id>]
 ```
 
 - The selectors (`--match`, `--not-deployed`, `--older-than`, `--stdin`) are resolved **in the
@@ -315,15 +315,15 @@ skif operations [list | show <id> | watch <id> | cancel <id>]
   verdict) before asking `Delete 12 projects (3 live)? [y/N]`.
 - If stdin isn't a TTY and `--yes` wasn't passed, the CLI refuses and says why. Purge with more than
   10 targets also asks you to type the count.
-- `skif prune` without `--apply` is a dry run. It shows the scan's live progress, then a
+- `yoal prune` without `--apply` is a dry run. It shows the scan's live progress, then a
   per-category table (items, size) and the command to apply that plan
-  (`skif prune --apply --plan op_…`). `--apply` without `--plan` scans and then asks for
+  (`yoal prune --apply --plan op_…`). `--apply` without `--plan` scans and then asks for
   confirmation.
 - Progress: on a TTY there is one redrawn line per category (`releases ▕████████░░▏ 384/480 · 46 MB`)
   and failures print inline. Otherwise `--json` emits NDJSON events and plain mode prints one line
   per phase.
-- **Ctrl-C detaches and does not cancel.** It prints `Still running: skif operations watch op_…`
-  and exits 130. `skif operations cancel` is the explicit stop.
+- **Ctrl-C detaches and does not cancel.** It prints `Still running: yoal operations watch op_…`
+  and exits 130. `yoal operations cancel` is the explicit stop.
 - Exit codes: 0 succeeded, 3 partial, 1 failed, cancelled, expired or declined at the prompt.
 
 ### 6.3 MCP
@@ -385,7 +385,7 @@ skif operations [list | show <id> | watch <id> | cancel <id>]
 2. `project.delete` / `restore` / `purge` definitions. REST. Trash view and the bulk bar in the
    dashboard.
 3. CLI `projects delete|restore|trash|purge` and `operations`.
-4. `ObjectStore.list()` (local and R2), the prune categories, Settings → Maintenance, `skif prune`.
+4. `ObjectStore.list()` (local and R2), the prune categories, Settings → Maintenance, `yoal prune`.
 5. MCP `delete_projects`, `restore_projects`, `get_operation`.
 
 Steps 1–5 are a feature and an additive migration, which means a **minor** bump
@@ -425,7 +425,7 @@ Steps 1–5 are a feature and an additive migration, which means a **minor** bum
 | REST | `apps/control-plane/src/routes/api/v1/[...path]/+server.ts` (`operations` section) |
 | SSE | `apps/control-plane/src/routes/api/v1/operations/[id]/stream/+server.ts` |
 | MCP | `delete_projects`, `restore_projects`, `get_operation` in `apps/control-plane/src/lib/server/mcp.ts` |
-| Blueprints (§12) | `packages/core/src/blueprints.ts` (`BlueprintService`, `blueprintApplyAction`), contracts `blueprint.ts`, migration `0066_blueprints.sql`, REST `routes/api/v1/blueprints/**`, CLI `skif blueprint`, MCP `plan_stack`/`apply_stack`/`get_task`, dashboard `/new/blueprint` |
+| Blueprints (§12) | `packages/core/src/blueprints.ts` (`BlueprintService`, `blueprintApplyAction`), contracts `blueprint.ts`, migration `0066_blueprints.sql`, REST `routes/api/v1/blueprints/**`, CLI `yoal blueprint`, MCP `plan_stack`/`apply_stack`/`get_task`, dashboard `/new/blueprint` |
 | Dashboard | `routes/(dashboard)/_lib/operations/`, `projects/`, `settings/maintenance/` |
 | CLI | `apps/cli/src/commands/{projects,prune,operations,run-operation}.ts`, `apps/cli/src/{sse,follow,selectors,operations}.ts` |
 | Tests | `packages/core/src/operations.test.ts`, `apps/control-plane/tests/operations.e2e.ts`, MCP cases in `tests/mcp-oauth.e2e.ts`, CLI unit tests |
@@ -434,9 +434,9 @@ Steps 1–5 are a feature and an additive migration, which means a **minor** bum
 
 ## 12. Blueprints (`blueprint.apply`)
 
-Status: **implemented, 2026-11-07** (plan 11, v1 subset; behind `SKIFF_FEATURE_BLUEPRINTS`, off by
-default). A blueprint is one declarative file (`skiff.blueprint.yaml|yml|json`, `apiVersion:
-skiff/v1`) describing a *stack*: projects (environments, domains, workload settings), managed
+Status: **implemented, 2026-11-07** (plan 11, v1 subset; behind `YOAL_FEATURE_BLUEPRINTS`, off by
+default). A blueprint is one declarative file (`yoal.blueprint.yaml|yml|json`, `apiVersion:
+yoal/v1`) describing a *stack*: projects (environments, domains, workload settings), managed
 databases, storage instances with buckets, brokers, and the attachments between them. Map keys are
 the real resource names; unset fields are unmanaged (platform default on create, untouched after).
 Secret references are names only. Contract: `packages/contracts/src/blueprint.ts`.
@@ -495,7 +495,7 @@ audit row with the operation id.
 
 - REST: `POST /blueprints/validate|plan|apply` (`?wait` on apply), `GET /blueprints/apply/:id`,
   `GET /blueprints`, `GET /blueprints/:name` (docs/API.md).
-- CLI: `skif blueprint validate|plan|apply [file] [--prune] [--plan <hash>] [--confirm <stack>]
+- CLI: `yoal blueprint validate|plan|apply [file] [--prune] [--plan <hash>] [--confirm <stack>]
   [--yes] [--json]`; apply follows the operation stream and exits 0/3/1 like bulk runs.
 - MCP: `plan_stack` (read-only, no prune), `apply_stack` (destructive; elicitation whose signed
   request state is bound to `stack:<name>:<planHash>`; pruning plans refused), `get_task` (polls
@@ -510,13 +510,13 @@ Jobs, app volumes, previews, static uploads (`path`), drift badges, `export`, JS
 publishing, compensation on failure and Compose import (plan 14) are not implemented.
 
 
-## 13. Config export (`GET /export`, `skif export`)
+## 13. Config export (`GET /export`, `yoal export`)
 
 Status: **implemented, 2026-11-09** (D198). A read-only snapshot of one organisation's
-configuration in one document (`apiVersion: skiff.export/v1`), for keeping in git, diffing
-between dates, or moving to another instance with `skif import` (§14). It is not a backup: it holds
+configuration in one document (`apiVersion: yoal.export/v1`), for keeping in git, diffing
+between dates, or moving to another instance with `yoal import` (§14). It is not a backup: it holds
 no data and no secret values.
-Platform disaster recovery remains `skiff-restore` with a recovery kit
+Platform disaster recovery remains `yoal-restore` with a recovery kit
 ([platform backups](../packages/docs/content/self-hosting/platform-backups.md)). Service:
 `packages/core/src/config-export.ts`. Header contract: `packages/contracts/src/config-export.ts`.
 
@@ -533,7 +533,7 @@ project links, registry credentials, forge connections, shares and templates.
 **What it never holds.** Secret values, credentials, passwords and header values (each section
 is the view its REST GET returns, which is write-only for those), deployments and releases,
 database rows, bucket objects, volume contents, logs, metrics, pool users and invites, audit
-history, trashed resources and platform-level settings (`/etc/skiff`, nodes, platform IAM).
+history, trashed resources and platform-level settings (`/etc/yoal`, nodes, platform IAM).
 
 **Permissions.** No new permission. Each section is read through its normal service call with the
 caller's principal, so it sees exactly what the API would show them. A section that throws a
@@ -549,12 +549,12 @@ or JSON and all or some projects, then downloads the file from
 attachment`, YAML via `Bun.YAML.stringify`). Opening the page lists projects only; the audit row is
 written when the file is downloaded.
 
-**CLI.** `skif export [--out <file>|-] [--format yaml|json] [--project <slug>] [--force]` writes
-`skiff-config-<org>-<date>.yaml` (mode 0600) and prints a section summary plus the skipped list.
+**CLI.** `yoal export [--out <file>|-] [--format yaml|json] [--project <slug>] [--force]` writes
+`yoal-config-<org>-<date>.yaml` (mode 0600) and prints a section summary plus the skipped list.
 The CLI runs on Node, so YAML is emitted by `apps/cli/src/config-export.ts`. Strings that are
 not plainly safe are JSON-quoted, and a test round-trips the output through `Bun.YAML.parse`.
 
-## 14. Config import (`POST /import/plan|apply`, `skif import`)
+## 14. Config import (`POST /import/plan|apply`, `yoal import`)
 
 Status: **implemented, 2026-11-09** (D199). Recreates a config export (§13) on another instance,
 for example after moving to a new server. Code: `packages/core/src/config-import/` (`engine.ts`
@@ -594,6 +594,6 @@ event rules (alert-rule ids remapped), log drains, email domains, local backup t
 - Temporary (JIT) and system bindings are skipped; grants for people who are not members here yet
   are skipped and their invitation is listed.
 
-**CLI.** `skif import <file> [--apply] [-y] [--secrets <file>] [--only a,b] [--skip a,b]
+**CLI.** `yoal import <file> [--apply] [-y] [--secrets <file>] [--only a,b] [--skip a,b]
 [--project <slug>] [--all] [--json]`: shows the plan; `--apply` asks, then applies (15-minute
 request timeout) and exits 3 if any step failed. The server parses the file (YAML or JSON).

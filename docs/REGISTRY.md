@@ -1,4 +1,4 @@
-# Skiff — Container registry
+# Yoal — Container registry
 
 Status: **G0–G6 built 2026-11-08** (R1 → D145, R2 → D146, R3 → D147, R4/R5 → D154, R6/R8 → D155,
 push events → D156, G2 → D157, G3/G4 logins → D158, G4–G6 → D159). What is not built is listed in §13. The other
@@ -11,12 +11,12 @@ pipelines plan consumes it. Note for WP2: zot verifies tokens against an X.509 c
 registry tokens are ES256 signed by `RegistryService` (W9 proposed Ed25519 with JWKS); a job
 token should be exchanged at the realm or minted with `RegistryService.internalToken`.
 
-Skiff runs container apps, but it cannot store an image, build one or pull a private one. Today a
+Yoal runs container apps, but it cannot store an image, build one or pull a private one. Today a
 container workload names a public image and the node pulls it straight from its registry. Cairn's
-private GHCR image reaches prod only through `docker save | ssh podman load`, because Skiff has no
-registry credentials (`cairn/deploy/skiff/deploy.sh`). This document plans an
-install-wide **OCI registry** run by Skiff. It also plans the smaller fixes that make any registry,
-Skiff's or someone else's, safe to deploy from.
+private GHCR image reaches prod only through `docker save | ssh podman load`, because Yoal has no
+registry credentials (`cairn/deploy/yoal/deploy.sh`). This document plans an
+install-wide **OCI registry** run by Yoal. It also plans the smaller fixes that make any registry,
+Yoal's or someone else's, safe to deploy from.
 
 ---
 
@@ -27,14 +27,14 @@ Skiff's or someone else's, safe to deploy from.
 | R1 | Deploys **resolve a tag to a digest** and the node runs `repo@sha256:…` | Deployments are immutable (D13) and rollback restores the exact image. Today `Pull=` is unset, so a re-pushed tag is never picked up. |
 | R2 | **Registry credentials** for external registries (GHCR, Docker Hub, ECR …), org-owned and sealed, delivered as a per-workload `AuthFile=` | Private images work without SSH. This is also the transport R6 reuses. |
 | R3 | **Node image prune**, an agent verb that keeps every image in desired state plus the previous image per workload | Nothing prunes images today, and the prod VPS has about 4.5 GB free. |
-| R4 | The registry is a **platform service** (one per install, like skiff-mail), not one instance per org | Layers deduplicate across projects. There is one hostname, one place to back up, and one pull path. |
+| R4 | The registry is a **platform service** (one per install, like yoal-mail), not one instance per org | Layers deduplicate across projects. There is one hostname, one place to back up, and one pull path. |
 | R5 | The engine is **zot**, run by the helper under a new `registry` profile and pinned by digest (D61), behind a `RegistryEngine` seam | zot is OCI-native, Apache-2.0, one binary, with online GC, retention, pull-through sync and signature checks. A native Bun engine can replace it later (§9). |
-| R6 | **Skiff owns auth.** The control plane is the Docker token realm and issues short-lived ES256 JWTs. zot only verifies them. | One identity system. `skif_` API keys, roles and audit work unchanged. |
+| R6 | **Yoal owns auth.** The control plane is the Docker token realm and issues short-lived ES256 JWTs. zot only verifies them. | One identity system. `yoal_` API keys, roles and audit work unchanged. |
 | R7 | Repositories are **`<org>/<name>`**, owned by an org, optionally linked to a project, and created on first push | Matches GHCR. The org is the tenancy boundary. |
 | R8 | A new permission resource **`image: pull, push, delete`** | Same model as `database:*`. API keys can be scoped to push only (CI). |
 | R9 | **Nodes pull over the overlay** through a loopback mirror (`127.0.0.1:8085`), with the public host as fallback | Pulls skip the internet round trip and keep working over WireGuard. Same pattern as the H6 loopback endpoints. |
 | R10 | Blobs live on a **disk**, through a future `registry` storage kind (D169). S3 on a RustFS instance comes with HA. | Filesystem storage deduplicates without Redis. The storage defaults already decide where bulk data goes. |
-| R11 | **Retention is deployment-aware.** Skiff keeps a hidden `skiff-d-<deploymentId>` tag on every retained deployment's digest. zot deletes untagged manifests after a grace period. | GC can never remove a rollback target. |
+| R11 | **Retention is deployment-aware.** Yoal keeps a hidden `yoal-d-<deploymentId>` tag on every retained deployment's digest. zot deletes untagged manifests after a grace period. | GC can never remove a rollback target. |
 | R12 | **Builders produce images.** A Dockerfile build runs under buildah and pushes with a token scoped to that job. | Git → image → deploy without GitHub Actions. |
 | R13 | **Pull-through cache** for docker.io, ghcr.io and quay.io, used by every node through `registries.conf` mirrors | Avoids Docker Hub's anonymous limit (100 pulls per 6 h per IP). Engine images keep pulling when upstream is down. |
 | R14 | **HA later:** zot on S3 (a replicated RustFS bucket, C9) with a Valkey dedupe cache and two replicas | Fits D107. A single registry copy (L0) is acceptable first, because nodes cache what they run. |
@@ -52,10 +52,10 @@ R1–R3 do not need a registry. They fix real problems today, and they are phase
 | Re-pushed tag | `image` is part of `activationVersion`. Saving the same tag does nothing, and a restart reuses the cached image. | `packages/core/src/workloads.ts:1129` |
 | Registry auth | None: no `AuthFile=`, `auth.json` or pull secrets | — |
 | Builds | The Builder clones, runs a shell command and zips `outputDir`. No image path. | `apps/builder/src/runner.ts`, `packages/contracts/src/build.ts` |
-| CLI | `skif deploy` uploads a zip. A container's image is set only through `PUT /projects/:slug/workload` or the dashboard. | `apps/cli/src/commands/deploy.ts` |
+| CLI | `yoal deploy` uploads a zip. A container's image is set only through `PUT /projects/:slug/workload` or the dashboard. | `apps/cli/src/commands/deploy.ts` |
 | Engine images | The helper's own registry. RustFS and pgbouncer are pinned by digest; databases and brokers by tag only. Nothing is mirrored. | `apps/helper/src/validate.ts:262-530` |
 | Disk | No image prune. `node_caches` is a placeholder. | `docs/OPERATIONS.md:240` |
-| First-party images | `skiff-postgres(-pitr)` are built in GitHub Actions and pushed to GHCR | `.github/workflows/postgres-pitr-image.yml` |
+| First-party images | `yoal-postgres(-pitr)` are built in GitHub Actions and pushed to GHCR | `.github/workflows/postgres-pitr-image.yml` |
 | Large-body proxying | The S3 route already streams with `flush_interval -1` and long timeouts. The platform route has Caddy defaults. | `apps/agent/src/caddy-config.ts:162-200` |
 
 ---
@@ -73,11 +73,11 @@ R1–R3 do not need a registry. They fix real problems today, and they are phase
 | Storage | Filesystem (dedupe via a local cache), or S3 (dedupe needs a Redis cache) | Filesystem or S3, with presigned redirects | Through Distribution | Our `ObjectStore` |
 
 **Recommendation: zot**, run like RustFS. It is a helper-derived, digest-pinned image, locked
-down, inside `skiff-workloads.slice`. Distribution's offline GC rules it out for a platform that
-pushes on every build. Harbor duplicates Skiff's database, auth and UI and does not fit a 4 GB
+down, inside `yoal-workloads.slice`. Distribution's offline GC rules it out for a platform that
+pushes on every build. Harbor duplicates Yoal's database, auth and UI and does not fit a 4 GB
 VPS. A native engine is attractive but not the first step (§9).
 
-Everything Skiff-specific stays in the control plane: token issuing, naming, permissions,
+Everything Yoal-specific stays in the control plane: token issuing, naming, permissions,
 deployment pins, quotas, events and UI. zot is used only for OCI storage and serving. Because of
 that, swapping zot for a native engine later changes only data and the helper profile, which is
 the D61/D95 pattern.
@@ -114,7 +114,7 @@ deployments.image_digest                                       -- R1
 settings['registry.*']                                         -- host, node, mirrors, retention
 ```
 
-Tags and manifests are **not** copied into SQLite. zot is the truth for content. Skiff keeps
+Tags and manifests are **not** copied into SQLite. zot is the truth for content. Yoal keeps
 ownership, links, pins and a usage snapshot, the same split as storage buckets.
 
 ### 3.2 Naming (R7)
@@ -126,7 +126,7 @@ ownership, links, pins and a usage snapshot, the same split as storage buckets.
   at most 3 segments after the org.
 - **Created on first push** when the pusher holds `image:push` in that org. Deleting a repository
   is a soft delete (trash, D-trash cascade) and purge removes its manifests.
-- **Project link:** `skif deploy --image` and the build path create `<org>/<project-slug>` linked to
+- **Project link:** `yoal deploy --image` and the build path create `<org>/<project-slug>` linked to
   the project. The project's Runtime tab lists its linked repositories first.
 
 ### 3.3 Hostname and edge
@@ -153,13 +153,13 @@ ownership, links, pins and a usage snapshot, the same split as storage buckets.
 docker push registry.x/kieran/cairn:v1
   → zot: 401 WWW-Authenticate: Bearer realm="https://control.x/api/registry/token",
                                       service="registry.x", scope="repository:kieran/cairn:pull,push"
-  → GET /api/registry/token?service=…&scope=…   (Basic: any-user : skif_…)
+  → GET /api/registry/token?service=…&scope=…   (Basic: any-user : yoal_…)
   ← { token: <ES256 JWT, 5 min, access:[{type:repository,name:kieran/cairn,actions:[pull,push]}]> }
   → zot verifies against the public cert the helper wrote into its config
 ```
 
 - The token endpoint is a thin SvelteKit route over `RegistryAuthService` in `packages/core`. It
-  takes Basic auth whose password is a `skif_` API key, or a dashboard session for the UI's own
+  takes Basic auth whose password is a `yoal_` API key, or a dashboard session for the UI's own
   calls. It returns the **intersection** of the requested scope and the principal's effective
   permissions (key scopes ∩ current role), so a token may grant less than was asked for, as the
   token spec allows.
@@ -198,7 +198,7 @@ only. A CI key is minted with `image:push` (+ `deployment:create` for push-to-de
 ### 5.1 Digest pinning (R1, phase G0)
 
 1. `WorkloadService` (or the build finalizer) resolves `image` to a digest when the deployment is
-   created. Skiff's registry uses `RegistryEngine.resolve`. External registries get a manifest HEAD
+   created. Yoal's registry uses `RegistryEngine.resolve`. External registries get a manifest HEAD
    with the org's matching credential (R2).
 2. The deployment stores `image` (as typed) and `image_digest`. `WorkloadDesired.image` becomes
    `<repo>@sha256:…`, so the existing `assertImage` regex already accepts it.
@@ -210,12 +210,12 @@ only. A CI key is minted with `image:push` (+ `deployment:create` for push-to-de
 
 ### 5.2 Credentials on the node (R2, R9)
 
-- The helper writes `/run/skiff-workloads/<id>/auth.json` (0400 root, like D43 secrets). It merges
+- The helper writes `/run/yoal-workloads/<id>/auth.json` (0400 root, like D43 secrets). It merges
   the node's registry secret for `registryHost` with any external credential the workload's org
   holds for the image's host. The Quadlet gets `AuthFile=` pointing at it.
 - External credentials travel through the **authenticated activation endpoint**, never through
   desired state (same rule as PITR keys and secrets).
-- `registries.conf.d/50-skiff.conf`, written by the helper on every node:
+- `registries.conf.d/50-yoal.conf`, written by the helper on every node:
 
 ```toml
 [[registry]]
@@ -232,7 +232,7 @@ insecure = true                  # plain HTTP on loopback only
 
 | Surface | What |
 |---|---|
-| CLI | `skif registry login` (calls `podman`/`docker login` with a freshly minted push-scoped key, or prints the command); `skif image ls [repo]`; `skif image rm`; `skif deploy --image <ref>` sets the workload image and deploys; `skif image push <local-ref> [--deploy]` tags into the org namespace and pushes |
+| CLI | `yoal registry login` (calls `podman`/`docker login` with a freshly minted push-scoped key, or prints the command); `yoal image ls [repo]`; `yoal image rm`; `yoal deploy --image <ref>` sets the workload image and deploys; `yoal image push <local-ref> [--deploy]` tags into the org namespace and pushes |
 | REST | `GET /registry` (host, usage); `GET/DELETE /registry/repositories[/:name]`; `GET /registry/repositories/:name/tags`; `DELETE …/tags/:tag`; `PATCH …` (project link, description); `GET/POST/DELETE /registry/credentials` |
 | MCP | Read-only `list_images` / `image_tags`. Deploying an image goes through the existing workload tools. No push or delete (D29/D53). |
 | Dashboard | **Registry** (sidebar, `/registry`; built): repositories with size, pushes and deploy on push, GitHub OIDC trusts, push snippet; `/registry/<org>/<name>`: tags with digest and the projects running them, pinning deployments, deploy a tag, deploy on push, CVE scan, delete tag. **Project → Runtime**: image picker from linked and org repos with tag dropdown and resolved digest. **Settings → Container registries**: platform setup (host, node, mirrors, retention, signatures, CVE, S3) and the org's external registry credentials. |
@@ -261,18 +261,18 @@ insecure = true                  # plain HTTP on loopback only
 
 ### 6.1 Retention and GC (R11)
 
-- zot: `gcDelay 1h`, `deleteUntagged: true` after 24 h, and `keepTags: [{patterns: ["^skiff-d-"]}]`
+- zot: `gcDelay 1h`, `deleteUntagged: true` after 24 h, and `keepTags: [{patterns: ["^yoal-d-"]}]`
   plus per-repo defaults (keep the newest `keepTags` tags, default 20). The count is editable in
   Settings → Container registries.
-- On demand, `skif prune --only registry_images` (or `skif registry prune`) plans then deletes
+- On demand, `yoal prune --only registry_images` (or `yoal registry prune`) plans then deletes
   user tags older than `registryRetentionDays` (default 90, Settings → Retention & defaults) that
   are beyond the newest `keepTags` per repository. `latest`, deployment pins, and tags a live
   workload still names are always kept. zot's GC then frees the blobs no manifest references.
-- Skiff: when a deployment is created on a registry image it writes `skiff-d-<deploymentId>` →
+- Yoal: when a deployment is created on a registry image it writes `yoal-d-<deploymentId>` →
   digest and a `registry_pins` row. When D13 retention drops the deployment, it removes both. So a
   digest stays while any retained or pinned deployment uses it, whatever happens to the user's
   tags.
-- `skiff-d-*` tags are hidden in every list and refused for user pushes by the token service.
+- `yoal-d-*` tags are hidden in every list and refused for user pushes by the token service.
 
 ### 6.2 Nodes (R3)
 
@@ -294,14 +294,14 @@ error; pulls are never blocked.
 
 - **Build source** gains `kind: 'dockerfile'` (path, context, target, build args from project
   secrets marked build-time) beside the existing command + `outputDir`.
-- **Builder:** `buildah build` runs as the unprivileged `skiff-build` user inside the D47 sandbox.
-  Rootless needs subuid/subgid for `skiff-build` and user namespaces. If the sandbox blocks nested
+- **Builder:** `buildah build` runs as the unprivileged `yoal-build` user inside the D47 sandbox.
+  Rootless needs subuid/subgid for `yoal-build` and user namespaces. If the sandbox blocks nested
   namespaces, fall back to `--isolation chroot` *(spike S4)*. Layer cache lives in the `builds`
   storage kind.
 - **Push:** with the job token (§4.3) to `<org>/<project>:build-<buildId>`, then the build
   finalizer creates the deployment from the pushed **digest**. No zip, no release download.
 - **Not now:** Railpack (needs BuildKit, pre-1.0), multi-arch builds, kaniko (archived June 2025).
-  The first-party `skiff-postgres*` images stay on GHCR; Skiff's registry is for user workloads.
+  The first-party `yoal-postgres*` images stay on GHCR; Yoal's registry is for user workloads.
 
 ---
 
@@ -346,7 +346,7 @@ L1, after CLUSTERING C9:
 | Q3 | Hostname: `registry.<platformDomain>`, or on the content domain? | Platform domain, DNS-only |
 | Q4 | Ship G0 (digests, external credentials, prune) before the registry? | Yes. It fixes Cairn's deploy today. |
 | Q5 | Allow anonymous public repositories? | Not in G1. Later, a per-repo `public` flag like D64. |
-| Q6 | Should Skiff's own first-party images move off GHCR? | No. Installs bootstrap before their registry exists. |
+| Q6 | Should Yoal's own first-party images move off GHCR? | No. Installs bootstrap before their registry exists. |
 
 ---
 
@@ -356,10 +356,10 @@ L1, after CLUSTERING C9:
 |---|---|---|
 | S1 | zot in the `registry` profile on Debian 13: RSS idle and under a 2 GB push, filesystem dedupe across two repos, online GC during a push, `keepTags` regex, the exact image and digest, and whether the search extension gives sizes | < 150 MB idle; no corrupt pull after GC; dedupe halves stored bytes for a shared base |
 | S2 | Push and pull of a 1.5 GB layer through edge Caddy over WireGuard, with Docker 28 and Podman 6.1 clients; a Cloudflare-proxied hostname as a negative test | Grey-cloud passes and proxied fails, with a clear error |
-| S3 | Token realm: Docker, Podman, buildah, `crane` and GitHub's `docker/login-action` against Skiff-issued ES256 tokens, including reduced-scope grants | All push and pull. A reduced scope gives a 403, not a hang. |
+| S3 | Token realm: Docker, Podman, buildah, `crane` and GitHub's `docker/login-action` against Yoal-issued ES256 tokens, including reduced-scope grants | All push and pull. A reduced scope gives a 403, not a hang. |
 | S4 | buildah rootless inside the D47 sandbox (subuid, userns, `--isolation chroot`), plus layer cache reuse | A Dockerfile build pushes and deploys by digest |
 | S5 | `registries.conf` loopback mirror + `AuthFile=` per Quadlet, and fallback when the overlay is down | A pull succeeds both ways. The auth file is never readable by the workload. |
-| S6 | OCI conformance suite (`OCI_VERSION=1.1`) against the deployed zot with Skiff tokens | Pull, push, discovery and management all pass |
+| S6 | OCI conformance suite (`OCI_VERSION=1.1`) against the deployed zot with Yoal tokens | Pull, push, discovery and management all pass |
 
 ---
 
@@ -367,12 +367,12 @@ L1, after CLUSTERING C9:
 
 | Phase | Scope |
 |---|---|
-| **G0** | **Done:** R1 digest pinning (`imageDigest` on the deployment spec, D145); R2 org registry credentials + per-workload `--authfile` via activation (D146; REST, `skif registry credentials`, Settings → Container registries); R3 hourly node image prune (D147); `POST /projects/:slug/deploy-image` and `skif registry deploy`. Moves Cairn off `docker save \| ssh`. Not yet: one-off jobs (`podman run --pull=missing`) reuse the app's already-pulled image but carry no auth file. |
-| **G1** | **Done:** spikes S1–S3 on zot 2.1.23 under Docker (ES256 tokens from Skiff's realm, scoped push/pull, `docker2s2`, the events extension, ~48 MiB idle, locked-down run as uid 65532); `registry` helper profile (D154); Settings → Container registries (enable, node, host, retention; repositories); token realm + `image:*` + per-workload node logins (D155); repositories table and push events (D156); Caddy route via the public-S3 route type; deploy-time pinning against the own registry; `skif registry status|login|repos|tags|untag|deploy`. **Not yet:** the loopback mirror (R9; nodes pull through the public host), a `registry` storage kind (the data dir is the node's helper state dir, so choose a node with disk), S5/S6 (Podman node pull and the OCI conformance suite on a Linux node). |
-| **G2** | **Done (D157):** `skiff-d-<deployment>` pins on every own-registry deployment (`registry_pins`, swept when the deployment row goes); deploy on push (`registry_repositories.deploy_project_id/deploy_tag`, `PATCH /registry/repositories`, `skif registry autodeploy`); `registry.push` events; hourly size sampling and the `registryBytes` quota (push refused at the realm); project image picker; MCP `list_images` / `image_tags`. |
-| **G3** | **Done (D158):** images build in Pipelines (`skiff/build-image`, docs/PIPELINES.md; BuildKit/buildah/podman/docker backends) and push with the job's own login (`job.<jobId>`); `registry/<name>` tags; GitHub Actions OIDC trusts (`/registry/trusts`, `skif registry trust`); GitLab CI `id_tokens` trusts since D178 ([FORGES.md](./FORGES.md) §8). |
-| **G4** | **Done (D159):** zot `sync` on demand for docker.io/ghcr.io/quay.io under `<upstream>/…`; nodes get `registryMirror` in desired state and the helper writes `registries.conf.d/50-skiff-mirror.conf` plus a `node.<id>` login in `/run/containers/0/auth.json`; workload logins cover the mirrors. |
-| **G5** | **Done (D159):** zot trust extension; cosign keys uploaded as the htpasswd admin; `signatures: off|warn|enforce` checked at deploy through zot's search API; CVE scanning toggle with `GET /registry/scan` and `skif registry scan`. Not built: Podman `policy.json` verification on nodes. |
+| **G0** | **Done:** R1 digest pinning (`imageDigest` on the deployment spec, D145); R2 org registry credentials + per-workload `--authfile` via activation (D146; REST, `yoal registry credentials`, Settings → Container registries); R3 hourly node image prune (D147); `POST /projects/:slug/deploy-image` and `yoal registry deploy`. Moves Cairn off `docker save \| ssh`. Not yet: one-off jobs (`podman run --pull=missing`) reuse the app's already-pulled image but carry no auth file. |
+| **G1** | **Done:** spikes S1–S3 on zot 2.1.23 under Docker (ES256 tokens from Yoal's realm, scoped push/pull, `docker2s2`, the events extension, ~48 MiB idle, locked-down run as uid 65532); `registry` helper profile (D154); Settings → Container registries (enable, node, host, retention; repositories); token realm + `image:*` + per-workload node logins (D155); repositories table and push events (D156); Caddy route via the public-S3 route type; deploy-time pinning against the own registry; `yoal registry status|login|repos|tags|untag|deploy`. **Not yet:** the loopback mirror (R9; nodes pull through the public host), a `registry` storage kind (the data dir is the node's helper state dir, so choose a node with disk), S5/S6 (Podman node pull and the OCI conformance suite on a Linux node). |
+| **G2** | **Done (D157):** `yoal-d-<deployment>` pins on every own-registry deployment (`registry_pins`, swept when the deployment row goes); deploy on push (`registry_repositories.deploy_project_id/deploy_tag`, `PATCH /registry/repositories`, `yoal registry autodeploy`); `registry.push` events; hourly size sampling and the `registryBytes` quota (push refused at the realm); project image picker; MCP `list_images` / `image_tags`. |
+| **G3** | **Done (D158):** images build in Pipelines (`yoal/build-image`, docs/PIPELINES.md; BuildKit/buildah/podman/docker backends) and push with the job's own login (`job.<jobId>`); `registry/<name>` tags; GitHub Actions OIDC trusts (`/registry/trusts`, `yoal registry trust`); GitLab CI `id_tokens` trusts since D178 ([FORGES.md](./FORGES.md) §8). |
+| **G4** | **Done (D159):** zot `sync` on demand for docker.io/ghcr.io/quay.io under `<upstream>/…`; nodes get `registryMirror` in desired state and the helper writes `registries.conf.d/50-yoal-mirror.conf` plus a `node.<id>` login in `/run/containers/0/auth.json`; workload logins cover the mirrors. |
+| **G5** | **Done (D159):** zot trust extension; cosign keys uploaded as the htpasswd admin; `signatures: off|warn|enforce` checked at deploy through zot's search API; CVE scanning toggle with `GET /registry/scan` and `yoal registry scan`. Not built: Podman `policy.json` verification on nodes. |
 | **G6** | **Done (D159), single replica:** S3 storage with a Redis/Valkey cache, so moving the registry to another node needs no data copy. Not built: zot `cluster` mode (several active replicas). |
 
 ---
@@ -398,7 +398,7 @@ L1, after CLUSTERING C9:
 | Item | Why |
 |---|---|
 | Several active registry replicas (zot `cluster`) | zot's scale-out mode drops the trust and CVE extensions and needs members reachable on the overlay; S3 + moving the single replica covers node loss today. |
-| Podman `policy.json` signature checks on nodes | Podman's reading of cosign v3 referrer bundles is unconfirmed; Skiff checks signatures at deploy time instead. |
+| Podman `policy.json` signature checks on nodes | Podman's reading of cosign v3 referrer bundles is unconfirmed; Yoal checks signatures at deploy time instead. |
 | A `registry` storage kind (STORAGE.md) | The data dir is the registry node's helper state dir; choose a node with disk, or S3. |
 | R9 loopback mirror for own-registry pulls | Nodes pull own images through the public host; the G4 mirror covers upstream registries. |
 | S5/S6 on a Linux node | Podman node pulls and the OCI conformance suite were not run on Debian; the end-to-end test (`tests/e2e/registry-pipeline.e2e.ts`) uses Docker on macOS. |

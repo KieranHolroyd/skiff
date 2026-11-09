@@ -3,7 +3,7 @@ import {
 	platformRoleDescriptions,
 	platformRoleIds,
 	platformRoles,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { route } from '#lib/server/api.js';
 import { requirePrincipal } from '#lib/server/principal.js';
 

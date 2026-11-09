@@ -1,14 +1,14 @@
 import { join } from 'node:path';
 import { BUILD_VERSION } from './build-version.ts';
-import { nodeJoinSchema, wireguardPublicKeySchema, wireguardStateSchema, type NodeJoin, type WireguardState } from '@skiff/contracts';
+import { nodeJoinSchema, wireguardPublicKeySchema, wireguardStateSchema, type NodeJoin, type WireguardState } from '@yoal/contracts';
 import { atomicWriteFile } from './state.ts';
 
 /**
- * `skiff-agent join <controlUrl> --token … --name …` exchanges a single-use join token for a node
+ * `yoal-agent join <controlUrl> --token … --name …` exchanges a single-use join token for a node
  * identity, writes `${dataDir}/node.json` and prints the systemd EnvironmentFile lines.
  */
 
-export const JOIN_USAGE = `Usage: skiff-agent join <controlUrl> --token <joinToken> --name <name> [--data-dir <dir>] [--public-address <address>] [--network-mode skiff|external] [--wireguard-public-key <key>]`;
+export const JOIN_USAGE = `Usage: yoal-agent join <controlUrl> --token <joinToken> --name <name> [--data-dir <dir>] [--public-address <address>] [--network-mode yoal|external] [--wireguard-public-key <key>]`;
 
 export class JoinError extends Error {
 	constructor(message: string) {
@@ -24,7 +24,7 @@ export interface JoinOptions {
 	dataDir: string;
 	version: string;
 	publicAddress?: string;
-	networkMode?: 'skiff' | 'external';
+	networkMode?: 'yoal' | 'external';
 	wireguardPublicKey?: string;
 }
 
@@ -69,9 +69,9 @@ export function parseJoinArgs(args: string[], env: Env = process.env): JoinOptio
 	let token: string | undefined;
 	let name: string | undefined;
 	let publicAddress: string | undefined;
-	let networkMode: 'skiff' | 'external' = 'external';
+	let networkMode: 'yoal' | 'external' = 'external';
 	let wireguardPublicKey: string | undefined;
-	let dataDir = env.SKIFF_DATA_DIR?.trim() || '/var/lib/skiff-agent';
+	let dataDir = env.YOAL_DATA_DIR?.trim() || '/var/lib/yoal-agent';
 
 	for (let index = 0; index < args.length; index++) {
 		const arg = args[index]!;
@@ -93,7 +93,7 @@ export function parseJoinArgs(args: string[], env: Env = process.env): JoinOptio
 			else if (flag === '--name') name = value;
 			else if (flag === '--data-dir') dataDir = value;
 			else if (flag === '--network-mode') {
-				if (value !== 'skiff' && value !== 'external') throw new JoinError('--network-mode must be skiff or external');
+				if (value !== 'yoal' && value !== 'external') throw new JoinError('--network-mode must be yoal or external');
 				networkMode = value;
 			} else if (flag === '--wireguard-public-key') wireguardPublicKey = value;
 			else publicAddress = value;
@@ -120,9 +120,9 @@ export function parseJoinArgs(args: string[], env: Env = process.env): JoinOptio
 		token,
 		name,
 		dataDir: dataDir.replace(/\/+$/, '') || '/',
-		version: env.SKIFF_AGENT_VERSION?.trim() || BUILD_VERSION,
+		version: env.YOAL_AGENT_VERSION?.trim() || BUILD_VERSION,
 		...(publicAddress ? { publicAddress } : {}),
-		...(networkMode === 'skiff' ? { networkMode, ...(wireguardPublicKey ? { wireguardPublicKey } : {}) } : {}),
+		...(networkMode === 'yoal' ? { networkMode, ...(wireguardPublicKey ? { wireguardPublicKey } : {}) } : {}),
 	};
 }
 
@@ -134,7 +134,7 @@ export async function joinNode(options: JoinOptions, fetchImpl: FetchLike = fetc
 		version: options.version,
 		networkMode: options.networkMode ?? 'external',
 		...(options.publicAddress ? { publicAddress: options.publicAddress } : {}),
-		...(options.networkMode === 'skiff' && options.wireguardPublicKey
+		...(options.networkMode === 'yoal' && options.wireguardPublicKey
 			? { wireguardPublicKey: options.wireguardPublicKey }
 			: {}),
 	};
@@ -196,12 +196,12 @@ export async function joinNode(options: JoinOptions, fetchImpl: FetchLike = fetc
 	return joined;
 }
 
-/** EnvironmentFile lines for `/etc/skiff/agent.env`. */
+/** EnvironmentFile lines for `/etc/yoal/agent.env`. */
 export function formatEnv(node: JoinedNode): string {
 	return [
-		`SKIFF_CONTROL_URL=${node.controlUrl}`,
-		`SKIFF_NODE_ID=${node.nodeId}`,
-		`SKIFF_NODE_TOKEN=${node.token}`,
-		`SKIFF_NODE_MODE=${node.mode}`,
+		`YOAL_CONTROL_URL=${node.controlUrl}`,
+		`YOAL_NODE_ID=${node.nodeId}`,
+		`YOAL_NODE_TOKEN=${node.token}`,
+		`YOAL_NODE_MODE=${node.mode}`,
 	].join('\n') + '\n';
 }

@@ -1,10 +1,10 @@
-# Skiff — Disks and default storage
+# Yoal — Disks and default storage
 
 Status: **rebuilt 2026-11-08** (D169). Replaces node volumes, storage pools and the partition
 table (D72–D75, D144). App volumes, the project-owned directories mounted into apps, are a
 separate resource: [VOLUMES.md](./VOLUMES.md).
 
-An operator should be able to answer "where does my data go?" in one screen. Skiff stores data on
+An operator should be able to answer "where does my data go?" in one screen. Yoal stores data on
 **disks**, each disk is **fast** or **bulk**, and Settings says which of the two (or the system
 disk) each kind of service uses by default. Nothing more to set up.
 
@@ -14,14 +14,14 @@ disk) each kind of service uses by default. Nothing more to set up.
 
 | Term | Meaning |
 |---|---|
-| **Disk** | One mounted filesystem on one node that Skiff may store data on: a local disk or partition, an LVM/mdadm/ZFS/LUKS device the OS already assembled, or a mounted network share. |
+| **Disk** | One mounted filesystem on one node that Yoal may store data on: a local disk or partition, an LVM/mdadm/ZFS/LUKS device the OS already assembled, or a mounted network share. |
 | **System disk** | Each node's built-in storage (the helper state dir and the D48 install directories). Always there, never a row. |
 | **Tier** | `fast` or `bulk`, per disk. Derived from the hardware (SSD/NVMe → fast; spinning disk, network share, unknown → bulk) until an operator sets it. |
 | **Storage target** | Where a new service goes: `system`, `fast`, `bulk`, or one disk by name. |
 | **Default storage** | Per kind of service, the target its create form preselects. |
 
 There are no pools, allocation methods, minimum-free knobs, class overrides or node default
-volumes. Skiff never formats, partitions or assembles anything: it uses filesystems the OS
+volumes. Yoal never formats, partitions or assembles anything: it uses filesystems the OS
 already provides (D169).
 
 ## 2. Model
@@ -29,7 +29,7 @@ already provides (D169).
 ```text
 disks            SQL table node_volumes (0010), TS `disks`:
                  id, node_id, name, kind, source_key, mount_path, fs_type, remote,
-                 tier fast|bulk, tier_set (operator chose it), mount_uuid (Skiff mounts it),
+                 tier fast|bulk, tier_set (operator chose it), mount_uuid (Yoal mounts it),
                  status pending|ready|missing|failed|removing, message, size/free, stats_at
 storage_defaults kind PK → target system|fast|bulk
 settings['storage.onboarding'] = done|skipped
@@ -40,7 +40,7 @@ TypeScript schema calls the table `disks` and every `volume_id` placement column
 `storage_pools`, `storage_rules`, `disk_mounts` and `nodes.default_volume_id` are no longer read.
 
 A resource keeps the disk it was placed on (`disk_id`, null for the system disk) until an
-explicit move. Disk data lives at `<mount>/skiff/<id>`; Skiff owns only that subtree (D78).
+explicit move. Disk data lives at `<mount>/yoal/<id>`; Yoal owns only that subtree (D78).
 
 **Identity** is a stable source key, never `/dev/sdX` (D72): `fs:<UUID>[#subvol]`,
 `lvm:<vg-lv>`, `md:<array UUID>`, `zfs:<pool/dataset>`, `luks:<mapper>`,
@@ -50,12 +50,12 @@ explicit move. Disk data lives at `<mount>/skiff/<id>`; Skiff owns only that sub
 
 | Kind | What | Data path | Suggested default |
 |---|---|---|---|
-| `databases` | Managed databases, read replicas, move targets | `<disk>/skiff/<db_id>` | fast |
-| `object-storage` | RustFS instances | `<disk>/skiff/<st_id>` | bulk |
-| `brokers` | Queue brokers | `<disk>/skiff/<br_id>` | fast |
-| `app-volumes` | App volumes ([VOLUMES.md](./VOLUMES.md)) | `<disk>/skiff/apps/<project>/<vol_id>` | fast |
-| `builds` | Builder scratch (D48 `buildDir`) | `<disk>/skiff/node/<node>/builds` | bulk |
-| `site-data` | Agent state and the static release cache (D48 `dataDir`) | `<disk>/skiff/node/<node>/agent` | system |
+| `databases` | Managed databases, read replicas, move targets | `<disk>/yoal/<db_id>` | fast |
+| `object-storage` | RustFS instances | `<disk>/yoal/<st_id>` | bulk |
+| `brokers` | Queue brokers | `<disk>/yoal/<br_id>` | fast |
+| `app-volumes` | App volumes ([VOLUMES.md](./VOLUMES.md)) | `<disk>/yoal/apps/<project>/<vol_id>` | fast |
+| `builds` | Builder scratch (D48 `buildDir`) | `<disk>/yoal/node/<node>/builds` | bulk |
+| `site-data` | Agent state and the static release cache (D48 `dataDir`) | `<disk>/yoal/node/<node>/agent` | system |
 
 A kind with no saved default uses the system disk, so an install that never adds a disk behaves
 exactly as before. The "suggested" column is what Settings fills in when an operator presses
@@ -78,11 +78,11 @@ t = fast|bulk:
 "Room" means the disk keeps 10 % of its size free after the request (unknown capacity fits).
 **There is no fallback**: a `fast` request on a node with no usable fast disk is refused, naming
 each node's reason ("homelab: no fast disk; edge: fast disk nvme is below 10 % free after
-20 GiB"). Skiff never puts a service on another tier than the one chosen.
+20 GiB"). Yoal never puts a service on another tier than the one chosen.
 
 Node-level kinds (`builds`, `site-data`) resolve per node when its desired state is built: the
 node's explicit D48 directory, else its most-free **local** ready disk of the default tier, else
-the install default. A change reaches the node's `skiff-storage.service` applier, which moves the
+the install default. A change reaches the node's `yoal-storage.service` applier, which moves the
 directory (D48). Network shares are skipped here: Caddy serves releases from `site-data`.
 
 Moves (D97) keep the resource's tier: a database on a fast disk moves to a fast disk on the
@@ -91,12 +91,12 @@ target, one on the system disk to the target's system disk, unless the move name
 ## 3. Adding a disk
 
 Settings → Storage lists each node with its system disk, its disks, and a **Add a disk** list of
-what the node reports that Skiff could use. Each candidate is one row with one button:
+what the node reports that Yoal could use. Each candidate is one row with one button:
 
 | Candidate | What **Use this disk** does |
 |---|---|
 | A filesystem already mounted at a usable path (e.g. `/mnt/data`, a ZFS dataset, an assembled array) | Registers it as a disk at once (`ready`). |
-| An unmounted ext4/ext3/ext2/xfs/btrfs/f2fs filesystem with a UUID, on a node with the `disk-mounts` capability | Registers it as `pending` with `mount_uuid`; the node's helper mounts it by UUID at `/mnt/skiff-disks/<name>`; the disk turns `ready` when the inventory shows that UUID there. |
+| An unmounted ext4/ext3/ext2/xfs/btrfs/f2fs filesystem with a UUID, on a node with the `disk-mounts` capability | Registers it as `pending` with `mount_uuid`; the node's helper mounts it by UUID at `/mnt/yoal-disks/<name>`; the disk turns `ready` when the inventory shows that UUID there. |
 
 The dialog asks only for a name (prefilled from the label or device) and the tier (prefilled from
 the hardware). Everything the node reports that cannot be used — the OS's own filesystems, swap,
@@ -104,7 +104,7 @@ LVM/RAID/LUKS/ZFS members, disks without a filesystem, vfat/ntfs/exfat, filesyst
 UUID — is folded into **Not usable (n)** with the reason, so the list never shows a partition the
 operator cannot act on.
 
-**Remove** unregisters a disk; it is refused while anything is stored on it. A disk Skiff mounted
+**Remove** unregisters a disk; it is refused while anything is stored on it. A disk Yoal mounted
 goes `removing`, the node unmounts it (never forced; the mount point is removed with `rmdir`) and
 the row is deleted when the node confirms. Its files stay on the disk. **Rename** and **tier**
 are edited in place; changing a tier affects new services only.
@@ -158,10 +158,10 @@ The control plane queues a `volume_profiles` row and lists it in desired state a
 `volumeProfileTasks` entry naming the disk id, never a path. The agent (capability
 `volume-profiles`) runs them one at a time through the helper, which resolves the mount from its
 own registry, verifies it (D76), refuses when free space is under twice the 512 MiB scratch size,
-writes under `<mount>/skiff/.profile/` and deletes it afterwards. A run not finished within 15
+writes under `<mount>/yoal/.profile/` and deletes it afterwards. A run not finished within 15
 minutes fails, and a late report never overwrites a final one. `fio`, `nfs-common` and
 `cifs-utils` are installed by the installer and, on in-place updates, once per helper version by
-the helper (`SKIFF_HELPER_STORAGE_TOOLS=0` turns that off; Debian/Ubuntu only).
+the helper (`YOAL_HELPER_STORAGE_TOOLS=0` turns that off; Debian/Ubuntu only).
 
 ## 6. Surfaces
 
@@ -171,7 +171,7 @@ the helper (`SKIFF_HELPER_STORAGE_TOOLS=0` turns that off; Debian/Ubuntu only).
 | Views | A placed resource shows `disk: { id, name, tier, remote } \| null` (null = system disk). Create forms get `storageChoices(kind)`: the default target and the tiers that have at least one ready disk (no nodes, paths or capacity). |
 | Permissions | Platform admin dashboard session for every write (D129); platform viewers read. |
 | Audit | `storage.disk.add`, `storage.disk.update`, `storage.disk.remove`, `storage.disk.mount.fail`, `storage.defaults.update`, `storage.profile`, `storage.onboarding` |
-| CLI | `--disk <system\|fast\|bulk\|name>` on `skif db create`, `skif db replica add`, `skif storage create`, `skif storage move`, `skif broker create`, `skif volume create` (`--storage` already means the size budget). `--volume` is a deprecated alias on replica add, storage move and broker create. |
+| CLI | `--disk <system\|fast\|bulk\|name>` on `yoal db create`, `yoal db replica add`, `yoal storage create`, `yoal storage move`, `yoal broker create`, `yoal volume create` (`--storage` already means the size budget). `--volume` is a deprecated alias on replica add, storage move and broker create. |
 | MCP | `storage` on the same create tools; no disk writes over MCP (D29/D53). |
 
 ## 7. Safety
@@ -180,7 +180,7 @@ the helper (`SKIFF_HELPER_STORAGE_TOOLS=0` turns that off; Debian/Ubuntu only).
   re-derives everything from its own `lsblk`/`findmnt`.
 - Every managed start verifies the mount and its source key (D76); a missing disk fails closed
   instead of writing to the system disk through an empty mountpoint.
-- Only `<mount>/skiff/<id>` is created and chowned; removing a disk never deletes files (D78).
+- Only `<mount>/yoal/<id>` is created and chowned; removing a disk never deletes files (D78).
 - Defaults and tier changes never move existing data; a disk holding anything cannot be removed.
 - Node-level kinds skip network disks, so Caddy and the builder never depend on a share.
 - Health and capacity ride the heartbeat (D80): a disk that disappears is `missing`.
@@ -190,4 +190,4 @@ the helper (`SKIFF_HELPER_STORAGE_TOOLS=0` turns that off; Debian/Ubuntu only).
 - `images` (podman `graphroot`) and `backups` (local backup target) as kinds; capacity alerts per
   tier.
 - Moving a resource between disks on one node (stop → copy → re-point → start, D79).
-- Systemd mount units for disks Skiff mounts (today the agent remounts after boot).
+- Systemd mount units for disks Yoal mounts (today the agent remounts after boot).

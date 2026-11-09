@@ -21,7 +21,7 @@ reviewed independently.
    - `packages/contracts/src/backup.ts` — targets, schedules, artifacts, runs, tasks/results.
    - `packages/contracts/src/app-volume.ts` — volumes, attachments, snapshots.
    - `packages/contracts/src/job.ts` — jobs, runs, cron, concurrency.
-   - `packages/contracts/src/blueprint.ts` — `skiff.yaml` schema, plan/apply views.
+   - `packages/contracts/src/blueprint.ts` — `yoal.yaml` schema, plan/apply views.
    - `packages/contracts/src/preview.ts` — preview, database clone, bucket prefix, TTL.
    - `packages/contracts/src/bucket-config.ts` (or append to `object-storage.ts`) — versioning,
      lifecycle, CORS, quota, object lock, share links.
@@ -113,7 +113,7 @@ before merge.
 
 **Goal:** risky work ships dark and can be undone.
 
-1. `SKIFF_FEATURE_<AREA>` env flags read once, exposed in `/api/setup/status`; default off for
+1. `YOAL_FEATURE_<AREA>` env flags read once, exposed in `/api/setup/status`; default off for
    destructive features. List the flags in `docs/OPS.md`.
 2. Migration rules: additive only; one file per feature; no destructive `ALTER`; a pre-migration
    snapshot hook; a `schema_version` check in `/readyz`.

@@ -33,7 +33,7 @@ tasks, and an audit trail.
 - Credentials are never returned by MCP (D58/S6).
 - No `restore`, `fork`, `query`, `presign`, `plan_stack`, or `get_data_health`.
 - Coolify's `confirm=true` is client-enforced; research finds most destructive MCP tools lack
-  server-side confirmation. Skiff's existing confirmation token is a good base.
+  server-side confirmation. Yoal's existing confirmation token is a good base.
 
 ## Design
 
@@ -78,7 +78,7 @@ tasks, and an audit trail.
   parsing or by transaction mode + a conservative allowlist (`SELECT`, `WITH`, `EXPLAIN`).
 - Redact literals from the audit record; store the query fingerprint, not the raw SQL with values.
 - Return column metadata and a truncated flag; never stream unbounded rows.
-- If the database has a read-only role (04), use it; otherwise use a dedicated `skiff_query` role
+- If the database has a read-only role (04), use it; otherwise use a dedicated `yoal_query` role
   with `pg_read_all_data` and no write grants.
 
 ### Presigned URLs
@@ -149,12 +149,12 @@ tasks, and an audit trail.
 ## Rollout
 
 Read-only tools first (`get_data_health`, `list_backups`, `create_presigned_url`), then
-`query_database`, then `plan_stack`/`apply_stack`, then restore/fork. `SKIFF_FEATURE_AGENT_DATA_WRITE`
+`query_database`, then `plan_stack`/`apply_stack`, then restore/fork. `YOAL_FEATURE_AGENT_DATA_WRITE`
 off by default; destructive tools require the feature flag and a human approval.
 
 ## Open questions
 
-- Should `query_database` use a dedicated role or the monitor role? A dedicated `skiff_query` role
+- Should `query_database` use a dedicated role or the monitor role? A dedicated `yoal_query` role
   with `pg_read_all_data` is cleaner; add it in 04.
 - Do we support SQL parameters? Yes, `$1` params, never string interpolation.
 - How do we handle MCP Tasks on clients that do not support them? Synchronous fallback with a
@@ -166,4 +166,4 @@ Own: `packages/contracts/src/mcp-data.ts`, `apps/control-plane/src/lib/server/mc
 `packages/core/src/mcp-tasks.ts` + test, `docs/MCP.md`.
 
 Integration-owned: MCP registry, confirmation token implementation, audit registry, schema/migration,
-dashboard approvals page, CLI `skif mcp` docs, e2e harness.
+dashboard approvals page, CLI `yoal mcp` docs, e2e harness.

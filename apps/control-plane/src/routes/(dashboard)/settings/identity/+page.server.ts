@@ -4,8 +4,8 @@ import type {
 	UserPoolGroupMemberView,
 	UserPoolGroupView,
 	UserPoolOAuthProviderView
-} from '@skiff/contracts';
-import type { UserPoolUserView } from '@skiff/core';
+} from '@yoal/contracts';
+import type { UserPoolUserView } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import {
 	failStatus,
@@ -203,7 +203,7 @@ export const actions: Actions = {
 		const format = formString(data, 'format');
 		try {
 			const report = await core.userPools.importPool(principal, poolId, {
-				format: (format || 'auto') as 'auto' | 'skiff' | 'auth0' | 'cognito' | 'firebase',
+				format: (format || 'auto') as 'auto' | 'yoal' | 'auth0' | 'cognito' | 'firebase',
 				dryRun: formBoolean(data, 'dryRun'),
 				data: parsed
 			});

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import ActivityIcon from '@lucide/svelte/icons/activity';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
-	import type { FunctionInvocationRow } from '@skiff/core';
+	import type { FunctionInvocationRow } from '@yoal/core';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Skeleton } from '#lib/components/ui/skeleton/index.js';
 	import EmptyState from '../../_lib/EmptyState.svelte';

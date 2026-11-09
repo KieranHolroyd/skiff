@@ -2,14 +2,14 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import { DEFAULT_FEATURES, type AppVolumeTaskResult } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import { DEFAULT_FEATURES, type AppVolumeTaskResult } from '@yoal/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { APP_VOLUME_TASK_TIMEOUT_MS, appVolumeSnapshotObjectKey, createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import type { Core } from './index.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-app-volume-lifecycle-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-app-volume-lifecycle-'));
 const opened = createDb({ path: ':memory:' });
 const objectsDir = join(dir, 'objects');
 const store = new LocalObjectStore(objectsDir, 'https://control.test', 'object-secret-123');

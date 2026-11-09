@@ -12,8 +12,8 @@ import { sveltekitCookies } from 'better-auth/svelte-kit';
 import { mcp } from '@better-auth/mcp';
 import { cimd } from '@better-auth/cimd';
 import { fetchClientMetadataResource } from '@better-auth/cimd/node';
-import { allPermissions, roles, statements, type Permission, type Role } from '@skiff/contracts';
-import { readMembership } from '@skiff/core';
+import { allPermissions, roles, statements, type Permission, type Role } from '@yoal/contracts';
+import { readMembership } from '@yoal/core';
 import { getRequestEvent } from '$app/server';
 import * as z from 'zod';
 import { allowDcr, authSecret, contentDomain, github, gitlab, mcpResource, openSignup, platformOrigin, smtp } from './config';
@@ -48,7 +48,7 @@ import { stepUp } from './step-up/plugin';
 
 /**
  * "Sign in with GitHub" credentials: `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` from the
- * environment, else the OAuth client of Skiff's GitHub App (docs/GITHUB.md, D166). Read once at
+ * environment, else the OAuth client of Yoal's GitHub App (docs/GITHUB.md, D166). Read once at
  * boot, so an App created from the dashboard enables sign-in after the next restart.
  */
 const githubOAuth = github ?? core.githubApp.oauthCredentials();
@@ -64,12 +64,12 @@ export const gitlabSignIn = Boolean(gitlab);
 const ac = createAccessControl({
 	...defaultStatements,
 	...statements,
-	// Both define `member`: keep Better Auth's actions (used by its endpoints) next to Skiff's.
+	// Both define `member`: keep Better Auth's actions (used by its endpoints) next to Yoal's.
 	member: [...defaultStatements.member, ...statements.member],
 });
 
 /**
- * Skiff permissions → the Better Auth organization actions its endpoints check, so the same RBAC
+ * Yoal permissions → the Better Auth organization actions its endpoints check, so the same RBAC
  * table (DESIGN §6.2) governs invitations and membership changes. Better Auth itself stops
  * non-owners from inviting or promoting anyone to `owner`.
  */
@@ -102,7 +102,7 @@ const organizationRoles = {
 	deployer: ac.newRole(statementsFor('deployer')),
 	viewer: ac.newRole(statementsFor('viewer')),
 	// Guests are project-only (IAM.md §8.2): the member row exists so sign-in resolves an org, but
-	// Better Auth's own endpoints grant them nothing. Skiff's project bindings are the only source.
+	// Better Auth's own endpoints grant them nothing. Yoal's project bindings are the only source.
 	guest: ac.newRole({}),
 };
 
@@ -137,8 +137,8 @@ const claimSetupBody = z.object({
 	password: z.string(),
 });
 
-const skiffSetup = {
-	id: 'skiff-setup',
+const yoalSetup = {
+	id: 'yoal-setup',
 	endpoints: {
 		claimSetup: createAuthEndpoint.serverOnly({ method: 'POST', body: claimSetupBody }, async (ctx) => {
 			const body = ctx.body;
@@ -345,14 +345,14 @@ export const auth = betterAuth({
 				// Invite-only (D10). The owner is created by the setup wizard (D102, `claimSetup`
 				// above), never by whoever signs up first: until setup is done, sign-up is refused.
 				// Invitations are Better Auth organization invitations by email. An SSO callback is the
-				// one exception: the provider is admin-configured and its domain is verified by Skiff,
+				// one exception: the provider is admin-configured and its domain is verified by Yoal,
 				// so the IdP has already proved the address (IAM.md I19, §8.3).
 				before: async (user, context) => {
 					const count = sqlite.query<{ count: number }, []>('SELECT count(*) AS count FROM user').get();
 					if ((count?.count ?? 0) === 0) {
 						if (!openSignup)
 							throw new APIError('FORBIDDEN', {
-								message: 'Skiff is not set up yet. Open the setup link the installer printed.',
+								message: 'Yoal is not set up yet. Open the setup link the installer printed.',
 							});
 						// Dev/open-signup installs: the first user is the platform admin (DESIGN §6.2).
 						return { data: { ...user, role: 'admin' } };
@@ -372,7 +372,7 @@ export const auth = betterAuth({
 						.get(user.email.toLowerCase(), new Date().toISOString());
 					if (!invited)
 						throw new APIError('FORBIDDEN', {
-							message: 'Skiff is invite-only. Ask an owner to invite your email address.',
+							message: 'Yoal is invite-only. Ask an owner to invite your email address.',
 						});
 				},
 			},
@@ -476,12 +476,12 @@ export const auth = betterAuth({
 	},
 	advanced: {
 		// `__Host-` cookies only (DESIGN §5, D19): no Domain attribute, Secure, Path=/.
-		cookiePrefix: secure ? '__Host-skiff' : 'skiff',
+		cookiePrefix: secure ? '__Host-yoal' : 'yoal',
 		useSecureCookies: secure,
 	},
 	plugins: [
-		// SSO (IAM.md I19, §8.3). `@better-auth/sso` 1.7.15. Skiff owns provider storage
-		// (`sso_providers`, 0087), domain ownership (`sso_domains`, the `skiff-verify=` TXT check) and
+		// SSO (IAM.md I19, §8.3). `@better-auth/sso` 1.7.15. Yoal owns provider storage
+		// (`sso_providers`, 0087), domain ownership (`sso_domains`, the `yoal-verify=` TXT check) and
 		// JIT membership, so organisation provisioning and the plugin's domain verification are off.
 		// `syncSsoProviders()` copies each enabled row into the plugin's `ssoProvider` table at boot
 		// and after every settings change. The callback is the plugin default,
@@ -505,7 +505,7 @@ export const auth = betterAuth({
 			},
 		}),
 		// SCIM 2.0 provisioning (IAM.md I20, §8.4). The plugin serves `/api/auth/scim/v2` and owns
-		// its resource tables. Skiff supplies the per-organisation bearer credential and the
+		// its resource tables. Yoal supplies the per-organisation bearer credential and the
 		// behavioural layer: users become members, deactivation revokes everything, and groups
 		// mirror into `iam_groups` (`core.scim`, called from the after-hook below).
 		scimPlugin({
@@ -601,12 +601,12 @@ export const auth = betterAuth({
 			},
 		}),
 		admin(),
-		passkey({ rpID: platformHost, rpName: 'Skiff', origin: platformOrigin }),
+		passkey({ rpID: platformHost, rpName: 'Yoal', origin: platformOrigin }),
 		// Accounts without a password (passkey/GitHub/magic link) enrol TOTP without one; accounts with
 		// a password must re-enter it to add or remove the app (Better Auth's rule, D103).
-		twoFactor({ issuer: 'Skiff', allowPasswordless: true }),
+		twoFactor({ issuer: 'Yoal', allowPasswordless: true }),
 		apiKey({
-			defaultPrefix: 'skif_',
+			defaultPrefix: 'yoal_',
 			enableMetadata: true,
 			// The plugin default (10 per 24h) locks out the CLI after a handful of deploys.
 			rateLimit: { enabled: true, timeWindow: API_KEY_RATE_WINDOW_MS, maxRequests: API_KEY_RATE_MAX },
@@ -618,9 +618,9 @@ export const auth = betterAuth({
 			},
 		}),
 		// Step-up verification (STEP-UP.md §5): the endpoints under /api/auth/step-up. Enforcement
-		// itself lives in `@skiff/contracts`' `requireStepUp` and is gated by `SKIFF_STEP_UP`.
+		// itself lives in `@yoal/contracts`' `requireStepUp` and is gated by `YOAL_STEP_UP`.
 		stepUp(),
-		skiffSetup,
+		yoalSetup,
 		// Must stay last: it copies Set-Cookie from server-side calls onto the SvelteKit response.
 		sveltekitCookies(getRequestEvent),
 	],

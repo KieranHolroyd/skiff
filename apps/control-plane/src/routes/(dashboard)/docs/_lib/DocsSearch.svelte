@@ -2,8 +2,8 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import SearchIcon from '@lucide/svelte/icons/search';
-	import type { SearchEntry } from '@skiff/docs';
-	import { searchDocs } from '@skiff/docs/search';
+	import type { SearchEntry } from '@yoal/docs';
+	import { searchDocs } from '@yoal/docs/search';
 	import * as InputGroup from '#lib/components/ui/input-group/index.js';
 	import { Kbd } from '#lib/components/ui/kbd/index.js';
 

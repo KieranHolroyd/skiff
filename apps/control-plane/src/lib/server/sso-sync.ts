@@ -1,5 +1,5 @@
 /**
- * Copies Skiff's SSO provider rows into the table Better Auth's `@better-auth/sso` plugin reads.
+ * Copies Yoal's SSO provider rows into the table Better Auth's `@better-auth/sso` plugin reads.
  *
  * `sso_providers` stays the source of truth: it is what Settings → SSO edits, what the sealed
  * secret belongs to, and what is scoped to the organisation. The plugin's `ssoProvider` row is a
@@ -17,8 +17,8 @@
  *   material lives in `settings` (`sso-sp.ts`), not in the plugin row: the row is rebuilt from it
  *   on every sync;
  *
- * `domainVerification` stays off in the plugin: Skiff proves domain ownership itself
- * (`sso_domains`, the daily `skiff-verify=` TXT check) and only routes a verified domain to an IdP.
+ * `domainVerification` stays off in the plugin: Yoal proves domain ownership itself
+ * (`sso_domains`, the daily `yoal-verify=` TXT check) and only routes a verified domain to an IdP.
  * The plugin's `domain` is therefore the org's preferred verified domain, used only as a fallback
  * when a caller has no provider id.
  */
@@ -148,7 +148,7 @@ function certificateList(row: ProviderRow): string[] {
  * is the only shape the plugin reads. The certificate is public and also appears in the SP
  * metadata. `authnRequestsSigned` makes the plugin sign AuthnRequests and logout messages; the
  * plugin rejects that setting without a private key, so the key is generated before this config is
- * written. `spMetadata.metadata` is built by Skiff rather than the plugin because the plugin's
+ * written. `spMetadata.metadata` is built by Yoal rather than the plugin because the plugin's
  * generator has no certificate input. IdP certificates are public; a rollover keeps the old and new
  * IdP certificates trusted at the same time, and the previous SP certificate is published in the
  * metadata for its overlap window.
@@ -236,7 +236,7 @@ function deletePluginRow(providerId: string): void {
 	sqlite.run('DELETE FROM "ssoProvider" WHERE providerId = ?', [providerId]);
 }
 
-/** Rebuild the plugin's provider table from Skiff's rows. Safe to call after every mutation. */
+/** Rebuild the plugin's provider table from Yoal's rows. Safe to call after every mutation. */
 export function syncSsoProviders(): number {
 	let providers: ProviderRow[];
 	try {
@@ -313,7 +313,7 @@ export function syncSsoProviders(): number {
 			keep.add(row.id);
 			written += 1;
 		} catch (error) {
-			// The plugin's table is boot-migrated after Skiff's; a first boot can race the hook that
+			// The plugin's table is boot-migrated after Yoal's; a first boot can race the hook that
 			// created it. Report without taking sign-in down.
 			if (error instanceof SQLiteError && /no such table/i.test(error.message)) return written;
 			console.error(`[sso] could not sync provider ${row.id} to Better Auth:`, error);

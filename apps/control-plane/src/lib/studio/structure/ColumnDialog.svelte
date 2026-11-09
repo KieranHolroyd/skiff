@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Column, ObjectRef, SchemaChangeInput, StudioInfo } from '@skiff/studio/protocol';
+	import type { Column, ObjectRef, SchemaChangeInput, StudioInfo } from '@yoal/studio/protocol';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
 	import * as Dialog from '#lib/components/ui/dialog/index.js';

@@ -3,7 +3,7 @@ import { core } from '#lib/server/core.js';
 import { json, route } from '#lib/server/api.js';
 
 /**
- * The webhook of Skiff's GitHub App (docs/GITHUB.md, D165): installation changes, and `push` /
+ * The webhook of Yoal's GitHub App (docs/GITHUB.md, D165): installation changes, and `push` /
  * `pull_request` for every repository an installation covers, routed to the linked org's git
  * builds and pipelines. Authenticated by the App's webhook secret over the raw body, never a
  * cookie (`/api/webhooks/` is CSRF-exempt).

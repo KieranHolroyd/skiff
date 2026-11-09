@@ -1,12 +1,12 @@
-# @skiffy/skiff
+# @yoal/cli
 
-Command-line client for [Skiff](https://github.com/KieranHolroyd/skiff), a lightweight
-self-hosted deploy platform. Installing the `@skiffy/skiff` package gives you two commands, `skif`
-and `skiff`, which do the same thing.
+Command-line client for [Yoal](https://github.com/KieranHolroyd/yoal), a lightweight
+self-hosted deploy platform. Installing the `@yoal/cli` package gives you the `yoal`
+command.
 
 ```sh
-npm install -g @skiffy/skiff   # or: bun add -g @skiffy/skiff / pnpm add -g @skiffy/skiff
-npx @skiffy/skiff --help       # or run it without installing
+npm install -g @yoal/cli   # or: bun add -g @yoal/cli / pnpm add -g @yoal/cli
+npx @yoal/cli --help       # or run it without installing
 ```
 
 Requires Node.js 20+ or Bun.
@@ -14,17 +14,17 @@ Requires Node.js 20+ or Bun.
 ## Quick start
 
 ```sh
-skif login --url https://control.example.com   # approve the CLI in your browser
-skif deploy ./dist                              # zip, upload, and promote to production
-skif status my-site
+yoal login --url https://control.example.com   # approve the CLI in your browser
+yoal deploy ./dist                              # zip, upload, and promote to production
+yoal status my-site
 ```
 
 On CI or headless machines, skip the browser and use an API key from the dashboard:
 
 ```sh
-export SKIFF_URL=https://control.example.com
-export SKIFF_TOKEN=skif_...
-skif deploy ./dist --project my-site --json
+export YOAL_URL=https://control.example.com
+export YOAL_TOKEN=yoal_...
+yoal deploy ./dist --project my-site --json
 ```
 
 ## Commands
@@ -66,14 +66,14 @@ Deleting, restoring and purging many projects, and pruning orphaned data, run as
 the CLI shows that plan before asking.
 
 ```sh
-skif projects delete blog old-demo                       # named projects
-skif projects delete --match 'test-*' --not-deployed     # selectors (combine with AND)
-skif projects delete --older-than 90d --not-deployed --yes
-cat slugs.txt | skif projects delete --stdin --yes       # one slug per line
+yoal projects delete blog old-demo                       # named projects
+yoal projects delete --match 'test-*' --not-deployed     # selectors (combine with AND)
+yoal projects delete --older-than 90d --not-deployed --yes
+cat slugs.txt | yoal projects delete --stdin --yes       # one slug per line
 
-skif projects trash                                      # what's deleted, and when it purges
-skif projects restore --match 'test-*'                   # selectors resolve against the trash
-skif projects purge old-demo                             # permanent; trash only
+yoal projects trash                                      # what's deleted, and when it purges
+yoal projects restore --match 'test-*'                   # selectors resolve against the trash
+yoal projects purge old-demo                             # permanent; trash only
 ```
 
 - Selectors (`--match <glob>`, `--not-deployed`, `--older-than 30d|12h|2w`, `--stdin`) are
@@ -85,23 +85,23 @@ skif projects purge old-demo                             # permanent; trash only
 - When stdin isn't a terminal, the CLI won't prompt: pass `--yes`, or it cancels the plan and exits 1.
 
 ```sh
-skif prune                                   # dry run: scan, per-category table, apply command
-skif prune --apply --plan op_…               # apply exactly that plan (within 1 hour)
-skif prune --apply --only releases,deployments   # scan these, confirm, apply
-skif prune --scope platform                  # every org, plus stored objects (platform admins)
+yoal prune                                   # dry run: scan, per-category table, apply command
+yoal prune --apply --plan op_…               # apply exactly that plan (within 1 hour)
+yoal prune --apply --only releases,deployments   # scan these, confirm, apply
+yoal prune --scope platform                  # every org, plus stored objects (platform admins)
 ```
 
 Progress shows one redrawn line per category on a terminal
 (`releases ▕████████░░▏ 384/480 · 46 MiB`), one line per phase in logs, and NDJSON events
 (`plan`, `progress`, `items`, `done`) with `--json`. **Ctrl-C detaches**: the operation keeps
-running on the server, and `skif operations watch <id>` picks it up again. Stop one with
-`skif operations cancel <id>`. Exit codes: `0` succeeded, `3` partial (some items failed),
+running on the server, and `yoal operations watch <id>` picks it up again. Stop one with
+`yoal operations cancel <id>`. Exit codes: `0` succeeded, `3` partial (some items failed),
 `1` failed, cancelled or expired.
 
 ```sh
-skif operations                  # recent operations
-skif operations show op_…        # status, counts and items
-skif operations watch op_…       # follow to the end
+yoal operations                  # recent operations
+yoal operations show op_…        # status, counts and items
+yoal operations watch op_…       # follow to the end
 ```
 
 ## Databases
@@ -111,15 +111,15 @@ container projects get `<PREFIX>_URL`, `_HOST`, `_PORT`, `_USER`, `_PASSWORD` an
 activation (the prefix defaults to `DATABASE`) and are placed on the database's node.
 
 ```sh
-skif db create main --project api                    # create and attach in one go
-skif db create analytics --version 16 --memory 512M --storage 20G
-skif db attach main --project worker --prefix DATABASE
-skif db info main                                    # status, node, size vs budget, projects, top tables
-skif db detach main --project worker
-skif db delete main                                  # trash: restorable for 7 days
-skif db restore main
-skif db purge main                                   # permanent; asks you to type the name
-psql "$(skif db credentials main)"                   # URL only; --json for everything
+yoal db create main --project api                    # create and attach in one go
+yoal db create analytics --version 16 --memory 512M --storage 20G
+yoal db attach main --project worker --prefix DATABASE
+yoal db info main                                    # status, node, size vs budget, projects, top tables
+yoal db detach main --project worker
+yoal db delete main                                  # trash: restorable for 7 days
+yoal db restore main
+yoal db purge main                                   # permanent; asks you to type the name
+psql "$(yoal db credentials main)"                   # URL only; --json for everything
 ```
 
 The URL points at `127.0.0.1` on the database's node: run it there, or tunnel first with
@@ -140,23 +140,23 @@ Clients must use path-style addressing. A private instance serves apps on its ow
 are placed there); `--public` serves it at `https://<name>--s3.<content domain>` for everyone else.
 
 ```sh
-skif storage create media --bucket uploads --project api      # create, add a bucket, attach
-skif storage create assets --bucket img,css --public --storage 50G
-skif storage info media                                       # status, endpoints, buckets, projects
-skif storage update media --public                            # or --no-public, --memory 1G, --storage 20G
-skif storage buckets media                                    # list buckets with size and objects
-skif storage buckets create media avatars --access public-read
-skif storage buckets update media avatars --access private
-skif storage buckets delete media avatars                     # only when empty; --force deletes objects
-skif storage attach media --project worker                    # read-write on the only bucket
-skif storage attach media --project cdn --bucket uploads:read --bucket avatars --prefix AWS
-skif storage grants media --project cdn --bucket uploads:read-write
-skif storage detach media --project cdn
-skif storage metrics media --since 24h                        # --from/--to, --interval 1m|1h
-skif storage delete media                                     # trash: restorable for 7 days
-skif storage restore media
-skif storage purge media                                      # permanent; asks you to type the name
-set -a; eval "$(skif storage credentials media)"; set +a      # root key as AWS_* lines; --json for all
+yoal storage create media --bucket uploads --project api      # create, add a bucket, attach
+yoal storage create assets --bucket img,css --public --storage 50G
+yoal storage info media                                       # status, endpoints, buckets, projects
+yoal storage update media --public                            # or --no-public, --memory 1G, --storage 20G
+yoal storage buckets media                                    # list buckets with size and objects
+yoal storage buckets create media avatars --access public-read
+yoal storage buckets update media avatars --access private
+yoal storage buckets delete media avatars                     # only when empty; --force deletes objects
+yoal storage attach media --project worker                    # read-write on the only bucket
+yoal storage attach media --project cdn --bucket uploads:read --bucket avatars --prefix AWS
+yoal storage grants media --project cdn --bucket uploads:read-write
+yoal storage detach media --project cdn
+yoal storage metrics media --since 24h                        # --from/--to, --interval 1m|1h
+yoal storage delete media                                     # trash: restorable for 7 days
+yoal storage restore media
+yoal storage purge media                                      # permanent; asks you to type the name
+set -a; eval "$(yoal storage credentials media)"; set +a      # root key as AWS_* lines; --json for all
 ```
 
 `attach` without `--bucket` grants read-write on the instance's only bucket, and asks for
@@ -170,48 +170,48 @@ there or tunnel with `ssh -L <port>:127.0.0.1:<port> <node>`.
 ## Profiles
 
 A profile is one deployment: its control-plane URL, API key and content domain. Keep a profile
-per Skiff installation instead of juggling env vars.
+per Yoal installation instead of juggling env vars.
 
 ```sh
-skif login --profile prod --url https://control.example.com
-skif login --profile dev  --url http://localhost:5173
+yoal login --profile prod --url https://control.example.com
+yoal login --profile dev  --url http://localhost:5173
 
-skif profile list            # * marks the profile commands use
-skif profile use dev         # switch the default
-skif --profile prod status   # one command against another profile
-SKIFF_PROFILE=prod skif deploy ./dist
+yoal profile list            # * marks the profile commands use
+yoal profile use dev         # switch the default
+yoal --profile prod status   # one command against another profile
+YOAL_PROFILE=prod yoal deploy ./dist
 ```
 
 With a single profile, commands use it automatically — no `--profile` needed. With several,
-the active profile set by `skif profile use` is used. If several exist and none is active,
-commands stop and ask you to choose. `skif profile add <name> --url <url> [--token <key>]
+the active profile set by `yoal profile use` is used. If several exist and none is active,
+commands stop and ask you to choose. `yoal profile add <name> --url <url> [--token <key>]
 [--content-domain <domain>] [--use]` creates one without the browser, and
-`skif profile remove <name>` deletes it. `skif logout --all` removes every profile.
+`yoal profile remove <name>` deletes it. `yoal logout --all` removes every profile.
 
 Profiles written by older CLI versions (settings at the top level of the file) are read as a
 profile named `default` and upgraded on the next write.
 
 ## Configuration
 
-Settings and credentials are stored per profile in `~/.config/skiff/config.json` (mode `0600`).
-`SKIFF_CONFIG_DIR` or `XDG_CONFIG_HOME` change the location.
+Settings and credentials are stored per profile in `~/.config/yoal/config.json` (mode `0600`).
+`YOAL_CONFIG_DIR` or `XDG_CONFIG_HOME` change the location.
 
 | Environment variable | Overrides |
 | --- | --- |
-| `SKIFF_PROFILE` | Profile to use (overrides the active profile) |
-| `SKIFF_URL` | Control-plane URL |
-| `SKIFF_TOKEN` | API key |
-| `SKIFF_CONTENT_DOMAIN` | Domain deployed sites are served from |
-| `SKIFF_DEBUG=1` | Print full error details |
+| `YOAL_PROFILE` | Profile to use (overrides the active profile) |
+| `YOAL_URL` | Control-plane URL |
+| `YOAL_TOKEN` | API key |
+| `YOAL_CONTENT_DOMAIN` | Domain deployed sites are served from |
+| `YOAL_DEBUG=1` | Print full error details |
 
 ## Development
 
-The CLI lives in `apps/cli` of the Skiff monorepo and is written in TypeScript for Bun.
+The CLI lives in `apps/cli` of the Yoal monorepo and is written in TypeScript for Bun.
 
 ```sh
 bun src/main.ts --help   # run from source
 bun test                 # unit tests
-bun run build            # bundle to dist/skif.js (Node 20+ / Bun)
+bun run build            # bundle to dist/yoal.js (Node 20+ / Bun)
 ```
 
 ## Releasing

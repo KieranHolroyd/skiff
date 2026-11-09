@@ -53,7 +53,7 @@ export function withContainersSubids(text: string, label: string): string | null
 	const clash = entries.find((entry) => entry.start < end && entry.start + entry.count > CONTAINERS_SUBID_START);
 	if (clash)
 		throw new ValidationError(
-			`${label} gives ${clash.user} ids that overlap the range Skiff reserves for containers ` +
+			`${label} gives ${clash.user} ids that overlap the range Yoal reserves for containers ` +
 				`(${CONTAINERS_SUBID_START}-${end - 1}); add a "${CONTAINERS_SUBID_USER}:<start>:<count>" entry by hand`,
 		);
 	const line = `${CONTAINERS_SUBID_USER}:${CONTAINERS_SUBID_START}:${CONTAINERS_SUBID_COUNT}\n`;
@@ -84,7 +84,7 @@ export async function ensureContainerSubids(files: SubidFiles = DEFAULT_SUBID_FI
 	}
 	for (const { path, next } of planned) {
 		// A unique suffix keeps two applies that race from sharing (and losing) one temp file.
-		const temp = join(dirname(path), `.${path.split('/').pop()}.skiff-${process.pid}-${randomUUID()}`);
+		const temp = join(dirname(path), `.${path.split('/').pop()}.yoal-${process.pid}-${randomUUID()}`);
 		await fs.writeFile(temp, next, { mode: 0o644 });
 		await fs.rename(temp, path);
 	}

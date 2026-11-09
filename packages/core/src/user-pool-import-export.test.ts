@@ -2,9 +2,9 @@ import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:tes
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
+import { createDb } from '@yoal/db';
 import { scryptSync } from 'node:crypto';
-import type { Principal } from '@skiff/contracts';
+import type { Principal } from '@yoal/contracts';
 import { UnauthorizedError } from './errors.ts';
 import { createCore, type Core } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
@@ -17,7 +17,7 @@ import { encodeScryptHash, setUserPoolBreachCheckFetch } from './user-pool-engin
  * must become a forced reset rather than a dead credential. Not run by the coding-agent slice.
  */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-user-pool-import-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-user-pool-import-'));
 const opened = createDb({ path: ':memory:' });
 opened.sqlite.exec(readFileSync(new URL('../../db/migrations/0097_user_pool_engine.sql', import.meta.url), 'utf8'));
 opened.sqlite.exec(readFileSync(new URL('../../db/migrations/0101_user_pool_passkeys.sql', import.meta.url), 'utf8'));
@@ -102,7 +102,7 @@ describe('pool export', () => {
 
 		const exported = core.userPools.exportPool(owner, pool.id);
 		const json = JSON.stringify(exported);
-		expect(exported.schema).toBe('skiff.user-pool');
+		expect(exported.schema).toBe('yoal.user-pool');
 		expect(exported.version).toBe(1);
 		expect(exported.users).toHaveLength(1);
 		expect(exported.users[0]!.email).toBe('ada@example.com');
@@ -148,7 +148,7 @@ describe('import dry run and apply', () => {
 			dryRun: true
 		});
 		expect(dry.dryRun).toBe(true);
-		expect(dry.format).toBe('skiff');
+		expect(dry.format).toBe('yoal');
 		expect(dry.users.create).toBe(1);
 		expect(dry.groups.create).toBe(1);
 		expect(core.userPools.listUsers(owner, target.id)).toHaveLength(0);
@@ -215,7 +215,7 @@ describe('provider formats', () => {
 		const encoded = encodeScryptHash(1024, 8, 1, salt, hash);
 		const report = await core.userPools.importPool(owner, target.id, {
 			data: {
-				schema: 'skiff.user-pool',
+				schema: 'yoal.user-pool',
 				version: 1,
 				users: [{ email: 'scrypt@example.com', passwordHash: encoded, passwordAlgorithm: 'scrypt' }]
 			}

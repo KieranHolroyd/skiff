@@ -8,7 +8,7 @@ import { authenticatedClient } from './common.ts';
 
 /** Config export (docs/OPERATIONS.md §13): a read-only snapshot of the org's configuration. */
 
-const usage = `Usage: skif export [options]
+const usage = `Usage: yoal export [options]
 
 Write the organisation's configuration to one file: every project's settings,
 environments, domains, workload spec, jobs, volumes and attachments, plus the
@@ -23,7 +23,7 @@ read with your own permissions; anything you cannot read is listed under
 \`skipped\` instead of failing the export.
 
 Options:
-  -o, --out <file>        Where to write (default skiff-config-<org>-<date>.yaml); - for stdout
+  -o, --out <file>        Where to write (default yoal-config-<org>-<date>.yaml); - for stdout
       --format <yaml|json>  Output format (default yaml, or json for a .json --out)
   -p, --project <slug>    Only these projects (repeatable or comma-separated);
                           org-level config is still exported
@@ -31,9 +31,9 @@ Options:
   -h, --help              Show this help
 
 Examples:
-  skif export
-  skif export --out skiff-config.json
-  skif export --project shop-web,shop-api --out - | less`;
+  yoal export
+  yoal export --out yoal-config.json
+  yoal export --project shop-web,shop-api --out - | less`;
 
 const flags: FlagSpec = {
 	out: { type: 'string', short: 'o' },
@@ -49,7 +49,7 @@ export async function exportCommand(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif export [--out <file>] [--format yaml|json] [--project <slug>]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal export [--out <file>] [--format yaml|json] [--project <slug>]');
 	const out = args.string('out');
 	let format;
 	try {

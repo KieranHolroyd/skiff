@@ -4,7 +4,7 @@ import {
 	type OperationActionInfo,
 	type OperationItemView,
 	type OperationView
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { toast } from 'svelte-sonner';
 import {
 	applyOperation,

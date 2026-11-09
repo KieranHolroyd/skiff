@@ -57,7 +57,7 @@ describe('emailDomain', () => {
 	});
 
 	test('handles a plus address and the last at-sign only', () => {
-		expect(emailDomain('ada+skiff@mail.example.com')).toBe('mail.example.com');
+		expect(emailDomain('ada+yoal@mail.example.com')).toBe('mail.example.com');
 	});
 
 	test('rejects anything without exactly one local part and domain', () => {
@@ -88,19 +88,19 @@ describe('verifiedDomainForEmail', () => {
 });
 
 describe('verification record', () => {
-	test('uses the skiff-verify prefix', () => {
-		expect(SSO_VERIFY_PREFIX).toBe('skiff-verify=');
-		expect(ssoVerificationRecord('  abc123 ')).toBe('skiff-verify=abc123');
+	test('uses the yoal-verify prefix', () => {
+		expect(SSO_VERIFY_PREFIX).toBe('yoal-verify=');
+		expect(ssoVerificationRecord('  abc123 ')).toBe('yoal-verify=abc123');
 	});
 
 	test('joins a record split into character-strings', () => {
-		expect(hasSsoVerificationRecord([['skiff-verify=', 'abc123']], 'abc123')).toBe(true);
+		expect(hasSsoVerificationRecord([['yoal-verify=', 'abc123']], 'abc123')).toBe(true);
 	});
 
 	test('ignores other TXT records and other tokens', () => {
 		expect(
 			hasSsoVerificationRecord(
-				[['v=spf1 -all'], ['skiff-verify=other'], ['not-skiff-verify=abc123']],
+				[['v=spf1 -all'], ['yoal-verify=other'], ['not-yoal-verify=abc123']],
 				'abc123'
 			)
 		).toBe(false);
@@ -168,7 +168,7 @@ describe('groupIdsForClaims', () => {
 		{ claimValue: 'engineering', groupId: 'grp_eng' }
 	];
 
-	test('maps known claims to unique Skiff group ids', () => {
+	test('maps known claims to unique Yoal group ids', () => {
 		expect(groupIdsForClaims(['engineering', 'Platform'], mappings)).toEqual([
 			'grp_eng',
 			'grp_platform'
@@ -510,41 +510,41 @@ describe('SAML service-provider metadata', () => {
 	const certificateB = `-----BEGIN CERTIFICATE-----\n${'B'.repeat(120)}\n-----END CERTIFICATE-----`;
 
 	test('the SLO callback URL is the plugin endpoint for the provider', () => {
-		expect(ssoSamlSloUrl('https://skiff.example/', 'sso_abc')).toBe(
-			'https://skiff.example/api/auth/sso/saml2/sp/slo/sso_abc'
+		expect(ssoSamlSloUrl('https://yoal.example/', 'sso_abc')).toBe(
+			'https://yoal.example/api/auth/sso/saml2/sp/slo/sso_abc'
 		);
 	});
 
 	test('publishes the entity id, ACS URL, signing certificate and both SLO bindings', () => {
 		const xml = ssoSamlSpMetadataXml({
-			entityId: 'https://skiff.example/api/auth/sso/saml2/sp/metadata?providerId=sso_abc',
-			acsUrl: 'https://skiff.example/api/auth/sso/saml2/sp/acs/sso_abc',
-			sloUrl: 'https://skiff.example/api/auth/sso/saml2/sp/slo/sso_abc',
+			entityId: 'https://yoal.example/api/auth/sso/saml2/sp/metadata?providerId=sso_abc',
+			acsUrl: 'https://yoal.example/api/auth/sso/saml2/sp/acs/sso_abc',
+			sloUrl: 'https://yoal.example/api/auth/sso/saml2/sp/slo/sso_abc',
 			certificates: [certificateA],
 			wantAssertionsSigned: true
 		});
 		expect(xml).toContain(
-			'entityID="https://skiff.example/api/auth/sso/saml2/sp/metadata?providerId=sso_abc"'
+			'entityID="https://yoal.example/api/auth/sso/saml2/sp/metadata?providerId=sso_abc"'
 		);
 		expect(xml).toContain('AuthnRequestsSigned="true"');
 		expect(xml).toContain('WantAssertionsSigned="true"');
 		expect(xml).toContain('<md:KeyDescriptor use="signing">');
 		expect(xml).toContain(`<ds:X509Certificate>${'A'.repeat(120)}</ds:X509Certificate>`);
 		expect(xml).toContain(
-			'<md:AssertionConsumerService index="0" Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="https://skiff.example/api/auth/sso/saml2/sp/acs/sso_abc"/>'
+			'<md:AssertionConsumerService index="0" Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="https://yoal.example/api/auth/sso/saml2/sp/acs/sso_abc"/>'
 		);
 		expect(xml).toContain(
-			'<md:SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="https://skiff.example/api/auth/sso/saml2/sp/slo/sso_abc"/>'
+			'<md:SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="https://yoal.example/api/auth/sso/saml2/sp/slo/sso_abc"/>'
 		);
 		expect(xml).toContain(
-			'<md:SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="https://skiff.example/api/auth/sso/saml2/sp/slo/sso_abc"/>'
+			'<md:SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="https://yoal.example/api/auth/sso/saml2/sp/slo/sso_abc"/>'
 		);
 	});
 
 	test('publishes a rollover certificate next to the current one', () => {
 		const xml = ssoSamlSpMetadataXml({
-			entityId: 'https://skiff.example/sp',
-			acsUrl: 'https://skiff.example/acs',
+			entityId: 'https://yoal.example/sp',
+			acsUrl: 'https://yoal.example/acs',
 			certificates: [certificateA, certificateB],
 			wantAssertionsSigned: true
 		});
@@ -555,8 +555,8 @@ describe('SAML service-provider metadata', () => {
 
 	test('omits every encryption KeyDescriptor unless an encryption certificate is supplied', () => {
 		const xml = ssoSamlSpMetadataXml({
-			entityId: 'https://skiff.example/sp',
-			acsUrl: 'https://skiff.example/acs',
+			entityId: 'https://yoal.example/sp',
+			acsUrl: 'https://yoal.example/acs',
 			certificates: [certificateA],
 			wantAssertionsSigned: true
 		});
@@ -566,8 +566,8 @@ describe('SAML service-provider metadata', () => {
 
 	test('publishes a separate encryption certificate with RSA-OAEP only when enabled', () => {
 		const xml = ssoSamlSpMetadataXml({
-			entityId: 'https://skiff.example/sp',
-			acsUrl: 'https://skiff.example/acs',
+			entityId: 'https://yoal.example/sp',
+			acsUrl: 'https://yoal.example/acs',
 			certificates: [certificateA],
 			encryptionCertificates: [certificateB],
 			wantAssertionsSigned: true
@@ -581,8 +581,8 @@ describe('SAML service-provider metadata', () => {
 
 	test('publishes both encryption certificates during a rollover', () => {
 		const xml = ssoSamlSpMetadataXml({
-			entityId: 'https://skiff.example/sp',
-			acsUrl: 'https://skiff.example/acs',
+			entityId: 'https://yoal.example/sp',
+			acsUrl: 'https://yoal.example/acs',
 			certificates: [certificateA],
 			encryptionCertificates: [certificateB, certificateA],
 			wantAssertionsSigned: true
@@ -592,13 +592,13 @@ describe('SAML service-provider metadata', () => {
 
 	test('escapes attribute values and omits an unconfigured SLO endpoint', () => {
 		const xml = ssoSamlSpMetadataXml({
-			entityId: 'https://skiff.example/sp?a=1&b="2"',
-			acsUrl: 'https://skiff.example/acs',
+			entityId: 'https://yoal.example/sp?a=1&b="2"',
+			acsUrl: 'https://yoal.example/acs',
 			certificates: [certificateA],
 			wantAssertionsSigned: false,
 			identifierFormat: 'urn:example:nameid'
 		});
-		expect(xml).toContain('entityID="https://skiff.example/sp?a=1&amp;b=&quot;2&quot;"');
+		expect(xml).toContain('entityID="https://yoal.example/sp?a=1&amp;b=&quot;2&quot;"');
 		expect(xml).toContain('WantAssertionsSigned="false"');
 		expect(xml).toContain('<md:NameIDFormat>urn:example:nameid</md:NameIDFormat>');
 		expect(xml).not.toContain('SingleLogoutService');

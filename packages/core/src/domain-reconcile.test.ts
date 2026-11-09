@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
-import { createDb } from '@skiff/db';
+import { createDb } from '@yoal/db';
 import { reconcilePlatformDomains } from './domain-reconcile.ts';
 
 /** Only the columns the reconcile touches. */

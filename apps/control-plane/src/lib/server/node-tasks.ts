@@ -2,7 +2,7 @@ import { fail, type ActionFailure } from '@sveltejs/kit';
 import { core } from '#lib/server/core.js';
 import { failStatus, toFormFailure } from '../../routes/(dashboard)/_lib/errors.js';
 import { json } from '#lib/server/api.js';
-import { nodeTaskLimits, type NodeTaskKind, type NodeTaskView, type Principal } from '@skiff/contracts';
+import { nodeTaskLimits, type NodeTaskKind, type NodeTaskView, type Principal } from '@yoal/contracts';
 
 /**
  * Answer a node task (D124) over REST: wait up to `?wait=` seconds (default 20) for the node's

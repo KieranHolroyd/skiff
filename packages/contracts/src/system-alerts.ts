@@ -202,7 +202,7 @@ export interface SystemAlertView extends SystemAlertInfo {
 	recentCount: number;
 }
 
-/** Every notifier Skiff can configure (Settings → Notifications), by its `Notifier.name`. */
+/** Every notifier Yoal can configure (Settings → Notifications), by its `Notifier.name`. */
 export const knownAlertChannels = [
 	{ name: 'email', label: 'Email', description: 'Through the platform’s SMTP settings to the alert address.' },
 	{ name: 'webhook', label: 'Webhook', description: 'A JSON POST to any URL (Home Assistant, a custom receiver).' },

@@ -1,5 +1,5 @@
 import { fail } from '@sveltejs/kit';
-import { emailSuppressionCreateSchema, type EmailSuppressionView } from '@skiff/contracts';
+import { emailSuppressionCreateSchema, type EmailSuppressionView } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { failStatus, formString, toFormFailure } from '../../_lib/errors.js';
 import { fieldErrorsFrom } from '../../databases/_lib/forms.server.js';

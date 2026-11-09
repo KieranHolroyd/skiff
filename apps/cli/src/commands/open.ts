@@ -10,7 +10,7 @@ const flags: FlagSpec = {
 	help: { type: 'boolean', short: 'h' },
 };
 
-const usage = `Usage: skif open <project> [--preview] [--json]
+const usage = `Usage: yoal open <project> [--preview] [--json]
 
 Open the production site (or the latest preview with --preview) in your browser.
 Preview URLs are built from the configured contentDomain when the API omits them.`;

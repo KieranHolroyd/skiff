@@ -9,10 +9,10 @@
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
 	import { runAction } from '#lib/actions.js';
-	import DataTable, { type DataColumn } from '#lib/components/skiff/DataTable.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import DataTable, { type DataColumn } from '#lib/components/yoal/DataTable.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
@@ -77,7 +77,7 @@
 </script>
 
 <svelte:head>
-	<title>Domains · Email · Skiff</title>
+	<title>Domains · Email · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">
@@ -94,7 +94,7 @@
 
 	{#if !area.enabled}
 		<Notice tone="warning" title="Email is switched off">
-			Set <code class="font-mono">SKIFF_FEATURE_EMAIL=1</code> to add domains.
+			Set <code class="font-mono">YOAL_FEATURE_EMAIL=1</code> to add domains.
 		</Notice>
 	{:else if !area.configured}
 		<NotSetUp platformAdmin={area.can.platform} />
@@ -110,7 +110,7 @@
 		<EmptyState
 			icon={GlobeIcon}
 			title="No sending domains yet"
-			description="Add a domain you control, such as example.com or mail.example.com. Skiff generates its DKIM key and lists the records to publish; with Cloudflare connected it can create them for you."
+			description="Add a domain you control, such as example.com or mail.example.com. Yoal generates its DKIM key and lists the records to publish; with Cloudflare connected it can create them for you."
 		>
 			{#if canCreate}
 				<Button onclick={() => (createOpen = true)}><PlusIcon />Add domain</Button>
@@ -156,7 +156,7 @@
 		bind:open={createOpen}
 		icon={GlobeIcon}
 		title="Add domain"
-		description="Skiff generates a DKIM key for it and checks its DNS. Mail can be sent from any address at the domain once it is verified."
+		description="Yoal generates a DKIM key for it and checks its DNS. Mail can be sent from any address at the domain once it is verified."
 		action="?/create"
 		submitLabel="Add domain"
 	>
@@ -192,7 +192,7 @@
 					<Field.Label for="domain-auto-dns">Create records in Cloudflare when possible</Field.Label
 					>
 					<Field.Description>
-						When the domain is in the platform's Cloudflare zone, Skiff publishes DKIM, SPF and
+						When the domain is in the platform's Cloudflare zone, Yoal publishes DKIM, SPF and
 						DMARC itself. Otherwise you copy them from the next page.
 					</Field.Description>
 				</Field.Content>

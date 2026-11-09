@@ -1,6 +1,6 @@
 <script module lang="ts">
 	import type * as MonacoApi from 'monaco-editor';
-	import { sqlMacros, type ObservabilitySchema } from '@skiff/contracts';
+	import { sqlMacros, type ObservabilitySchema } from '@yoal/contracts';
 	import type { Monaco } from '#lib/studio/editor/monaco.js';
 
 	/**
@@ -264,7 +264,7 @@
 				model = monaco.editor.createModel(
 					value ?? '',
 					language,
-					monaco.Uri.parse(`inmemory://skiff-observability/query-${++counter}.${language}`)
+					monaco.Uri.parse(`inmemory://yoal-observability/query-${++counter}.${language}`)
 				);
 				editor = monaco.editor.create(container, {
 					model,
@@ -296,7 +296,7 @@
 					unicodeHighlight: { ambiguousCharacters: false, invisibleCharacters: false }
 				});
 				editor.addAction({
-					id: 'skiff.observability.run',
+					id: 'yoal.observability.run',
 					label: 'Run query',
 					keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter],
 					run: () => onrun?.(model?.getValue() ?? '')
@@ -350,7 +350,7 @@
 		}
 		const selection = editor.getSelection();
 		if (!selection) return;
-		editor.executeEdits('skiff.insert', [{ range: selection, text, forceMoveMarkers: true }]);
+		editor.executeEdits('yoal.insert', [{ range: selection, text, forceMoveMarkers: true }]);
 		editor.focus();
 	}
 </script>

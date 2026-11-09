@@ -6,7 +6,7 @@ import { unzipSync } from 'fflate';
 import { zipDirectory } from './zip.ts';
 import { BuildValidationError } from './command.ts';
 
-const root = mkdtempSync(join(tmpdir(), 'skiff-builder-zip-'));
+const root = mkdtempSync(join(tmpdir(), 'yoal-builder-zip-'));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 function fixture(): string {

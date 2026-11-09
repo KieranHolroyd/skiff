@@ -5,10 +5,10 @@ import {
 	type PipelineWorkflow,
 	type PipelineWorkflowCall,
 	type TemplateMap,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 
 /**
- * Reusable workflows (docs/PIPELINES.md WP4). A job with `uses: ./.skiff/workflows/x.yml` is
+ * Reusable workflows (docs/PIPELINES.md WP4). A job with `uses: ./.yoal/workflows/x.yml` is
  * replaced, when the run is created, by the called workflow's jobs under keys `<caller>--<callee>`.
  * The caller key stays addressable: `needs: caller` waits for every inlined job, and
  * `needs.caller.outputs.*` comes from the callee's `on.workflow_call.outputs`, evaluated over the
@@ -50,7 +50,7 @@ function stripWrap(expression: string | null): string | null {
 	return (match ? match[1]! : expression).trim() || null;
 }
 
-/** `./.skiff/workflows/x.yml` → `.skiff/workflows/x.yml`; anything else is unsupported. */
+/** `./.yoal/workflows/x.yml` → `.yoal/workflows/x.yml`; anything else is unsupported. */
 export function localWorkflowPath(uses: string): string | null {
 	const match = /^\.\/(.+)$/.exec(uses.trim());
 	if (!match) return null;

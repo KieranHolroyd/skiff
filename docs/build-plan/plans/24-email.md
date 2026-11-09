@@ -12,9 +12,9 @@
 
 ## Status (2026-11-07)
 
-E0's code spike passed and the MTA is Skiff's own (`packages/mail`, D115; KumoMTA dropped). E1 is
-built: contracts, `skiff-mail`, migration **0050** (0049 went to event notifications), `EmailService`,
-agent routes and bridge, helper verbs, `skiff-mail.service`, REST, MCP, CLI, dashboard. Still open
+E0's code spike passed and the MTA is Yoal's own (`packages/mail`, D115; KumoMTA dropped). E1 is
+built: contracts, `yoal-mail`, migration **0050** (0049 went to event notifications), `EmailService`,
+agent routes and bridge, helper verbs, `yoal-mail.service`, REST, MCP, CLI, dashboard. Still open
 in E1: automated preflight, ClickHouse `email_events`, built-in alert kinds, an admin view of every
 org's email state, and the real delivery check from the prod IP once its PTR is set. The design
 names below that say KumoMTA or `scripts/systemd/mta.ts` are superseded by `scripts/systemd/mail.ts`
@@ -22,24 +22,24 @@ and `packages/mail`.
 
 ## Goal
 
-Apps send and receive mail on their own verified domains through Skiff's own MTA, with DKIM,
+Apps send and receive mail on their own verified domains through Yoal's own MTA, with DKIM,
 suppression, bounce/complaint handling, events and webhooks (docs/EMAIL.md, proposed D114–D120).
 
 ## Non-goals
 
 Mailboxes/IMAP, marketing lists and campaigns, dedicated IPs per org, multiple mail nodes (E4), and
-moving platform mail off `SKIFF_SMTP_*` (D22 stays for it).
+moving platform mail off `YOAL_SMTP_*` (D22 stays for it).
 
 ## Current state
 
-- Platform mail is nodemailer → `SKIFF_SMTP_*` (`packages/core/src/notify.ts`). No tenant email.
+- Platform mail is nodemailer → `YOAL_SMTP_*` (`packages/core/src/notify.ts`). No tenant email.
 - The Cloudflare client only writes `CNAME | A` (`packages/core/src/domains.ts:47`).
 - No public TCP listener exists on any node; Caddy is HTTP-only (no layer4).
 - Node roles: `ingress | control | compute | data | build` (`packages/contracts/src/cluster.ts:12`);
   capabilities `studio-principal | node-update | functions | brokers`
   (`packages/contracts/src/agent.ts:201`).
 - Optional platform services follow the ClickHouse pattern: `scripts/systemd/clickhouse.ts`, helper
-  action `telemetry`, `skiff-platform-config telemetry on|off`, env-driven `installed`.
+  action `telemetry`, `yoal-platform-config telemetry on|off`, env-driven `installed`.
 - `send_email`/`email()` are refused for functions (FUNCTIONS.md §4.5).
 - Latest migration 0048 (brokers).
 
@@ -65,7 +65,7 @@ See docs/EMAIL.md. Summary of the moving parts:
    (Scaleway "Enable SMTP", PTR set); inbound to a stub webhook; OOB DSN + ARF parsing. Record in
    SPIKES.md. On failure, repeat with Postfix.
 2. Contracts: `email.ts` schemas, `authorizeSend` + exhaustive unit tests, `mail` role and capability,
-   permissions, `SKIFF_FEATURE_EMAIL`.
+   permissions, `YOAL_FEATURE_EMAIL`.
 3. Migration 0049 + `EmailService` domains: DKIM keygen (sealed), record set, checks via
    `DnsResolver` (add `resolveMx`), Cloudflare TXT/MX, daily re-check sweep (F4 scheduler).
 4. MTA install path: `scripts/systemd/mta.ts`, helper action, installer `--email` prompt, converge and
@@ -113,7 +113,7 @@ any surface work.
 
 ## Rollout
 
-Behind `SKIFF_FEATURE_EMAIL` and an explicit install in Settings → Email. Nothing listens on 25/587/465
+Behind `YOAL_FEATURE_EMAIL` and an explicit install in Settings → Email. Nothing listens on 25/587/465
 until the helper installs the MTA. D114–D120 move into DECISIONS.md when the design is agreed;
 D22's row is amended in the same change.
 

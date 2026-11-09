@@ -8,7 +8,7 @@ import { promises as fs } from 'node:fs';
  * the expected filesystem; a missing mount must fail the start instead of writing to the root
  * disk through an empty directory (D76).
  *
- * This module deliberately imports nothing from `@skiff/contracts` (the helper ships without
+ * This module deliberately imports nothing from `@yoal/contracts` (the helper ships without
  * runtime dependencies and validates its own wire surface).
  */
 
@@ -76,20 +76,20 @@ const FORBIDDEN_EXACT = new Set([
 	'/media',
 	'/mnt',
 	'/opt',
-	'/opt/skiff',
+	'/opt/yoal',
 	'/proc',
 	'/root',
 	'/run',
 	'/sbin',
 	'/snap',
 	'/srv',
-	'/srv/skiff',
+	'/srv/yoal',
 	'/sys',
 	'/tmp',
 	'/usr',
 	'/var',
 	'/var/lib',
-	'/var/lib/skiff',
+	'/var/lib/yoal',
 	'/var/log',
 	'/var/tmp',
 ]);
@@ -102,7 +102,7 @@ const FORBIDDEN_PREFIXES = [
 	'/home/',
 	'/lib/',
 	'/lib64/',
-	'/opt/skiff/',
+	'/opt/yoal/',
 	'/proc/',
 	'/root/',
 	'/run/',
@@ -111,7 +111,7 @@ const FORBIDDEN_PREFIXES = [
 	'/sys/',
 	'/tmp/',
 	'/usr/',
-	'/var/lib/skiff/',
+	'/var/lib/yoal/',
 	'/var/log/',
 	'/var/tmp/',
 ];
@@ -159,7 +159,7 @@ export function parseWorkloadVolumes(raw: unknown): WorkloadVolume[] {
 	return out;
 }
 
-/** `/etc/skiff/volumes.json`, written by the root volume applier. */
+/** `/etc/yoal/volumes.json`, written by the root volume applier. */
 export interface VolumeRegistryEntry {
 	mountPath: string;
 	sourceKey: string;
@@ -167,7 +167,7 @@ export interface VolumeRegistryEntry {
 }
 export type VolumeRegistry = Record<string, VolumeRegistryEntry>;
 
-export const DEFAULT_VOLUMES_FILE = '/etc/skiff/volumes.json';
+export const DEFAULT_VOLUMES_FILE = '/etc/yoal/volumes.json';
 
 /** Filesystems that can host managed data. Everything else (`tmpfs`, `proc`, `overlay`, …) is noise. */
 const LOCAL_FS = new Set(['ext2', 'ext3', 'ext4', 'xfs', 'btrfs', 'f2fs', 'ntfs', 'exfat', 'vfat', 'zfs']);
@@ -335,7 +335,7 @@ function btrfsSubvolume(options: string): string | null {
 	return match?.[1] ?? null;
 }
 
-/** Derive the stable identity and kind for one mount. Null means Skiff must not manage it. */
+/** Derive the stable identity and kind for one mount. Null means Yoal must not manage it. */
 export function classifyMount(
 	entry: FindmntEntry,
 	devices: Map<string, LsblkNode>,
@@ -376,7 +376,7 @@ export function inventoryFrom(
 	const mounts: HelperMount[] = [];
 	const seen = new Set<string>();
 	for (const entry of findmnt) {
-		// The inventory is the list of adoptable data volumes. Root, /var/lib/skiff and the other
+		// The inventory is the list of adoptable data volumes. Root, /var/lib/yoal and the other
 		// reserved paths cannot hold node data (the contract rejects them), so never advertise them.
 		if (volumePathProblem(entry.mountPath)) continue;
 		const identity = classifyMount(entry, devices);
@@ -457,7 +457,7 @@ export function mountAt(entries: FindmntEntry[], mountPath: string): FindmntEntr
 	return entries.find((candidate) => candidate.mountPath === expected) ?? null;
 }
 
-/** Compare what `findmnt` reports for `mountPath` with the key Skiff registered. */
+/** Compare what `findmnt` reports for `mountPath` with the key Yoal registered. */
 export function verifyFrom(
 	findmntStdout: string,
 	lsblkStdout: string,

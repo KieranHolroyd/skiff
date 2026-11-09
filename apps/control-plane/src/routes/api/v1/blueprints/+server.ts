@@ -6,7 +6,7 @@ import { requirePrincipal } from '#lib/server/principal.js';
 /**
  * Blueprint stacks (plan 11, docs/OPERATIONS.md §12): what each applied stack manages and how its
  * last apply went. Plan with `POST /blueprints/plan`, apply with `POST /blueprints/apply`. Every
- * check lives in `core.blueprints`; the feature needs `SKIFF_FEATURE_BLUEPRINTS`.
+ * check lives in `core.blueprints`; the feature needs `YOAL_FEATURE_BLUEPRINTS`.
  */
 export const GET: RequestHandler = (event) =>
 	route(() => {

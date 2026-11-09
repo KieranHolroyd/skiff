@@ -8,7 +8,7 @@ import {
 	type OperationStatus,
 	type OperationView,
 	type PruneCategory
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { Tone } from '#lib/status.js';
 import { formatDuration } from '../format.js';
 

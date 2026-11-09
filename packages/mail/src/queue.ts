@@ -4,7 +4,7 @@ import {
 	HARD_BOUNCE_CLASSES,
 	verpAddress,
 	type MailHostnames,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { ReplyOutcome } from './classify.ts';
 import { deliverDomain, type DeliveryItem, type DeliveryOptions, type DeliveryResult } from './deliver.ts';
 import type { MailPolicy } from './policy.ts';

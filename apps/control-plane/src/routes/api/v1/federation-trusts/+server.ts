@@ -1,6 +1,6 @@
 import * as z from 'zod';
 import type { RequestHandler } from './$types';
-import type { FederationRestriction } from '@skiff/core';
+import type { FederationRestriction } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import { json, readJson, route } from '#lib/server/api.js';
 import { requirePrincipal } from '#lib/server/principal.js';

@@ -34,7 +34,7 @@ export interface SubnavItem {
 	live?: string;
 	/** Anything richer than a count (a status dot, a version pill). */
 	hint?: SubnavSlot;
-	/** `data-skiff-target` for the assistant tour. */
+	/** `data-yoal-target` for the assistant tour. */
 	target?: string;
 }
 
@@ -66,7 +66,7 @@ export interface Subnav {
 	groups: SubnavGroup[];
 	/** The section the current URL shows; a page can override it while it switches in place. */
 	active: string | null;
-	/** `data-skiff-target` prefix for items without their own target. */
+	/** `data-yoal-target` prefix for items without their own target. */
 	target?: string;
 	footer?: SubnavSlot;
 }

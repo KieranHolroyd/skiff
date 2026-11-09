@@ -1,6 +1,6 @@
 import { fail } from '@sveltejs/kit';
-import { hasPermission, isGuestPrincipal, roles, type Permission, type Principal, type Role } from '@skiff/contracts';
-import { isRole, memberChangeError } from '@skiff/core';
+import { hasPermission, isGuestPrincipal, roles, type Permission, type Principal, type Role } from '@yoal/contracts';
+import { isRole, memberChangeError } from '@yoal/core';
 import { auth } from '#lib/server/auth.js';
 import { platformOrigin } from '#lib/server/config.js';
 import { core } from '#lib/server/core.js';
@@ -11,7 +11,7 @@ import type { Actions, PageServerLoad } from './$types';
 /**
  * Members and invitations of the signed-in org (DESIGN §6.2). Mutations go through Better Auth's
  * organization endpoints, which re-check the same RBAC table (auth.ts maps `member:*` onto them);
- * Skiff checks the permission and the ownership rules (`memberChangeError`) first for clear errors.
+ * Yoal checks the permission and the ownership rules (`memberChangeError`) first for clear errors.
  */
 
 // Guests are project-scope members (IAM.md §8.2): the org list shows them, but they are invited

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { buildFunctionBundle } from './function-bundle.ts';
 
 /**
- * WebAssembly languages (Rust via workers-rs, Go via TinyGo, C/C++, Zig) reach Skiff as an ES module
+ * WebAssembly languages (Rust via workers-rs, Go via TinyGo, C/C++, Zig) reach Yoal as an ES module
  * that imports a `.wasm` file. The bundler keeps the wasm as its own CompiledWasm module and rewrites
  * the import to that module's name, which is the layout workerd loads (D121).
  */
@@ -21,7 +21,7 @@ afterEach(async () => {
 
 describe('WebAssembly Workers', () => {
 	test('a JS entry importing .wasm bundles to an esm module plus a wasm module', async () => {
-		const root = await mkdtemp(join(tmpdir(), 'skiff-wasm-'));
+		const root = await mkdtemp(join(tmpdir(), 'yoal-wasm-'));
 		dirs.push(root);
 		await mkdir(join(root, 'build'), { recursive: true });
 		await writeFile(join(root, 'build', 'add.wasm'), ADD_WASM);

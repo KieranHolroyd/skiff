@@ -3,7 +3,7 @@ title: Alerts
 description: Built-in platform alerts, metric alert rules, silences, history and the channels that deliver them.
 ---
 
-Skiff raises alerts when something needs attention: a node stops reporting, a disk fills, a certificate is about to expire, a backup fails, a deployment starts returning errors, or a metric you care about crosses a threshold. The **Alerts** page in the dashboard shows what is firing now, the rules that produce alerts, the silences that mute them, and a history of everything that has happened. This page covers each tab, the built-in system alerts, how to write a rule, and how notifications reach you.
+Yoal raises alerts when something needs attention: a node stops reporting, a disk fills, a certificate is about to expire, a backup fails, a deployment starts returning errors, or a metric you care about crosses a threshold. The **Alerts** page in the dashboard shows what is firing now, the rules that produce alerts, the silences that mute them, and a history of everything that has happened. This page covers each tab, the built-in system alerts, how to write a rule, and how notifications reach you.
 
 Metric rules are evaluated against the telemetry store, so they need the telemetry service (see [metrics](/observe/metrics)). The built-in system alerts do not.
 
@@ -173,16 +173,16 @@ Alerts are sent to any of these channels. Channel settings are set up in **Setti
 
 | Channel | Delivers to | Set up with |
 |---|---|---|
-| Email | The alert address, through the platform's SMTP settings | `SKIFF_ALERT_EMAIL` and the `SKIFF_SMTP_*` settings |
-| Webhook | Any HTTPS URL that accepts a JSON POST | `SKIFF_ALERT_WEBHOOK` and optional `SKIFF_ALERT_WEBHOOK_SECRET` |
-| SMS | Phone numbers, through Twilio | `SKIFF_ALERT_SMS` and `SKIFF_TWILIO_*` |
-| Slack | A Slack incoming webhook (or a Slack-compatible one) | `SKIFF_ALERT_SLACK_WEBHOOK` |
-| Discord | A Discord channel webhook | `SKIFF_ALERT_DISCORD_WEBHOOK` |
-| Telegram | A bot message to a chat | `SKIFF_ALERT_TELEGRAM_BOT_TOKEN` and `SKIFF_ALERT_TELEGRAM_CHAT_ID` |
-| ntfy | A topic on ntfy.sh or your own server | `SKIFF_ALERT_NTFY_URL` and optional `SKIFF_ALERT_NTFY_TOKEN` |
+| Email | The alert address, through the platform's SMTP settings | `YOAL_ALERT_EMAIL` and the `YOAL_SMTP_*` settings |
+| Webhook | Any HTTPS URL that accepts a JSON POST | `YOAL_ALERT_WEBHOOK` and optional `YOAL_ALERT_WEBHOOK_SECRET` |
+| SMS | Phone numbers, through Twilio | `YOAL_ALERT_SMS` and `YOAL_TWILIO_*` |
+| Slack | A Slack incoming webhook (or a Slack-compatible one) | `YOAL_ALERT_SLACK_WEBHOOK` |
+| Discord | A Discord channel webhook | `YOAL_ALERT_DISCORD_WEBHOOK` |
+| Telegram | A bot message to a chat | `YOAL_ALERT_TELEGRAM_BOT_TOKEN` and `YOAL_ALERT_TELEGRAM_CHAT_ID` |
+| ntfy | A topic on ntfy.sh or your own server | `YOAL_ALERT_NTFY_URL` and optional `YOAL_ALERT_NTFY_TOKEN` |
 | Push | Browsers that have installed the dashboard as an app | Settings → Notifications → Push |
 
-The `SKIFF_*` values are stored in the host's environment file, `/etc/skiff/skiff.env`, which the systemd alert service also reads.
+The `YOAL_*` values are stored in the host's environment file, `/etc/yoal/yoal.env`, which the systemd alert service also reads.
 
 ### Webhook payload
 
@@ -190,7 +190,7 @@ A webhook receives a JSON POST like this:
 
 ```json
 {
-  "title": "Skiff: Site down",
+  "title": "Yoal: Site down",
   "message": "shop.example.com: 62.5% of 48 requests returned 5xx in the last 3 minutes.",
   "severity": "critical",
   "key": "alert_rule:9f3c2a1b",
@@ -200,7 +200,7 @@ A webhook receives a JSON POST like this:
 }
 ```
 
-- `title` is `Skiff: ` followed by the alert title.
+- `title` is `Yoal: ` followed by the alert title.
 - `message` is the detail text.
 - `severity` is `info`, `warning` or `critical`. Resolved messages are `info`.
 - `key` identifies the alert. Metric rules use `alert_rule:<id>`, so a receiver can deduplicate on it. System alerts use the kind and target, for example `disk:<node-id>`.
@@ -214,10 +214,10 @@ A failure returns an error to the channel's history, and other channels still ge
 
 ### Verify the webhook signature
 
-Set a signing secret under **Settings → Notifications → Webhook** (it is stored as `SKIFF_ALERT_WEBHOOK_SECRET`) and every webhook request carries a signature header:
+Set a signing secret under **Settings → Notifications → Webhook** (it is stored as `YOAL_ALERT_WEBHOOK_SECRET`) and every webhook request carries a signature header:
 
 ```http
-X-Skiff-Signature: t=1794045600,v1=5257a869e7ecebeda32affa62cdca3fa51cad7e77a0e56ff536d0ce8e108d8bd
+X-Yoal-Signature: t=1794045600,v1=5257a869e7ecebeda32affa62cdca3fa51cad7e77a0e56ff536d0ce8e108d8bd
 ```
 
 `t` is the Unix time the request was signed, and `v1` is the hex HMAC-SHA256 of `<t>.<raw body>` with the secret. To verify, recompute the HMAC over the exact bytes you received, compare it in constant time, and reject a `t` more than five minutes old so a captured request can't be replayed:
@@ -225,7 +225,7 @@ X-Skiff-Signature: t=1794045600,v1=5257a869e7ecebeda32affa62cdca3fa51cad7e77a0e5
 ```ts
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
-export function verifySkiff(secret: string, rawBody: string, header: string | null): boolean {
+export function verifyYoal(secret: string, rawBody: string, header: string | null): boolean {
 	const parts = Object.fromEntries((header ?? '').split(',').map((part) => part.split('=', 2)));
 	const t = Number(parts.t);
 	if (!Number.isInteger(t) || Math.abs(Date.now() / 1000 - t) > 300 || !parts.v1) return false;
@@ -236,7 +236,7 @@ export function verifySkiff(secret: string, rawBody: string, header: string | nu
 
 Without a secret, requests are not signed: treat the URL itself as a secret and keep it out of logs you do not control. [Log drains](/observe/dashboards-and-logs#log-drains) sign their webhook requests the same way.
 
-If the URL is a Discord or Slack webhook, Skiff detects it from the host and sends that service's own message format instead.
+If the URL is a Discord or Slack webhook, Yoal detects it from the host and sends that service's own message format instead.
 
 ### Web Push
 
@@ -244,16 +244,16 @@ Web Push delivers alerts as browser notifications to devices where the dashboard
 
 ## Systemd failure alerts
 
-Host-level jobs can alert even when the control plane is down. When one of these units fails, systemd runs `skiff-alert@<unit>.service`, which runs `skiff-alert` with the failed unit's name:
+Host-level jobs can alert even when the control plane is down. When one of these units fails, systemd runs `yoal-alert@<unit>.service`, which runs `yoal-alert` with the failed unit's name:
 
-- `skiff-litestream.service` (platform database backups)
-- `skiff-restore-drill.service` (the monthly restore drill; the alert includes the reason from the drill's status file)
+- `yoal-litestream.service` (platform database backups)
+- `yoal-restore-drill.service` (the monthly restore drill; the alert includes the reason from the drill's status file)
 - The ClickHouse telemetry service, when its alert template is installed
 
-The alert is sent to every configured channel, using the same `SKIFF_ALERT_*` and `SKIFF_*` settings as the control plane. It also writes a line to the journal. If no channel is configured, the journal line is the only record. To read the failed unit's logs, run:
+The alert is sent to every configured channel, using the same `YOAL_ALERT_*` and `YOAL_*` settings as the control plane. It also writes a line to the journal. If no channel is configured, the journal line is the only record. To read the failed unit's logs, run:
 
 ```sh
-journalctl -u skiff-restore-drill.service -n 100
+journalctl -u yoal-restore-drill.service -n 100
 ```
 
 ## Managing alerts over the API

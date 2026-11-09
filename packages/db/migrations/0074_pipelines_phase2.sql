@@ -1,9 +1,9 @@
 -- Pipelines, remaining phases (docs/PIPELINES.md WP2–WP6).
--- 1. `skiff_event` triggers: pipeline_triggers.event had a CHECK listing four events. SQLite cannot
+-- 1. `yoal_event` triggers: pipeline_triggers.event had a CHECK listing four events. SQLite cannot
 --    alter a CHECK, so the table is rebuilt with the same columns and indexes and no CHECK on
 --    `event` (the contracts enum is the source of truth). Rows are copied unchanged.
 -- 2. Repository isolation minimums (W14) and a write-only commit-status token.
--- 3. Step summaries ($SKIFF_STEP_SUMMARY).
+-- 3. Step summaries ($YOAL_STEP_SUMMARY).
 -- 4. The OCI runtime a job was claimed with (W14).
 
 CREATE TABLE pipeline_triggers_new (

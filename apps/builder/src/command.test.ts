@@ -44,7 +44,7 @@ describe('systemd argv', () => {
 	test('builds a transient unit with the D3 limits', () => {
 		expect(
 			systemdRunArgs({
-				workDir: '/var/lib/skiff-builder/build-abc',
+				workDir: '/var/lib/yoal-builder/build-abc',
 				command: 'bun run build',
 				unit: unitName('bld_123'),
 			}),
@@ -54,12 +54,12 @@ describe('systemd argv', () => {
 			'--collect',
 			'--pipe',
 			'--wait',
-			'--unit=skiff-build-bld_123',
+			'--unit=yoal-build-bld_123',
 			'--property=MemoryMax=2G',
 			'--property=CPUQuota=200%',
 			'--property=TimeoutStartSec=600',
 			'--property=RuntimeMaxSec=600',
-			'--working-directory=/var/lib/skiff-builder/build-abc',
+			'--working-directory=/var/lib/yoal-builder/build-abc',
 			'/bin/bash',
 			'-lc',
 			'bun run build',
@@ -68,24 +68,24 @@ describe('systemd argv', () => {
 
 	test('sandboxes the unit and runs it as the build account when a user is set', () => {
 		const argv = systemdRunArgs({
-			workDir: '/var/lib/skiff-builder/build-abc/apps/web',
-			writableDir: '/var/lib/skiff-builder/build-abc',
+			workDir: '/var/lib/yoal-builder/build-abc/apps/web',
+			writableDir: '/var/lib/yoal-builder/build-abc',
 			command: 'bun run build',
 			unit: unitName('bld_123'),
-			user: 'skiff-build',
-			env: { HOME: '/var/lib/skiff-builder/build-abc/.home', CI: '1' },
+			user: 'yoal-build',
+			env: { HOME: '/var/lib/yoal-builder/build-abc/.home', CI: '1' },
 		});
-		expect(argv).toContain('--property=User=skiff-build');
+		expect(argv).toContain('--property=User=yoal-build');
 		expect(argv).toContain('--property=NoNewPrivileges=yes');
 		expect(argv).toContain('--property=ProtectSystem=strict');
-		expect(argv).toContain('--property=ReadWritePaths=/var/lib/skiff-builder/build-abc');
+		expect(argv).toContain('--property=ReadWritePaths=/var/lib/yoal-builder/build-abc');
 		expect(argv).toContain('--property=CapabilityBoundingSet=');
-		expect(argv.find((arg) => arg.startsWith('--property=InaccessiblePaths='))).toContain('-/etc/skiff');
-		expect(argv).toContain('--setenv=HOME=/var/lib/skiff-builder/build-abc/.home');
+		expect(argv.find((arg) => arg.startsWith('--property=InaccessiblePaths='))).toContain('-/etc/yoal');
+		expect(argv).toContain('--setenv=HOME=/var/lib/yoal-builder/build-abc/.home');
 		expect(argv).toContain('--setenv=CI=1');
 		// The command is still the last argument, after every property.
 		expect(argv.slice(-3)).toEqual(['/bin/bash', '-lc', 'bun run build']);
-		expect(argv.indexOf('--working-directory=/var/lib/skiff-builder/build-abc/apps/web')).toBe(argv.length - 4);
+		expect(argv.indexOf('--working-directory=/var/lib/yoal-builder/build-abc/apps/web')).toBe(argv.length - 4);
 	});
 
 	test('direct fallback uses the same shell boundary', () => {
@@ -93,7 +93,7 @@ describe('systemd argv', () => {
 	});
 
 	test('sanitizes unit names', () => {
-		expect(unitName('bld_abc/../def')).toBe('skiff-build-bld_abc-..-def');
+		expect(unitName('bld_abc/../def')).toBe('yoal-build-bld_abc-..-def');
 	});
 });
 
@@ -159,7 +159,7 @@ describe('clone credentials', () => {
 });
 
 describe('SSH deploy key', () => {
-	const ssh = { keyPath: '/etc/skiff/git-deploy-key', knownHostsPath: null, fallbackKnownHostsPath: '/var/lib/skiff-builder/known_hosts' };
+	const ssh = { keyPath: '/etc/yoal/git-deploy-key', knownHostsPath: null, fallbackKnownHostsPath: '/var/lib/yoal-builder/known_hosts' };
 
 	test('recognises only SSH URL forms', () => {
 		expect(isSshRepoUrl('git@github.com:acme/app.git')).toBe(true);
@@ -172,14 +172,14 @@ describe('SSH deploy key', () => {
 	test('passes the key through GIT_SSH_COMMAND for SSH URLs, recording hosts on first use', () => {
 		expect(gitSshEnv('git@github.com:acme/app.git', ssh)).toEqual({
 			GIT_SSH_COMMAND:
-				"ssh -i '/etc/skiff/git-deploy-key' -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile='/var/lib/skiff-builder/known_hosts'",
+				"ssh -i '/etc/yoal/git-deploy-key' -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile='/var/lib/yoal-builder/known_hosts'",
 		});
 	});
 
 	test('a pinned known_hosts file turns on strict host checking', () => {
-		const env = gitSshEnv('ssh://git@git.corp/acme/app.git', { ...ssh, knownHostsPath: '/etc/skiff/git-known-hosts' });
+		const env = gitSshEnv('ssh://git@git.corp/acme/app.git', { ...ssh, knownHostsPath: '/etc/yoal/git-known-hosts' });
 		expect(env.GIT_SSH_COMMAND).toContain('-o StrictHostKeyChecking=yes');
-		expect(env.GIT_SSH_COMMAND).toContain("-o UserKnownHostsFile='/etc/skiff/git-known-hosts'");
+		expect(env.GIT_SSH_COMMAND).toContain("-o UserKnownHostsFile='/etc/yoal/git-known-hosts'");
 	});
 
 	test('never applies to other URLs or without a key, and refuses shell syntax in paths', () => {
@@ -196,25 +196,25 @@ describe('systemd argv for the pipeline step runner', () => {
 		const argv = systemdRunArgs({
 			workDir: '/b/pipelines/j1/workspace',
 			writableDir: '/b/pipelines/j1',
-			argv: ['/opt/skiff/bin/skiff-agent', 'pipeline-step', '/b/pipelines/j1/meta/job.json'],
-			unit: 'skiff-job-j1',
-			user: 'skiff-build',
+			argv: ['/opt/yoal/bin/yoal-agent', 'pipeline-step', '/b/pipelines/j1/meta/job.json'],
+			unit: 'yoal-job-j1',
+			user: 'yoal-build',
 			env: { HOME: '/b/pipelines/j1/home' },
-			inheritEnv: ['SKIFF_JOB_TOKEN'],
+			inheritEnv: ['YOAL_JOB_TOKEN'],
 		});
 		expect(argv.slice(-4)).toEqual([
 			'--working-directory=/b/pipelines/j1/workspace',
-			'/opt/skiff/bin/skiff-agent',
+			'/opt/yoal/bin/yoal-agent',
 			'pipeline-step',
 			'/b/pipelines/j1/meta/job.json',
 		]);
-		expect(argv).toContain('--setenv=SKIFF_JOB_TOKEN');
+		expect(argv).toContain('--setenv=YOAL_JOB_TOKEN');
 		expect(argv).toContain('--property=ReadWritePaths=/b/pipelines/j1');
 		expect(argv).not.toContain('-lc');
 	});
 
 	test('rejects a relative program, NUL bytes and odd variable names', () => {
-		expect(() => systemdRunArgs({ workDir: '/w', argv: ['skiff-agent'] })).toThrow(BuildValidationError);
+		expect(() => systemdRunArgs({ workDir: '/w', argv: ['yoal-agent'] })).toThrow(BuildValidationError);
 		expect(() => systemdRunArgs({ workDir: '/w', argv: ['/bin/x', 'a\0b'] })).toThrow(BuildValidationError);
 		expect(() => systemdRunArgs({ workDir: '/w', argv: ['/bin/x'], inheritEnv: ['A=B'] })).toThrow(BuildValidationError);
 	});

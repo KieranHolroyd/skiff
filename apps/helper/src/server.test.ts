@@ -24,7 +24,7 @@ function workloadInput(overrides: Record<string, unknown> = {}): Record<string, 
 		runtime: 'process',
 		status: 'running',
 		release: SHA,
-		upstream: 'unix//run/skiff-workloads/prj_abc123.sock',
+		upstream: 'unix//run/yoal-workloads/prj_abc123.sock',
 		memoryMb: 256,
 		cpus: 1,
 		port: 3000,
@@ -115,7 +115,7 @@ class FakeRuntime implements HelperRuntime {
 
 	async startStudio(): Promise<void> {
 		if (this.failStudio)
-			throw new Error('systemctl start failed (5): Failed to start skiff-studio.service: Unit skiff-studio.service not found.');
+			throw new Error('systemctl start failed (5): Failed to start yoal-studio.service: Unit yoal-studio.service not found.');
 		this.calls.push('studio-start');
 	}
 
@@ -125,7 +125,7 @@ class FakeRuntime implements HelperRuntime {
 
 	async pitrConfigure(id: string, repo: unknown): Promise<{ stanza: string; configPath: string }> {
 		this.calls.push(`pitr-configure:${id}`);
-		return { stanza: id, configPath: `/run/skiff-workloads/${id}/pgbackrest.conf` };
+		return { stanza: id, configPath: `/run/yoal-workloads/${id}/pgbackrest.conf` };
 	}
 
 	async pitrBaseBackup(id: string, type: unknown): Promise<{ stanza: string; type: 'full' | 'diff' | 'incr' }> {
@@ -396,7 +396,7 @@ describe('helper HTTP surface', () => {
 		const response = await handler(runtime)(new Request('http://localhost/v1/studio/start', { method: 'POST' }));
 		expect(response.status).toBe(500);
 		expect(await response.json()).toEqual({
-			error: 'systemctl start failed (5): Failed to start skiff-studio.service: Unit skiff-studio.service not found.',
+			error: 'systemctl start failed (5): Failed to start yoal-studio.service: Unit yoal-studio.service not found.',
 		});
 	});
 
@@ -564,7 +564,7 @@ describe('helper HTTP surface', () => {
 			post('/v1/workloads/db_abc123/credential', {
 				action: 'grant',
 				role: 'readonly',
-				username: 'skiff_readonly_deadbeef',
+				username: 'yoal_readonly_deadbeef',
 				password: 'abcdefghijklmnop',
 			}),
 		);
@@ -572,7 +572,7 @@ describe('helper HTTP surface', () => {
 		const body = await response.json();
 		expect(body).toEqual({ ok: true, credential: { action: 'grant', role: 'readonly' } });
 		expect(runtime.calls).toEqual([
-			'credential:db_abc123:grant:readonly:skiff_readonly_deadbeef:abcdefghijklmnop',
+			'credential:db_abc123:grant:readonly:yoal_readonly_deadbeef:abcdefghijklmnop',
 		]);
 		expect(JSON.stringify(body)).not.toContain('abcdefghijklmnop');
 	});
@@ -582,7 +582,7 @@ describe('helper HTTP surface', () => {
 			post('/v1/workloads/db_abc123/credential', {
 				action: 'drop',
 				role: 'app',
-				username: 'skiff_app_deadbeef',
+				username: 'yoal_app_deadbeef',
 			}),
 		);
 		expect(response.status).toBe(400);
@@ -595,9 +595,9 @@ describe('helper HTTP surface', () => {
 	});
 
 	test('binds a group-restricted unix socket and removes it on stop', async () => {
-		const dir = await fs.mkdtemp(join(tmpdir(), 'skiff-helper-server-'));
+		const dir = await fs.mkdtemp(join(tmpdir(), 'yoal-helper-server-'));
 		directories.push(dir);
-		const config = loadHelperConfig({ SKIFF_HELPER_SOCKET: join(dir, 'helper.sock') });
+		const config = loadHelperConfig({ YOAL_HELPER_SOCKET: join(dir, 'helper.sock') });
 		const helper = await startHelperServer(config, new FakeRuntime());
 		try {
 			expect((await fs.stat(config.socketPath)).mode & 0o777).toBe(0o660);

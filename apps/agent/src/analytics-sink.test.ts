@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import type { AnalyticsEvent, FunctionTailEvent } from '@skiff/contracts';
+import type { AnalyticsEvent, FunctionTailEvent } from '@yoal/contracts';
 import {
 	ANALYTICS_SINK_MAX_BODY_BYTES,
 	TAIL_SINK_MAX_BODY_BYTES,

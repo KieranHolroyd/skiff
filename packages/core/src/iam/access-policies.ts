@@ -1,7 +1,7 @@
 /**
- * Skiff Access policies (IAM.md I25, §11.1).
+ * Yoal Access policies (IAM.md I25, §11.1).
  *
- * The pure decision lives in `@skiff/contracts` (`evaluateAccessPolicy`). This service stores the
+ * The pure decision lives in `@yoal/contracts` (`evaluateAccessPolicy`). This service stores the
  * policies, resolves the policy a content host uses, and writes the assignment a project or
  * environment points at. It reuses the IAM engine for permissions: `accessPolicy:create|read|
  * update|delete`, attachable at org, project and environment scope through the existing
@@ -25,7 +25,7 @@ import {
 	type AccessServiceTokenRule,
 	type Principal,
 	type ResourceRef,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from '../context.ts';
 import type { ContentRoute } from '../access.ts';
 import { NotFoundError, ValidationError } from '../errors.ts';
@@ -72,7 +72,7 @@ interface ServiceTokenRow {
 
 export interface CreatedServiceToken {
 	token: AccessServiceToken;
-	/** The raw `skiff_svc_…` value. Returned once and never stored. */
+	/** The raw `yoal_svc_…` value. Returned once and never stored. */
 	secret: string;
 }
 
@@ -85,7 +85,7 @@ export interface AccessPolicyAssignInput {
 	/** `production` or `previews` on the project, or one named environment id. */
 	scope: 'production' | 'previews' | 'environment';
 	environmentId?: string;
-	/** `null` turns Skiff Access off for the scope. */
+	/** `null` turns Yoal Access off for the scope. */
 	policyId: string | null;
 }
 
@@ -233,7 +233,7 @@ export class AccessPolicyService {
 		const legacy = this.rules(policyId).filter((rule) => rule.matcher.type === 'serviceToken').length;
 		if (active + legacy >= 100)
 			throw new ValidationError('A policy may have at most 100 service tokens.');
-		const secret = `skiff_svc_${randomToken(32)}`;
+		const secret = `yoal_svc_${randomToken(32)}`;
 		const tokenHash = sha256Hex(secret);
 		const id = newId('ast_');
 		const now = this.ctx.now();
@@ -429,7 +429,7 @@ export class AccessPolicyService {
 			.query<{ id: string }, [string]>('SELECT id FROM environments WHERE access_policy_id = ? LIMIT 1')
 			.get(id);
 		if (assigned || assignedEnv)
-			throw new ValidationError('Turn Skiff Access off for every host using this policy before deleting it.');
+			throw new ValidationError('Turn Yoal Access off for every host using this policy before deleting it.');
 		this.#sqlite.transaction(() => {
 			this.#sqlite.run('DELETE FROM access_service_tokens WHERE policy_id = ? AND org_id = ?', [
 				id,
@@ -447,7 +447,7 @@ export class AccessPolicyService {
 		});
 	}
 
-	/** Turn Skiff Access on (or off) for one project scope or named environment. */
+	/** Turn Yoal Access on (or off) for one project scope or named environment. */
 	assign(principal: Principal, project: ProjectRow, input: AccessPolicyAssignInput): void {
 		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		if (input.scope === 'environment' && !input.environmentId)

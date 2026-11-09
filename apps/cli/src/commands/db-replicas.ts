@@ -6,18 +6,18 @@ import { authenticatedClient } from './common.ts';
 import { confirmOrRefuse } from './run-operation.ts';
 
 /**
- * Postgres read replicas (docs/CLUSTERING.md §9.2–9.3): `skif db replica list|add|remove|promote`.
+ * Postgres read replicas (docs/CLUSTERING.md §9.2–9.3): `yoal db replica list|add|remove|promote`.
  * A thin client; every refusal (engine, capacity, lag, fencing) comes from the server.
  */
 
 export const replicaUsage = `Usage:
-  skif db replica list <name>                 Replicas with status, lag and the promotion history
-  skif db replica add <name> --node <node>    Add an async streaming replica on a node (id or name);
+  yoal db replica list <name>                 Replicas with status, lag and the promotion history
+  yoal db replica add <name> --node <node>    Add an async streaming replica on a node (id or name);
                                               --disk <where> system, fast, bulk or a disk on that
                                               node (default: the primary's kind of disk)
-  skif db replica remove <name> <replica-id>  Stop it; its node deletes the copy, the primary drops
+  yoal db replica remove <name> <replica-id>  Stop it; its node deletes the copy, the primary drops
                                               its slot
-  skif db replica promote <name> <replica-id> Make the replica the primary: fence the old one,
+  yoal db replica promote <name> <replica-id> Make the replica the primary: fence the old one,
                                               promote, re-point apps (asks; --yes to skip)
       --accept-data-loss                      Promote although the replica is behind (64 MB / 60 s),
                                               its lag report is stale, or the old primary's node
@@ -92,7 +92,7 @@ function failoverLine(failover: DatabaseFailoverView): string {
 }
 
 async function listReplicas(argv: string[]): Promise<void> {
-	const args = parse(argv, base, 1, 'Usage: skif db replica list <name>');
+	const args = parse(argv, base, 1, 'Usage: yoal db replica list <name>');
 	if (!args) return;
 	const name = requirePositional(args, 0, `database name.\n\n${replicaUsage}`);
 	const client = await authenticatedClient();
@@ -101,7 +101,7 @@ async function listReplicas(argv: string[]): Promise<void> {
 		printJson(result.raw);
 		return;
 	}
-	if (result.replicas.length === 0) console.log(`"${name}" has no replicas. Add one with \`skif db replica add ${name} --node <node>\`.`);
+	if (result.replicas.length === 0) console.log(`"${name}" has no replicas. Add one with \`yoal db replica add ${name} --node <node>\`.`);
 	else console.log(replicaTable(result.replicas));
 	if (result.failovers.length > 0) {
 		console.log(`\nPromotions (primary generation ${result.primaryGeneration}):`);
@@ -110,11 +110,11 @@ async function listReplicas(argv: string[]): Promise<void> {
 }
 
 async function addReplica(argv: string[]): Promise<void> {
-	const args = parse(argv, addFlags, 1, 'Usage: skif db replica add <name> --node <node> [--disk <where>]');
+	const args = parse(argv, addFlags, 1, 'Usage: yoal db replica add <name> --node <node> [--disk <where>]');
 	if (!args) return;
 	const name = requirePositional(args, 0, `database name.\n\n${replicaUsage}`);
 	const node = args.string('node');
-	if (!node) throw new UsageError(`Name the node: skif db replica add ${name} --node <node>`);
+	if (!node) throw new UsageError(`Name the node: yoal db replica add ${name} --node <node>`);
 	const disk = args.string('disk') ?? args.string('volume');
 	const client = await authenticatedClient();
 	const { replica, raw } = await client.addDatabaseReplica(name, { node, ...(disk ? { storage: disk } : {}) });
@@ -124,12 +124,12 @@ async function addReplica(argv: string[]): Promise<void> {
 	}
 	console.log(
 		`Added replica ${replica.id} of "${name}" on ${replica.nodeName ?? replica.nodeId}${replica.sameNode ? ' (same node: read scaling only)' : ''}. ` +
-			'It copies the primary first, then streams; follow it with `skif db replica list`.',
+			'It copies the primary first, then streams; follow it with `yoal db replica list`.',
 	);
 }
 
 async function removeReplica(argv: string[]): Promise<void> {
-	const args = parse(argv, removeFlags, 2, 'Usage: skif db replica remove <name> <replica-id>');
+	const args = parse(argv, removeFlags, 2, 'Usage: yoal db replica remove <name> <replica-id>');
 	if (!args) return;
 	const name = requirePositional(args, 0, `database name.\n\n${replicaUsage}`);
 	const id = requirePositional(args, 1, `replica id.\n\n${replicaUsage}`);
@@ -152,7 +152,7 @@ async function removeReplica(argv: string[]): Promise<void> {
 }
 
 async function promoteReplica(argv: string[]): Promise<void> {
-	const args = parse(argv, promoteFlags, 2, 'Usage: skif db replica promote <name> <replica-id> [--accept-data-loss]');
+	const args = parse(argv, promoteFlags, 2, 'Usage: yoal db replica promote <name> <replica-id> [--accept-data-loss]');
 	if (!args) return;
 	const name = requirePositional(args, 0, `database name.\n\n${replicaUsage}`);
 	const id = requirePositional(args, 1, `replica id.\n\n${replicaUsage}`);
@@ -160,7 +160,7 @@ async function promoteReplica(argv: string[]): Promise<void> {
 	const current = await client.databaseReplicas(name);
 	const replica = current.replicas.find((item) => item.id === id);
 	if (!replica)
-		throw new CliError(`Database "${name}" has no replica ${id}.`, { code: 'not_found', suggestions: [`skif db replica list ${name}`] });
+		throw new CliError(`Database "${name}" has no replica ${id}.`, { code: 'not_found', suggestions: [`yoal db replica list ${name}`] });
 	const acceptDataLoss = args.boolean('accept-data-loss');
 	const confirmed = await confirmOrRefuse(
 		`Promote ${id} on ${replica.nodeName ?? replica.nodeId} to primary of "${name}"? The current primary is stopped and ` +
@@ -187,6 +187,6 @@ async function promoteReplica(argv: string[]): Promise<void> {
 	}
 	console.log(
 		`Promoting ${id} (generation ${failover.generation}): ${failover.stage === 'fencing' ? 'waiting for the old primary to stop' : 'the old primary is unreachable; promoting now'}. ` +
-			'Follow it with `skif db replica list`.',
+			'Follow it with `yoal db replica list`.',
 	);
 }

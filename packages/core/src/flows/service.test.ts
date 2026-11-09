@@ -2,15 +2,15 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import { DEFAULT_FEATURES, flowLimits } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import { DEFAULT_FEATURES, flowLimits } from '@yoal/contracts';
 import { buildPrincipal } from '../orgs.ts';
 import { createCore, type Core } from '../index.ts';
 import { LocalObjectStore } from '../object-store.ts';
 import { flow } from './types.ts';
 import { flowRetryDelayMs } from './service.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-flows-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-flows-'));
 const opened = createDb({ path: ':memory:' });
 let clock = Date.parse('2026-11-08T10:00:00Z');
 
@@ -149,11 +149,11 @@ describe('running a flow', () => {
 	});
 
 	test('asynchronous handlers settle later', async () => {
-		const started = startIn('test.async', 'a1', { value: 'skiff' });
+		const started = startIn('test.async', 'a1', { value: 'yoal' });
 		expect(flows.get(owner, started.id).status).toBe('running');
 		await started.settled;
-		expect(flows.get(owner, started.id)).toMatchObject({ status: 'succeeded', result: 'SKIFF' });
-		expect(trail).toContain('fetched:skiff');
+		expect(flows.get(owner, started.id)).toMatchObject({ status: 'succeeded', result: 'YOAL' });
+		expect(trail).toContain('fetched:yoal');
 	});
 
 	test('rejects unknown kinds, steps and non-object input', () => {

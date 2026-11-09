@@ -1,6 +1,6 @@
 import { error } from '@sveltejs/kit';
-import { CoreError } from '@skiff/core';
-import type { EmailMessageView } from '@skiff/contracts';
+import { CoreError } from '@yoal/core';
+import type { EmailMessageView } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import type { PageServerLoad } from './$types';
 

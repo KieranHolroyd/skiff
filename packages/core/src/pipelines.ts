@@ -16,7 +16,7 @@ import {
 	pipelineVariables,
 	projects,
 	settings,
-} from '@skiff/db';
+} from '@yoal/db';
 import {
 	pipelineAutoSetupSchema,
 	pipelineDispatchSchema,
@@ -50,7 +50,7 @@ import {
 	type PipelineTriggerView,
 	type PipelineVariableView,
 	type Principal,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { cronMatches } from './cron.ts';
@@ -97,7 +97,7 @@ export interface PipelineWebhookResult {
 
 /** A repository without workflows is asked again after this, unless a push touches them (D172). */
 const AUTO_SETUP_RECHECK_MS = 10 * 60_000;
-const WORKFLOW_DIR = '.skiff/workflows';
+const WORKFLOW_DIR = '.yoal/workflows';
 
 /** Where a delivery for an unknown repository came from, so it may add it to Pipelines (D172, D177). */
 export interface AutoRegisterSource {
@@ -106,7 +106,7 @@ export interface AutoRegisterSource {
 	fullName: string;
 	/** Who the repository is created on behalf of (the installation linker or connection creator). */
 	createdBy: string | null;
-	/** The delivery covers repositories Skiff does not know yet (App installation, namespace hook). */
+	/** The delivery covers repositories Yoal does not know yet (App installation, namespace hook). */
 	mayAutoRegister: boolean;
 }
 
@@ -191,7 +191,7 @@ export class PipelineService {
 		// Adding it by hand undoes an earlier removal for automatic setup.
 		const ignoreKey = this.ctx.git.autoSetupKey(row.orgId, row.cloneUrl);
 		if (ignoreKey) this.setIgnored(row.orgId, ignoreKey, false);
-		// D174: a repository on a connected forge gets Skiff's webhook.
+		// D174: a repository on a connected forge gets Yoal's webhook.
 		this.ctx.git.ensureWebhook(row.orgId, row.cloneUrl);
 		this.audit(principal, 'pipeline.repository.create', row.id, { name: row.name, cloneUrl: row.cloneUrl });
 		return this.repositoryView(row);
@@ -399,8 +399,8 @@ export class PipelineService {
 	/**
 	 * A delivery to a repository's own webhook (`/api/webhooks/pipelines/<id>`): GitHub, Gitea and
 	 * Forgejo sign it with the stored secret, GitLab sends it in `X-Gitlab-Token` (D174). `push` and
-	 * pull/merge requests start runs; `ping` is accepted. The secret is mandatory (D45). When Skiff's
-	 * GitHub App or a Skiff-created forge hook already delivers the repository's events (D165), this
+	 * pull/merge requests start runs; `ping` is accepted. The secret is mandatory (D45). When Yoal's
+	 * GitHub App or a Yoal-created forge hook already delivers the repository's events (D165), this
 	 * hook is ignored so one push never starts two runs.
 	 */
 	async handleWebhook(repositoryId: string, rawBody: string, headers: HeaderReader): Promise<PipelineWebhookResult> {
@@ -431,7 +431,7 @@ export class PipelineService {
 		return this.handleWebhook(repositoryId, rawBody, { get: (name: string) => values[name.toLowerCase()] ?? null });
 	}
 
-	/** An event delivered through Skiff's GitHub App (D165). Returns the trigger ids created. */
+	/** An event delivered through Yoal's GitHub App (D165). Returns the trigger ids created. */
 	async handleAppEvent(orgId: string, fullName: string, event: string, payload: unknown): Promise<string[]> {
 		const normalised = normaliseForgeEvent('github', event, payload);
 		if (normalised.kind !== 'push' && normalised.kind !== 'pull_request') return [];
@@ -445,7 +445,7 @@ export class PipelineService {
 	}
 
 	/**
-	 * An event delivered by a Skiff-managed hook (the GitHub App, or a forge connection's hook): every
+	 * An event delivered by a Yoal-managed hook (the GitHub App, or a forge connection's hook): every
 	 * enabled pipeline repository of the org with `identity` gets it. A push to a repository Pipelines
 	 * does not know yet may add it (D172, D177). Returns the trigger ids created.
 	 */
@@ -539,7 +539,7 @@ export class PipelineService {
 
 	/**
 	 * A push through the GitHub App or a forge namespace hook to a repository the org has no
-	 * pipeline repository for: when the pushed commit has `.skiff/workflows/*.yml`, add the
+	 * pipeline repository for: when the pushed commit has `.yoal/workflows/*.yml`, add the
 	 * repository (no webhook secret: the managed hook delivers its events) on behalf of whoever
 	 * linked the installation or created the connection, and return it. Pull requests never add a
 	 * repository, so a fork cannot register one. Never throws.
@@ -766,7 +766,7 @@ export class PipelineService {
 
 	/**
 	 * A platform event (`deployments.failed`, `alerts.firing`, …) for an org: start every default
-	 * branch workflow subscribed to it with `on: skiff_event`. Called by `EventService` for every
+	 * branch workflow subscribed to it with `on: yoal_event`. Called by `EventService` for every
 	 * event it emits; never throws (an event source must not fail because of a workflow).
 	 */
 	onPlatformEvent(orgId: string, type: string, data: Record<string, unknown>): number {
@@ -784,9 +784,9 @@ export class PipelineService {
 				for (const subscription of subscriptions) {
 					this.engine.createTrigger({
 						repository,
-						event: 'skiff_event',
+						event: 'yoal_event',
 						ref: repository.defaultBranch,
-						actor: 'skiff',
+						actor: 'yoal',
 						createdBy: repository.createdBy,
 						payload: {
 							eventType: type,
@@ -799,7 +799,7 @@ export class PipelineService {
 				}
 			}
 		} catch (error) {
-			console.error(`[pipelines] skiff_event ${type} for ${orgId} not started:`, error);
+			console.error(`[pipelines] yoal_event ${type} for ${orgId} not started:`, error);
 		}
 		return started;
 	}

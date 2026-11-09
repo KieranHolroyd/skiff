@@ -2,8 +2,8 @@ import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb, truncateAll } from '@skiff/db';
-import type { Principal } from '@skiff/contracts';
+import { createDb, truncateAll } from '@yoal/db';
+import type { Principal } from '@yoal/contracts';
 import type { AlertMessage } from '../config.ts';
 import { createCore, type Core } from '../index.ts';
 import { LocalObjectStore } from '../object-store.ts';
@@ -16,7 +16,7 @@ import {
 } from './keys.ts';
 import { IAM_KEYS_ROTATED_STATE_KEY } from '../maintenance.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-iam-maintenance-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-iam-maintenance-'));
 const opened = createDb({ path: ':memory:' });
 
 let now = Date.parse('2026-11-08T12:00:00Z');
@@ -142,7 +142,7 @@ function insertAccessKey(id: string, serviceAccountId: string, lastUsedAt: numbe
 		`INSERT INTO access_keys
 			(id, org_id, principal_type, principal_id, name, prefix, start, hash, restriction_json,
 			 allowed_cidrs, expires_at, last_used_at, last_used_ip_hash, created_by, revoked_at, created_at)
-		 VALUES (?, 'org_1', 'serviceAccount', ?, 'ci', 'skif_', 'skif_abc', ?, '{}', '[]',
+		 VALUES (?, 'org_1', 'serviceAccount', ?, 'ci', 'yoal_', 'yoal_abc', ?, '{}', '[]',
 			 NULL, ?, NULL, 'user_1', NULL, ?)`,
 		[id, serviceAccountId, `hash-${id}`, lastUsedAt, now - 200 * 86_400_000],
 	);
@@ -438,7 +438,7 @@ describe('IAM notifications', () => {
 
 		// No IAM notification ever carries a credential or a secret-shaped value.
 		for (const alert of alerts.filter((entry) => entry.key.startsWith('iam:'))) {
-			expect(JSON.stringify(alert)).not.toMatch(/skif_|secret|password|token/i);
+			expect(JSON.stringify(alert)).not.toMatch(/yoal_|secret|password|token/i);
 		}
 	});
 });

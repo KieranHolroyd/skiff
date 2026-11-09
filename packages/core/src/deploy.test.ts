@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { zipSync } from 'fflate';
-import { limits } from '@skiff/contracts';
-import { createDb, slugRedirects } from '@skiff/db';
+import { limits } from '@yoal/contracts';
+import { createDb, slugRedirects } from '@yoal/db';
 import { eq } from 'drizzle-orm';
 import { entriesFromZip } from './artifact.ts';
 import { buildPrincipal } from './orgs.ts';
@@ -21,7 +21,7 @@ class SizedStore extends LocalObjectStore {
 	}
 }
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-deploy-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-deploy-'));
 const opened = createDb({ path: ':memory:' });
 const store = new SizedStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 let clock = Date.now();
@@ -208,10 +208,10 @@ describe('SPA hint', () => {
 		expect(result.hint).toContain('single-page app');
 	});
 
-	test('is not offered when skiff.json already enables SPA mode, or when suppressed', async () => {
+	test('is not offered when yoal.json already enables SPA mode, or when suppressed', async () => {
 		const configured = await core.deploy.deploySite(orgA, {
 			name: 'spa-configured',
-			files: [file('index.html', '<div id=app>'), file('skiff.json', '{"spa":true}')],
+			files: [file('index.html', '<div id=app>'), file('yoal.json', '{"spa":true}')],
 			promote: true,
 		});
 		expect(configured.hint).toBeUndefined();

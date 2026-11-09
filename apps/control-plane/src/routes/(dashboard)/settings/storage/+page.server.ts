@@ -4,7 +4,7 @@ import {
 	storageKinds,
 	type StorageDefaultInput,
 	type StorageDefaultTarget
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { failStatus, formBoolean, formString, toFormFailure } from '../../_lib/errors.js';
 import type { Actions, PageServerLoad } from './$types';
@@ -79,7 +79,7 @@ export const actions: Actions = {
 		return {
 			success: unmounting
 				? 'Unmounting the disk on its node. Its files stay on the disk.'
-				: 'Disk removed from Skiff. Its files and mount were left alone.'
+				: 'Disk removed from Yoal. Its files and mount were left alone.'
 		};
 	},
 

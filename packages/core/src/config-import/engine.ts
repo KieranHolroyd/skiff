@@ -3,7 +3,7 @@ import type {
 	ConfigImportStatus,
 	ConfigImportStep,
 	ConfigImportView,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { CoreError } from '../errors.ts';
 
 /**

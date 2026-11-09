@@ -1,6 +1,6 @@
 # Compose stacks (level 4)
 
-Skiff has four deploy levels. The level is a **product** view of a project's runtime; the runtime
+Yoal has four deploy levels. The level is a **product** view of a project's runtime; the runtime
 column, the helper and the security model are unchanged.
 
 | Level | Runtime | What runs | Deploy input |
@@ -18,15 +18,15 @@ container; compose only adds grouping, ordering and routing.
 
 ```sh
 # A project is created with the level-4 runtime once.
-skif projects create shop --runtime compose
+yoal projects create shop --runtime compose
 
 # A compose file in the directory is detected and deployed; `--no-compose` deploys the
 # directory as a static site instead.
 cd shop
-skif deploy
+yoal deploy
 
 # Or name the file explicitly.
-skif deploy --compose ./docker-compose.yml
+yoal deploy --compose ./docker-compose.yml
 ```
 
 The REST surface is `POST /api/v1/projects/:slug/deploy-compose` with `{ document, promote,
@@ -46,14 +46,14 @@ reports every other key at its exact path:
   warning; set it in the project environment instead.
 - `depends_on` — list or mapping. Ordering is `After=` + `Requires=`, not a health wait.
 - `ports` / `expose` — the **container** port only (`"8080"` or `"8080:80"`). A port is reachable
-  inside the stack network either way; only a port named in `x-skiff.routes` is public. Host ports
-  and host IPs are assigned by Skiff; UDP, ranges and `127.0.0.1:…` bindings are refused.
+  inside the stack network either way; only a port named in `x-yoal.routes` is public. Host ports
+  and host IPs are assigned by Yoal; UDP, ranges and `127.0.0.1:…` bindings are refused.
 - `volumes` — named volumes only (`uploads:/app/uploads`, optional `:ro`). A top-level `volumes:`
   declaration is preferred; an implicit one is accepted with a warning. Bind mounts, host paths,
   anonymous volumes and device paths are refused.
 - `deploy.resources.limits.memory` and `.cpus` — translated to the same `MemoryMax`/`CPUQuota`
   and whole-stack admission as a level-3 project.
-- `x-skiff.healthPath` per service and `x-skiff.routes` at the top level (below).
+- `x-yoal.healthPath` per service and `x-yoal.routes` at the top level (below).
 
 Presentational keys (`container_name`, `restart`, `labels`, `healthcheck`, `tty`, …) are ignored
 with a warning because systemd owns the lifecycle. Anything that widens the container's privilege
@@ -69,7 +69,7 @@ Every service joins the project's workload network and is addressable by its ser
 service port is public:
 
 ```yaml
-x-skiff:
+x-yoal:
   routes:
     - service: web
       port: 3000
@@ -98,7 +98,7 @@ host and a warning says so.
 ## Networking and isolation
 
 Services use the same private Podman network as every other workload in the organisation
-(`skiff-org-<orgId>`, or the shared `skiff-workloads` network when `ORG_NETWORKS` is off). Attached
+(`yoal-org-<orgId>`, or the shared `yoal-workloads` network when `ORG_NETWORKS` is off). Attached
 managed databases, storage and brokers are reachable by their normal aliases, so
 `DATABASE_URL=postgres://…@db-<id>:5432/…` works exactly as it does for a level-2 or level-3 app.
 Cross-stack traffic inside an organisation is already possible for every runtime; a per-stack
@@ -128,7 +128,7 @@ reference instead.
 
 ## Rollback and previews
 
-The release of a compose deploy is a one-file marker (`skiff-compose.json`) that records the
+The release of a compose deploy is a one-file marker (`yoal-compose.json`) that records the
 normalised stack; the services live in the deployment's workload snapshot. Promote, rollback and
 environment pointers work like every other runtime. A preview URL serves the primary route only;
 secondary service hosts follow the production pointer.

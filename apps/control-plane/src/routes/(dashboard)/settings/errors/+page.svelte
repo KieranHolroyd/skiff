@@ -10,7 +10,7 @@
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import ZapIcon from '@lucide/svelte/icons/zap';
-	import { serverErrorSources, type ServerErrorStatus } from '@skiff/contracts';
+	import { serverErrorSources, type ServerErrorStatus } from '@yoal/contracts';
 	import { toast } from 'svelte-sonner';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
@@ -131,7 +131,7 @@
 	}
 </script>
 
-<svelte:head><title>Server errors · Settings · Skiff</title></svelte:head>
+<svelte:head><title>Server errors · Settings · Yoal</title></svelte:head>
 
 <SettingsHeader id="errors" />
 

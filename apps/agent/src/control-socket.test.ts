@@ -10,7 +10,7 @@ let server: ReturnType<typeof Bun.serve>;
 const seen: Array<{ url: string; method: string; headers: Record<string, string>; body: string }> = [];
 
 beforeAll(() => {
-	dir = mkdtempSync(join(tmpdir(), 'skiff-control-socket-'));
+	dir = mkdtempSync(join(tmpdir(), 'yoal-control-socket-'));
 	socket = join(dir, 'control.sock');
 	server = Bun.serve({
 		unix: socket,
@@ -64,7 +64,7 @@ describe('controlSocketFetch', () => {
 
 	test('leaves every other origin on the network', async () => {
 		const routed = controlSocketFetch(network, 'https://control.example.com', socket);
-		const response = await routed('https://github.com/skiff/releases');
+		const response = await routed('https://github.com/yoal/releases');
 		expect(await response.json()).toEqual({ via: 'network' });
 		const otherPort = await routed('https://control.example.com:8443/api/agent/heartbeat');
 		expect(await otherPort.json()).toEqual({ via: 'network' });

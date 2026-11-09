@@ -9,11 +9,11 @@ import {
 	backupTargetViewSchema,
 } from './backup-target.ts';
 
-const local = { name: 'local-backups', kind: 'local', path: '/var/lib/skiff/backups' } as const;
+const local = { name: 'local-backups', kind: 'local', path: '/var/lib/yoal/backups' } as const;
 const s3 = {
 	name: 'offsite',
 	kind: 's3',
-	bucket: 'skiff-backups',
+	bucket: 'yoal-backups',
 	accessKeyId: 'AKIAIOSFODNN7EXAMPLE',
 	secretAccessKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
 } as const;
@@ -22,8 +22,8 @@ describe('backup target schemas', () => {
 	test('local targets default to writable files', () => {
 		expect(backupTargetCreateSchema.parse(local)).toEqual({ ...local, writeOnly: false });
 		expect(backupTargetCreateSchema.safeParse({ ...local, path: 'backups' }).success).toBe(false);
-		expect(backupTargetCreateSchema.safeParse({ ...local, path: '/var/lib/skiff/backups/' }).success).toBe(false);
-		expect(backupTargetCreateSchema.safeParse({ ...local, path: '/var/lib/skiff/../etc' }).success).toBe(false);
+		expect(backupTargetCreateSchema.safeParse({ ...local, path: '/var/lib/yoal/backups/' }).success).toBe(false);
+		expect(backupTargetCreateSchema.safeParse({ ...local, path: '/var/lib/yoal/../etc' }).success).toBe(false);
 	});
 
 	test('S3 targets fill self-hosted defaults and accept a custom endpoint', () => {
@@ -31,7 +31,7 @@ describe('backup target schemas', () => {
 		expect(parsed).toMatchObject({
 			...s3,
 			region: 'us-east-1',
-			pathPrefix: 'skiff/backups',
+			pathPrefix: 'yoal/backups',
 			forcePathStyle: true,
 			writeOnly: false,
 			objectLock: false,
@@ -55,9 +55,9 @@ describe('backup target schemas', () => {
 	test('endpoint and prefix rules keep credentials and traversal out', () => {
 		expect(backupTargetCreateSchema.safeParse({ ...s3, endpoint: 'https://user:pw@minio.example.com' }).success).toBe(false);
 		expect(backupTargetCreateSchema.safeParse({ ...s3, endpoint: 'ftp://minio.example.com' }).success).toBe(false);
-		expect(backupTargetCreateSchema.safeParse({ ...s3, pathPrefix: '/skiff' }).success).toBe(false);
-		expect(backupTargetCreateSchema.safeParse({ ...s3, pathPrefix: 'skiff/../etc' }).success).toBe(false);
-		expect(backupTargetCreateSchema.safeParse({ ...s3, pathPrefix: 'skiff/backups/' }).success).toBe(false);
+		expect(backupTargetCreateSchema.safeParse({ ...s3, pathPrefix: '/yoal' }).success).toBe(false);
+		expect(backupTargetCreateSchema.safeParse({ ...s3, pathPrefix: 'yoal/../etc' }).success).toBe(false);
+		expect(backupTargetCreateSchema.safeParse({ ...s3, pathPrefix: 'yoal/backups/' }).success).toBe(false);
 		expect(backupTargetPathPrefixSchema.parse('')).toBe('');
 		expect(backupTargetLocalPathSchema.parse('/mnt/backups')).toBe('/mnt/backups');
 	});
@@ -78,9 +78,9 @@ describe('backup target schemas', () => {
 			kind: 's3',
 			path: null,
 			endpoint: 'https://minio.example.com',
-			bucket: 'skiff-backups',
+			bucket: 'yoal-backups',
 			region: 'us-east-1',
-			pathPrefix: 'skiff/backups',
+			pathPrefix: 'yoal/backups',
 			forcePathStyle: true,
 			writeOnly: true,
 			objectLock: false,

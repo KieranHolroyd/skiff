@@ -3,13 +3,13 @@ import { principalStub } from './principal-stub.test-support';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_FEATURES } from '@skiff/contracts';
-import { LocalObjectStore, buildPrincipal, createCore, type Core } from '@skiff/core';
-import { createDb } from '@skiff/db';
+import { DEFAULT_FEATURES } from '@yoal/contracts';
+import { LocalObjectStore, buildPrincipal, createCore, type Core } from '@yoal/core';
+import { createDb } from '@yoal/db';
 
 /** Log drain tools and `get_audit_log` paging (DESIGN §8) against a real core. */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-mcp-log-drains-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-mcp-log-drains-'));
 const opened = createDb({ path: ':memory:' });
 const realCore: Core = createCore({
 	db: opened.db,
@@ -42,7 +42,7 @@ mock.module('./core', () => ({ core: realCore }));
 mock.module('./config', () => ({ platformOrigin: 'https://control.test', authSecret: 'test-secret' }));
 mock.module('./principal', () => principalStub({ principalFromMcp: () => null }));
 
-const { skiffToolDefinitions } = await import('./mcp');
+const { yoalToolDefinitions } = await import('./mcp');
 const { assistantTools } = await import('./assistant/tools');
 const { CONFIRM_TOOLS } = await import('./assistant/confirm-policy');
 
@@ -68,7 +68,7 @@ async function call(principal: typeof owner, name: string, args: Record<string, 
 describe('log drain tools', () => {
 	test('annotations: reads are read-only, delete is destructive, create asks in the assistant', () => {
 		const tools = new Map(
-			skiffToolDefinitions(owner).map((entry) => [entry.name, entry.config.annotations])
+			yoalToolDefinitions(owner).map((entry) => [entry.name, entry.config.annotations])
 		);
 		expect(tools.get('list_log_drains')).toMatchObject({
 			readOnlyHint: true,

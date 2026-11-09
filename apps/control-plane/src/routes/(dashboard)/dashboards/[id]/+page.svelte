@@ -15,7 +15,7 @@
 		DashboardView,
 		QueryResult,
 		VizType
-	} from '@skiff/contracts';
+	} from '@yoal/contracts';
 	import { createQuery, useIsFetching, useQueryClient } from '@tanstack/svelte-query';
 	import { toast } from 'svelte-sonner';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
@@ -27,7 +27,7 @@
 	import Settings2Icon from '@lucide/svelte/icons/settings-2';
 	import TypeIcon from '@lucide/svelte/icons/type';
 	import Undo2Icon from '@lucide/svelte/icons/undo-2';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
@@ -339,7 +339,7 @@
 </script>
 
 <svelte:head>
-	<title>{meta.title || 'Dashboard'} · Skiff</title>
+	<title>{meta.title || 'Dashboard'} · Yoal</title>
 </svelte:head>
 
 <svelte:window

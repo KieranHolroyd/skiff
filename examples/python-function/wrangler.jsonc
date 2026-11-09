@@ -1,5 +1,5 @@
 {
-	// A Python Worker on Skiff Functions (D121). `skif deploy` runs the build command, then ships
+	// A Python Worker on Yoal Functions (D121). `yoal deploy` runs the build command, then ships
 	// src/*.py and the vendored python_modules/.
 	"name": "python-function",
 	"main": "src/entry.py",

@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { Resolver } from 'node:dns/promises';
 import { networkInterfaces } from 'node:os';
-import { isIpv4 } from '@skiff/contracts';
+import { isIpv4 } from '@yoal/contracts';
 
 /**
  * Settings → Domains checks names against public DNS before moving the platform (D105): the root
@@ -74,7 +74,7 @@ export async function probeDomains(
 		const addresses = await lookup(name, using);
 		return { display, addresses, status: status(addresses) };
 	};
-	const wildcard = `skiff-dns-check-${randomBytes(4).toString('hex')}.${settings.contentDomain}`;
+	const wildcard = `yoal-dns-check-${randomBytes(4).toString('hex')}.${settings.contentDomain}`;
 	const [platform, content] = await Promise.all([
 		isIpv4(settings.platformHost) ? Promise.resolve(null) : probe(settings.platformHost, settings.platformHost),
 		probe(wildcard, `*.${settings.contentDomain}`)

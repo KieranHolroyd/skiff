@@ -13,7 +13,7 @@ import {
 	type SchemaChangeOp,
 	type StudioInfo,
 	type TreeNode
-} from '@skiff/studio/protocol';
+} from '@yoal/studio/protocol';
 
 // ---------------------------------------------------------------- capabilities
 

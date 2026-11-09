@@ -1,4 +1,4 @@
-import { hasPermission, type Principal } from '@skiff/contracts';
+import { hasPermission, type Principal } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 
 /** What the viewer may do with Email; the dashboard hides actions they can't take. */

@@ -7,7 +7,7 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /*
- * Skiff theme: stock shadcn neutral tokens, plus one brand accent and four status colours.
+ * Yoal theme: stock shadcn neutral tokens, plus one brand accent and four status colours.
  *
  * - Everything (sidebar included) follows the light/dark mode; nothing is dark in both themes.
  * - `--brand` is reserved for the mark, the active nav item and things that are live in production.
@@ -166,7 +166,7 @@
 /* TanStack Charts: series palette, type and tooltip surface follow the dashboard theme. The
    tooltip class repeats the tokens because a portalled tooltip can end up directly under <body>. */
 .ts-chart-host,
-.skiff-chart-tooltip {
+.yoal-chart-tooltip {
 	--ts-chart-1: var(--chart-1);
 	--ts-chart-2: var(--chart-2);
 	--ts-chart-3: var(--chart-3);
@@ -185,7 +185,7 @@
 	--ts-chart-tooltip-max-width: 20rem;
 	font-variant-numeric: tabular-nums;
 }
-.skiff-chart-tooltip {
+.yoal-chart-tooltip {
 	white-space: nowrap;
 }
 .ts-chart-host:focus-visible,
@@ -197,8 +197,8 @@
 
 /* Dashboard assistant docked beside the page (lib/assistant/AssistantPanel.svelte). */
 @media (min-width: 1024px) {
-	html.skiff-assistant-docked body {
-		padding-right: var(--skiff-assistant-width, 440px);
+	html.yoal-assistant-docked body {
+		padding-right: var(--yoal-assistant-width, 440px);
 	}
 }
 

@@ -5,7 +5,7 @@
  * The session is scoped to `target.database`, so the tree root lists tables and views
  * directly (`schemas: false`).
  */
-import type { DatabaseEngine } from '@skiff/contracts';
+import type { DatabaseEngine } from '@yoal/contracts';
 import type { StudioPlugin } from '../../driver.ts';
 import type { StudioCapabilities } from '../../protocol.ts';
 import { MYSQL_STRUCTURE } from './ddl.ts';

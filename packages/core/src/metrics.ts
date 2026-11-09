@@ -1,6 +1,6 @@
 import { and, eq, isNull, ne, sql } from 'drizzle-orm';
-import { deployments, nodes, projects, releases } from '@skiff/db';
-import type { Principal } from '@skiff/contracts';
+import { deployments, nodes, projects, releases } from '@yoal/db';
+import type { Principal } from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { ValidationError } from './errors.ts';
 import {
@@ -177,24 +177,24 @@ export class MetricsService {
 	platformLines(): string[] {
 		const summary = this.rawSummary();
 		return [
-			'# HELP skiff_nodes_total Nodes known to the control plane.',
-			'# TYPE skiff_nodes_total gauge',
-			`skiff_nodes_total ${summary.nodes}`,
-			'# HELP skiff_nodes_online Nodes currently online.',
-			'# TYPE skiff_nodes_online gauge',
-			`skiff_nodes_online ${summary.online}`,
-			'# HELP skiff_projects_total Projects (apps), excluding the trash.',
-			'# TYPE skiff_projects_total gauge',
-			`skiff_projects_total ${summary.projects}`,
-			'# HELP skiff_deployments_active Active deployments.',
-			'# TYPE skiff_deployments_active gauge',
-			`skiff_deployments_active ${summary.activeDeployments}`,
-			'# HELP skiff_storage_bytes Release artifact bytes across every org.',
-			'# TYPE skiff_storage_bytes gauge',
-			`skiff_storage_bytes ${summary.storageBytes}`,
-			'# HELP skiff_agent_desired_version_info Agent version the control plane wants nodes on.',
-			'# TYPE skiff_agent_desired_version_info gauge',
-			`skiff_agent_desired_version_info{version="${escape(summary.agentVersion)}"} 1`,
+			'# HELP yoal_nodes_total Nodes known to the control plane.',
+			'# TYPE yoal_nodes_total gauge',
+			`yoal_nodes_total ${summary.nodes}`,
+			'# HELP yoal_nodes_online Nodes currently online.',
+			'# TYPE yoal_nodes_online gauge',
+			`yoal_nodes_online ${summary.online}`,
+			'# HELP yoal_projects_total Projects (apps), excluding the trash.',
+			'# TYPE yoal_projects_total gauge',
+			`yoal_projects_total ${summary.projects}`,
+			'# HELP yoal_deployments_active Active deployments.',
+			'# TYPE yoal_deployments_active gauge',
+			`yoal_deployments_active ${summary.activeDeployments}`,
+			'# HELP yoal_storage_bytes Release artifact bytes across every org.',
+			'# TYPE yoal_storage_bytes gauge',
+			`yoal_storage_bytes ${summary.storageBytes}`,
+			'# HELP yoal_agent_desired_version_info Agent version the control plane wants nodes on.',
+			'# TYPE yoal_agent_desired_version_info gauge',
+			`yoal_agent_desired_version_info{version="${escape(summary.agentVersion)}"} 1`,
 		];
 	}
 

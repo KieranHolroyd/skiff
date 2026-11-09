@@ -7,9 +7,9 @@
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
 	import XIcon from '@lucide/svelte/icons/x';
-	import { emailEventKinds } from '@skiff/contracts';
-	import DataTable, { type DataColumn } from '#lib/components/skiff/DataTable.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import { emailEventKinds } from '@yoal/contracts';
+	import DataTable, { type DataColumn } from '#lib/components/yoal/DataTable.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as InputGroup from '#lib/components/ui/input-group/index.js';
@@ -90,7 +90,7 @@
 </script>
 
 <svelte:head>
-	<title>Activity · Email · Skiff</title>
+	<title>Activity · Email · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">

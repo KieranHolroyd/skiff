@@ -9,7 +9,7 @@
  *   bun run dev:clickhouse --status        is it answering?
  *   bun run dev:clickhouse --reset         delete the dev telemetry data first
  *   --port <n>                             HTTP port (default 18123)
- *   --memory <MiB>                         memory ceiling (default SKIFF_CLICKHOUSE_MEMORY_MB, else 768)
+ *   --memory <MiB>                         memory ceiling (default YOAL_CLICKHOUSE_MEMORY_MB, else 768)
  *
  * Data lives in apps/control-plane/.data/clickhouse (gitignored by `.data*\/`).
  */
@@ -28,8 +28,8 @@ import {
 	parseClickHouseMemoryMb,
 } from '../systemd/clickhouse.ts';
 
-export const DEV_WRITER_PASSWORD = 'skiff-dev';
-export const DEV_READER_PASSWORD = 'skiff-dev-reader';
+export const DEV_WRITER_PASSWORD = 'yoal-dev';
+export const DEV_READER_PASSWORD = 'yoal-dev-reader';
 
 const args = process.argv.slice(2);
 const flag = (name: string) => args.includes(name);
@@ -155,7 +155,7 @@ async function main(): Promise<number> {
 			writerPassword: DEV_WRITER_PASSWORD,
 			readerPassword: DEV_READER_PASSWORD,
 			// packages/core/src/test-clickhouse.ts: one throwaway database per test store.
-			extraWriterDatabases: ['skiff_test*'],
+			extraWriterDatabases: ['yoal_test*'],
 			memory,
 		}),
 	);

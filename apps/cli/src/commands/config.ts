@@ -14,17 +14,17 @@ const flags: FlagSpec = {
 	help: { type: 'boolean', short: 'h' },
 };
 
-const usage = `Usage: skif config <list|get|set|unset|path> [options]
+const usage = `Usage: yoal config <list|get|set|unset|path> [options]
 
-Persistent settings live in ~/.config/skiff/config.json (mode 0600) and survive
-\`skif logout\`, which removes only the API key. Settings belong to the selected
-profile; use \`skif profile list\` to see them and \`--profile <name>\` to choose
-one. SKIFF_CONFIG_DIR and XDG_CONFIG_HOME change the file location.
+Persistent settings live in ~/.config/yoal/config.json (mode 0600) and survive
+\`yoal logout\`, which removes only the API key. Settings belong to the selected
+profile; use \`yoal profile list\` to see them and \`--profile <name>\` to choose
+one. YOAL_CONFIG_DIR and XDG_CONFIG_HOME change the file location.
 
 Settings:
-  url            Control-plane URL, e.g. https://control.example.com  (SKIFF_URL)
-  contentDomain  Domain deployed sites use, e.g. examplecloud.com     (SKIFF_CONTENT_DOMAIN)
-  token          API key; prefer \`skif login\`, which verifies it     (SKIFF_TOKEN)
+  url            Control-plane URL, e.g. https://control.example.com  (YOAL_URL)
+  contentDomain  Domain deployed sites use, e.g. examplecloud.com     (YOAL_CONTENT_DOMAIN)
+  token          API key; prefer \`yoal login\`, which verifies it     (YOAL_TOKEN)
 
 Commands:
   list                    Show effective settings and where each value came from
@@ -98,12 +98,12 @@ async function listSettings(json: boolean): Promise<void> {
 	console.log(renderTable(['SETTING', 'VALUE', 'SOURCE'], rows));
 	console.log(`\nProfile ${report.profile ?? 'none'}`);
 	console.log(`Config  ${report.path}`);
-	if (!report.stored) console.log('No settings saved yet. Run `skif config set url <control-url>`.');
+	if (!report.stored) console.log('No settings saved yet. Run `yoal config set url <control-url>`.');
 }
 
 async function getSetting(args: ParsedArgs): Promise<void> {
 	if (args.positionals.length !== 1)
-		throw new UsageError('Usage: skif config get <key>');
+		throw new UsageError('Usage: yoal config get <key>');
 	const key = canonicalConfigKey(args.positionals[0]!);
 	const report = await describeConfig();
 	const entry = report.entries.find((candidate) => candidate.key === key)!;
@@ -124,7 +124,7 @@ async function getSetting(args: ParsedArgs): Promise<void> {
 
 async function setSetting(args: ParsedArgs): Promise<void> {
 	if (args.positionals.length !== 2)
-		throw new UsageError('Usage: skif config set <key> <value>');
+		throw new UsageError('Usage: yoal config set <key> <value>');
 	const key = canonicalConfigKey(args.positionals[0]!);
 	const change = await setStoredConfigValue(key, args.positionals[1]!);
 
@@ -137,7 +137,7 @@ async function setSetting(args: ParsedArgs): Promise<void> {
 	}
 	if (CONFIG_KEYS[key].secret) {
 		console.log(`Stored the API key in ${change.path} (mode 0600).`);
-		console.log('Run `skif login` to verify it, or use `skif config list` to check the URL.');
+		console.log('Run `yoal login` to verify it, or use `yoal config list` to check the URL.');
 		return;
 	}
 	console.log(`Saved ${key} = ${change.value}`);
@@ -147,7 +147,7 @@ async function setSetting(args: ParsedArgs): Promise<void> {
 
 async function unsetSetting(args: ParsedArgs): Promise<void> {
 	if (args.positionals.length !== 1)
-		throw new UsageError('Usage: skif config unset <key>');
+		throw new UsageError('Usage: yoal config unset <key>');
 	const key = canonicalConfigKey(args.positionals[0]!);
 	const change = await unsetStoredConfigValue(key);
 
@@ -165,7 +165,7 @@ async function unsetSetting(args: ParsedArgs): Promise<void> {
 }
 
 async function printPath(args: ParsedArgs): Promise<void> {
-	if (args.positionals.length > 0) throw new UsageError('Usage: skif config path');
+	if (args.positionals.length > 0) throw new UsageError('Usage: yoal config path');
 	const report = await describeConfig();
 	if (args.boolean('json')) {
 		printJson({ path: report.path, exists: report.stored, profile: report.profile ?? null });

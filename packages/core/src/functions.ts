@@ -1,5 +1,5 @@
 import { and, eq, isNull } from 'drizzle-orm';
-import { projects, workloads } from '@skiff/db';
+import { projects, workloads } from '@yoal/db';
 import {
 	FUNCTION_DEFAULT_IDLE_STOP_SECONDS,
 	FUNCTION_DEFAULT_COMPATIBILITY_DATE,
@@ -27,7 +27,7 @@ import {
 	type Principal,
 	type SecretRef,
 	type WorkloadSpec,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { entryMap, type FileEntry } from './artifact.ts';
 import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
@@ -46,7 +46,7 @@ import { parseCron } from './cron.ts';
 import { parseJson, sha256Hex } from './util.ts';
 
 /**
- * Functions (D110): validates a `skiff-function.json` bundle, resolves bindings against the org
+ * Functions (D110): validates a `yoal-function.json` bundle, resolves bindings against the org
  * and exposes the function view.
  *
  * The control plane validates and never bundles (D2): a client uploads the modules plus the
@@ -66,18 +66,18 @@ export class FunctionService {
 		const manifestEntry = entries.find((entry) => entry.path === FUNCTION_MANIFEST_FILE);
 		if (!manifestEntry) {
 			if (effectiveRuntime(project) !== 'function') return null;
-			// A redeploy of a prebuilt Worker (for example `skif deploy ./dist`) carries no
+			// A redeploy of a prebuilt Worker (for example `yoal deploy ./dist`) carries no
 			// manifest. Reuse the project's existing function spec for compatibility, bindings and
 			// assets, and infer the modules from the uploaded files. A first deploy still needs the
 			// generated manifest because there is nothing to infer from.
 			this.ctx.iam.require(principal, 'deployment:create', { type: 'project', id: project.id });
 			if (!featureEnabled(this.ctx.config, 'FUNCTIONS'))
-				throw new ValidationError('Functions are not enabled on this platform (SKIFF_FEATURE_FUNCTIONS).');
+				throw new ValidationError('Functions are not enabled on this platform (YOAL_FEATURE_FUNCTIONS).');
 			return this.applyInferredBundle(principal, project, entries);
 		}
 		this.ctx.iam.require(principal, 'deployment:create', { type: 'project', id: project.id });
 		if (!featureEnabled(this.ctx.config, 'FUNCTIONS'))
-			throw new ValidationError('Functions are not enabled on this platform (SKIFF_FEATURE_FUNCTIONS).');
+			throw new ValidationError('Functions are not enabled on this platform (YOAL_FEATURE_FUNCTIONS).');
 
 		const manifest = parseManifest(manifestEntry.data);
 		if (effectiveRuntime(project) !== 'function')
@@ -108,7 +108,7 @@ export class FunctionService {
 			manifest.compatibilityFlags.includes('d1_binding_jsrpc')
 		)
 			throw new ValidationError(
-				'D1 bindings on Skiff use the HTTP binding path; remove the d1_binding_jsrpc compatibility flag.',
+				'D1 bindings on Yoal use the HTTP binding path; remove the d1_binding_jsrpc compatibility flag.',
 			);
 
 		const { bindings, secrets } = await this.resolveBindings(project, manifest.bindings, manifest);
@@ -132,7 +132,7 @@ export class FunctionService {
 		const memoryMb = manifest.memoryMb ?? (python ? FUNCTION_PYTHON_DEFAULT_MEMORY_MB : FUNCTION_DEFAULT_MEMORY_MB);
 		if (python && memoryMb < FUNCTION_PYTHON_MIN_MEMORY_MB)
 			throw new ValidationError(
-				`A Python function needs at least ${FUNCTION_PYTHON_MIN_MEMORY_MB} MB: Pyodide alone is about 230 MB resident (skiff.memoryMb).`,
+				`A Python function needs at least ${FUNCTION_PYTHON_MIN_MEMORY_MB} MB: Pyodide alone is about 230 MB resident (yoal.memoryMb).`,
 			);
 		const resolved = functionRuntimeSpecSchema.parse({
 			main: manifest.main,
@@ -215,9 +215,9 @@ export class FunctionService {
 	}
 
 	/**
-	 * Redeploy a prebuilt Worker without `skiff-function.json`. The previous deployment's resolved
+	 * Redeploy a prebuilt Worker without `yoal-function.json`. The previous deployment's resolved
 	 * spec supplies the compatibility date, bindings and assets directory; only the modules and
-	 * asset bytes are taken from this upload. This keeps `skif deploy ./dist` working for projects
+	 * asset bytes are taken from this upload. This keeps `yoal deploy ./dist` working for projects
 	 * that already deployed once, while a first deploy still uses the generated manifest.
 	 */
 	private async applyInferredBundle(
@@ -238,7 +238,7 @@ export class FunctionService {
 			.filter((path) => ['.js', '.mjs', '.cjs', '.wasm'].includes(extensionOf(path)));
 		if (candidate.length === 0)
 			throw new ValidationError(
-				'No built Worker module was found in this upload. Run the build first (or keep wrangler.jsonc at the project root and use skif deploy from there).',
+				'No built Worker module was found in this upload. Run the build first (or keep wrangler.jsonc at the project root and use yoal deploy from there).',
 			);
 		const preferred = ['index.js', 'index.mjs', 'worker.js', '_worker.js', 'main.js', 'main.mjs'];
 		const main = fn && files.has(fn.main)
@@ -513,7 +513,7 @@ export class FunctionService {
 					const resolver = bindingResolver(binding.type);
 					if (!resolver)
 						throw new ValidationError(
-							`Binding ${binding.name}: ${binding.type} bindings are not supported by this Skiff build yet.`,
+							`Binding ${binding.name}: ${binding.type} bindings are not supported by this Yoal build yet.`,
 						);
 					bindings.push(await resolver({ core: this.ctx, project }, binding));
 					break;
@@ -540,7 +540,7 @@ export class FunctionService {
 	}
 }
 
-/** Parse and schema-check `skiff-function.json`, naming the file and the first few bad fields. */
+/** Parse and schema-check `yoal-function.json`, naming the file and the first few bad fields. */
 function parseManifest(data: Uint8Array): FunctionManifest {
 	let raw: unknown;
 	try {

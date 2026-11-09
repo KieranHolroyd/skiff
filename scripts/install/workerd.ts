@@ -11,7 +11,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-export const WORKERD_DEST = '/usr/lib/skiff/workerd';
+export const WORKERD_DEST = '/usr/lib/yoal/workerd';
 
 export type WorkerdArch = 'amd64' | 'arm64';
 
@@ -48,7 +48,7 @@ export function pinnedWorkerdVersion(repoRoot: string): string {
 export interface EnsureWorkerdOptions {
 	version: string;
 	arch: WorkerdArch;
-	/** Defaults to `/usr/lib/skiff/workerd`. */
+	/** Defaults to `/usr/lib/yoal/workerd`. */
 	destDir?: string;
 	dryRun?: boolean;
 	/** Download seam for tests. */
@@ -93,7 +93,7 @@ export async function ensureWorkerd(options: EnsureWorkerdOptions): Promise<Ensu
 	// A real workerd tarball is tens of MB; reject an HTML error page or a truncated body.
 	if (body.byteLength < 1_000_000) throw new Error(`workerd download is too small (${body.byteLength} bytes)`);
 
-	const work = mkdtempSync(join(tmpdir(), 'skiff-workerd-'));
+	const work = mkdtempSync(join(tmpdir(), 'yoal-workerd-'));
 	try {
 		const tarball = join(work, 'workerd.tgz');
 		await Bun.write(tarball, body);

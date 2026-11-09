@@ -2,7 +2,7 @@
 /**
  * Black-box stress and conformance run against a deployed v2-stress workload.
  *
- * The app is ordinary HTTP: this script knows nothing about Skiff internals except the public
+ * The app is ordinary HTTP: this script knows nothing about Yoal internals except the public
  * REST and agent APIs it uses for optional cross-checks. Run it against the deployed URL (with
  * `--node-token` for desired-state/activation checks) or against `bun run dev` locally.
  */
@@ -81,8 +81,8 @@ Load and limits:
   --skip-load              skip the load sample
 
 Control plane (optional):
-  --api <origin>           platform origin (default state.platform or SKIFF_URL)
-  --token <key>            user API key (default SKIFF_TOKEN)
+  --api <origin>           platform origin (default state.platform or YOAL_URL)
+  --token <key>            user API key (default YOAL_TOKEN)
   --node <origin>          node-API origin (default --api)
   --node-token <token>     node token for desired-state and activation checks
   --project <slug>         project slug (default state.project)
@@ -110,13 +110,13 @@ if (!base) {
 const baseUrl = new URL(base);
 const stateMatchesBase = (state?.appUrl ?? '').replace(/\/+$/, '') === base;
 const project = flags.string('project') ?? state?.project ?? '';
-const apiOrigin = (flags.string('api') ?? state?.platform ?? process.env.SKIFF_URL ?? '').replace(
+const apiOrigin = (flags.string('api') ?? state?.platform ?? process.env.YOAL_URL ?? '').replace(
 	/\/+$/,
 	''
 );
-const apiToken = flags.string('token') ?? process.env.SKIFF_TOKEN ?? '';
+const apiToken = flags.string('token') ?? process.env.YOAL_TOKEN ?? '';
 const nodeOrigin = (flags.string('node') ?? apiOrigin).replace(/\/+$/, '');
-const nodeToken = flags.string('node-token') ?? process.env.SKIFF_NODE_TOKEN ?? '';
+const nodeToken = flags.string('node-token') ?? process.env.YOAL_NODE_TOKEN ?? '';
 const requests = flags.int('requests', 200, 1, 100_000);
 const concurrency = flags.int('concurrency', 16, 1, 512);
 const fit = Math.min(concurrency, requests);
@@ -752,7 +752,7 @@ if (api) {
 		return `${node.reservedMemoryMb}/${node.sliceMemoryMb} MB reserved, ${node.workloadCount} workloads`;
 	});
 } else {
-	skip('control-plane state', 'set --api and --token (or SKIFF_URL/SKIFF_TOKEN)');
+	skip('control-plane state', 'set --api and --token (or YOAL_URL/YOAL_TOKEN)');
 }
 
 if (nodeToken && nodeOrigin && workloadId) {

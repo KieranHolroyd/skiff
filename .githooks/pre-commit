@@ -1,7 +1,7 @@
 #!/bin/sh
 # Automatic patch bump of VERSION for commits that change shipped code (scripts/version.ts auto).
 # Minor/major bumps are manual: bun run version:minor | version:major.
-# Skip once with `git commit --no-verify`, or set SKIFF_NO_VERSION_BUMP=1.
+# Skip once with `git commit --no-verify`, or set YOAL_NO_VERSION_BUMP=1.
 if ! command -v bun >/dev/null 2>&1; then
 	echo "pre-commit: bun not found; skipping the automatic VERSION bump" >&2
 	exit 0

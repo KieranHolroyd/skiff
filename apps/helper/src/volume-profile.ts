@@ -7,7 +7,7 @@ import type { VolumeRegistry, VolumeRunner, VerifyResult } from './volumes.ts';
  *
  * The agent names a **registered disk id** (`volumeId` on the wire), never a path: the helper
  * resolves the mount from its own registry, proves it is mounted (D76), and benchmarks a scratch
- * file under `<mount>/skiff/.profile/`, removing it afterwards. With `fio` installed it measures
+ * file under `<mount>/yoal/.profile/`, removing it afterwards. With `fio` installed it measures
  * sequential read/write (1 MiB, queue depth 8), random 4 KiB read/write IOPS (queue depth 32) and
  * sync-write latency (4 KiB writes, `fdatasync` after each, queue depth 1 — what a database commit
  * feels).
@@ -68,7 +68,7 @@ export class VolumeProfiler {
 			if (!entry) throw new Error(`Volume ${request.volumeId} is not registered on this node.`);
 			const verified = await this.options.verify({ mountPath: entry.mountPath, sourceKey: entry.sourceKey });
 			if (!verified.ok) throw new Error(`Volume ${request.volumeId} is not mounted: ${verified.message ?? 'unknown'}`);
-			const dir = join(entry.mountPath, 'skiff', '.profile');
+			const dir = join(entry.mountPath, 'yoal', '.profile');
 			await fs.mkdir(dir, { recursive: true, mode: 0o700 });
 			const free = await (this.options.freeBytes ?? statfsFree)(dir);
 			if (free < request.sizeMb * MIB * 2)

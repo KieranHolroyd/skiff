@@ -60,7 +60,7 @@ export const POST: RequestHandler = async ({ locals }) => {
 		headers: {
 			'content-type': 'application/vnd.sqlite3',
 			'content-length': String(size),
-			'content-disposition': `attachment; filename="skiff-${stamp}.db"`,
+			'content-disposition': `attachment; filename="yoal-${stamp}.db"`,
 			'cache-control': 'no-store'
 		}
 	});

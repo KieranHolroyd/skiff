@@ -104,7 +104,7 @@ export const bulkVerbs: Record<BulkAction, { verb: string; past: string; noun: s
 };
 
 export function watchHint(id: string): string {
-	return `Still running: skif operations watch ${id}`;
+	return `Still running: yoal operations watch ${id}`;
 }
 
 // --- plans --------------------------------------------------------------------------------

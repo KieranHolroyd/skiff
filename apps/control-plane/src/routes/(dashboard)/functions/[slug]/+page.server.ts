@@ -5,7 +5,7 @@ import {
 	isFunctionTier,
 	nextCronTime,
 	type SecretView
-} from '@skiff/core';
+} from '@yoal/core';
 import {
 	FUNCTION_STATEFUL_REPLICA_MESSAGE,
 	MAX_WORKLOAD_REPLICAS,
@@ -19,7 +19,7 @@ import {
 	type FunctionView,
 	type NodeCapacityView,
 	type WorkloadView
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { features } from '#lib/server/config.js';
 import { parseTrafficRange, trafficRangeHref, trafficRanges } from '#lib/server/traffic-range.js';

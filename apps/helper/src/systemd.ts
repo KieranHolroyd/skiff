@@ -176,7 +176,7 @@ import {
  * The on-demand database studio process (plan 22). A static unit the installer and updater ship
  * beside the agent unit; the helper only ever starts or stops it, by this fixed name.
  */
-export const STUDIO_UNIT = 'skiff-studio.service';
+export const STUDIO_UNIT = 'yoal-studio.service';
 
 export interface RunResult {
 	code: number;
@@ -268,13 +268,13 @@ export interface SystemdDriverOptions {
 	registriesConfDir?: string;
 	/** Root's default Podman auth file (G4 node login), normally /run/containers/0/auth.json. */
 	rootAuthFile?: string;
-	/** Root-owned runtime directory for env files and sockets, normally /run/skiff-workloads. */
+	/** Root-owned runtime directory for env files and sockets, normally /run/yoal-workloads. */
 	runtimeDir: string;
-	/** Root for per-workload identity tokens, normally /run/skiff/identity (IAM.md I18). */
+	/** Root for per-workload identity tokens, normally /run/yoal/identity (IAM.md I18). */
 	identityDir?: string;
-	/** Persistent container data root, normally /var/lib/skiff-workloads. */
+	/** Persistent container data root, normally /var/lib/yoal-workloads. */
 	stateDir: string;
-	/** Disk registry written by the root applier, normally /etc/skiff/volumes.json (D76). */
+	/** Disk registry written by the root applier, normally /etc/yoal/volumes.json (D76). */
 	volumeRegistryFile?: string;
 	/**
 	 * Injectable registry for tests, used instead of `volumeRegistryFile`. Production always reads
@@ -377,7 +377,7 @@ export class SystemdDriver {
 		this.registriesConfDir = assertAbsolutePath(options.registriesConfDir ?? '/etc/containers/registries.conf.d', 'registriesConfDir');
 		this.rootAuthFile = assertAbsolutePath(options.rootAuthFile ?? '/run/containers/0/auth.json', 'rootAuthFile');
 		this.runtimeDir = assertAbsolutePath(options.runtimeDir, 'runtimeDir');
-		this.identityDir = assertAbsolutePath(options.identityDir ?? '/run/skiff/identity', 'identityDir');
+		this.identityDir = assertAbsolutePath(options.identityDir ?? '/run/yoal/identity', 'identityDir');
 		this.stateDir = assertAbsolutePath(options.stateDir, 'stateDir');
 		this.volumeRegistryFile = assertAbsolutePath(
 			options.volumeRegistryFile ?? DEFAULT_VOLUMES_FILE,
@@ -389,7 +389,7 @@ export class SystemdDriver {
 		this.releaseDirs = options.releaseDirs.map((dir) => assertAbsolutePath(dir, 'releaseDir'));
 		this.bunPath = assertAbsolutePath(options.bunPath, 'bunPath');
 		this.nodePath = assertAbsolutePath(options.nodePath ?? '/usr/local/bin/node', 'nodePath');
-		this.workerdDir = assertAbsolutePath(options.workerdDir ?? '/usr/lib/skiff/workerd', 'workerdDir');
+		this.workerdDir = assertAbsolutePath(options.workerdDir ?? '/usr/lib/yoal/workerd', 'workerdDir');
 		this.systemctlPath = assertAbsolutePath(options.systemctlPath ?? '/usr/bin/systemctl', 'systemctlPath');
 		this.journalctlPath = assertAbsolutePath(
 			options.journalctlPath ?? '/usr/bin/journalctl',
@@ -404,7 +404,7 @@ export class SystemdDriver {
 		this.socketGroup = options.socketGroup ?? null;
 		this.chown = options.chown ?? defaultChown();
 		this.replicationDir = assertAbsolutePath(
-			options.replicationDir ?? '/var/lib/skiff/agent/replication',
+			options.replicationDir ?? '/var/lib/yoal/agent/replication',
 			'replicationDir',
 		);
 	}
@@ -423,10 +423,10 @@ export class SystemdDriver {
 	async ensureSlice(options: SliceOptions): Promise<void> {
 		const memoryMb = assertMemoryMb(options.memoryMb, 'slice memoryMb');
 		const cpuWeight = assertCpuWeight(options.cpuWeight ?? 200, 'cpuWeight');
-		const path = join(this.unitDir, 'skiff-workloads.slice');
+		const path = join(this.unitDir, 'yoal-workloads.slice');
 		const changed = await this.writeIfChanged(path, renderSliceUnit(memoryMb, cpuWeight), 0o644);
 		if (changed) await this.daemonReload();
-		await this.systemctl(['start', 'skiff-workloads.slice']);
+		await this.systemctl(['start', 'yoal-workloads.slice']);
 	}
 
 	/**
@@ -511,14 +511,14 @@ export class SystemdDriver {
 			throw new ValidationError(
 				`Volume "${workload.volumeId}" is not mounted at ${entry.mountPath}: ${mounted.message ?? 'unknown error'}. Refusing to start ${workload.id}.`,
 			);
-		return join(entry.mountPath, 'skiff', workload.id);
+		return join(entry.mountPath, 'yoal', workload.id);
 	}
 
 	/**
 	 * Resolve app volumes to host directories before anything is written (plan 07).
 	 *
 	 * A disk backing (`node_volume`) is verified with `findmnt` every start; a missing mount fails the
-	 * start rather than creating `/mnt/empty/skiff/apps/...` on the root disk. State-dir volumes
+	 * start rather than creating `/mnt/empty/yoal/apps/...` on the root disk. State-dir volumes
 	 * live under the helper's own state directory. Only `<base>/<volumeId>` is created.
 	 */
 	async resolveAppVolumeMounts(workload: WorkloadDesired): Promise<UnitVolumeMount[]> {
@@ -549,7 +549,7 @@ export class SystemdDriver {
 						);
 					verified.add(nodeVolumeId);
 				}
-				base = join(entry.mountPath, 'skiff', 'apps', workload.projectId);
+				base = join(entry.mountPath, 'yoal', 'apps', workload.projectId);
 			} else {
 				base = join(this.stateDir, 'apps', workload.projectId);
 			}
@@ -881,8 +881,8 @@ export class SystemdDriver {
 					adminUser: user,
 					tls: tls?.enabled
 						? {
-								certFile: '/run/skiff-tls/server.crt',
-								keyFile: '/run/skiff-tls/server.key',
+								certFile: '/run/yoal-tls/server.crt',
+								keyFile: '/run/yoal-tls/server.key',
 							}
 						: null,
 				});
@@ -1129,7 +1129,7 @@ export class SystemdDriver {
 
 	/**
 	 * Configure a primary for streaming (docs/CLUSTERING.md §9.2): the managed `pg_hba` rule, the
-	 * `skiff_repl` role, WAL retention and exactly `slots`. An empty list tears everything down.
+	 * `yoal_repl` role, WAL retention and exactly `slots`. An empty list tears everything down.
 	 * Idempotent; the SQL goes over stdin and the owner password through the environment.
 	 */
 	async replicationConfigure(id: string, raw: { slots?: unknown; password?: unknown }): Promise<{ slots: string[] }> {
@@ -1156,7 +1156,7 @@ export class SystemdDriver {
 		return { slots };
 	}
 
-	/** Every Skiff slot on a primary, joined to its walsender, as one JSON query. */
+	/** Every Yoal slot on a primary, joined to its walsender, as one JSON query. */
 	async replicationStatus(id: string): Promise<{ slots: ReplicationSlotStatus[] }> {
 		const databaseId = assertPrimaryDatabaseId(id);
 		const env = await this.readPostgresEnv(databaseId);
@@ -1221,7 +1221,7 @@ export class SystemdDriver {
 			'-i',
 			'-e',
 			'PGPASSWORD',
-			`skiff-workload-${id}`,
+			`yoal-workload-${id}`,
 			'psql',
 			'-X',
 			'-h',
@@ -1252,7 +1252,7 @@ export class SystemdDriver {
 		for (const name of await fs.readdir(this.quadletDir).catch(() => [] as string[])) {
 			const id = LEGACY_CONSOLE_UNIT.exec(name)?.[1];
 			if (!id || !isDatabaseId(id)) continue;
-			await this.systemctl(['disable', '--now', `skiff-workload-${id}-console.service`], {
+			await this.systemctl(['disable', '--now', `yoal-workload-${id}-console.service`], {
 				allowFailure: true,
 			});
 			unitRemoved = (await this.removeIfExists(join(this.quadletDir, name))) || unitRemoved;
@@ -1304,7 +1304,7 @@ export class SystemdDriver {
 		await this.systemctl(['stop', STUDIO_UNIT]);
 	}
 
-	/** Start `skiff-mail` on the mail node (docs/EMAIL.md). The unit name is fixed. */
+	/** Start `yoal-mail` on the mail node (docs/EMAIL.md). The unit name is fixed. */
 	async startMail(): Promise<void> {
 		await this.systemctl(['start', MAIL_UNIT]);
 	}
@@ -1328,18 +1328,18 @@ export class SystemdDriver {
 		await this.systemctl(['stop', IDENTITY_UNIT]);
 	}
 
-	/** Copy the submission certificate out of Caddy's storage for `skiff-mail`. */
+	/** Copy the submission certificate out of Caddy's storage for `yoal-mail`. */
 	async copyMailTls(host: string): Promise<{ found: boolean; changed: boolean }> {
 		return copyMailTls(host, {
-			caddyDataDir: process.env.SKIFF_CADDY_DATA_DIR ?? '/var/lib/caddy/.local/share/caddy',
-			outDir: process.env.SKIFF_MAIL_TLS_DIR ?? '/run/skiff/mail-tls',
-			ownerFrom: process.env.SKIFF_MAIL_OWNER_PATH ?? '/var/lib/skiff',
+			caddyDataDir: process.env.YOAL_CADDY_DATA_DIR ?? '/var/lib/caddy/.local/share/caddy',
+			outDir: process.env.YOAL_MAIL_TLS_DIR ?? '/run/yoal/mail-tls',
+			ownerFrom: process.env.YOAL_MAIL_OWNER_PATH ?? '/var/lib/yoal',
 			chown: this.chown,
 		});
 	}
 
 	/**
-	 * Fixed read-only studio principal verb (plan 22 track G): create or update `skiff_studio_ro`
+	 * Fixed read-only studio principal verb (plan 22 track G): create or update `yoal_studio_ro`
 	 * with read rights only, then log in as it. The engine and owner come from the helper's own env
 	 * file; the statements are fixed (`studio-principal.ts`). Valkey/Redis also get the user written
 	 * into the generated server config, so it survives a restart without one now.
@@ -1348,7 +1348,7 @@ export class SystemdDriver {
 		assertDatabaseId(id, 'database id');
 		assertStudioPrincipalPassword(password);
 		const env = await this.readDatabaseEnv(id);
-		await applyStudioPrincipal(containerExec([this.podmanPath], `skiff-workload-${id}`), env, password);
+		await applyStudioPrincipal(containerExec([this.podmanPath], `yoal-workload-${id}`), env, password);
 		if (env.engine !== 'valkey' && env.engine !== 'redis') return;
 		const path = join(this.runtimeDir, id, 'server.conf');
 		const current = await fs.readFile(path, 'utf8').catch(() => null);
@@ -1371,8 +1371,8 @@ export class SystemdDriver {
 			if (role !== 'owner') throw new ValidationError(`Only the owner can be rotated on ${env.engine}`);
 			return this.rotateEngineOwner(id, env, newPassword);
 		}
-		const target = role === 'owner' ? env.user : 'skiff_monitor';
-		const container = `skiff-workload-${id}`;
+		const target = role === 'owner' ? env.user : 'yoal_monitor';
+		const container = `yoal-workload-${id}`;
 		const child = Bun.spawn(
 			[
 				this.podmanPath,
@@ -1510,7 +1510,7 @@ END $$;`];
 				'-i',
 				'-e',
 				'PGPASSWORD',
-				`skiff-workload-${id}`,
+				`yoal-workload-${id}`,
 				'psql',
 				'-h',
 				'127.0.0.1',
@@ -1547,7 +1547,7 @@ END $$;`];
 				'exec',
 				'-e',
 				'PGPASSWORD',
-				`skiff-workload-${id}`,
+				`yoal-workload-${id}`,
 				'psql',
 				'-h',
 				'127.0.0.1',
@@ -1589,7 +1589,7 @@ END $$;`];
 				'exec',
 				'-e',
 				'PGPASSWORD',
-				`skiff-workload-${id}`,
+				`yoal-workload-${id}`,
 				'pg_dump',
 				'-Fc',
 				'--no-owner',
@@ -1631,7 +1631,7 @@ END $$;`];
 				'-i',
 				'-e',
 				'PGPASSWORD',
-				`skiff-workload-${id}`,
+				`yoal-workload-${id}`,
 				'pg_restore',
 				'--clean',
 				'--if-exists',
@@ -1674,7 +1674,7 @@ END $$;`];
 				'exec',
 				'-e',
 				'PGPASSWORD',
-				`skiff-workload-${id}`,
+				`yoal-workload-${id}`,
 				'psql',
 				'-tAc',
 				'SELECT 1',
@@ -1700,7 +1700,7 @@ END $$;`];
 
 	/**
 	 * Write the pgBackRest repository config and `.pgpass` for one database (docs/PITR.md) into its
-	 * config directory, `/run/skiff-workloads/<id>/pgbackrest/`: 0400 files owned by the engine uid;
+	 * config directory, `/run/yoal-workloads/<id>/pgbackrest/`: 0400 files owned by the engine uid;
 	 * credentials never enter desired state. The unit mounts the directory, so the running
 	 * container sees a rewrite at once and nothing restarts. `/run` is a tmpfs: the agent calls
 	 * this before every PITR task, which is what puts the files back after a reboot.
@@ -1985,7 +1985,7 @@ END $$;`];
 	private async dataDirFor(id: string): Promise<string> {
 		const roots = [resolve(this.stateDir)];
 		const registry = await this.registry();
-		for (const entry of Object.values(registry)) roots.push(resolve(entry.mountPath, 'skiff'));
+		for (const entry of Object.values(registry)) roots.push(resolve(entry.mountPath, 'yoal'));
 		for (const root of roots) {
 			const candidate = resolve(root, id);
 			if (dirname(candidate) !== root || basename(candidate) !== id) continue;
@@ -1999,7 +1999,7 @@ END $$;`];
 
 	/**
 	 * Owner credentials from the env file the helper itself wrote for the container. The engine is
-	 * the helper's own `SKIFF_DB_ENGINE` marker; files written before D95 have none and are Postgres.
+	 * the helper's own `YOAL_DB_ENGINE` marker; files written before D95 have none and are Postgres.
 	 */
 	private async readDatabaseEnv(id: string): Promise<DatabaseEnv> {
 		const text = await fs.readFile(join(this.runtimeDir, id, 'env'), 'utf8').catch(() => null);
@@ -2010,7 +2010,7 @@ END $$;`];
 			if (eq <= 0) continue;
 			values.set(line.slice(0, eq), line.slice(eq + 1));
 		}
-		const marker = values.get('SKIFF_DB_ENGINE') ?? 'postgres';
+		const marker = values.get('YOAL_DB_ENGINE') ?? 'postgres';
 		if (!Object.hasOwn(DATABASE_ENGINES, marker))
 			throw new ValidationError(`Database ${id} has an unknown engine "${marker}" in its env file.`);
 		const engine = marker as DatabaseEngine;
@@ -2155,7 +2155,7 @@ END $$;`];
 		if (env.engine === 'valkey' || env.engine === 'redis' || env.engine === 'clickhouse') return this.dumpNative(id, env);
 		const runtimeDir = join(this.runtimeDir, id);
 		await fs.mkdir(runtimeDir, { recursive: true, mode: 0o700 });
-		const container = `skiff-workload-${id}`;
+		const container = `yoal-workload-${id}`;
 		let argv: string[];
 		let extension: string;
 		let spawnEnv: Record<string, string | undefined> = process.env;
@@ -2226,7 +2226,7 @@ END $$;`];
 	private async restoreEngine(id: string, env: DatabaseEnv, body: ReadableStream<Uint8Array>): Promise<void> {
 		if (env.engine === 'valkey' || env.engine === 'redis' || env.engine === 'clickhouse')
 			return this.restoreNative(id, env, body);
-		const container = `skiff-workload-${id}`;
+		const container = `yoal-workload-${id}`;
 		let argv: string[];
 		let spawnEnv: Record<string, string | undefined> = process.env;
 		switch (env.engine) {
@@ -2291,7 +2291,7 @@ END $$;`];
 	 */
 	private async dumpNative(id: string, env: DatabaseEnv): Promise<{ path: string; sizeBytes: number; filename: string }> {
 		const staging = await this.prepareDumpStaging(id, env.engine);
-		const container = `skiff-workload-${id}`;
+		const container = `yoal-workload-${id}`;
 		const extension = env.engine === 'clickhouse' ? 'zip' : 'rdb';
 		const file = stagingFileName('dump', randomUUID(), extension);
 		const path = join(staging, file);
@@ -2337,13 +2337,13 @@ END $$;`];
 	 * - Valkey/Redis: `check-rdb` must accept it while the target still runs; the unit is stopped,
 	 *   the snapshot replaces the AOF as its base file (with a fresh manifest), and the unit is
 	 *   started. `PING` must answer `PONG`, which it only does once the dataset has loaded.
-	 * - ClickHouse: `RESTORE DATABASE skiff_backup AS <target>` into the running server, which
+	 * - ClickHouse: `RESTORE DATABASE yoal_backup AS <target>` into the running server, which
 	 *   verifies every part's checksum; the staging archive is removed either way.
 	 */
 	private async restoreNative(id: string, env: DatabaseEnv, body: ReadableStream<Uint8Array>): Promise<void> {
 		const staging = await this.prepareDumpStaging(id, env.engine);
 		const owner = DATABASE_ENGINES[env.engine];
-		const container = `skiff-workload-${id}`;
+		const container = `yoal-workload-${id}`;
 		const extension = env.engine === 'clickhouse' ? 'zip' : 'rdb';
 		const file = stagingFileName('restore', randomUUID(), extension);
 		const path = join(staging, file);
@@ -2369,11 +2369,11 @@ END $$;`];
 						podmanPath: this.podmanPath,
 						container,
 						user: env.user,
-						query: `SELECT 'skiff-ok' FROM system.databases WHERE name = '${env.database}'`,
+						query: `SELECT 'yoal-ok' FROM system.databases WHERE name = '${env.database}'`,
 					}),
 					{ env: { CLICKHOUSE_PASSWORD: env.password } },
 				);
-				if (verify.code !== 0 || verify.stdout.trim() !== 'skiff-ok')
+				if (verify.code !== 0 || verify.stdout.trim() !== 'yoal-ok')
 					throw new Error('The restored database did not answer the verification query.');
 				return;
 			}
@@ -2413,7 +2413,7 @@ END $$;`];
 	}
 
 	/**
-	 * The `skiff-dumps` directory in a database's data dir, created 0700 for the engine's uid (the
+	 * The `yoal-dumps` directory in a database's data dir, created 0700 for the engine's uid (the
 	 * server writes and reads the files), with stale leftovers from an interrupted run removed.
 	 */
 	private async prepareDumpStaging(id: string, engine: DatabaseEngine): Promise<string> {
@@ -2449,7 +2449,7 @@ END $$;`];
 	 */
 	private async rotateEngineOwner(id: string, env: DatabaseEnv, newPassword: string): Promise<void> {
 		if (env.engine === 'clickhouse') return this.rotateClickHouseOwner(id, env, newPassword);
-		const container = `skiff-workload-${id}`;
+		const container = `yoal-workload-${id}`;
 		let argv: string[];
 		let spawnEnv: Record<string, string | undefined> = process.env;
 		let script: string;
@@ -2510,7 +2510,7 @@ END $$;`];
 
 	/** A fresh owner login over TCP with `password`, answered by the engine's smallest query. */
 	private async verifyEngineLogin(id: string, env: DatabaseEnv, password: string): Promise<boolean> {
-		const container = `skiff-workload-${id}`;
+		const container = `yoal-workload-${id}`;
 		let argv: string[];
 		let spawnEnv: Record<string, string | undefined> = process.env;
 		let stdin: string | null = null;
@@ -2526,8 +2526,8 @@ END $$;`];
 				argv = [this.podmanPath, 'exec', '-i', container, 'mongosh', '--quiet', '--nodb'];
 				stdin =
 					`const c = connect('mongodb://127.0.0.1:27017/admin', ${JSON.stringify(env.user)}, ${JSON.stringify(password)});\n` +
-					`print('skiff-ok-' + c.runCommand({ ping: 1 }).ok);\n`;
-				expected = 'skiff-ok-1';
+					`print('yoal-ok-' + c.runCommand({ ping: 1 }).ok);\n`;
+				expected = 'yoal-ok-1';
 				break;
 			case 'valkey':
 			case 'redis':
@@ -2538,9 +2538,9 @@ END $$;`];
 			case 'clickhouse':
 				// clickhouse-client reads CLICKHOUSE_PASSWORD from its environment, overriding the
 				// container's (old) value; the native port is not published, only used in-container.
-				argv = [this.podmanPath, 'exec', '-e', 'CLICKHOUSE_PASSWORD', container, 'clickhouse-client', '--host', '127.0.0.1', '--user', env.user, '--query', "SELECT 'skiff-ok'"];
+				argv = [this.podmanPath, 'exec', '-e', 'CLICKHOUSE_PASSWORD', container, 'clickhouse-client', '--host', '127.0.0.1', '--user', env.user, '--query', "SELECT 'yoal-ok'"];
 				spawnEnv = { ...process.env, CLICKHOUSE_PASSWORD: password };
-				expected = 'skiff-ok';
+				expected = 'yoal-ok';
 				break;
 			default:
 				return false;
@@ -2586,11 +2586,11 @@ END $$;`];
 	async purge(id: string): Promise<void> {
 		assertManagedId(id, 'managed id');
 		await this.remove(id);
-		// The data dir is under the state root or, for a disk-backed workload, `<mount>/skiff`
+		// The data dir is under the state root or, for a disk-backed workload, `<mount>/yoal`
 		// (D78). Both are fixed shapes with the id as the basename; nothing else is ever removed.
 		const roots = [resolve(this.stateDir)];
 		const registry = await this.registry();
-		for (const entry of Object.values(registry)) roots.push(resolve(entry.mountPath, 'skiff'));
+		for (const entry of Object.values(registry)) roots.push(resolve(entry.mountPath, 'yoal'));
 		for (const root of roots) {
 			const target = resolve(root, id);
 			if (dirname(target) !== root || basename(target) !== id)
@@ -2635,7 +2635,7 @@ END $$;`];
 		// Compose: remove every rendered service unit, using the manifest and a directory scan so a
 		// half-written manifest still cannot leave a container behind.
 		const services = new Set<string>((await this.readComposeManifest(id)) ?? []);
-		const prefix = `skiff-workload-${id}--`;
+		const prefix = `yoal-workload-${id}--`;
 		for (const name of await fs.readdir(this.quadletDir).catch(() => [] as string[])) {
 			if (!name.startsWith(prefix) || !name.endsWith('.container')) continue;
 			const service = name.slice(prefix.length, -'.container'.length);
@@ -2992,7 +2992,7 @@ END $$;`];
 			.run([this.podmanPath, 'network', 'inspect', networkName, '--format', '{{json .Containers}}'])
 			.catch(() => null);
 		if (!inspect || inspect.code !== 0) return false;
-		const container = `skiff-workload-${workload.id}`;
+		const container = `yoal-workload-${workload.id}`;
 		if (networkHasContainer(inspect.stdout, container)) return true;
 		const connect = await this.runner
 			.run([this.podmanPath, 'network', 'connect', networkName, container])
@@ -3057,8 +3057,8 @@ END $$;`];
 }
 
 /** Names the retired D60 studio console used; only `removeLegacyConsoles` still matches them. */
-const LEGACY_CONSOLE_UNIT = /^skiff-workload-(db_[A-Za-z0-9_-]+)-console\.container$/;
-const LEGACY_CONSOLE_CONTAINER = /^skiff-workload-(db_[A-Za-z0-9_-]+)-console$/;
+const LEGACY_CONSOLE_UNIT = /^yoal-workload-(db_[A-Za-z0-9_-]+)-console\.container$/;
+const LEGACY_CONSOLE_CONTAINER = /^yoal-workload-(db_[A-Za-z0-9_-]+)-console$/;
 
 function isDatabaseId(value: string): boolean {
 	try {
@@ -3139,7 +3139,7 @@ function detailOf(result: RunResult): string {
 }
 
 /** Inside the container's /tmp tmpfs; removed after every MongoDB tool run. */
-const MONGO_TOOL_CONFIG = '/tmp/skiff-mongo-tool.yaml';
+const MONGO_TOOL_CONFIG = '/tmp/yoal-mongo-tool.yaml';
 
 /** Connection flags shared by `mongodump`/`mongorestore` (the password comes from `--config`). */
 function mongoToolArgs(user: string): string[] {
@@ -3190,8 +3190,8 @@ export function takeRegistryFiles(env: Record<string, string>): RegistrySecrets 
 }
 
 /** Activation env names that carry the broker's credentials (set by the control plane, D111). */
-export const BROKER_USER_ENV = 'SKIFF_BROKER_USER';
-export const BROKER_PASSWORD_ENV = 'SKIFF_BROKER_PASSWORD';
+export const BROKER_USER_ENV = 'YOAL_BROKER_USER';
+export const BROKER_PASSWORD_ENV = 'YOAL_BROKER_PASSWORD';
 
 /** Remove the broker's credentials from the container env and return them for its config. */
 export function takeBrokerAuth(env: Record<string, string>): { user: string; password: string } {
@@ -3223,10 +3223,10 @@ export function databaseFixedEnv(engine: DatabaseEngine, env: Record<string, str
 		case 'postgres':
 			return { PGDATA: DATABASE_PGDATA };
 		case 'mysql':
-			return { SKIFF_DB_ENGINE: engine, MYSQL_ROOT_PASSWORD: password, MYSQL_ROOT_HOST: 'localhost' };
+			return { YOAL_DB_ENGINE: engine, MYSQL_ROOT_PASSWORD: password, MYSQL_ROOT_HOST: 'localhost' };
 		case 'mariadb':
 			return {
-				SKIFF_DB_ENGINE: engine,
+				YOAL_DB_ENGINE: engine,
 				MARIADB_ROOT_PASSWORD: password,
 				MARIADB_ROOT_HOST: 'localhost',
 				MARIADB_AUTO_UPGRADE: '1',
@@ -3234,12 +3234,12 @@ export function databaseFixedEnv(engine: DatabaseEngine, env: Record<string, str
 		case 'mongodb':
 		case 'valkey':
 		case 'redis':
-			return { SKIFF_DB_ENGINE: engine };
+			return { YOAL_DB_ENGINE: engine };
 		case 'clickhouse':
 			// The entrypoint reads the helper's standalone config and leaves users to it; the owner
 			// in CLICKHOUSE_USER/PASSWORD is what its first-start `CREATE DATABASE` logs in as.
 			return {
-				SKIFF_DB_ENGINE: engine,
+				YOAL_DB_ENGINE: engine,
 				CLICKHOUSE_CONFIG: `${CLICKHOUSE_CONFIG_DIR}/${CLICKHOUSE_CONFIG_FILE}`,
 				CLICKHOUSE_SKIP_USER_SETUP: '1',
 				CLICKHOUSE_WATCHDOG_ENABLE: '0',

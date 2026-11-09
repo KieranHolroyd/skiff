@@ -79,9 +79,9 @@ describe('claimInstance', () => {
 	});
 
 	test('only one of two connections to the same database can claim it', () => {
-		const dir = mkdtempSync(join(tmpdir(), 'skiff-setup-'));
+		const dir = mkdtempSync(join(tmpdir(), 'yoal-setup-'));
 		try {
-			const path = join(dir, 'skiff.db');
+			const path = join(dir, 'yoal.db');
 			const a = authDb(path);
 			const b = authDb(path);
 			const results = [a, b].map((db, i) => {
@@ -151,7 +151,7 @@ describe('organizationSlug', () => {
 describe('setup token', () => {
 	let dir: string;
 	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), 'skiff-setup-token-'));
+		dir = mkdtempSync(join(tmpdir(), 'yoal-setup-token-'));
 	});
 	afterEach(() => rmSync(dir, { recursive: true, force: true }));
 

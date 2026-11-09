@@ -4,7 +4,7 @@ import {
 	safeEqual,
 	userPoolCsrfCookieName,
 	userPoolSessionCookieName
-} from '@skiff/core';
+} from '@yoal/core';
 import { platformOrigin } from '#lib/server/config.js';
 
 /**

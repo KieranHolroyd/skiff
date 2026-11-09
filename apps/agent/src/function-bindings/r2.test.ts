@@ -3,7 +3,7 @@ import {
 	workloadDesiredSchema,
 	type FunctionRuntimeBinding,
 	type WorkloadDesired,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { renderR2Binding } from './r2.ts';
 import type { BindingRenderContext } from './types.ts';
 
@@ -22,11 +22,11 @@ function functionWorkload(
 		runtime: 'function',
 		status: 'running',
 		release: SHA,
-		upstream: 'unix//run/skiff-workloads/wl_1.sock',
+		upstream: 'unix//run/yoal-workloads/wl_1.sock',
 		memoryMb: 128,
 		cpus: 1,
 		port: 3000,
-		healthPath: '/__skiff/health',
+		healthPath: '/__yoal/health',
 		socketActivation: true,
 		activationVersion: SHA,
 		function: {

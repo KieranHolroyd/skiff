@@ -1,4 +1,4 @@
-import type { Cell, Column } from '@skiff/studio/protocol';
+import type { Cell, Column } from '@yoal/studio/protocol';
 import { cellPretty, isCell, isTagged } from './cells.js';
 
 /**

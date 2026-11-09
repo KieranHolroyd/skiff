@@ -1,6 +1,6 @@
 import { fail } from '@sveltejs/kit';
-import { destructivePermissions, isPermission } from '@skiff/contracts';
-import { CONNECTED_APPS_ORG_PERMISSION, type ConnectedApp } from '@skiff/core';
+import { destructivePermissions, isPermission } from '@yoal/contracts';
+import { CONNECTED_APPS_ORG_PERMISSION, type ConnectedApp } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import { failStatus, formString, toFormFailure } from '../../_lib/errors.js';
 import type { Actions, PageServerLoad } from './$types';

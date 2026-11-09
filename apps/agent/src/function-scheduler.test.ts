@@ -9,12 +9,12 @@ import {
 	type DesiredState,
 	type WorkloadDesired,
 	type WorkloadStatus,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { HelperWorkloadStatus } from './helper-client.ts';
 import { FunctionScheduler } from './function-scheduler.ts';
 
 const SHA = 'a'.repeat(64);
-const SOCKET_DIR = '/run/skiff-workloads';
+const SOCKET_DIR = '/run/yoal-workloads';
 const T0 = Date.parse('2026-11-05T10:00:00Z');
 const MINUTE = 60_000;
 const directories: string[] = [];
@@ -99,7 +99,7 @@ function functionWorkload(
 		memoryMb: 128,
 		cpus: 1,
 		port: 3000,
-		healthPath: '/__skiff/health',
+		healthPath: '/__yoal/health',
 		socketActivation: true,
 		activationVersion: 'b'.repeat(64),
 		env: {},
@@ -128,7 +128,7 @@ function processApp(options: { idleStopSeconds?: number; status?: 'running' | 's
 		runtime: 'process',
 		status: options.status ?? 'running',
 		release: SHA,
-		upstream: 'unix//run/skiff-workloads/prj_proc.sock',
+		upstream: 'unix//run/yoal-workloads/prj_proc.sock',
 		memoryMb: 256,
 		cpus: 1,
 		port: 3000,
@@ -183,7 +183,7 @@ function make(options: HarnessOptions = {}) {
 }
 
 async function tempStatePath(): Promise<string> {
-	const dir = await fs.mkdtemp(join(tmpdir(), 'skiff-function-scheduler-'));
+	const dir = await fs.mkdtemp(join(tmpdir(), 'yoal-function-scheduler-'));
 	directories.push(dir);
 	return join(dir, 'function-cron-state.json');
 }
@@ -457,13 +457,13 @@ describe('cron triggers (FN9)', () => {
 		await made.scheduler.tick(state, signal);
 		expect(calls.calls).toHaveLength(1);
 		const [call] = calls.calls;
-		expect(call?.url).toBe('http://localhost/__skiff/scheduled');
+		expect(call?.url).toBe('http://localhost/__yoal/scheduled');
 		expect(call?.init.method).toBe('POST');
 		expect(call?.init.unix).toBe(`${SOCKET_DIR}/wld_fn.sock`);
 		expect(call?.init.headers).toEqual({
 			[FUNCTION_INTERNAL_HEADER]: FUNCTION_INTERNAL_VALUE,
-			'x-skiff-cron': '*/5 * * * *',
-			'x-skiff-scheduled-time': String(T0),
+			'x-yoal-cron': '*/5 * * * *',
+			'x-yoal-scheduled-time': String(T0),
 		});
 
 		// The same occurrence never fires twice.
@@ -476,7 +476,7 @@ describe('cron triggers (FN9)', () => {
 		await made.scheduler.tick(state, signal);
 		expect(calls.calls).toHaveLength(2);
 		expect(calls.calls[1]?.init.headers).toMatchObject({
-			'x-skiff-scheduled-time': String(T0 + 5 * MINUTE),
+			'x-yoal-scheduled-time': String(T0 + 5 * MINUTE),
 		});
 	});
 
@@ -492,7 +492,7 @@ describe('cron triggers (FN9)', () => {
 		await made.scheduler.tick(state, signal);
 		expect(calls.calls).toHaveLength(1);
 		expect(calls.calls[0]?.init.headers).toMatchObject({
-			'x-skiff-scheduled-time': String(T0 + 5 * MINUTE),
+			'x-yoal-scheduled-time': String(T0 + 5 * MINUTE),
 		});
 	});
 
@@ -525,7 +525,7 @@ describe('cron triggers (FN9)', () => {
 		await secondScheduler.tick(stateWith([workload]), signal);
 		expect(calls.calls).toHaveLength(1);
 		expect(calls.calls[0]?.init.headers).toMatchObject({
-			'x-skiff-scheduled-time': String(T0 + 35 * MINUTE),
+			'x-yoal-scheduled-time': String(T0 + 35 * MINUTE),
 		});
 	});
 
@@ -539,7 +539,7 @@ describe('cron triggers (FN9)', () => {
 		await second.scheduler.tick(stateWith([functionWorkload({ crons: ['*/5 * * * *'] })]), signal);
 		expect(calls.calls).toHaveLength(1);
 		expect(calls.calls[0]?.init.headers).toMatchObject({
-			'x-skiff-scheduled-time': String(T0 + 5 * MINUTE),
+			'x-yoal-scheduled-time': String(T0 + 5 * MINUTE),
 		});
 	});
 

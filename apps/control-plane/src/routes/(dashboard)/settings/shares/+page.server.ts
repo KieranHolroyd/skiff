@@ -1,5 +1,5 @@
 import { fail } from '@sveltejs/kit';
-import type { ShareGrant, ShareView } from '@skiff/contracts';
+import type { ShareGrant, ShareView } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { failStatus, formBoolean, formRawString, formString, toFormFailure } from '../../_lib/errors.js';
 import type { Actions, PageServerLoad } from './$types';

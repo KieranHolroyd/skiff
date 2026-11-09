@@ -8,16 +8,16 @@
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
 	import TerminalIcon from '@lucide/svelte/icons/terminal';
 	import TrashIcon from '@lucide/svelte/icons/trash';
-	import type { RegistryOidcTrustView, RegistryRepositoryView } from '@skiff/contracts';
+	import type { RegistryOidcTrustView, RegistryRepositoryView } from '@yoal/contracts';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
-	import DataTable, { type DataColumn } from '#lib/components/skiff/DataTable.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import GitHubMark from '#lib/components/skiff/GitHubMark.svelte';
-	import GitRepoPicker from '#lib/components/skiff/GitRepoPicker.svelte';
-	import ForgeMark from '#lib/components/skiff/ForgeMark.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
+	import DataTable, { type DataColumn } from '#lib/components/yoal/DataTable.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import GitHubMark from '#lib/components/yoal/GitHubMark.svelte';
+	import GitRepoPicker from '#lib/components/yoal/GitRepoPicker.svelte';
+	import ForgeMark from '#lib/components/yoal/ForgeMark.svelte';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
@@ -70,15 +70,15 @@
 			: null
 	);
 
-	const quickstart = $derived(`# Log in with your Skiff API key (or: docker login ${host})
-skif registry login
+	const quickstart = $derived(`# Log in with your Yoal API key (or: docker login ${host})
+yoal registry login
 
 # Tag and push; the first push creates the repository
 docker tag web:latest ${host}/${orgSlug}/web:latest
 docker push ${host}/${orgSlug}/web:latest
 
 # Deploy it to a container project, pinned to the pushed digest
-skif registry deploy <project> ${host}/${orgSlug}/web:latest`);
+yoal registry deploy <project> ${host}/${orgSlug}/web:latest`);
 
 	const workflowSnippet = $derived(`permissions:
   id-token: write
@@ -103,10 +103,10 @@ steps:
   image: docker:27
   services: [docker:27-dind]
   id_tokens:
-    SKIFF_ID_TOKEN:
+    YOAL_ID_TOKEN:
       aud: ${host}
   script:
-    - echo "$SKIFF_ID_TOKEN" | docker login ${host} -u gitlab-oidc --password-stdin
+    - echo "$YOAL_ID_TOKEN" | docker login ${host} -u gitlab-oidc --password-stdin
     - docker build -t ${host}/${orgSlug}/app:$CI_COMMIT_SHORT_SHA .
     - docker push ${host}/${orgSlug}/app:$CI_COMMIT_SHORT_SHA`);
 
@@ -161,7 +161,7 @@ steps:
 	}
 </script>
 
-<svelte:head><title>Registry · Skiff</title></svelte:head>
+<svelte:head><title>Registry · Yoal</title></svelte:head>
 
 <div class="space-y-6">
 	<PageHeader
@@ -268,7 +268,7 @@ steps:
 			<Panel title="Push your first image" icon={TerminalIcon}>
 				<p class="mb-4 text-sm text-muted-foreground">
 					Repositories live under {data.registry.host}/{orgSlug}/. A workflow's
-					<code class="font-mono text-xs">skiff/build-image</code> step pushes without a login; from a
+					<code class="font-mono text-xs">yoal/build-image</code> step pushes without a login; from a
 					laptop, log in with an API key.
 				</p>
 				<CodeBlock label="Terminal" lang="bash" code={quickstart} />

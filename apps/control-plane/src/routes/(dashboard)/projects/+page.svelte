@@ -14,11 +14,11 @@
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import TrashIcon from '@lucide/svelte/icons/trash';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
-	import { operationActions, operationLimits, type OperationActionInfo } from '@skiff/contracts';
+	import { operationActions, operationLimits, type OperationActionInfo } from '@yoal/contracts';
 	import { toast } from 'svelte-sonner';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import ForgeMark from '#lib/components/skiff/ForgeMark.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import ForgeMark from '#lib/components/yoal/ForgeMark.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
@@ -26,7 +26,7 @@
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as InputGroup from '#lib/components/ui/input-group/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
-	import DataTable, { type DataColumn } from '#lib/components/skiff/DataTable.svelte';
+	import DataTable, { type DataColumn } from '#lib/components/yoal/DataTable.svelte';
 	import * as Tabs from '#lib/components/ui/tabs/index.js';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
@@ -315,7 +315,7 @@
 </script>
 
 <svelte:head>
-	<title>{trashView ? 'Trash' : 'Projects'} · Skiff</title>
+	<title>{trashView ? 'Trash' : 'Projects'} · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">

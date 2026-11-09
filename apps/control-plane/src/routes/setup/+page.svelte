@@ -12,8 +12,8 @@
 	import SmartphoneIcon from '@lucide/svelte/icons/smartphone';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import { authClient } from '#lib/auth-client.js';
-	import AuthShell from '#lib/components/skiff/AuthShell.svelte';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
+	import AuthShell from '#lib/components/yoal/AuthShell.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
@@ -189,13 +189,13 @@
 	const title = $derived(
 		{
 			'wrong-host': 'Open setup on the platform address',
-			locked: 'Set up Skiff',
-			check: 'Welcome to Skiff',
+			locked: 'Set up Yoal',
+			check: 'Welcome to Yoal',
 			account: 'Create the owner account',
 			secure: 'Secure your account',
 			storage: 'Set up storage',
 			done: 'You’re all set'
-		}[step ?? data.phase] ?? 'Set up Skiff'
+		}[step ?? data.phase] ?? 'Set up Yoal'
 	);
 	const description = $derived(
 		{
@@ -212,7 +212,7 @@
 </script>
 
 <svelte:head>
-	<title>Set up · Skiff</title>
+	<title>Set up · Yoal</title>
 </svelte:head>
 
 <AuthShell wide eyebrow="First-run setup" {title} {description}>
@@ -273,7 +273,7 @@
 					/>
 					<Field.Description>
 						On the server: <code class="text-xs">sudo cat {data.tokenFile}</code>, or
-						<code class="text-xs">journalctl -u skiff-control-plane | grep setup</code>.
+						<code class="text-xs">journalctl -u yoal-control-plane | grep setup</code>.
 					</Field.Description>
 				</Field.Field>
 				{#if result?.unlockError}
@@ -403,7 +403,7 @@
 		<div class="space-y-4">
 			<div class="space-y-2 rounded-lg border p-3 text-sm">
 				<p>
-					Skiff can keep everything on each node's system disk, or you can add more disks. Each disk is
+					Yoal can keep everything on each node's system disk, or you can add more disks. Each disk is
 					<strong>fast</strong> (SSD, NVMe) or <strong>bulk</strong> (spinning disks, arrays, a NAS), and you pick
 					which one databases, object storage, app data and builds use.
 				</p>
@@ -501,7 +501,7 @@
 					<ol class="list-decimal space-y-4 pl-5 text-sm">
 						<li class="space-y-2">
 							<p>
-								Add Skiff to your authenticator app (1Password, Bitwarden, Google Authenticator…). On a
+								Add Yoal to your authenticator app (1Password, Bitwarden, Google Authenticator…). On a
 								phone, <a class="font-medium underline underline-offset-4" href={enrolment.totpURI}
 									>open the setup link</a
 								>; otherwise enter this key:
@@ -574,7 +574,7 @@
 						</li>
 						<li>
 							<a class="underline underline-offset-4" href="/settings/api-keys">Create an API key</a> or run
-							<code class="text-xs">skif login --url {data.instance.platformOrigin}</code>.
+							<code class="text-xs">yoal login --url {data.instance.platformOrigin}</code>.
 						</li>
 					</ul>
 				</div>

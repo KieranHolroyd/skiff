@@ -1,5 +1,5 @@
 import type { RequestHandler } from './$types';
-import { featureEnabled, studioFingerprint } from '@skiff/core';
+import { featureEnabled, studioFingerprint } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import { handleStudioCall, type StudioProxyDeps } from '#lib/studio/proxy.server.js';
 

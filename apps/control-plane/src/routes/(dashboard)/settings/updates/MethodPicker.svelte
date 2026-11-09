@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { SelfUpdateMethod } from '@skiff/contracts';
+	import type { SelfUpdateMethod } from '@yoal/contracts';
 	import { methods } from './update-ui.js';
 
 	/** Radio cards for how the release is obtained; submits as the form field `method`. */

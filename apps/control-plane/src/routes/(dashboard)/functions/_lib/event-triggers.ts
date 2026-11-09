@@ -1,4 +1,4 @@
-import type { EventRuleView } from '@skiff/contracts';
+import type { EventRuleView } from '@yoal/contracts';
 
 /** A queue on a broker, as a function's queue consumer or an event rule's target names it. */
 export interface QueueTarget {

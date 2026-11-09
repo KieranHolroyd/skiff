@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { createHmac } from 'node:crypto';
-import { desiredStateSchema, type DesiredState } from '@skiff/contracts';
+import { desiredStateSchema, type DesiredState } from '@yoal/contracts';
 import {
 	handleSiteRequest,
 	hmacBase64url,
@@ -13,7 +13,7 @@ import {
 const NOW = 1_800_000_000;
 const SITE_KEY = 'site-key-0123456789';
 const HOST = 'secret.example.com';
-const LOGIN = 'https://cloud.example.com/_skiff/site-login?project=prj_1';
+const LOGIN = 'https://cloud.example.com/_yoal/site-login?project=prj_1';
 
 function state(): DesiredState {
 	return desiredStateSchema.parse({
@@ -46,7 +46,7 @@ function state(): DesiredState {
 }
 
 function verifyRequest(headers: Record<string, string>): Request {
-	return new Request('http://agent.local/_skiff/verify', { headers });
+	return new Request('http://agent.local/_yoal/verify', { headers });
 }
 
 /** Callback token as the control plane mints it: 60 s `exp`, session `sexp`, one-time `jti`. */
@@ -63,7 +63,7 @@ function token(claims: Record<string, unknown>, key = SITE_KEY): string {
 
 const options = {
 	state: state(),
-	cookieName: '__skiff_s',
+	cookieName: '__yoal_s',
 	insecureHttp: false,
 	nowSeconds: () => NOW,
 };
@@ -76,13 +76,13 @@ describe('visitor cookies', () => {
 			verifyRequest({
 				'x-forwarded-host': HOST,
 				'x-forwarded-uri': '/page?x=1',
-				cookie: `other=1; __skiff_s=${cookie}; another=2`,
+				cookie: `other=1; __yoal_s=${cookie}; another=2`,
 			}),
 			options,
 		);
 		expect(response.status).toBe(200);
-		expect(response.headers.get('x-skiff-visitor')).toBe(String(exp));
-		expect(response.headers.get('x-skiff-project')).toBe('prj_1');
+		expect(response.headers.get('x-yoal-visitor')).toBe(String(exp));
+		expect(response.headers.get('x-yoal-project')).toBe('prj_1');
 	});
 
 	test('rejects a forged signature and redirects with an encoded return URL', () => {
@@ -91,7 +91,7 @@ describe('visitor cookies', () => {
 			verifyRequest({
 				'x-forwarded-host': HOST,
 				'x-forwarded-uri': '/page?x=1',
-				cookie: `__skiff_s=${exp}.forged`,
+				cookie: `__yoal_s=${exp}.forged`,
 			}),
 			options,
 		);
@@ -99,7 +99,7 @@ describe('visitor cookies', () => {
 		const location = response.headers.get('location');
 		expect(location).not.toBeNull();
 		const url = new URL(location!);
-		expect(url.origin + url.pathname).toBe('https://cloud.example.com/_skiff/site-login');
+		expect(url.origin + url.pathname).toBe('https://cloud.example.com/_yoal/site-login');
 		expect(url.searchParams.get('project')).toBe('prj_1');
 		expect(url.searchParams.get('return')).toBe('https://secret.example.com/page?x=1');
 	});
@@ -109,7 +109,7 @@ describe('visitor cookies', () => {
 		const response = handleSiteRequest(
 			verifyRequest({
 				'x-forwarded-host': HOST,
-				cookie: `__skiff_s=${exp}.${signVisitorCookie(SITE_KEY, HOST, exp)}`,
+				cookie: `__yoal_s=${exp}.${signVisitorCookie(SITE_KEY, HOST, exp)}`,
 			}),
 			options,
 		);
@@ -121,7 +121,7 @@ describe('visitor cookies', () => {
 		const response = handleSiteRequest(
 			verifyRequest({
 				'x-forwarded-host': HOST,
-				cookie: `__skiff_s=${exp}.${signVisitorCookie(SITE_KEY, 'other.example.com', exp)}`,
+				cookie: `__yoal_s=${exp}.${signVisitorCookie(SITE_KEY, 'other.example.com', exp)}`,
 			}),
 			options,
 		);
@@ -139,8 +139,8 @@ describe('visitor cookies', () => {
 	test('falls back to the Host header when X-Forwarded-Host is absent', () => {
 		const exp = NOW + 3600;
 		const response = handleSiteRequest(
-			new Request('http://agent.local/_skiff/verify', {
-				headers: { host: HOST, cookie: `__skiff_s=${exp}.${signVisitorCookie(SITE_KEY, HOST, exp)}` },
+			new Request('http://agent.local/_yoal/verify', {
+				headers: { host: HOST, cookie: `__yoal_s=${exp}.${signVisitorCookie(SITE_KEY, HOST, exp)}` },
 			}),
 			options,
 		);
@@ -158,12 +158,12 @@ describe('visitor cookies', () => {
 			verifyRequest({
 				'x-forwarded-host': HOST,
 				'x-forwarded-uri': '/',
-				cookie: `__skiff_s=${cookie}`,
+				cookie: `__yoal_s=${cookie}`,
 			}),
 			{ ...options, state: withRevocation },
 		);
 		expect(response.status).toBe(302);
-		expect(response.headers.get('location')).toContain('/_skiff/site-login');
+		expect(response.headers.get('location')).toContain('/_yoal/site-login');
 	});
 
 	test('dev mode uses http return URLs without Secure cookies', () => {
@@ -178,7 +178,7 @@ describe('visitor cookies', () => {
 
 		const callback = handleSiteRequest(
 			new Request(
-				`http://agent.local/_skiff/callback?token=${token({
+				`http://agent.local/_yoal/callback?token=${token({
 					host: HOST,
 					exp,
 					sub: 'usr_1',
@@ -199,7 +199,7 @@ describe('login callback', () => {
 		const sexp = NOW + 3600;
 		const signed = token({ host: HOST, exp, sexp, sub: 'usr_1', kind: 'platform', sid: 'ses_1' });
 		const response = handleSiteRequest(
-			new Request(`http://agent.local/_skiff/callback?token=${signed}`, {
+			new Request(`http://agent.local/_yoal/callback?token=${signed}`, {
 				headers: { 'x-forwarded-host': HOST },
 			}),
 			options,
@@ -208,7 +208,7 @@ describe('login callback', () => {
 		expect(response.headers.get('location')).toBe('/');
 		const cookie = response.headers.get('set-cookie') ?? '';
 		const expected = `${sexp}.ses_1.${signVisitorCookie(SITE_KEY, HOST, sexp, 'ses_1')}`;
-		expect(cookie).toContain(`__skiff_s=${expected}`);
+		expect(cookie).toContain(`__yoal_s=${expected}`);
 		expect(cookie).toContain('Path=/');
 		expect(cookie).toContain('HttpOnly');
 		expect(cookie).toContain('Secure');
@@ -220,7 +220,7 @@ describe('login callback', () => {
 		const usedTokens = new UsedTokenCache();
 		const signed = token({ host: HOST, exp: NOW + 60, sub: 'usr_1', kind: 'platform' });
 		const request = () =>
-			new Request(`http://agent.local/_skiff/callback?token=${signed}`, {
+			new Request(`http://agent.local/_yoal/callback?token=${signed}`, {
 				headers: { 'x-forwarded-host': HOST },
 			});
 		expect(handleSiteRequest(request(), { ...options, usedTokens }).status).toBe(302);
@@ -238,7 +238,7 @@ describe('login callback', () => {
 	test('rejects long-lived tokens and tokens without a one-time id', () => {
 		const longLived = token({ host: HOST, exp: NOW + 3600, sub: 'usr_1', kind: 'platform' });
 		const response = handleSiteRequest(
-			new Request(`http://agent.local/_skiff/callback?token=${longLived}`, {
+			new Request(`http://agent.local/_yoal/callback?token=${longLived}`, {
 				headers: { 'x-forwarded-host': HOST },
 			}),
 			options,
@@ -250,7 +250,7 @@ describe('login callback', () => {
 		).toString('base64url');
 		const legacy = `${payload}.${createHmac('sha256', SITE_KEY).update(payload).digest('base64url')}`;
 		const legacyResponse = handleSiteRequest(
-			new Request(`http://agent.local/_skiff/callback?token=${legacy}`, {
+			new Request(`http://agent.local/_yoal/callback?token=${legacy}`, {
 				headers: { 'x-forwarded-host': HOST },
 			}),
 			options,
@@ -265,7 +265,7 @@ describe('login callback', () => {
 		};
 		const signed = token({ host: HOST, exp: NOW + 60, sub: 'v', kind: 'share', sid: 'red_1' });
 		const response = handleSiteRequest(
-			new Request(`http://agent.local/_skiff/callback?token=${signed}`, {
+			new Request(`http://agent.local/_yoal/callback?token=${signed}`, {
 				headers: { 'x-forwarded-host': HOST },
 			}),
 			revoked,
@@ -279,18 +279,18 @@ describe('login callback', () => {
 		const response = handleSiteRequest(
 			verifyRequest({
 				'x-forwarded-host': HOST,
-				'x-forwarded-uri': `/_skiff/callback?token=${signed}`,
+				'x-forwarded-uri': `/_yoal/callback?token=${signed}`,
 			}),
 			options,
 		);
 		expect(response.status).toBe(302);
-		expect(response.headers.get('set-cookie')).toContain('__skiff_s=');
+		expect(response.headers.get('set-cookie')).toContain('__yoal_s=');
 	});
 
 	test('rejects a token for a different host', () => {
 		const signed = token({ host: 'other.example.com', exp: NOW + 120, sub: 'usr_1', kind: 'platform' });
 		const response = handleSiteRequest(
-			new Request(`http://agent.local/_skiff/callback?token=${signed}`, {
+			new Request(`http://agent.local/_yoal/callback?token=${signed}`, {
 				headers: { 'x-forwarded-host': HOST },
 			}),
 			options,
@@ -301,7 +301,7 @@ describe('login callback', () => {
 	test('rejects a bad signature', () => {
 		const signed = token({ host: HOST, exp: NOW + 120, sub: 'usr_1', kind: 'platform' }, 'wrong-site-key-000');
 		const response = handleSiteRequest(
-			new Request(`http://agent.local/_skiff/callback?token=${signed}`, {
+			new Request(`http://agent.local/_yoal/callback?token=${signed}`, {
 				headers: { 'x-forwarded-host': HOST },
 			}),
 			options,
@@ -312,7 +312,7 @@ describe('login callback', () => {
 	test('rejects an expired token', () => {
 		const signed = token({ host: HOST, exp: NOW - 1, sub: 'usr_1', kind: 'platform' });
 		const response = handleSiteRequest(
-			new Request(`http://agent.local/_skiff/callback?token=${signed}`, {
+			new Request(`http://agent.local/_yoal/callback?token=${signed}`, {
 				headers: { 'x-forwarded-host': HOST },
 			}),
 			options,
@@ -322,7 +322,7 @@ describe('login callback', () => {
 
 	test('rejects a malformed token', () => {
 		const response = handleSiteRequest(
-			new Request('http://agent.local/_skiff/callback?token=nope', {
+			new Request('http://agent.local/_yoal/callback?token=nope', {
 				headers: { 'x-forwarded-host': HOST },
 			}),
 			options,
@@ -348,7 +348,7 @@ describe('sign out everyone (rotated site key)', () => {
 	};
 	const verify = (cookie: string, routeState: DesiredState) =>
 		handleSiteRequest(
-			verifyRequest({ 'x-forwarded-host': HOST, 'x-forwarded-uri': '/', cookie: `__skiff_s=${cookie}` }),
+			verifyRequest({ 'x-forwarded-host': HOST, 'x-forwarded-uri': '/', cookie: `__yoal_s=${cookie}` }),
 			{ ...options, state: routeState },
 		);
 
@@ -360,7 +360,7 @@ describe('sign out everyone (rotated site key)', () => {
 
 	test('a callback token minted before the rotation cannot start a session', () => {
 		const response = handleSiteRequest(
-			new Request(`http://agent.local/_skiff/callback?token=${token({ host: HOST, exp: NOW + 60, sub: 'password:prj_1', kind: 'password' })}`, {
+			new Request(`http://agent.local/_yoal/callback?token=${token({ host: HOST, exp: NOW + 60, sub: 'password:prj_1', kind: 'password' })}`, {
 				headers: { 'x-forwarded-host': HOST },
 			}),
 			{ ...options, state: rotated(), usedTokens: new UsedTokenCache() },
@@ -371,7 +371,7 @@ describe('sign out everyone (rotated site key)', () => {
 	test('visitors who sign in again get a cookie under the new key', () => {
 		const response = handleSiteRequest(
 			new Request(
-				`http://agent.local/_skiff/callback?token=${token({ host: HOST, exp: NOW + 60, sub: 'password:prj_1', kind: 'password' }, ROTATED_KEY)}`,
+				`http://agent.local/_yoal/callback?token=${token({ host: HOST, exp: NOW + 60, sub: 'password:prj_1', kind: 'password' }, ROTATED_KEY)}`,
 				{ headers: { 'x-forwarded-host': HOST } },
 			),
 			{ ...options, state: rotated(), usedTokens: new UsedTokenCache() },
@@ -392,8 +392,8 @@ describe('helpers', () => {
 	});
 
 	test('parses cookies without matching prefixes', () => {
-		expect(readCookie('a=1; __skiff_s=two; __skiff_sx=three', '__skiff_s')).toBe('two');
-		expect(readCookie(null, '__skiff_s')).toBeNull();
+		expect(readCookie('a=1; __yoal_s=two; __yoal_sx=three', '__yoal_s')).toBe('two');
+		expect(readCookie(null, '__yoal_s')).toBeNull();
 	});
 
 	test('HMAC output is base64url', () => {

@@ -3,7 +3,7 @@
 	 * What can be queried: builder datasets with their measures and dimensions, and (for SQL
 	 * users) the ClickHouse tables with columns, row counts and sizes. Clicking a name inserts it.
 	 */
-	import type { ObservabilitySchema } from '@skiff/contracts';
+	import type { ObservabilitySchema } from '@yoal/contracts';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import { formatBytes } from '../../_lib/format.js';
 	import { formatValue } from './units.js';

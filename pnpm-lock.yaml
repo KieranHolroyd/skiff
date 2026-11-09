@@ -20,22 +20,22 @@ importers:
 
   apps/agent:
     dependencies:
-      '@skiff/builder':
+      '@yoal/builder':
         specifier: workspace:*
         version: link:../builder
-      '@skiff/contracts':
+      '@yoal/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
-      '@skiff/identity':
+      '@yoal/identity':
         specifier: workspace:*
         version: link:../identity
-      '@skiff/mail':
+      '@yoal/mail':
         specifier: workspace:*
         version: link:../../packages/mail
-      '@skiff/site-config':
+      '@yoal/site-config':
         specifier: workspace:*
         version: link:../../packages/site-config
-      '@skiff/studio':
+      '@yoal/studio':
         specifier: workspace:*
         version: link:../../packages/studio
       aws4fetch:
@@ -48,7 +48,7 @@ importers:
 
   apps/builder:
     dependencies:
-      '@skiff/contracts':
+      '@yoal/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
       fflate:
@@ -87,22 +87,22 @@ importers:
       '@modelcontextprotocol/server':
         specifier: 2.4.0
         version: 2.4.0
-      '@skiff/contracts':
+      '@yoal/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
-      '@skiff/core':
+      '@yoal/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@skiff/db':
+      '@yoal/db':
         specifier: workspace:*
         version: link:../../packages/db
-      '@skiff/docs':
+      '@yoal/docs':
         specifier: workspace:*
         version: link:../../packages/docs
-      '@skiff/site-config':
+      '@yoal/site-config':
         specifier: workspace:*
         version: link:../../packages/site-config
-      '@skiff/studio':
+      '@yoal/studio':
         specifier: workspace:*
         version: link:../../packages/studio
       better-auth:
@@ -247,7 +247,7 @@ importers:
       '@fontsource-variable/geist-mono':
         specifier: ^5.3.0
         version: 5.3.0
-      '@skiff/docs':
+      '@yoal/docs':
         specifier: workspace:*
         version: link:../../packages/docs
 
@@ -255,13 +255,13 @@ importers:
 
   apps/identity:
     dependencies:
-      '@skiff/contracts':
+      '@yoal/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
-      '@skiff/core':
+      '@yoal/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@skiff/db':
+      '@yoal/db':
         specifier: workspace:*
         version: link:../../packages/db
       zod:
@@ -276,16 +276,16 @@ importers:
 
   packages/core:
     dependencies:
-      '@skiff/contracts':
+      '@yoal/contracts':
         specifier: workspace:*
         version: link:../contracts
-      '@skiff/db':
+      '@yoal/db':
         specifier: workspace:*
         version: link:../db
-      '@skiff/site-config':
+      '@yoal/site-config':
         specifier: workspace:*
         version: link:../site-config
-      '@skiff/studio':
+      '@yoal/studio':
         specifier: workspace:*
         version: link:../studio
       aws4fetch:
@@ -338,7 +338,7 @@ importers:
 
   packages/mail:
     dependencies:
-      '@skiff/contracts':
+      '@yoal/contracts':
         specifier: workspace:*
         version: link:../contracts
       mailauth:
@@ -359,7 +359,7 @@ importers:
 
   packages/site-config:
     dependencies:
-      '@skiff/contracts':
+      '@yoal/contracts':
         specifier: workspace:*
         version: link:../contracts
       zod:
@@ -368,7 +368,7 @@ importers:
 
   packages/studio:
     dependencies:
-      '@skiff/contracts':
+      '@yoal/contracts':
         specifier: workspace:*
         version: link:../contracts
       mongodb:

@@ -1,4 +1,4 @@
-import type { PipelineConclusion, PipelineJobView, PipelineLogLine } from '@skiff/contracts';
+import type { PipelineConclusion, PipelineJobView, PipelineLogLine } from '@yoal/contracts';
 
 /**
  * Turns a job's raw log lines into display rows: one header per step, `::group::` blocks that

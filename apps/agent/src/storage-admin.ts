@@ -18,7 +18,7 @@ import {
 	type StorageRootKeyReport,
 	type WorkloadObjectStorage,
 	type WorkloadStatus,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 
 /**
  * Managed object storage on the node (docs/OBJECT-STORAGE.md S4, S8). Each healthy RustFS
@@ -28,7 +28,7 @@ import {
  * - a bucket is only ever deleted through `deleteBuckets`, never because it is missing from
  *   `buckets` (a desired-state bug must not wipe data, as D59). `force` empties it first;
  * - every desired scoped key gets a RustFS user with a canned policy limited to its grants.
- *   `SKF*` users and `skiff-*` policies that are not desired are removed; anything else
+ *   `SKF*` users and `yoal-*` policies that are not desired are removed; anything else
  *   (built-in policies, users a human created with the root key) is never touched.
  *
  * The root key and user secrets come from the activation's `storageAdmin` and live only in the
@@ -97,7 +97,7 @@ export interface StorageApi {
 	getBucketCors(name: string): Promise<BucketCorsRule[]>;
 	putBucketCors(name: string, rules: BucketCorsRule[]): Promise<void>;
 	deleteBucketCors(name: string): Promise<void>;
-	/** Point every create/delete event at the `skiff` webhook target, or clear the config (D122). */
+	/** Point every create/delete event at the `yoal` webhook target, or clear the config (D122). */
 	putBucketNotifications(name: string, enabled: boolean): Promise<void>;
 	/** Hard byte cap; null clears it. */
 	getBucketQuota(name: string): Promise<number | null>;
@@ -724,7 +724,7 @@ export class StorageReconciler {
 			}
 		}
 
-		// 2. Deletions: only what Skiff asked for, never a bucket that is still desired.
+		// 2. Deletions: only what Yoal asked for, never a bucket that is still desired.
 		await this.deleteBuckets(target, api, existing, state);
 
 		// 3. Scoped keys.
@@ -935,7 +935,7 @@ export class StorageReconciler {
 
 		for (const [accessKeyId, grants] of desiredUsers) {
 			if (!accessKeyId.startsWith(STORAGE_USER_KEY_PREFIX)) {
-				this.log('warn', `Storage ${target.id}: ignoring user ${accessKeyId}: not a Skiff key`);
+				this.log('warn', `Storage ${target.id}: ignoring user ${accessKeyId}: not a Yoal key`);
 				continue;
 			}
 			const secret = target.admin.users[accessKeyId];
@@ -1213,7 +1213,7 @@ function errorText(error: unknown): string {
 }
 
 /**
- * A bucket's notification config (D122). Skiff sends every create/delete event to its one `skiff`
+ * A bucket's notification config (D122). Yoal sends every create/delete event to its one `yoal`
  * webhook target and filters by prefix, suffix and event in the control plane, so rules can
  * change without touching RustFS. Disabled is an empty config, which removes the bucket's rules.
  */
@@ -1221,7 +1221,7 @@ export function notificationXml(enabled: boolean): string {
 	if (!enabled) return '<NotificationConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></NotificationConfiguration>';
 	return (
 		'<NotificationConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">' +
-		`<QueueConfiguration><Id>skiff</Id><Queue>${STORAGE_NOTIFY_ARN}</Queue>` +
+		`<QueueConfiguration><Id>yoal</Id><Queue>${STORAGE_NOTIFY_ARN}</Queue>` +
 		'<Event>s3:ObjectCreated:*</Event><Event>s3:ObjectRemoved:*</Event></QueueConfiguration>' +
 		'</NotificationConfiguration>'
 	);

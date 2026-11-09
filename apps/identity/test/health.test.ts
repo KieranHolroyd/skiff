@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import type { Core } from '@skiff/core';
+import type { Core } from '@yoal/core';
 import { createIdentityHandler } from '../src/server.ts';
 import { applyIdentityDesired } from '../src/state.ts';
-import { identityDesiredSchema } from '@skiff/contracts';
+import { identityDesiredSchema } from '@yoal/contracts';
 
 function db(): Database {
 	const sqlite = new Database(':memory:');
@@ -62,9 +62,9 @@ describe('identity health and metrics surface', () => {
 		const metrics = await handler(new Request('http://auth.example.com/metrics'));
 		expect(metrics.headers.get('content-type')).toContain('text/plain');
 		const text = await metrics.text();
-		expect(text).toContain('skiff_identity_ready 1');
-		expect(text).toContain('skiff_identity_pools 1');
-		expect(text).toContain('skiff_identity_generation 42');
-		expect(text).toContain('skiff_identity_requests_total{route="health",status="200"} 1');
+		expect(text).toContain('yoal_identity_ready 1');
+		expect(text).toContain('yoal_identity_pools 1');
+		expect(text).toContain('yoal_identity_generation 42');
+		expect(text).toContain('yoal_identity_requests_total{route="health",status="200"} 1');
 	});
 });

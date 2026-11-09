@@ -4,7 +4,7 @@ A very small, built-in error tracker for the control plane itself (D171). It ans
 where, how often, and is it still happening?" without running Sentry, a log stack or anything
 outside the platform database. Platform admins find it under **Settings → Server errors**.
 
-It covers Skiff's own code. Errors inside deployed apps are the apps' business: their logs,
+It covers Yoal's own code. Errors inside deployed apps are the apps' business: their logs,
 drains and the `promote_5xx` alert cover those.
 
 ## 1. What is recorded
@@ -50,7 +50,7 @@ Migration 0093: `server_error_issues`, `server_error_events` and `server_error_h
   issue, so an error storm costs counter updates, not rows. Each issue keeps its newest 50.
 - **Retention**: events and hourly counts go after 30 days, and issues not seen for 90 days go
   with them (the maintenance sweep, `core.serverErrors.prune`).
-- **Scrubbing**: messages and stacks lose URL credentials, bearer/basic tokens, JWTs, Skiff and
+- **Scrubbing**: messages and stacks lose URL credentials, bearer/basic tokens, JWTs, Yoal and
   common provider keys, AWS key ids, PEM blocks and `password=`/`token:`-style pairs before they
   are stored. Paths never keep their query string, and long token-like path segments become
   `:token`. No request body, header or cookie is ever stored.
@@ -78,6 +78,6 @@ platform maintenance. The dashboard and the REST API call the same `core.serverE
 ## 6. Not built
 
 - Browser (client-side) errors: they would need an unauthenticated, rate-limited intake.
-- Agent and helper errors: agents log to their own journal (`journalctl -u skiff-agent`).
+- Agent and helper errors: agents log to their own journal (`journalctl -u yoal-agent`).
 - Source maps for the production bundle: frames point at built chunks, which is enough to group
   but not to show original line numbers.

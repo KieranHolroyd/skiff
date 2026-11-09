@@ -97,13 +97,13 @@ bun test
 bun run check
 bun run check:migrations
 bun scripts/check-migrations.ts
-SKIFF_E2E_ENGINE=none bun tests/e2e/managed-data.e2e.ts   # skip path
+YOAL_E2E_ENGINE=none bun tests/e2e/managed-data.e2e.ts   # skip path
 ```
 
 For a real run, use Docker/Podman:
 
 ```sh
-SKIFF_E2E_ENGINE=docker bun tests/e2e/managed-data.e2e.ts
+YOAL_E2E_ENGINE=docker bun tests/e2e/managed-data.e2e.ts
 ```
 
 ## After integration

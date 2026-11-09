@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ensureStorageTools, missingStorageTools } from './storage-tools.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-storage-tools-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-storage-tools-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 function host(present: string[], options: { installs?: boolean } = {}) {

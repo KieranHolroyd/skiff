@@ -1,5 +1,5 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { emailDomainCreateSchema, type EmailDomainView } from '@skiff/contracts';
+import { emailDomainCreateSchema, type EmailDomainView } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { failStatus, formBoolean, formString, toFormFailure } from '../../_lib/errors.js';
 import { fieldErrorsFrom } from '../../databases/_lib/forms.server.js';

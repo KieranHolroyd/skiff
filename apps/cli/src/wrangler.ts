@@ -1,10 +1,10 @@
 /**
- * Wrangler config discovery, JSONC parsing, and the `skif wrangler` passthrough.
+ * Wrangler config discovery, JSONC parsing, and the `yoal wrangler` passthrough.
  *
  * A Functions project is one with a `wrangler.jsonc` (or `wrangler.json`) (docs/FUNCTIONS.md
  * §4.3, §4.11). This module finds that file and parses it without a dependency. Deploys never run
- * Wrangler: Skiff's own bundler compiles the Worker (`worker-bundler.ts`, D113). The install and
- * invoker helpers below serve only `skif wrangler …`, the local dev loop.
+ * Wrangler: Yoal's own bundler compiles the Worker (`worker-bundler.ts`, D113). The install and
+ * invoker helpers below serve only `yoal wrangler …`, the local dev loop.
  *
  * The CLI runs on Node 20 (package.json `engines`) and is also exercised under Bun, so
  * everything here uses `node:child_process` and `node:fs` and takes injectable runners for
@@ -90,7 +90,7 @@ const EXEC_COMMANDS: Record<PackageManager, { command: string; prefix: string[] 
  * Returns null when there is no config; a `wrangler.toml` is an error pointing at JSONC.
  */
 export async function findWranglerConfig(dir: string): Promise<WranglerConfig | null> {
-	// Search the deploy root first, then its parents: `skif deploy ./dist` is a common way to
+	// Search the deploy root first, then its parents: `yoal deploy ./dist` is a common way to
 	// ship a prebuilt Worker whose wrangler config lives at the project root. Stop at the
 	// filesystem root; a directory without a config simply has none.
 	let current = resolve(dir);
@@ -109,7 +109,7 @@ export async function findWranglerConfig(dir: string): Promise<WranglerConfig | 
 		}
 		if (names.includes('wrangler.toml'))
 			throw new CliError(
-				`Found wrangler.toml in ${current}. Skiff Functions use wrangler.jsonc (or wrangler.json): convert the TOML to JSONC and rename the file.`,
+				`Found wrangler.toml in ${current}. Yoal Functions use wrangler.jsonc (or wrangler.json): convert the TOML to JSONC and rename the file.`,
 				{ code: 'wrangler_config' },
 			);
 		const parent = dirname(current);
@@ -127,7 +127,7 @@ export async function resolveWranglerConfig(input: string): Promise<WranglerConf
 	const lower = path.toLowerCase();
 	if (lower.endsWith('.toml'))
 		throw new CliError(
-			`${input} is a wrangler.toml. Skiff Functions use wrangler.jsonc (or wrangler.json): convert the TOML to JSONC and rename the file.`,
+			`${input} is a wrangler.toml. Yoal Functions use wrangler.jsonc (or wrangler.json): convert the TOML to JSONC and rename the file.`,
 			{ code: 'wrangler_config' },
 		);
 	const format: WranglerConfigFormat | null = lower.endsWith('.jsonc')

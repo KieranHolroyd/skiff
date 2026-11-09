@@ -1,6 +1,6 @@
-# FrankenPHP config for a Skiff process app (D121).
+# FrankenPHP config for a Yoal process app (D121).
 #
-# Skiff's own Caddy terminates TLS and proxies to this app over the workload's unix socket, so this
+# Yoal's own Caddy terminates TLS and proxies to this app over the workload's unix socket, so this
 # server speaks plain HTTP, never manages certificates and has no admin endpoint.
 {
 	admin off

@@ -15,7 +15,7 @@
  * policy. Reads are permission-checked; `forOrg` is the internal, unauthenticated read that the
  * hook needs before a principal exists.
  */
-import type { Principal } from '@skiff/contracts';
+import type { Principal } from '@yoal/contracts';
 import type { CoreContext } from '../context.ts';
 import { ValidationError } from '../errors.ts';
 

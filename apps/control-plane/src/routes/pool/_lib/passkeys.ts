@@ -1,7 +1,7 @@
 import type {
 	UserPoolPasskeyAuthenticationChallenge,
 	UserPoolPasskeyRegistrationChallenge
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 
 /**
  * Browser-side WebAuthn helpers for the hosted pool pages. They deliberately use the platform

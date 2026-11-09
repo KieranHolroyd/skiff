@@ -10,7 +10,7 @@
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import { resolve } from '$app/paths';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
@@ -44,7 +44,7 @@
 	function install() {
 		askConfirm({
 			title: 'Install the telemetry store?',
-			description: `Skiff downloads ClickHouse 26.8 LTS (about 240 MB, checksum-verified) and runs it on 127.0.0.1 only, with a ${t.memory.defaultMb} MiB memory ceiling (typically 300–800 MB in use; adjustable afterwards). This host has ${formatBytes(t.host.totalMemoryBytes)} of RAM. The dashboard restarts for a few seconds when it is ready.`,
+			description: `Yoal downloads ClickHouse 26.8 LTS (about 240 MB, checksum-verified) and runs it on 127.0.0.1 only, with a ${t.memory.defaultMb} MiB memory ceiling (typically 300–800 MB in use; adjustable afterwards). This host has ${formatBytes(t.host.totalMemoryBytes)} of RAM. The dashboard restarts for a few seconds when it is ready.`,
 			confirmLabel: 'Install',
 			action: '?/install'
 		});
@@ -108,7 +108,7 @@
 	}
 </script>
 
-<svelte:head><title>Telemetry · Settings · Skiff</title></svelte:head>
+<svelte:head><title>Telemetry · Settings · Yoal</title></svelte:head>
 
 <SettingsHeader id="telemetry" />
 
@@ -135,7 +135,7 @@
 			<EmptyState
 				icon={FeatherIcon}
 				title="Off, to keep this install light"
-				description="Without it, Skiff runs as before but has no request history: traffic charts, database and storage stats and dashboards stay empty. Agents keep working and nothing else changes."
+				description="Without it, Yoal runs as before but has no request history: traffic charts, database and storage stats and dashboards stay empty. Agents keep working and nothing else changes."
 			>
 				{#if local}
 					<p class="text-sm text-muted-foreground">
@@ -184,7 +184,7 @@
 					<Alert.Title>ClickHouse is not answering</Alert.Title>
 					<Alert.Description>
 						<p>
-							{t.error} Check <code>systemctl status skiff-clickhouse</code> on the server (docs/OPS.md
+							{t.error} Check <code>systemctl status yoal-clickhouse</code> on the server (docs/OPS.md
 							§3.6).
 						</p>
 						{#if /MEMORY_LIMIT_EXCEEDED|memory limit exceeded/i.test(t.error)}
@@ -211,7 +211,7 @@
 					<TriangleAlertIcon />
 					<Alert.Title>Installed, but this control plane is not connected</Alert.Title>
 					<Alert.Description>
-						The ClickHouse unit exists but the <code>SKIFF_CLICKHOUSE_*</code> settings are missing. Install
+						The ClickHouse unit exists but the <code>YOAL_CLICKHOUSE_*</code> settings are missing. Install
 						again to repair it, or remove it.
 					</Alert.Description>
 				</Alert.Root>
@@ -345,7 +345,7 @@
 				{/if}
 				{t.memory.configuredMb === null
 					? `Using the default (${t.memory.defaultMb} MiB).`
-					: `Set in /etc/skiff/skiff.env as SKIFF_CLICKHOUSE_MEMORY_MB.`}
+					: `Set in /etc/yoal/yoal.env as YOAL_CLICKHOUSE_MEMORY_MB.`}
 				{#if local}
 					Dev server: <code class="font-mono">bun run dev:clickhouse --memory &lt;MiB&gt;</code>.
 				{/if}
@@ -357,12 +357,12 @@
 		<p class="text-sm text-muted-foreground">
 			{#if data.availability === 'not-enabled'}
 				Dashboard settings are not enabled on this host yet. Run <code
-					>sudo skiff-update-self check</code
+					>sudo yoal-update-self check</code
 				>
-				once, or use <code>sudo skiff-platform-config telemetry on</code>.
+				once, or use <code>sudo yoal-platform-config telemetry on</code>.
 			{:else}
 				This control plane is not an installed release; install ClickHouse with
-				<code>sudo skiff-platform-config telemetry on</code> on the server.
+				<code>sudo yoal-platform-config telemetry on</code> on the server.
 			{/if}
 		</p>
 	{/if}

@@ -1,5 +1,5 @@
 import { fail } from '@sveltejs/kit';
-import type { NodeView } from '@skiff/core';
+import type { NodeView } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import { updateSource } from '#lib/server/self-update.js';
 import { platformVersion } from '#lib/server/version.js';
@@ -69,13 +69,13 @@ export const actions: Actions = {
 			const token = core.nodes.createJoinToken(principal, name);
 			const origin = core.ctx.config.platformOrigin;
 			const command = [
-				`sudo -u skiff /opt/skiff/current/agent/skiff-agent join ${origin} \\`,
+				`sudo -u yoal /opt/yoal/current/agent/yoal-agent join ${origin} \\`,
 				`  --token ${token.token} \\`,
 				`  --name ${name} \\`,
 				`  --public-address ${publicAddress} \\`,
-				`  --data-dir /var/lib/skiff/agent \\`,
-				`  | sudo tee /etc/skiff/agent.env >/dev/null`,
-				`sudo chown root:skiff /etc/skiff/agent.env && sudo chmod 0640 /etc/skiff/agent.env`
+				`  --data-dir /var/lib/yoal/agent \\`,
+				`  | sudo tee /etc/yoal/agent.env >/dev/null`,
+				`sudo chown root:yoal /etc/yoal/agent.env && sudo chmod 0640 /etc/yoal/agent.env`
 			].join('\n');
 			return {
 				success: 'Join command created. It is single-use and expires in one hour.',

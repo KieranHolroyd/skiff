@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { Column } from '@skiff/studio/protocol';
+import type { Column } from '@yoal/studio/protocol';
 import { formatBytes, formatTtl, parseTtl, ttlFromCell, ttlInput } from './ttl.ts';
 import {
 	addHashField,

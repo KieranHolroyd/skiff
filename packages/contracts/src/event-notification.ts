@@ -5,7 +5,7 @@ import { z } from 'zod';
  *
  * Cloudflare's model, as with R2 event notifications: a rule watches one source and publishes a
  * message to a queue on a managed broker; a function consumes that queue with the ordinary queue
- * trigger and handles it in `queue()`. Skiff never calls a function directly for an event, so
+ * trigger and handles it in `queue()`. Yoal never calls a function directly for an event, so
  * delivery gets the queue's ack, retry and dead-letter behaviour for free.
  */
 
@@ -156,7 +156,7 @@ export type EventDeliveryView = z.infer<typeof eventDeliveryViewSchema>;
 
 /**
  * A storage event, in Cloudflare's R2 event-notification shape so an R2 consumer runs unchanged.
- * `skiff` carries what R2 has no field for.
+ * `yoal` carries what R2 has no field for.
  */
 export interface StorageEventBody {
 	account: string;
@@ -164,7 +164,7 @@ export interface StorageEventBody {
 	bucket: string;
 	object: { key: string; size?: number; eTag?: string };
 	eventTime: string;
-	skiff: { type: `storage.${EventType<'storage'>}`; storage: string; eventName: string };
+	yoal: { type: `storage.${EventType<'storage'>}`; storage: string; eventName: string };
 }
 
 /** Every other source: one envelope, typed by `type`. */
@@ -200,7 +200,7 @@ export const agentEventAckSchema = z.object({
 });
 export type AgentEventAck = z.infer<typeof agentEventAckSchema>;
 
-/** The RustFS webhook target id: env `RUSTFS_NOTIFY_WEBHOOK_*_SKIFF`, ARN `…:skiff:webhook`. */
-export const STORAGE_NOTIFY_TARGET = 'skiff';
+/** The RustFS webhook target id: env `RUSTFS_NOTIFY_WEBHOOK_*_YOAL`, ARN `…:yoal:webhook`. */
+export const STORAGE_NOTIFY_TARGET = 'yoal';
 /** RustFS's default region; it appears in the target ARN (spiked on 1.0.4, D122). */
-export const STORAGE_NOTIFY_ARN = 'arn:rustfs:sqs:us-east-1:skiff:webhook';
+export const STORAGE_NOTIFY_ARN = 'arn:rustfs:sqs:us-east-1:yoal:webhook';

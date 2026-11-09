@@ -14,7 +14,7 @@ const directories: string[] = [];
 const openssl = Bun.which('openssl');
 
 async function fixture() {
-	const root = await fs.mkdtemp(join(tmpdir(), 'skiff-helper-tls-'));
+	const root = await fs.mkdtemp(join(tmpdir(), 'yoal-helper-tls-'));
 	directories.push(root);
 	return root;
 }

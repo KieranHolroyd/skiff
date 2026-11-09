@@ -1,5 +1,5 @@
 /**
- * Skiff Queue binding service (docs/FUNCTIONS.md §4.5, §4.10, D112).
+ * Yoal Queue binding service (docs/FUNCTIONS.md §4.5, §4.10, D112).
  *
  * A Worker that implements workerd's Queue *producer* protocol and stores each message in a
  * JetStream stream on the project's managed broker (docs/BROKERS.md). Delivery to consumers is not
@@ -19,7 +19,7 @@
  * Bindings (rendered by the agent, apps/agent/src/function-bindings/queue.ts):
  * - `BROKER`: a service binding to an `external` TCP service at the broker's loopback port.
  * - `BROKER_USER`, `BROKER_PASSWORD`: `fromEnvironment` values from the broker attachment.
- * - `QUEUE_NAME`: the queue (JetStream stream `SKIFF_Q_<name>`, subject `skiff.q.<name>`).
+ * - `QUEUE_NAME`: the queue (JetStream stream `YOAL_Q_<name>`, subject `yoal.q.<name>`).
  *
  * workerd ties sockets to the request that opened them, so each producer call opens its own
  * connection to the broker (loopback, one round trip) and closes it before replying.
@@ -152,7 +152,7 @@ export class QueueProducer {
 		this.now = options.now ?? (() => Date.now());
 		this.connect =
 			options.connect ??
-			((config) => NatsConnection.connect(env.BROKER.connect(config.address), { user: config.user, pass: config.pass, name: `skiff-queue:${config.queue}` }));
+			((config) => NatsConnection.connect(env.BROKER.connect(config.address), { user: config.user, pass: config.pass, name: `yoal-queue:${config.queue}` }));
 	}
 
 	async fetch(request) {

@@ -1,4 +1,4 @@
-import type { createDb } from '@skiff/db';
+import type { createDb } from '@yoal/db';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -18,13 +18,13 @@ import { join } from 'node:path';
 
 type Database = ReturnType<typeof createDb>['sqlite'];
 
-/** Where the installer writes the token (`root:skiff 0640`, docs/OPS.md §1). */
-export const DEFAULT_SETUP_TOKEN_FILE = '/etc/skiff/setup-token';
+/** Where the installer writes the token (`root:yoal 0640`, docs/OPS.md §1). */
+export const DEFAULT_SETUP_TOKEN_FILE = '/etc/yoal/setup-token';
 /** Cookie that carries a verified token between wizard steps (never readable by scripts). */
-export const SETUP_COOKIE = 'skiff-setup';
+export const SETUP_COOKIE = 'yoal-setup';
 const MIN_TOKEN_LENGTH = 24;
 
-/** Password rules for every Skiff account (Better Auth is configured with the same bounds, D103). */
+/** Password rules for every Yoal account (Better Auth is configured with the same bounds, D103). */
 export const MIN_PASSWORD_LENGTH = 12;
 export const MAX_PASSWORD_LENGTH = 128;
 
@@ -67,7 +67,7 @@ export function resolveSetupToken(options: {
 		if (token) return { token, file: configured };
 		if (existsSync(configured))
 			options.warn?.(
-				`[setup] ${configured} exists but is not readable by this process (want root:skiff 0640); using a token in ${options.dataDir} instead`,
+				`[setup] ${configured} exists but is not readable by this process (want root:yoal 0640); using a token in ${options.dataDir} instead`,
 			);
 	}
 	const fallback = join(options.dataDir, 'setup-token');

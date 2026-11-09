@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import type { BuildView, DatabaseView, DomainView, StorageView } from '@skiff/contracts';
-import type { DeploymentView, NodeView } from '@skiff/core';
+import type { BuildView, DatabaseView, DomainView, StorageView } from '@yoal/contracts';
+import type { DeploymentView, NodeView } from '@yoal/core';
 import { buildAttention, type AttentionInput } from './attention.js';
 
 const NOW = Date.parse('2026-11-05T12:00:00Z');

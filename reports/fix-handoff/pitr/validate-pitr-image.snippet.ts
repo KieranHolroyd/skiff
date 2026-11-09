@@ -9,7 +9,7 @@
  * and lockdown as the base image.
  */
 export const POSTGRES_PITR_VERSIONS = ['18'] as const;
-const POSTGRES_PITR_IMAGE = 'ghcr.io/kieranholroyd/skiff-postgres-pitr';
+const POSTGRES_PITR_IMAGE = 'ghcr.io/kieranholroyd/yoal-postgres-pitr';
 const POSTGRES_PITR_IMAGE_REVISION = '1';
 const POSTGRES_PITR_IMAGE_DIGEST: string | null = null;
 

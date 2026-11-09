@@ -12,7 +12,7 @@
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import TableIcon from '@lucide/svelte/icons/table';
 	import TablePropertiesIcon from '@lucide/svelte/icons/table-properties';
-	import type { TreeNode, TreeNodeKind } from '@skiff/studio/protocol';
+	import type { TreeNode, TreeNodeKind } from '@yoal/studio/protocol';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Kbd } from '#lib/components/ui/kbd/index.js';
 	import { Spinner } from '#lib/components/ui/spinner/index.js';

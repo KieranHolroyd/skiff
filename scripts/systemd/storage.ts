@@ -1,20 +1,20 @@
 /**
- * `skiff-storage.path` + `skiff-storage.service`: move a node's data when a platform admin changes
+ * `yoal-storage.path` + `yoal-storage.service`: move a node's data when a platform admin changes
  * its storage locations (D48). The agent cannot do it: its sandbox only writes the current
- * directories. So it drops `/run/skiff/storage.request`, and systemd (root) runs
- * `skiff-agent storage apply`. That command ignores the request's contents and fetches the paths
+ * directories. So it drops `/run/yoal/storage.request`, and systemd (root) runs
+ * `yoal-agent storage apply`. That command ignores the request's contents and fetches the paths
  * from the control plane with the node token.
  *
  * Same trigger pattern as the dashboard self-update (scripts/update-self/units.ts). Shared by the
- * installer and `skiff-update-self`.
+ * installer and `yoal-update-self`.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { STORAGE_LINK } from './builder.ts';
 
-export const STORAGE_PATH_UNIT = 'skiff-storage.path';
-export const STORAGE_SERVICE_UNIT = 'skiff-storage.service';
-export const STORAGE_REQUEST_FILE = '/run/skiff/storage.request';
+export const STORAGE_PATH_UNIT = 'yoal-storage.path';
+export const STORAGE_SERVICE_UNIT = 'yoal-storage.service';
+export const STORAGE_REQUEST_FILE = '/run/yoal/storage.request';
 
 export interface StorageUnitPaths {
 	optDir?: string;
@@ -23,8 +23,8 @@ export interface StorageUnitPaths {
 }
 
 export function storageUnits(paths: StorageUnitPaths = {}): Record<string, string> {
-	const optDir = paths.optDir ?? '/opt/skiff';
-	const agentEnvFile = paths.agentEnvFile ?? '/etc/skiff/agent.env';
+	const optDir = paths.optDir ?? '/opt/yoal';
+	const agentEnvFile = paths.agentEnvFile ?? '/etc/yoal/agent.env';
 	const requestFile = paths.requestFile ?? STORAGE_REQUEST_FILE;
 	// On both units: a service whose condition fails would leave the request in place and make the
 	// path unit re-trigger until it hits its trigger limit.
@@ -32,8 +32,8 @@ export function storageUnits(paths: StorageUnitPaths = {}): Record<string, strin
 ConditionPathExists=${optDir}/current/agent/${STORAGE_LINK}`;
 	return {
 		[STORAGE_PATH_UNIT]: `[Unit]
-Description=Move Skiff node storage when the agent requests it
-Documentation=https://github.com/KieranHolroyd/skiff/blob/main/docs/OPS.md
+Description=Move Yoal node storage when the agent requests it
+Documentation=https://github.com/KieranHolroyd/yoal/blob/main/docs/OPS.md
 ${conditions}
 
 [Path]
@@ -44,9 +44,9 @@ Unit=${STORAGE_SERVICE_UNIT}
 WantedBy=paths.target
 `,
 		[STORAGE_SERVICE_UNIT]: `[Unit]
-Description=Skiff node storage move (requested from the dashboard)
-Documentation=https://github.com/KieranHolroyd/skiff/blob/main/docs/OPS.md
-# Deliberately no dependency on skiff-agent.service: this unit stops and starts it.
+Description=Yoal node storage move (requested from the dashboard)
+Documentation=https://github.com/KieranHolroyd/yoal/blob/main/docs/OPS.md
+# Deliberately no dependency on yoal-agent.service: this unit stops and starts it.
 ${conditions}
 
 [Service]

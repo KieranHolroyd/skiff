@@ -3,7 +3,7 @@ import {
 	identityDesiredSchema,
 	identityHost,
 	type IdentityDesired,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { parseJson } from './util.ts';
 import { userPoolMfaRequiredKey, userPoolRequireEmailVerificationKey } from './user-pools.ts';
@@ -47,7 +47,7 @@ export function identityGeneration(value: unknown): number {
 	return hash;
 }
 
-/** `DesiredState.identity`, only for the node selected to run `skiff-identity`. */
+/** `DesiredState.identity`, only for the node selected to run `yoal-identity`. */
 export function identityDesiredForNode(ctx: CoreContext, nodeId: string): IdentityDesired | null {
 	const host = identityHost(ctx.config.contentDomain);
 	if (!host) return null;
@@ -55,7 +55,7 @@ export function identityDesiredForNode(ctx: CoreContext, nodeId: string): Identi
 		.query<PoolRow, []>(
 			`SELECT id, org_id, name, issuer, signup_mode, theme_json, updated_at, disabled_at
 			   FROM user_pools
-			  WHERE disabled_at IS NULL AND engine = 'skiff-identity'
+			  WHERE disabled_at IS NULL AND engine = 'yoal-identity'
 			  ORDER BY name COLLATE NOCASE`,
 		)
 		.all();

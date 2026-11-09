@@ -1,15 +1,15 @@
 import type { RequestEvent } from '@sveltejs/kit';
 import type { AuthInfo } from '@modelcontextprotocol/server';
-import { buildPrincipal, isPlatformAdminUser, resolveMembership } from '@skiff/core';
-import type { AccessKeyVerification, Membership, SkiffTokenAudiences } from '@skiff/core';
-import { serviceAccountPrincipalFromSkiffToken, verifySkiffToken } from '@skiff/core';
-import type { Permission, Principal, Role } from '@skiff/contracts';
+import { buildPrincipal, isPlatformAdminUser, resolveMembership } from '@yoal/core';
+import type { AccessKeyVerification, Membership, YoalTokenAudiences } from '@yoal/core';
+import { serviceAccountPrincipalFromYoalToken, verifyYoalToken } from '@yoal/core';
+import type { Permission, Principal, Role } from '@yoal/contracts';
 import {
 	WORKLOAD_IDENTITY_AUDIENCE,
 	effectivePermissions,
 	isPermission,
 	roles as roleDefinitions,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { auth } from './auth';
 import { openSignup } from './config';
 import { core } from './core';
@@ -94,11 +94,11 @@ function membershipFrom(
 }
 
 /**
- * REST authentication: a Skiff access key (`skif_…`, IAM.md I14), a Better Auth API key
- * (`skif_…`) that has not been migrated yet, a Skiff workload/STS token (IAM.md §7.3–§7.4), or
+ * REST authentication: a Yoal access key (`yoal_…`, IAM.md I14), a Better Auth API key
+ * (`yoal_…`) that has not been migrated yet, a Yoal workload/STS token (IAM.md §7.3–§7.4), or
  * the session cookie.
  *
- * Access keys are tried first: `AccessKeyService.verify` accepts both Skiff's `sha256` rows and
+ * Access keys are tried first: `AccessKeyService.verify` accepts both Yoal's `sha256` rows and
  * migrated Better Auth rows (`hash_scheme = 'better-auth'`, spike S1), so a migrated key never
  * pays Better Auth's rate-limit/usage side effects. Anything it does not recognise falls back to
  * `verifyApiKey` for an `apikey` row the one-time migration has not copied. Neither path deletes
@@ -110,17 +110,17 @@ export async function principalFromRequest(request: Request): Promise<Principal 
 	const authorization = request.headers.get('authorization');
 	if (authorization?.startsWith('Bearer ')) {
 		const key = authorization.slice(7).trim();
-		if (key.startsWith('skif_')) {
+		if (key.startsWith('yoal_')) {
 			// The raw IP is only used for the CIDR check; the principal carries its hash.
 			const verified = core.ctx.accessKeys.verify(key, { ip: clientIp(request) });
 			if (verified) return principalFromAccessKey(verified, request);
 
 			// A migrated row is authoritative even when `verify` rejected it (revoked, expired or
-			// CIDR mismatch): falling back to Better Auth would revive a key Skiff just revoked.
+			// CIDR mismatch): falling back to Better Auth would revive a key Yoal just revoked.
 			if (core.ctx.accessKeys.recognizes(key)) return undefined;
 
-			// Not a migrated/Skiff access key: fall back to Better Auth for rows the one-time
-			// migration has not copied yet (spike S1). New keys are Skiff-only.
+			// Not a migrated/Yoal access key: fall back to Better Auth for rows the one-time
+			// migration has not copied yet (spike S1). New keys are Yoal-only.
 			const result = await auth.api.verifyApiKey({ body: { key } }).catch(() => undefined);
 			if (result?.valid && result.key) {
 				const userId = result.key.referenceId;
@@ -140,9 +140,9 @@ export async function principalFromRequest(request: Request): Promise<Principal 
 			return undefined;
 		}
 
-		// A Skiff workload or STS token. It names a service account and its org, and can only carry
+		// A Yoal workload or STS token. It names a service account and its org, and can only carry
 		// the bindings that account holds, narrowed by the token's own scope/resources.
-		return principalFromSkiffBearer(key, request, {
+		return principalFromYoalBearer(key, request, {
 			workloadAudiences: [WORKLOAD_IDENTITY_AUDIENCE],
 			stsAudiences: [WORKLOAD_IDENTITY_AUDIENCE, core.ctx.config.platformOrigin],
 		});
@@ -159,19 +159,19 @@ export async function principalFromRequest(request: Request): Promise<Principal 
 
 /**
  * A workload or STS bearer token, for the surfaces that accept one (REST, MCP, the registry
- * realm). The token must be signed by Skiff's ring, unexpired, issued by the platform, and carry
+ * realm). The token must be signed by Yoal's ring, unexpired, issued by the platform, and carry
  * one of the accepted audiences; its service account must still exist in the org it names.
  * Returns undefined for anything else, so a caller can fall back to its own credential path.
  */
-export async function principalFromSkiffBearer(
+export async function principalFromYoalBearer(
 	token: string,
 	request: Request,
-	audiences: SkiffTokenAudiences = {},
+	audiences: YoalTokenAudiences = {},
 ): Promise<Principal | undefined> {
-	const identity = await verifySkiffToken(core.ctx, token, audiences);
+	const identity = await verifyYoalToken(core.ctx, token, audiences);
 	if (!identity) return undefined;
 	return {
-		...serviceAccountPrincipalFromSkiffToken(core.ctx, identity),
+		...serviceAccountPrincipalFromYoalToken(core.ctx, identity),
 		ipHash: hashIp(request),
 	};
 }

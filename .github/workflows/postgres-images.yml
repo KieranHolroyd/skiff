@@ -1,8 +1,8 @@
 name: Postgres images
 
-# Skiff-built Postgres variant images (D126, docs/DATABASES.md §9). Each tag is immutable: a
+# Yoal-built Postgres variant images (D126, docs/DATABASES.md §9). Each tag is immutable: a
 # published `<major>-<variant>-<revision>` is never rebuilt over. Changing the Dockerfile or its
-# base means bumping REVISION here, `SKIFF_POSTGRES_IMAGE_REVISION` in packages/contracts and the
+# base means bumping REVISION here, `YOAL_POSTGRES_IMAGE_REVISION` in packages/contracts and the
 # helper's copy in apps/helper/src/validate.ts, in the same commit.
 
 on:
@@ -26,7 +26,7 @@ env:
 
 jobs:
   image:
-    name: skiff-postgres ${{ matrix.variant }}
+    name: yoal-postgres ${{ matrix.variant }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -40,7 +40,7 @@ jobs:
 
       - name: Resolve image name and tag
         run: |
-          echo "IMAGE=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/skiff-postgres" >> "$GITHUB_ENV"
+          echo "IMAGE=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/yoal-postgres" >> "$GITHUB_ENV"
           echo "TAG=${MAJOR}-${{ matrix.variant }}-${REVISION}" >> "$GITHUB_ENV"
 
       - uses: docker/setup-qemu-action@v3

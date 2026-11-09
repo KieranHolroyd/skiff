@@ -1,5 +1,5 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { githubImportSchema, hasPermission, repoKey } from '@skiff/contracts';
+import { githubImportSchema, hasPermission, repoKey } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { fieldErrorsFrom } from '../../databases/_lib/forms.server.js';
 import { failStatus, formString, toFormFailure } from '../../_lib/errors.js';

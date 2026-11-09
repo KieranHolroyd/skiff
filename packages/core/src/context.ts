@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite';
-import type { SkiffDb } from '@skiff/db';
+import type { YoalDb } from '@yoal/db';
 import type { Notifier, CoreConfig } from './config.ts';
 import type { AuditService } from './audit.ts';
 import type { QuotaService } from './quota.ts';
@@ -79,7 +79,7 @@ import type { ServerErrorService } from './server-errors.ts';
  * so the services can call each other without constructor cycles.
  */
 export interface CoreContext {
-	db: SkiffDb;
+	db: YoalDb;
 	sqlite: Database;
 	config: CoreConfig;
 	objectStore: ObjectStore;
@@ -108,7 +108,7 @@ export interface CoreContext {
 	storage: StorageService;
 	/** Managed queue brokers (D111). */
 	brokers: BrokerService;
-	/** Email: Skiff's self-hosted SES (docs/EMAIL.md). */
+	/** Email: Yoal's self-hosted SES (docs/EMAIL.md). */
 	email: EmailService;
 	/** Event notifications into function queues (D122). */
 	events: EventService;
@@ -136,7 +136,7 @@ export interface CoreContext {
 	backupTargets: BackupTargetService;
 	upgrades: UpgradeService;
 	githubRunners: GithubRunnerService;
-	/** Skiff's GitHub App: installations, tokens, statuses, the App webhook (docs/GITHUB.md). */
+	/** Yoal's GitHub App: installations, tokens, statuses, the App webhook (docs/GITHUB.md). */
 	githubApp: GithubAppService;
 	/** Deploy from Git: detect and import a repository from any provider (docs/GITHUB.md §9, docs/FORGES.md §7). */
 	githubImport: GithubImportService;
@@ -189,7 +189,7 @@ export interface CoreContext {
 	workloadIdentity: WorkloadIdentityService;
 	/** RFC 8693 token exchange against federation trusts (IAM.md I16–I17). */
 	sts: TokenService;
-	/** Skiff Access policies: identity-aware proxy rules for content hosts (IAM.md I25). */
+	/** Yoal Access policies: identity-aware proxy rules for content hosts (IAM.md I25). */
 	accessPolicies: AccessPolicyService;
 	/** Managed user pools: OIDC clients and discovery for tenant apps (IAM.md I26–I29). */
 	userPools: UserPoolService;

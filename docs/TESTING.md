@@ -22,11 +22,11 @@ bun install --frozen-lockfile
 bun tests/e2e/managed-data.e2e.ts
 
 # Require one engine (CI does this, so a missing engine is a failure)
-SKIFF_E2E_ENGINE=podman bun tests/e2e/managed-data.e2e.ts
-SKIFF_E2E_ENGINE=docker bun tests/e2e/managed-data.e2e.ts
+YOAL_E2E_ENGINE=podman bun tests/e2e/managed-data.e2e.ts
+YOAL_E2E_ENGINE=docker bun tests/e2e/managed-data.e2e.ts
 
 # Force the skip path (useful for offline development)
-SKIFF_E2E_ENGINE=none bun tests/e2e/managed-data.e2e.ts
+YOAL_E2E_ENGINE=none bun tests/e2e/managed-data.e2e.ts
 ```
 
 On macOS with Podman, start the machine first: `podman machine init && podman machine start`.
@@ -40,9 +40,9 @@ a `finally` block (including on interrupt). No state survives the run and no roo
 
 | Variable | Purpose |
 |---|---|
-| `SKIFF_E2E_ENGINE` | `podman`, `docker`, or `none`. Unset auto-detects; an explicit engine that is unavailable is a hard failure. |
-| `SKIFF_E2E_PODMAN_SUDO` | Set to `1` to run `sudo podman` (rootful node). Default is rootless. |
-| `SKIFF_E2E_SKIP_OS_CHECK` | Used by `scripts/e2e/debian13.sh` to test the wrapper off Debian 13. |
+| `YOAL_E2E_ENGINE` | `podman`, `docker`, or `none`. Unset auto-detects; an explicit engine that is unavailable is a hard failure. |
+| `YOAL_E2E_PODMAN_SUDO` | Set to `1` to run `sudo podman` (rootful node). Default is rootless. |
+| `YOAL_E2E_SKIP_OS_CHECK` | Used by `scripts/e2e/debian13.sh` to test the wrapper off Debian 13. |
 
 ---
 
@@ -85,7 +85,7 @@ On `main` pushes the lane runs unconditionally. The job installs Podman (`apt-ge
 and runs:
 
 ```sh
-SKIFF_E2E_ENGINE=podman bun tests/e2e/managed-data.e2e.ts
+YOAL_E2E_ENGINE=podman bun tests/e2e/managed-data.e2e.ts
 ```
 
 GitHub's `ubuntu-latest` image provides Podman 4.9, not the Debian 13 baseline (Podman >= 5). The
@@ -124,16 +124,16 @@ is green, on the node that will run managed data:
 1. **Host** — the packages and `loginctl enable-linger` commands above. `systemctl --user` must
    work for the agent user.
 2. **Build** — `(cd apps/helper && bun run build)` and `(cd apps/agent && bun run build)`.
-3. **Helper** — run `skiff-helper` as root (it refuses uid != 0) with
-   `SKIFF_HELPER_SOCKET=/run/skiff-helper/helper.sock`,
-   `SKIFF_HELPER_QUADLET_DIR=/etc/containers/systemd`,
-   `SKIFF_HELPER_STATE_DIR=/var/lib/skiff-workloads`,
-   `SKIFF_HELPER_CONTROL_SOCKET_GROUP=skiff`. It must create a `0660 root:skiff` socket and
+3. **Helper** — run `yoal-helper` as root (it refuses uid != 0) with
+   `YOAL_HELPER_SOCKET=/run/yoal-helper/helper.sock`,
+   `YOAL_HELPER_QUADLET_DIR=/etc/containers/systemd`,
+   `YOAL_HELPER_STATE_DIR=/var/lib/yoal-workloads`,
+   `YOAL_HELPER_CONTROL_SOCKET_GROUP=yoal`. It must create a `0660 root:yoal` socket and
    `systemctl`/`podman` must be at the configured absolute paths.
 4. **Agent** — enrol with `bun run scripts/dev/enroll-agent.ts` (or the installer), add the node to
-   the control plane, start `skiff-agent` as the `skiff` user.
-5. **Verify** — `journalctl -u skiff-helper -u skiff-agent -f`, `podman ps --filter label=skiff`,
-   `systemctl list-units 'skiff-workload-*'`, `ls /etc/containers/systemd`, and create/attach a
+   the control plane, start `yoal-agent` as the `yoal` user.
+5. **Verify** — `journalctl -u yoal-helper -u yoal-agent -f`, `podman ps --filter label=yoal`,
+   `systemctl list-units 'yoal-workload-*'`, `ls /etc/containers/systemd`, and create/attach a
    database from the dashboard. Confirm:
    - the Quadlet `.container`/`.network` units are generated and the slice exists;
    - the data dir is owned by uid 70 and the container runs with `ReadOnly=true`;

@@ -11,7 +11,7 @@ import {
 	parseVerp,
 	type EmailRejectCode,
 	type MailHostnames,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { headerFromAddress, prepareHeaders, signMessage, splitHeaders } from './message.ts';
 import type { MailPolicy } from './policy.ts';
 import { dsnOutcome, parseReport, textBounceOutcome } from './reports.ts';
@@ -78,7 +78,7 @@ export function createSubmissionServer(deps: SubmissionDeps, tls: SmtpTls | null
 	const now = deps.now ?? Date.now;
 	const options: SMTPServerOptions = {
 		name: deps.hostname(),
-		banner: 'Skiff mail submission',
+		banner: 'Yoal mail submission',
 		secure,
 		...(tls ? { key: tls.key, cert: tls.cert } : {}),
 		authMethods: ['PLAIN', 'LOGIN'],
@@ -192,7 +192,7 @@ export function createInboundServer(deps: InboundDeps, tls: SmtpTls | null): SMT
 	};
 	return new SMTPServer({
 		name: deps.hostnames()?.mx ?? 'localhost',
-		banner: 'Skiff mail',
+		banner: 'Yoal mail',
 		...(tls ? { key: tls.key, cert: tls.cert } : {}),
 		authOptional: true,
 		disabledCommands: ['AUTH'],
@@ -232,7 +232,7 @@ export function createInboundServer(deps: InboundDeps, tls: SmtpTls | null): SMT
 		const at = new Date(now()).toISOString();
 
 		if (report.kind === 'arf') {
-			const messageId = report.skiffId ?? verp?.messageId ?? null;
+			const messageId = report.yoalId ?? verp?.messageId ?? null;
 			const sent = messageId ? deps.spool.sent(messageId, verp && verp.messageId === messageId ? verp.recipientIndex : null) : null;
 			if (!sent) {
 				deps.log?.(`complaint report for an unknown message (${messageId ?? 'no id'})`);

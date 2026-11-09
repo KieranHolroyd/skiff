@@ -9,7 +9,7 @@
 		dashboardSpecSchema,
 		type DashboardCreateInput,
 		type DashboardSummary
-	} from '@skiff/contracts';
+	} from '@yoal/contracts';
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { toast } from 'svelte-sonner';
 	import ChartAreaIcon from '@lucide/svelte/icons/chart-area';
@@ -20,8 +20,8 @@
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import UploadIcon from '@lucide/svelte/icons/upload';
-	import DataTable, { type DataColumn } from '#lib/components/skiff/DataTable.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import DataTable, { type DataColumn } from '#lib/components/yoal/DataTable.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
@@ -223,7 +223,7 @@
 	}
 </script>
 
-<svelte:head><title>Dashboards · Skiff</title></svelte:head>
+<svelte:head><title>Dashboards · Yoal</title></svelte:head>
 
 {#snippet titleCell(row: DashboardSummary)}
 	<a

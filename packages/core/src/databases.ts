@@ -11,7 +11,7 @@ import {
 	projects,
 	serviceEndpoints,
 	workloads,
-} from '@skiff/db';
+} from '@yoal/db';
 import {
 	databaseBackupFormat,
 	DATABASE_MONITOR_USER,
@@ -101,7 +101,7 @@ import {
 	type WorkloadDesired,
 	type WorkloadRuntime,
 	type WorkloadStatus,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
 import { nextCronTime } from './cron.ts';
@@ -436,7 +436,7 @@ export class DatabaseService {
 			if (row.engine === 'postgres' && isPostgresMajorChange(row.version, patch.version))
 				throw new ConflictError(
 					`PostgreSQL ${row.version} → ${patch.version} is a major-version upgrade. ` +
-						`Run \`skif db upgrade ${name} --to ${patch.version} --plan\`; the platform never switches a Postgres major automatically.`
+						`Run \`yoal db upgrade ${name} --to ${patch.version} --plan\`; the platform never switches a Postgres major automatically.`
 				);
 			if (row.engine !== 'postgres') {
 				// Versions are listed newest first, so a smaller index is newer.
@@ -512,8 +512,8 @@ export class DatabaseService {
 			throw new ValidationError(`Cannot compare PostgreSQL version "${row.version}" with "${input.targetVersion}".`);
 		if (fromMajor === toMajor)
 			throw new ValidationError(
-				`"${name}" already runs PostgreSQL ${fromMajor}, so there is no major upgrade to plan. Skiff runs one image per ` +
-					`PostgreSQL major and has no separate minor-update step; use \`skif db update ${name}\` to change memory, ` +
+				`"${name}" already runs PostgreSQL ${fromMajor}, so there is no major upgrade to plan. Yoal runs one image per ` +
+					`PostgreSQL major and has no separate minor-update step; use \`yoal db update ${name}\` to change memory, ` +
 					`CPUs, storage, pooling or extensions.`
 			);
 
@@ -798,7 +798,7 @@ export class DatabaseService {
 			? `Connections are unencrypted; ${info.label} is reachable only on loopback and the private container network.`
 			: tls.enabled
 				? 'TLS is on; use sslmode=require (or verify-full with the CA).'
-				: 'TLS is off; enable SKIFF_FEATURE_DB_TLS to encrypt connections.';
+				: 'TLS is off; enable YOAL_FEATURE_DB_TLS to encrypt connections.';
 		const sessionNote = info.capabilities.pooler ? ' Use the direct URL for migrations and session-only features.' : '';
 		return {
 			databaseId: row.id,
@@ -1254,7 +1254,7 @@ export class DatabaseService {
 			throw new ValidationError('Only app, readonly and backup credentials can be created.');
 		const now = this.ctx.now();
 		const id = newId('dbc_');
-		const username = `skiff_${input.role}_${randomBytes(4).toString('hex')}`;
+		const username = `yoal_${input.role}_${randomBytes(4).toString('hex')}`;
 		this.ctx.db
 			.insert(databaseCredentials)
 			.values({
@@ -2083,7 +2083,7 @@ export class DatabaseService {
 		const newestRestorable = new Map<string, string | null>();
 		for (const { backup, db } of candidates) {
 			if (!newestRestorable.has(db.id)) {
-				// The newest ok backup Skiff can still reach; an unreachable newer one does not count.
+				// The newest ok backup Yoal can still reach; an unreachable newer one does not count.
 				const good = this.ctx.db
 					.select()
 					.from(databaseBackups)
@@ -2597,11 +2597,11 @@ export class DatabaseService {
 
 	private requirePitrFeature(): void {
 		if (!featureEnabled(this.ctx.config, 'PITR'))
-			throw new ValidationError('PITR is disabled on this control plane (SKIFF_FEATURE_PITR).');
+			throw new ValidationError('PITR is disabled on this control plane (YOAL_FEATURE_PITR).');
 	}
 
 	private pitrRepoMissingMessage(): string {
-		return 'PITR is enabled but no pgBackRest repository is configured; set SKIFF_PITR_REPO_BUCKET, SKIFF_PITR_ACCESS_KEY_ID and SKIFF_PITR_SECRET_ACCESS_KEY.';
+		return 'PITR is enabled but no pgBackRest repository is configured; set YOAL_PITR_REPO_BUCKET, YOAL_PITR_ACCESS_KEY_ID and YOAL_PITR_SECRET_ACCESS_KEY.';
 	}
 
 	private pitrRepoView(): DatabasePitrStatus['repo'] {
@@ -2938,7 +2938,7 @@ export class DatabaseService {
 	 * The password the app connects with is part of it as a hash of its sealed value (D86): once a
 	 * rotation is confirmed and the live secret swaps, the version changes and the node restarts the
 	 * app with the new password. An owner attachment adds it only after its first owner rotation,
-	 * so upgrading Skiff never restarts apps whose password has not changed.
+	 * so upgrading Yoal never restarts apps whose password has not changed.
 	 */
 	consumerVersion(projectId: string, nodeId: string | null, runtime: WorkloadRuntime): string {
 		const tls = this.tlsEnabled();
@@ -3285,7 +3285,7 @@ export class DatabaseService {
 		if (principal.kind !== 'mcp') return;
 		throw new CoreError(
 			'forbidden',
-			'Credentials are never returned over MCP. Read them in the dashboard or with the CLI (`skif … credentials`).',
+			'Credentials are never returned over MCP. Read them in the dashboard or with the CLI (`yoal … credentials`).',
 			403,
 		);
 	}

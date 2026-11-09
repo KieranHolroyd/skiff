@@ -4,7 +4,7 @@ import {
 	FUNCTION_INTERNAL_HEADER,
 	FUNCTION_INTERNAL_PREFIX,
 	FUNCTION_INTERNAL_VALUE,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { renderFunctionShim } from './function-shim.ts';
 
 const render = (main = 'index.js'): string => renderFunctionShim({ main });
@@ -41,9 +41,9 @@ describe('renderFunctionShim', () => {
 		expect(shim).toContain(`const QUEUE_PATH = ${JSON.stringify(`${FUNCTION_INTERNAL_PREFIX}queue`)};`);
 		expect(shim).toContain(`const INTERNAL_HEADER = ${JSON.stringify(FUNCTION_INTERNAL_HEADER)};`);
 		expect(shim).toContain(`const INTERNAL_VALUE = ${JSON.stringify(FUNCTION_INTERNAL_VALUE)};`);
-		expect(shim).toContain('const CRON_HEADER = "x-skiff-cron";');
-		expect(shim).toContain('const SCHEDULED_TIME_HEADER = "x-skiff-scheduled-time";');
-		expect(shim).toContain('const QUEUE_HEADER = "x-skiff-queue";');
+		expect(shim).toContain('const CRON_HEADER = "x-yoal-cron";');
+		expect(shim).toContain('const SCHEDULED_TIME_HEADER = "x-yoal-scheduled-time";');
+		expect(shim).toContain('const QUEUE_HEADER = "x-yoal-queue";');
 	});
 
 	test('answers the public health probe without the internal header', () => {
@@ -61,7 +61,7 @@ describe('renderFunctionShim', () => {
 		);
 	});
 
-	test('hides every other /__skiff/ path without the internal value', () => {
+	test('hides every other /__yoal/ path without the internal value', () => {
 		const shim = render();
 		const fetch = fetchHandler(shim);
 		expect(fetch).toContain('if (path.startsWith(INTERNAL_PREFIX)) {');
@@ -85,7 +85,7 @@ describe('renderFunctionShim', () => {
 		expect(shim).toContain('return notImplemented("this function has no fetch handler");');
 	});
 
-	test('delivers cron runs through POST /__skiff/scheduled', () => {
+	test('delivers cron runs through POST /__yoal/scheduled', () => {
 		const shim = render();
 		expect(shim).toContain('async function deliverScheduled(request, env, ctx) {');
 		expect(shim).toContain('if (!handles("scheduled"))');
@@ -99,7 +99,7 @@ describe('renderFunctionShim', () => {
 		expect(fetchHandler(shim)).toContain('return deliverScheduled(request, env, ctx);');
 	});
 
-	test('delivers queue batches through POST /__skiff/queue', () => {
+	test('delivers queue batches through POST /__yoal/queue', () => {
 		const shim = render();
 		expect(shim).toContain('async function deliverQueue(request, env, ctx) {');
 		expect(shim).toContain('if (!handles("queue"))');
@@ -174,15 +174,15 @@ describe('queue verdicts (D112)', () => {
 		const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
 		const { tmpdir } = await import('node:os');
 		const { join } = await import('node:path');
-		const dir = await mkdtemp(join(tmpdir(), 'skiff-shim-'));
+		const dir = await mkdtemp(join(tmpdir(), 'yoal-shim-'));
 		try {
 			await writeFile(join(dir, 'user.js'), userSource);
 			await writeFile(join(dir, 'shim.js'), renderFunctionShim({ main: 'user.js' }));
 			const shim = (await import(join(dir, 'shim.js'))).default as { fetch: (r: Request, e: unknown, c: unknown) => Promise<Response> };
 			const response = await shim.fetch(
-				new Request('http://localhost/__skiff/queue', {
+				new Request('http://localhost/__yoal/queue', {
 					method: 'POST',
-					headers: { [FUNCTION_INTERNAL_HEADER]: FUNCTION_INTERNAL_VALUE, 'x-skiff-queue': 'jobs' },
+					headers: { [FUNCTION_INTERNAL_HEADER]: FUNCTION_INTERNAL_VALUE, 'x-yoal-queue': 'jobs' },
 					body: JSON.stringify(messages),
 				}),
 				{},

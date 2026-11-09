@@ -8,9 +8,9 @@
 		DatabaseReplicaView,
 		DatabaseView,
 		NodeCapacityView
-	} from '@skiff/contracts';
+	} from '@yoal/contracts';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';

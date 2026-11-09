@@ -39,14 +39,14 @@ describe('studio principal statements', () => {
 		expect(plan.apply.command).toEqual(['psql', '-h', '127.0.0.1', '-v', 'ON_ERROR_STOP=1', '-q', '-U', 'shop_db', '-d', 'shop_db']);
 		expect(plan.apply.env).toEqual({ PGPASSWORD: OWNER_PASSWORD });
 		const sql = plan.apply.stdin!;
-		expect(sql).toContain(`CREATE ROLE "skiff_studio_ro" LOGIN PASSWORD '${PASSWORD}' CONNECTION LIMIT 4;`);
-		expect(sql).toContain(`ALTER ROLE "skiff_studio_ro" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '${PASSWORD}' CONNECTION LIMIT 4;`);
-		expect(sql).toContain('GRANT pg_read_all_data TO "skiff_studio_ro";');
-		expect(sql).toContain('GRANT CONNECT ON DATABASE "shop_db" TO "skiff_studio_ro";');
-		expect(sql).toContain('ALTER ROLE "skiff_studio_ro" SET default_transaction_read_only = on;');
+		expect(sql).toContain(`CREATE ROLE "yoal_studio_ro" LOGIN PASSWORD '${PASSWORD}' CONNECTION LIMIT 4;`);
+		expect(sql).toContain(`ALTER ROLE "yoal_studio_ro" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '${PASSWORD}' CONNECTION LIMIT 4;`);
+		expect(sql).toContain('GRANT pg_read_all_data TO "yoal_studio_ro";');
+		expect(sql).toContain('GRANT CONNECT ON DATABASE "shop_db" TO "yoal_studio_ro";');
+		expect(sql).toContain('ALTER ROLE "yoal_studio_ro" SET default_transaction_read_only = on;');
 		expect(sql).not.toMatch(/pg_write_all_data|INSERT|UPDATE|DELETE/);
 		expect(plan.verify).toEqual({
-			command: ['psql', '-h', '127.0.0.1', '-tAc', 'SELECT 1', '-U', 'skiff_studio_ro', '-d', 'shop_db'],
+			command: ['psql', '-h', '127.0.0.1', '-tAc', 'SELECT 1', '-U', 'yoal_studio_ro', '-d', 'shop_db'],
 			env: { PGPASSWORD: PASSWORD },
 			stdin: null,
 		});
@@ -60,17 +60,17 @@ describe('studio principal statements', () => {
 			expect(plan.apply.command).toEqual([engine === 'mysql' ? 'mysql' : 'mariadb', '-uroot']);
 			expect(plan.apply.env).toEqual({ MYSQL_PWD: OWNER_PASSWORD });
 			expect(plan.apply.stdin!.split('\n').filter(Boolean)).toEqual([
-				`CREATE USER IF NOT EXISTS 'skiff_studio_ro'@'%' IDENTIFIED BY '${PASSWORD}' WITH MAX_USER_CONNECTIONS 4;`,
-				`ALTER USER 'skiff_studio_ro'@'%' IDENTIFIED BY '${PASSWORD}' WITH MAX_USER_CONNECTIONS 4;`,
-				"REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'skiff_studio_ro'@'%';",
-				"GRANT SELECT, SHOW VIEW ON `shop_db`.* TO 'skiff_studio_ro'@'%';",
+				`CREATE USER IF NOT EXISTS 'yoal_studio_ro'@'%' IDENTIFIED BY '${PASSWORD}' WITH MAX_USER_CONNECTIONS 4;`,
+				`ALTER USER 'yoal_studio_ro'@'%' IDENTIFIED BY '${PASSWORD}' WITH MAX_USER_CONNECTIONS 4;`,
+				"REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'yoal_studio_ro'@'%';",
+				"GRANT SELECT, SHOW VIEW ON `shop_db`.* TO 'yoal_studio_ro'@'%';",
 			]);
 			expect(plan.verify.command).toEqual([
 				engine === 'mysql' ? 'mysql' : 'mariadb',
 				'-h',
 				'127.0.0.1',
 				'-u',
-				'skiff_studio_ro',
+				'yoal_studio_ro',
 				'-N',
 				'-s',
 				'-e',
@@ -87,13 +87,13 @@ describe('studio principal statements', () => {
 		expect(plan.apply.env).toEqual({});
 		const script = plan.apply.stdin!;
 		expect(script).toContain(`connect('mongodb://127.0.0.1:27017/admin', "shop_db", "${OWNER_PASSWORD}")`);
-		expect(script).toContain('usersInfo: "skiff_studio_ro"');
-		expect(script).toContain(`updateUser: "skiff_studio_ro", pwd: "${PASSWORD}", roles: [{"role":"read","db":"shop_db"}]`);
-		expect(script).toContain(`createUser: "skiff_studio_ro", pwd: "${PASSWORD}", roles: [{"role":"read","db":"shop_db"}]`);
-		expect(plan.applied('> skiff-ok-1\n')).toBe(true);
-		expect(plan.applied('skiff-error Unauthorized\n')).toBe(false);
+		expect(script).toContain('usersInfo: "yoal_studio_ro"');
+		expect(script).toContain(`updateUser: "yoal_studio_ro", pwd: "${PASSWORD}", roles: [{"role":"read","db":"shop_db"}]`);
+		expect(script).toContain(`createUser: "yoal_studio_ro", pwd: "${PASSWORD}", roles: [{"role":"read","db":"shop_db"}]`);
+		expect(plan.applied('> yoal-ok-1\n')).toBe(true);
+		expect(plan.applied('yoal-error Unauthorized\n')).toBe(false);
 		// An echoed script line that merely contains the marker is not success.
-		expect(plan.applied("print(r.ok === 1 ? 'skiff-ok-1' : 'x')\n")).toBe(false);
+		expect(plan.applied("print(r.ok === 1 ? 'yoal-ok-1' : 'x')\n")).toBe(false);
 		expect(plan.verify.stdin).toContain('listCollections');
 	});
 
@@ -103,12 +103,12 @@ describe('studio principal statements', () => {
 			expect(plan.apply.command).toEqual([`${engine}-cli`, '--no-auth-warning', '--user', 'shop_db']);
 			expect(plan.apply.env).toEqual({ REDISCLI_AUTH: OWNER_PASSWORD });
 			expect(plan.apply.stdin).toBe(
-				`ACL SETUSER skiff_studio_ro reset on >${PASSWORD} ~* &* +@read +@connection -@write -@admin -@dangerous +command|info +command|docs +client|setname +info +dbsize\n`,
+				`ACL SETUSER yoal_studio_ro reset on >${PASSWORD} ~* &* +@read +@connection -@write -@admin -@dangerous +command|info +command|docs +client|setname +info +dbsize\n`,
 			);
 			expect(plan.applied('OK\n')).toBe(true);
 			expect(plan.applied('(error) ERR Error in ACL SETUSER modifier\n')).toBe(false);
 			expect(plan.verify).toEqual({
-				command: [`${engine}-cli`, '--no-auth-warning', '--user', 'skiff_studio_ro', 'DBSIZE'],
+				command: [`${engine}-cli`, '--no-auth-warning', '--user', 'yoal_studio_ro', 'DBSIZE'],
 				env: { REDISCLI_AUTH: PASSWORD },
 				stdin: null,
 			});
@@ -141,7 +141,7 @@ describe('studio principal execution', () => {
 		const { steps, exec } = fakeExec([{ stdout: '' }, { stdout: '1\n' }]);
 		await applyStudioPrincipal(exec, owner('postgres'), PASSWORD);
 		expect(steps.map((step) => step.command[0])).toEqual(['psql', 'psql']);
-		expect(steps[1]!.command).toContain('skiff_studio_ro');
+		expect(steps[1]!.command).toContain('yoal_studio_ro');
 	});
 
 	test('maps a failed apply to an engine error without either password', async () => {
@@ -157,7 +157,7 @@ describe('studio principal execution', () => {
 	test('a CLI that exits 0 on a command error still fails, and so does a failed login check', async () => {
 		const valkey = fakeExec([{ stdout: '(error) NOPERM this user has no permissions\n' }]);
 		await expect(applyStudioPrincipal(valkey.exec, owner('valkey'), PASSWORD)).rejects.toThrow(/Could not create the read-only principal on valkey \(exit 0\): \(error\) NOPERM/);
-		const mongo = fakeExec([{ stdout: 'skiff-ok-1\n' }, { stdout: 'MongoServerError: Authentication failed.\n' }]);
+		const mongo = fakeExec([{ stdout: 'yoal-ok-1\n' }, { stdout: 'MongoServerError: Authentication failed.\n' }]);
 		await expect(applyStudioPrincipal(mongo.exec, owner('mongodb'), PASSWORD)).rejects.toThrow(/did not pass the login check/);
 	});
 });
@@ -171,7 +171,7 @@ describe('valkey/redis persistence', () => {
 		expect(once.endsWith(`${keyValueStudioUserLine(PASSWORD)}\n`)).toBe(true);
 		const other = 'Z'.repeat(32);
 		const twice = withKeyValueStudioUser(once, other);
-		expect(twice.match(/^user skiff_studio_ro /gm)).toHaveLength(1);
+		expect(twice.match(/^user yoal_studio_ro /gm)).toHaveLength(1);
 		expect(keyValueStudioPassword(twice)).toBe(other);
 		expect(keyValueStudioPassword(base)).toBeNull();
 		// The owner line is untouched.
@@ -181,11 +181,11 @@ describe('valkey/redis persistence', () => {
 	});
 
 	test('the activation env value is taken out of the container env and validated', () => {
-		const env: Record<string, string> = { VALKEY_USER: 'cache_db', SKIFF_STUDIO_RO_PASSWORD: PASSWORD };
+		const env: Record<string, string> = { VALKEY_USER: 'cache_db', YOAL_STUDIO_RO_PASSWORD: PASSWORD };
 		expect(takeStudioPrincipalEnv(env)).toBe(PASSWORD);
 		expect(env).toEqual({ VALKEY_USER: 'cache_db' });
 		expect(takeStudioPrincipalEnv(env)).toBeNull();
-		expect(() => takeStudioPrincipalEnv({ SKIFF_STUDIO_RO_PASSWORD: 'x\nuser evil on' })).toThrow(ValidationError);
+		expect(() => takeStudioPrincipalEnv({ YOAL_STUDIO_RO_PASSWORD: 'x\nuser evil on' })).toThrow(ValidationError);
 	});
 });
 
@@ -209,10 +209,10 @@ describe('POST /v1/workloads/:id/studio-principal', () => {
 		);
 
 	test('applies the fixed user and never echoes the password', async () => {
-		const response = await post('db_abc123', { user: 'skiff_studio_ro', password: PASSWORD });
+		const response = await post('db_abc123', { user: 'yoal_studio_ro', password: PASSWORD });
 		expect(response.status).toBe(200);
 		const text = await response.text();
-		expect(JSON.parse(text)).toEqual({ ok: true, studioPrincipal: { user: 'skiff_studio_ro' } });
+		expect(JSON.parse(text)).toEqual({ ok: true, studioPrincipal: { user: 'yoal_studio_ro' } });
 		expect(text).not.toContain(PASSWORD);
 		expect(calls).toEqual([`db_abc123:${PASSWORD}`]);
 	});
@@ -222,21 +222,21 @@ describe('POST /v1/workloads/:id/studio-principal', () => {
 		for (const body of [
 			{ user: 'shop_db', password: PASSWORD },
 			{ password: PASSWORD },
-			{ user: 'skiff_studio_ro', password: 'short' },
-			{ user: 'skiff_studio_ro', password: `${PASSWORD}'` },
-			{ user: 'skiff_studio_ro', password: PASSWORD, engine: 'postgres' },
+			{ user: 'yoal_studio_ro', password: 'short' },
+			{ user: 'yoal_studio_ro', password: `${PASSWORD}'` },
+			{ user: 'yoal_studio_ro', password: PASSWORD, engine: 'postgres' },
 			[],
 		])
 			expect((await post('db_abc123', body)).status).toBe(400);
-		expect((await post('app_abc123', { user: 'skiff_studio_ro', password: PASSWORD })).status).toBe(400);
+		expect((await post('app_abc123', { user: 'yoal_studio_ro', password: PASSWORD })).status).toBe(400);
 		expect((await post('db_abc123', undefined, 'GET')).status).toBe(405);
 		expect(calls.length).toBe(before);
-		expect(parseStudioPrincipalRequest({ user: 'skiff_studio_ro', password: PASSWORD })).toEqual({ password: PASSWORD });
+		expect(parseStudioPrincipalRequest({ user: 'yoal_studio_ro', password: PASSWORD })).toEqual({ password: PASSWORD });
 	});
 
 	test('maps runtime failures: validation is 400, an engine error is 500 with its message', async () => {
-		expect((await post('db_stopped', { user: 'skiff_studio_ro', password: PASSWORD })).status).toBe(400);
-		const failed = await post('db_broken', { user: 'skiff_studio_ro', password: PASSWORD });
+		expect((await post('db_stopped', { user: 'yoal_studio_ro', password: PASSWORD })).status).toBe(400);
+		const failed = await post('db_broken', { user: 'yoal_studio_ro', password: PASSWORD });
 		expect(failed.status).toBe(500);
 		expect(await failed.json()).toEqual({ error: 'Could not create the read-only principal on postgres (exit 2): role busy' });
 	});
@@ -251,7 +251,7 @@ describe('SystemdDriver: valkey apply and the verb', () => {
 		const { join } = await import('node:path');
 		const { SystemdDriver } = await import('./systemd.ts');
 		const { parseWorkload } = await import('./validate.ts');
-		const root = await fs.mkdtemp(join(tmpdir(), 'skiff-helper-principal-'));
+		const root = await fs.mkdtemp(join(tmpdir(), 'yoal-helper-principal-'));
 		const runtimeDir = join(root, 'run');
 		// A fake `podman` answers the live ACL SETUSER and the DBSIZE login check.
 		const podmanPath = join(root, 'podman');
@@ -310,13 +310,13 @@ describe('SystemdDriver: valkey apply and the verb', () => {
 	test('renders the principal from the activation env, keeps it out of the env file and keeps it on a re-apply without it', async () => {
 		const f = await driverFixture();
 		try {
-			await f.driver.apply(f.workload, f.activation({ SKIFF_STUDIO_RO_PASSWORD: PASSWORD }));
+			await f.driver.apply(f.workload, f.activation({ YOAL_STUDIO_RO_PASSWORD: PASSWORD }));
 			const config = await f.read('server.conf');
 			expect(config).toContain(`${keyValueStudioUserLine(PASSWORD)}\n`);
 			expect(config).toContain('user default off');
 			const envFile = await f.read('env');
 			expect(envFile).not.toContain(PASSWORD);
-			expect(envFile).not.toContain('SKIFF_STUDIO_RO_PASSWORD');
+			expect(envFile).not.toContain('YOAL_STUDIO_RO_PASSWORD');
 
 			// An activation fetched before the principal existed must not drop it.
 			await f.driver.apply(f.workload, f.activation({}));

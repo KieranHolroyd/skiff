@@ -137,7 +137,7 @@ export class EmailNotifier implements Notifier {
 			recipients.map((recipient) =>
 				this.transport.send({
 					to: recipient,
-					subject: `[Skiff ${alert.severity}] ${alert.title}`,
+					subject: `[Yoal ${alert.severity}] ${alert.title}`,
 					text: alert.detail,
 				}),
 			),
@@ -146,7 +146,7 @@ export class EmailNotifier implements Notifier {
 }
 
 export interface WebhookNotifierOptions {
-	/** Signs each request with `X-Skiff-Signature` (`SKIFF_ALERT_WEBHOOK_SECRET`, webhook-signature.ts). */
+	/** Signs each request with `X-Yoal-Signature` (`YOAL_ALERT_WEBHOOK_SECRET`, webhook-signature.ts). */
 	secret?: string;
 	/** Tests only. */
 	fetch?: typeof fetch;
@@ -169,7 +169,7 @@ export function webhookPayload(alert: AlertMessage): {
 	labels: Record<string, string>;
 } {
 	return {
-		title: `Skiff: ${alert.title}`,
+		title: `Yoal: ${alert.title}`,
 		message: alert.detail,
 		severity: alert.severity,
 		key: alert.key,
@@ -213,7 +213,7 @@ export interface TwilioOptions {
 	fetch?: typeof fetch;
 }
 
-/** Twilio's REST API (2010-04-01) over plain fetch; no SDK, so it also runs in scripts/skiff-alert.ts. */
+/** Twilio's REST API (2010-04-01) over plain fetch; no SDK, so it also runs in scripts/yoal-alert.ts. */
 export class TwilioSmsTransport {
 	private readonly baseUrl: string;
 	private readonly fetch: typeof fetch;
@@ -270,7 +270,7 @@ export const SMS_MAX_LENGTH = 306;
  * segment from 160 to 70 characters and roughly doubles the bill, so fold the usual ones to ASCII.
  */
 export function smsBody(alert: { title: string; detail: string; severity: string }): string {
-	const text = `Skiff ${alert.severity}: ${alert.title}\n${alert.detail}`
+	const text = `Yoal ${alert.severity}: ${alert.title}\n${alert.detail}`
 		.replace(/[‘’‚′]/g, "'")
 		.replace(/[“”„″]/g, '"')
 		.replace(/[–—−]/g, '-')

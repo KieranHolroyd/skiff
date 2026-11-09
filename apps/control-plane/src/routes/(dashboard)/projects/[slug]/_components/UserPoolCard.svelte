@@ -10,9 +10,9 @@
 		nextEnvPrefix,
 		userPoolDefaultEnvPrefix,
 		type UserPoolAttachmentView
-	} from '@skiff/contracts';
+	} from '@yoal/contracts';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';

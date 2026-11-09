@@ -1,6 +1,6 @@
 <script lang="ts">
 	import ArchiveIcon from '@lucide/svelte/icons/archive';
-	import type { StorageGrant } from '@skiff/contracts';
+	import type { StorageGrant } from '@yoal/contracts';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
 	import { GRANT_FIELD_PREFIX } from './grants.js';

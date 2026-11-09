@@ -3,8 +3,8 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import type { Principal } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import type { Principal } from '@yoal/contracts';
 import { createCore, type Core } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import { buildPrincipal } from './orgs.ts';
@@ -16,7 +16,7 @@ import { USER_POOL_IMPERSONATION_MAX_TTL_SECONDS } from './user-pool-engine.ts';
  * with the admin as `actingFor`, and ending it revokes only impersonation sessions.
  */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-user-pool-impersonation-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-user-pool-impersonation-'));
 const opened = createDb({ path: ':memory:' });
 
 let now = Date.parse('2026-11-08T12:00:00Z');

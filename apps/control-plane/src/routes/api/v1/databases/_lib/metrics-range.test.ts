@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { ValidationError } from '@skiff/core';
+import { ValidationError } from '@yoal/core';
 import { parseDatabaseMetricsRange } from './metrics-range.ts';
 
 const now = Date.parse('2026-11-04T12:00:00.000Z');

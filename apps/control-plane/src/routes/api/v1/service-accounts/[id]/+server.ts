@@ -1,6 +1,6 @@
 import * as z from 'zod';
 import type { RequestHandler } from './$types';
-import { SLUG_MAX, SLUG_MIN, SLUG_PATTERN } from '@skiff/contracts';
+import { SLUG_MAX, SLUG_MIN, SLUG_PATTERN } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { readJson, route } from '#lib/server/api.js';
 import { requirePrincipal } from '#lib/server/principal.js';

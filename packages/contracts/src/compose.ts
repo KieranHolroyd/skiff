@@ -88,7 +88,7 @@ export type ComposeService = z.infer<typeof composeServiceSchema>;
 
 /**
  * One exposed service. `host` is the public hostname that reaches this service; omitted means the
- * stack derives `<service>-<slug>.<contentDomain>`. `hostPort` is assigned by Skiff at deploy time
+ * stack derives `<service>-<slug>.<contentDomain>`. `hostPort` is assigned by Yoal at deploy time
  * (the loopback port Caddy dials) and is never accepted from an input.
  */
 export const composeRouteSchema = z.strictObject({
@@ -109,7 +109,7 @@ export const composeRouteSchema = z.strictObject({
 	healthPath: z.string().startsWith('/').max(512).default('/'),
 	/** The service the project's own host serves. Defaults to the first route. */
 	primary: z.boolean().default(false),
-	/** Loopback port Caddy dials; set by Skiff, never by an input. */
+	/** Loopback port Caddy dials; set by Yoal, never by an input. */
 	hostPort: z.number().int().min(1).max(65_535).optional(),
 });
 export type ComposeRoute = z.infer<typeof composeRouteSchema>;

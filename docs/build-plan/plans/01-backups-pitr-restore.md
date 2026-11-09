@@ -99,7 +99,7 @@ New fixed verbs, all validated, no shell:
 
 Phase 1 only needs `database.dump` and `database.restore`. Phase 2 adds the pgBackRest verbs. The
 helper never receives a target URL with credentials in the unit file; the agent streams to the
-target itself, or writes a `0400` pgBackRest config file under `/run/skiff-workloads/<id>/`.
+target itself, or writes a `0400` pgBackRest config file under `/run/yoal-workloads/<id>/`.
 
 ### Agent (`apps/agent/src/backups.ts`)
 
@@ -126,7 +126,7 @@ Coolify failure mode where a control-plane restore hides newer S3 backups.
   `/api/v1/backups/runs`, `/api/v1/backups/restore`, `/api/v1/backups/drill`.
 - MCP: `list_backups`, `get_backup_health`, `restore_backup` (confirmed, human-only for in-place),
   `run_backup_drill` (platform admin). Never return target secrets.
-- CLI: `skif backup target|schedule|list|run|restore|drill`.
+- CLI: `yoal backup target|schedule|list|run|restore|drill`.
 - Dashboard: resource "Backups" tab, target picker, schedule editor, artifact list, restore wizard,
   drill badge, "last verified restore" timestamp.
 - Alerts: missed schedule, backup older than SLO, upload/checksum failure, drill failure, target
@@ -182,8 +182,8 @@ Coolify failure mode where a control-plane restore hides newer S3 backups.
 
 ## Rollout
 
-`SKIFF_FEATURE_BACKUPS_RESTORE` off by default. Enable for dev, then a single-node staging install,
-then the Debian 13 node. `SKIFF_FEATURE_PITR` remains off for one release after dumps are stable.
+`YOAL_FEATURE_BACKUPS_RESTORE` off by default. Enable for dev, then a single-node staging install,
+then the Debian 13 node. `YOAL_FEATURE_PITR` remains off for one release after dumps are stable.
 
 ## Open questions
 

@@ -28,9 +28,9 @@ export const load: PageServerLoad = ({ locals }) => {
 		platformMail: {
 			relay: relay.configured
 				? {
-						host: relay.values.SKIFF_SMTP_HOST ?? '',
-						port: relay.values.SKIFF_SMTP_PORT ?? '587',
-						from: relay.values.SKIFF_SMTP_FROM ?? null
+						host: relay.values.YOAL_SMTP_HOST ?? '',
+						port: relay.values.YOAL_SMTP_PORT ?? '587',
+						from: relay.values.YOAL_SMTP_FROM ?? null
 					}
 				: null,
 			canEdit: canConfigurePlatform(principal),

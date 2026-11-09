@@ -6,12 +6,12 @@
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
-	import type { EmailCredentialSecret } from '@skiff/contracts';
+	import type { EmailCredentialSecret } from '@yoal/contracts';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import DataTable, { type DataColumn } from '#lib/components/skiff/DataTable.svelte';
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import SecretDialog from '#lib/components/skiff/SecretDialog.svelte';
+	import DataTable, { type DataColumn } from '#lib/components/yoal/DataTable.svelte';
+	import DetailList from '#lib/components/yoal/DetailList.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import SecretDialog from '#lib/components/yoal/SecretDialog.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
@@ -108,7 +108,7 @@
 </script>
 
 <svelte:head>
-	<title>SMTP credentials · Email · Skiff</title>
+	<title>SMTP credentials · Email · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">

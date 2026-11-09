@@ -1,5 +1,5 @@
 import { error } from '@sveltejs/kit';
-import { hasPermission, isTerminalOperation, type OperationView } from '@skiff/contracts';
+import { hasPermission, isTerminalOperation, type OperationView } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { actorNames } from '../../_lib/operations/actors.server.js';
 import type { PageServerLoad } from './$types';

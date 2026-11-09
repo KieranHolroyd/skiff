@@ -7,7 +7,7 @@ export const D1_BINDING_FILE = 'binding-d1';
 
 /**
  * Phase-2 D1: workerd's own internal `cloudflare-internal:d1-api` module, wrapped around one
- * Skiff-supplied service per binding (docs/FUNCTIONS.md §4.5, FN10).
+ * Yoal-supplied service per binding (docs/FUNCTIONS.md §4.5, FN10).
  *
  * D1 is the one binding workerd does not implement natively, so the user Worker gets a `wrapped`
  * binding rather than a capability: workerd instantiates the internal d1-api module with a single

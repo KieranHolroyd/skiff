@@ -1,5 +1,5 @@
 import type { RequestHandler } from './$types';
-import { StsError, TOKEN_EXCHANGE_GRANT, type TokenExchangeInput } from '@skiff/core';
+import { StsError, TOKEN_EXCHANGE_GRANT, type TokenExchangeInput } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import { json } from '#lib/server/api.js';
 
@@ -8,7 +8,7 @@ import { json } from '#lib/server/api.js';
  *
  *   POST /api/iam/token
  *   grant_type=urn:ietf:params:oauth:grant-type:token-exchange
- *   subject_token=<Skiff/GitHub/any trusted OIDC token>
+ *   subject_token=<Yoal/GitHub/any trusted OIDC token>
  *   [subject_token_type=urn:ietf:params:oauth:token-type:...]
  *   [audience=<requested audience>] [scope=<space-separated permissions>]
  *

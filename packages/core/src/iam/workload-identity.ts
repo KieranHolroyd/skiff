@@ -14,8 +14,8 @@
  * a second credential format.
  */
 import { and, eq, isNull } from 'drizzle-orm';
-import { projects } from '@skiff/db';
-import type { WorkloadRuntime } from '@skiff/contracts';
+import { projects } from '@yoal/db';
+import type { WorkloadRuntime } from '@yoal/contracts';
 import {
 	SLUG_MAX,
 	SLUG_PATTERN,
@@ -24,7 +24,7 @@ import {
 	workloadSpecSchema,
 	type WorkloadIdentityActivation,
 	type WorkloadIdentityResponse,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from '../context.ts';
 import { CoreError, NotFoundError, ValidationError } from '../errors.ts';
 import type { ProjectRow } from '../projects.ts';
@@ -160,7 +160,7 @@ export class WorkloadIdentityService {
 	}
 
 	/**
-	 * Mint a one-hour token for a workload. `audience` is `skiff` for Skiff's API and is passed
+	 * Mint a one-hour token for a workload. `audience` is `yoal` for Yoal's API and is passed
 	 * through unchanged for cloud federation (`sts.amazonaws.com`, …). Refresh at 50% of `expiresIn`
 	 * is the caller's job; the agent owns that loop for delivered tokens.
 	 */

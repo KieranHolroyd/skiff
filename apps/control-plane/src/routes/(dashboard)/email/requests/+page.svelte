@@ -4,11 +4,11 @@
 	import InboxIcon from '@lucide/svelte/icons/inbox';
 	import RocketIcon from '@lucide/svelte/icons/rocket';
 	import XIcon from '@lucide/svelte/icons/x';
-	import { EMAIL_ACTIVE_DEFAULT_LIMITS } from '@skiff/contracts';
-	import DataTable, { type DataColumn } from '#lib/components/skiff/DataTable.svelte';
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import { EMAIL_ACTIVE_DEFAULT_LIMITS } from '@yoal/contracts';
+	import DataTable, { type DataColumn } from '#lib/components/yoal/DataTable.svelte';
+	import DetailList from '#lib/components/yoal/DetailList.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
@@ -73,7 +73,7 @@
 </script>
 
 <svelte:head>
-	<title>Access requests · Email · Skiff</title>
+	<title>Access requests · Email · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">

@@ -2,14 +2,14 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import { DEFAULT_FEATURES } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import { DEFAULT_FEATURES } from '@yoal/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore, type Core } from './index.ts';
 import { diskCandidates, deriveTier } from './disks.ts';
 import { LocalObjectStore } from './object-store.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-disks-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-disks-'));
 const opened = createDb({ path: ':memory:' });
 const clock = Date.parse('2026-11-08T10:00:00Z');
 const core: Core = createCore({
@@ -201,7 +201,7 @@ describe('disks', () => {
 	});
 
 	test('Use this disk registers a mounted filesystem at once, with a derived tier', () => {
-		expect(add('edge', 'mount:fs:edge-nvme')).toMatchObject({ name: 'nvme', tier: 'fast', tierSet: false, status: 'ready', mountedBySkiff: false });
+		expect(add('edge', 'mount:fs:edge-nvme')).toMatchObject({ name: 'nvme', tier: 'fast', tierSet: false, status: 'ready', mountedByYoal: false });
 		expect(add('homelab', 'mount:fs:lab-ssd')).toMatchObject({ name: 'cache', tier: 'fast' });
 		expect(add('homelab', 'mount:fs:lab-hdd1', { name: 'disk1' })).toMatchObject({ tier: 'bulk' });
 		expect(add('homelab', 'mount:fs:lab-hdd2', { name: 'disk2' }).tier).toBe('bulk');
@@ -216,7 +216,7 @@ describe('disks', () => {
 
 	test('an unmounted filesystem is mounted by UUID, then turns ready; removing unmounts it', async () => {
 		const disk = add('homelab', `uuid:${DATA_UUID}`);
-		expect(disk).toMatchObject({ name: 'archive', status: 'pending', mountedBySkiff: true, mountPath: '/mnt/skiff-disks/archive', tier: 'bulk' });
+		expect(disk).toMatchObject({ name: 'archive', status: 'pending', mountedByYoal: true, mountPath: '/mnt/yoal-disks/archive', tier: 'bulk' });
 		let desired = await core.nodes.desiredState(lab.token);
 		expect(desired.diskMounts).toEqual([{ id: disk.id, name: 'archive', fsUuid: DATA_UUID, fsType: 'xfs' }]);
 		expect(JSON.stringify(desired.diskMounts)).not.toContain('/dev/');
@@ -231,7 +231,7 @@ describe('disks', () => {
 				{ sourceKey: 'fs:lab-ssd', mountPath: '/mnt/cache', device: '/dev/sdx1', size: TB, free: 0.8 * TB, rotational: false },
 				{ sourceKey: 'fs:lab-hdd1', mountPath: '/mnt/disk1', device: '/dev/sda1', size: 8 * TB, free: 2 * TB, rotational: true },
 				{ sourceKey: 'fs:lab-hdd2', mountPath: '/mnt/disk2', device: '/dev/sdb1', size: 8 * TB, free: 6 * TB, rotational: true },
-				{ sourceKey: `fs:${DATA_UUID}`, mountPath: '/mnt/skiff-disks/archive', fsType: 'xfs', device: '/dev/sdc1', size: 2 * TB, free: 2 * TB, rotational: true },
+				{ sourceKey: `fs:${DATA_UUID}`, mountPath: '/mnt/yoal-disks/archive', fsType: 'xfs', device: '/dev/sdc1', size: 2 * TB, free: 2 * TB, rotational: true },
 			]),
 		});
 		expect(core.disks.byId(disk.id)).toMatchObject({ status: 'ready', message: null, freeBytes: 2 * TB });
@@ -291,11 +291,11 @@ describe('disks', () => {
 	});
 
 	test('node-level kinds use a local disk of the tier, else the install default', async () => {
-		expect(core.disks.nodeDirectory('builds', lab.nodeId)).toBe(`/mnt/disk2/skiff/node/${lab.nodeId}/builds`);
+		expect(core.disks.nodeDirectory('builds', lab.nodeId)).toBe(`/mnt/disk2/yoal/node/${lab.nodeId}/builds`);
 		expect(core.disks.nodeDirectory('builds', edge.nodeId)).toBeNull();
 		expect(core.disks.nodeDirectory('site-data', lab.nodeId)).toBeNull();
 		expect((await core.nodes.desiredState(lab.token)).storage).toMatchObject({
-			buildDir: `/mnt/disk2/skiff/node/${lab.nodeId}/builds`,
+			buildDir: `/mnt/disk2/yoal/node/${lab.nodeId}/builds`,
 		});
 	});
 

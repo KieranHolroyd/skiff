@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
-import { brokerLogEvents, brokers, builds, databases, logEvents, projects, serviceLogEvents, storageInstances, workloads } from '@skiff/db';
+import { brokerLogEvents, brokers, builds, databases, logEvents, projects, serviceLogEvents, storageInstances, workloads } from '@yoal/db';
 import {
 	levelForBuildLine,
 	parseLogLine,
@@ -15,7 +15,7 @@ import {
 	type ServiceLogQuery,
 	type ServiceLogQueryResult,
 	type RuntimeLogBatch,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { CoreError } from './errors.ts';
 import type { ProjectRow } from './projects.ts';

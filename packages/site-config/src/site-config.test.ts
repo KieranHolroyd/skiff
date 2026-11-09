@@ -5,9 +5,9 @@ import type { SiteCompileInput } from './compile.ts';
 const file = (text: string) => new TextEncoder().encode(text);
 
 describe('parseSiteConfig', () => {
-	test('parses skiff.json, _redirects and _headers', () => {
+	test('parses yoal.json, _redirects and _headers', () => {
 		const parsed = parseSiteConfig({
-			'skiff.json': file(JSON.stringify({ spa: true, cleanUrls: true, trailingSlash: 'never', notFound: '/404.html' })),
+			'yoal.json': file(JSON.stringify({ spa: true, cleanUrls: true, trailingSlash: 'never', notFound: '/404.html' })),
 			_redirects: file('# comment\n/old /new 301\n/legacy/* /posts/:splat 302\n/api /api.html 200\n'),
 			_headers: file('/assets/*\n  Cache-Control: public, max-age=31536000\n  X-Test: yes\n\n/*\n  X-Frame-Options: DENY\n'),
 		});
@@ -43,8 +43,8 @@ describe('parseSiteConfig', () => {
 		expect(() => parseSiteConfig({ _redirects: file('/a/*/b /x 301\n') })).toThrow(/only allowed at the end/);
 	});
 
-	test('rejects invalid JSON in skiff.json', () => {
-		expect(() => parseSiteConfig({ 'skiff.json': file('{nope') })).toThrow(/Invalid JSON/);
+	test('rejects invalid JSON in yoal.json', () => {
+		expect(() => parseSiteConfig({ 'yoal.json': file('{nope') })).toThrow(/Invalid JSON/);
 	});
 
 	test('rejects header lines before a path', () => {
@@ -77,12 +77,12 @@ const base: SiteCompileInput = {
 	host: 'blog.example.dev',
 	projectId: 'prj_1',
 	releasePath: '/srv/releases/abc',
-	agentSocket: '/run/skiff-agent/agent.sock',
+	agentSocket: '/run/yoal-agent/agent.sock',
 	accessMode: 'public',
 	site: { spa: false, cleanUrls: false, trailingSlash: 'ignore', notFound: '/404.html' },
 	redirects: [{ from: '/old', to: '/new', status: 301 }],
 	headers: [{ path: '/*', headers: { 'X-Frame-Options': 'DENY' } }],
-	loginUrl: 'https://control.example.dev/_skiff/site-login',
+	loginUrl: 'https://control.example.dev/_yoal/site-login',
 };
 
 describe('compileSiteRoute', () => {
@@ -128,7 +128,7 @@ describe('compileSiteRoute', () => {
 		const route = compileSiteRoute({ ...base, accessMode: 'platform' });
 		const json = JSON.stringify(route);
 		expect(json).toContain('reverse_proxy');
-		expect(json).toContain('/_skiff/verify');
+		expect(json).toContain('/_yoal/verify');
 		expect(json).toContain('noindex');
 		expect(json).toContain('private');
 	});
@@ -160,7 +160,7 @@ describe('compileSiteRoute', () => {
 		expect(always).toContain('{http.request.uri.path}/{http.request.uri.prefixed_query}');
 		expect(always).not.toContain('{http.request.uri}/');
 		const never = JSON.stringify(compileSiteRoute({ ...base, site: { ...base.site, trailingSlash: 'never' } }));
-		expect(never).toContain('{http.regexp.skiff_slash.path}{http.request.uri.prefixed_query}');
+		expect(never).toContain('{http.regexp.yoal_slash.path}{http.request.uri.prefixed_query}');
 	});
 
 	test('protected sites never emit public cache headers, even from _headers', () => {
@@ -227,11 +227,11 @@ describe('compileCaddyConfig', () => {
 		const config = compileCaddyConfig({
 			listen: [':443'],
 			sites: [base],
-			platform: { host: 'control.example.dev', upstream: 'unix//run/skiff/control.sock' },
+			platform: { host: 'control.example.dev', upstream: 'unix//run/yoal/control.sock' },
 		});
 		const json = JSON.stringify(config);
 		expect(json).toContain('"@id":"platform"');
 		expect(json).toContain('"host":["control.example.dev"]');
-		expect(json).toContain('"dial":"unix//run/skiff/control.sock"');
+		expect(json).toContain('"dial":"unix//run/yoal/control.sock"');
 	});
 });

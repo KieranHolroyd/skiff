@@ -7,7 +7,7 @@ import {
 	pruneCategoryInfo,
 	type Principal,
 	type PruneCategory,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { CoreError, ForbiddenError } from '../errors.ts';
 import { projectOwnedTables } from '../projects.ts';
 import type { DomainRow } from '../domains.ts';

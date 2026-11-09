@@ -7,10 +7,10 @@ import { confirmOrRefuse } from './run-operation.ts';
 
 /**
  * Custom domains (DESIGN §5, D31). Attaching a hostname creates a verification TXT record; the
- * platform issues a certificate once DNS points at Skiff and the TXT record is in place.
+ * platform issues a certificate once DNS points at Yoal and the TXT record is in place.
  */
 
-const usage = `Usage: skif domains <command> [options]
+const usage = `Usage: yoal domains <command> [options]
 
 Commands:
   list [--project <slug>]      List custom domains (the default)
@@ -26,10 +26,10 @@ Options:
   -h, --help                   Show this help
 
 Examples:
-  skif domains add shop.example.com --project shop
-  skif domains add example.com --project shop --redirect-www
-  skif domains check shop.example.com
-  skif domains remove shop.example.com --yes`;
+  yoal domains add shop.example.com --project shop
+  yoal domains add example.com --project shop --redirect-www
+  yoal domains check shop.example.com
+  yoal domains remove shop.example.com --yes`;
 
 const baseFlags: FlagSpec = {
 	project: { type: 'string', short: 'p' },
@@ -72,7 +72,7 @@ async function listDomains(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif domains list [--project <slug>] [--json]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal domains list [--project <slug>] [--json]');
 	const client = await authenticatedClient();
 	const { domains, raw } = await client.listDomains({ project: args.string('project') });
 	if (args.boolean('json')) {
@@ -80,7 +80,7 @@ async function listDomains(argv: string[]): Promise<void> {
 		return;
 	}
 	if (domains.length === 0) {
-		console.log('No custom domains yet. Add one with `skif domains add <hostname> --project <slug>`.');
+		console.log('No custom domains yet. Add one with `yoal domains add <hostname> --project <slug>`.');
 		return;
 	}
 	console.log(domainTable(domains));
@@ -92,7 +92,7 @@ async function addDomain(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif domains add <hostname> --project <slug>');
+	rejectExtraPositionals(args, 1, 'Usage: yoal domains add <hostname> --project <slug>');
 	const hostname = requirePositional(args, 0, 'hostname (for example shop.example.com)');
 	const project = args.string('project');
 	if (!project) throw new UsageError('Name the project: --project <slug>.');
@@ -118,7 +118,7 @@ async function addDomain(argv: string[]): Promise<void> {
 		console.log('\nCreate this DNS record:');
 		console.log(`  TXT    ${domain.verification.recordName}  →  ${domain.verification.recordValue}`);
 	}
-	console.log('\nThen run `skif domains check <hostname>`; Skiff also re-checks pending domains every 10 minutes.');
+	console.log('\nThen run `yoal domains check <hostname>`; Yoal also re-checks pending domains every 10 minutes.');
 }
 
 /** `dmn_…` is an id; anything else is matched against hostnames. */
@@ -136,7 +136,7 @@ async function resolveDomain(
 	if (!match)
 		throw new CliError(`No custom domain "${needle}"${project ? ` in ${project}` : ''}.`, {
 			code: 'not_found',
-			suggestions: [`Run \`skif domains list${project ? ` --project ${project}` : ''}\` to see the hostnames.`],
+			suggestions: [`Run \`yoal domains list${project ? ` --project ${project}` : ''}\` to see the hostnames.`],
 		});
 	return { client, domain: match };
 }
@@ -147,7 +147,7 @@ async function checkDomain(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif domains check <id|hostname> [--project <slug>]');
+	rejectExtraPositionals(args, 1, 'Usage: yoal domains check <id|hostname> [--project <slug>]');
 	const needle = requirePositional(args, 0, 'domain id or hostname');
 	const { client, domain } = await resolveDomain(needle, args.string('project'));
 	const { check, raw } = await client.checkDomain(domain.id);
@@ -172,7 +172,7 @@ async function removeDomain(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif domains remove <id|hostname> [--project <slug>] [--yes]');
+	rejectExtraPositionals(args, 1, 'Usage: yoal domains remove <id|hostname> [--project <slug>] [--yes]');
 	const needle = requirePositional(args, 0, 'domain id or hostname');
 	const { client, domain } = await resolveDomain(needle, args.string('project'));
 	await confirmOrRefuse(

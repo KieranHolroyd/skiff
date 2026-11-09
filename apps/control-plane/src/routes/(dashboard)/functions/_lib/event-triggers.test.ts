@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import type { EventRuleView } from '@skiff/contracts';
+import type { EventRuleView } from '@yoal/contracts';
 import { eventTriggersFor, parseQueueKey } from './event-triggers.js';
 
 const rule = (id: string, broker: string, queue: string): EventRuleView => ({

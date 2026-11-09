@@ -4,7 +4,7 @@
 	 * dashed red rule. Runs the rule's builder query with time series on through the dashboards'
 	 * query endpoint and draws it with the dashboards' time series panel.
 	 */
-	import type { AlertRuleSpec, ObservabilitySchema, QueryResult } from '@skiff/contracts';
+	import type { AlertRuleSpec, ObservabilitySchema, QueryResult } from '@yoal/contracts';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import { Skeleton } from '#lib/components/ui/skeleton/index.js';
 	import { errorText } from '#lib/query.js';

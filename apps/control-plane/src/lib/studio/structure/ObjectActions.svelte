@@ -4,7 +4,7 @@
 	import EraserIcon from '@lucide/svelte/icons/eraser';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
-	import type { StudioInfo, TreeNode } from '@skiff/studio/protocol';
+	import type { StudioInfo, TreeNode } from '@yoal/studio/protocol';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import { getStudioShell } from '../shell/context.js';

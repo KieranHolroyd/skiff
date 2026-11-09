@@ -49,8 +49,8 @@ export interface GitCredentials {
 
 /**
  * Credentials for one clone when the control plane sent a token (D164, D175): a read-only token
- * for that repository alone — from Skiff's GitHub App (github.com) or a forge connection (its
- * host, with the user name the forge checks) — used instead of the node's own `SKIFF_GIT_TOKEN`.
+ * for that repository alone — from Yoal's GitHub App (github.com) or a forge connection (its
+ * host, with the user name the forge checks) — used instead of the node's own `YOAL_GIT_TOKEN`.
  * Without one the node's credentials apply unchanged.
  */
 export function withCloneToken<T extends GitCredentials>(

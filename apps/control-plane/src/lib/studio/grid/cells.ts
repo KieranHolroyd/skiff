@@ -1,4 +1,4 @@
-import type { Cell, CellTag, Column, TaggedCell } from '@skiff/studio/protocol';
+import type { Cell, CellTag, Column, TaggedCell } from '@yoal/studio/protocol';
 
 /**
  * How the studio grid shows, copies and compares cells (plan 22). Pure, so the grid's rules are

@@ -1,5 +1,5 @@
 import { and, eq, isNotNull, isNull } from 'drizzle-orm';
-import { databases, disks, nodes, projects, storageInstances, workloads } from '@skiff/db';
+import { databases, disks, nodes, projects, storageInstances, workloads } from '@yoal/db';
 import {
 	type BlastRadiusItem,
 	type BlastRadiusView,
@@ -7,7 +7,7 @@ import {
 	type TopologyNodeView,
 	type TopologyView,
 	type TopologyZoneView,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { CoreError, NotFoundError } from './errors.ts';
 

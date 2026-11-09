@@ -1,10 +1,10 @@
-# Skiff — Cloud identity federation
+# Yoal — Cloud identity federation
 
-Status: **issuer, keys, workload tokens, token exchange, storage STS and Skiff's own consumers
+Status: **issuer, keys, workload tokens, token exchange, storage STS and Yoal's own consumers
 built; cloud federation works.** The platform issuer, discovery document, JWKS, signing-key ring,
 workload tokens, the node metadata endpoint and `POST /api/iam/token` are implemented and covered
 by unit tests. AWS, GCP and Azure can trust the issuer and exchange a workload token for temporary
-cloud credentials without a stored secret. Skiff's REST API, MCP and registry realm accept a
+cloud credentials without a stored secret. Yoal's REST API, MCP and registry realm accept a
 workload or STS token, attached RustFS storage exchanges the workload token for short-lived S3
 credentials, and each pipeline repository has its own OIDC subject and deploy service account.
 Automatic cloud-provider setup remains manual (§7). IAM.md tracks the plan (I16–I18, §7.3–§7.4)
@@ -12,11 +12,11 @@ and API.md the routes.
 
 Two different things share the same issuer:
 
-1. **Direct federation.** A cloud provider trusts Skiff's public issuer and verifies a workload JWT
-   itself. Skiff is not in the request path; the workload talks to AWS, GCP or Azure directly.
-2. **Skiff token exchange.** A caller presents any trusted subject token to `POST /api/iam/token`
-   and gets a short-lived Skiff access token for a service account. This is RFC 8693 token
-   exchange, for calling Skiff rather than a cloud.
+1. **Direct federation.** A cloud provider trusts Yoal's public issuer and verifies a workload JWT
+   itself. Yoal is not in the request path; the workload talks to AWS, GCP or Azure directly.
+2. **Yoal token exchange.** A caller presents any trusted subject token to `POST /api/iam/token`
+   and gets a short-lived Yoal access token for a service account. This is RFC 8693 token
+   exchange, for calling Yoal rather than a cloud.
 
 Both use ES256 keys from one ring. Neither needs a long-lived cloud secret in the workload.
 
@@ -29,7 +29,7 @@ one issuer and one public JWKS for every signing purpose except user pools.
 
 | Endpoint | What it serves |
 |---|---|
-| `GET <origin>/.well-known/openid-configuration` | Issuer, `jwks_uri`, `token_endpoint`, supported grant and subject-token types, and the claim names Skiff mints. Public, cached 5 minutes. |
+| `GET <origin>/.well-known/openid-configuration` | Issuer, `jwks_uri`, `token_endpoint`, supported grant and subject-token types, and the claim names Yoal mints. Public, cached 5 minutes. |
 | `GET <origin>/.well-known/jwks.json` | Every ring purpose except `pool:*`: `sts`, `workload`, `oidc`, `registry`. Public, cached 5 minutes. |
 | `POST <origin>/api/iam/token` | RFC 8693 token exchange (§3). No `/api/v1` prefix. |
 
@@ -62,7 +62,7 @@ Rotation is next → active → retired:
   correctness requirement: the retired-key window is what makes rotation safe.
 - The maintenance sweep rotates `registry`, `oidc`, `sts` and `workload` every 30 days, publishing
   a `next` key first and promoting it only after the 24-hour overlap. `GET /api/v1/iam/keys` shows
-  the decision it would take; `POST /api/v1/iam/keys/rotate` and `skif iam keys rotate` run it on
+  the decision it would take; `POST /api/v1/iam/keys/rotate` and `yoal iam keys rotate` run it on
   demand (D196).
 
 `purpose` is independent: rotating `sts` does not change `workload` or `oidc`. User pools rotate
@@ -92,7 +92,7 @@ the agent delivers it; the token is audience-bound and short-lived.
 |---|---|
 | `iss` | The platform origin. |
 | `sub` | The service account id, `sa_…`. This is the value a cloud trust policy matches. |
-| `aud` | `skiff` by default, or the audience requested from the metadata endpoint. |
+| `aud` | `yoal` by default, or the audience requested from the metadata endpoint. |
 | `org_id` | The organisation id. |
 | `project_id` | The project id. |
 | `environment` | The environment slug, e.g. `production`. |
@@ -112,14 +112,14 @@ The exact `sub` distinction matters for cloud policies:
 
 Delivery:
 
-- The agent/helper writes the token to `/run/skiff/identity/<workload>/token` on the host (0400,
-  owned by the workload uid) and mounts it at `/var/run/skiff/token`. `SKIFF_TOKEN_FILE` names it.
+- The agent/helper writes the token to `/run/yoal/identity/<workload>/token` on the host (0400,
+  owned by the workload uid) and mounts it at `/var/run/yoal/token`. `YOAL_TOKEN_FILE` names it.
 - The agent refreshes at 50% of the token's lifetime (30 minutes) and rewrites the file. A process
   that reads the file per request gets the current token; one that copied it at startup has at most
   an hour.
 - The node-local metadata endpoint serves other audiences. A process reaches
   `http://127.0.0.1:8086/identity/token?audience=…`; a container reaches
-  `http://host.containers.internal:8086/identity/token?audience=…`. `SKIFF_IDENTITY_URL` carries
+  `http://host.containers.internal:8086/identity/token?audience=…`. `YOAL_IDENTITY_URL` carries
   the right base URL for the runtime. The caller presents the current workload token as
   `Authorization: Bearer <token>`; the endpoint returns
   `{ access_token, expires_in, token_type: "Bearer" }`.
@@ -155,10 +155,10 @@ not workload tokens; a cloud trust for pipelines matches those subjects, not `sa
 ### 2.3 Storage STS (RustFS)
 
 Attached object storage is the fourth consumer of the workload token. RustFS 1.0.4 serves
-`AssumeRoleWithWebIdentity` against an external OIDC issuer, so Skiff configures the instance with
+`AssumeRoleWithWebIdentity` against an external OIDC issuer, so Yoal configures the instance with
 the platform issuer and exchanges the workload token for temporary S3 credentials.
 
-- The token keeps `aud: skiff`; the `groups` claim carries the attachment's scoped RustFS policy
+- The token keeps `aud: yoal`; the `groups` claim carries the attachment's scoped RustFS policy
   name (one policy per attachment key). RustFS maps that claim to the policy, and an optional
   inline `Policy` narrows the session to one granted bucket when the call names one.
 - The call goes through the same internal gateway as the object browser (`s3-<id>.storage.internal`,
@@ -175,11 +175,11 @@ the platform issuer and exchanges the workload token for temporary S3 credential
 
 | Token | Audience | TTL |
 |---|---|---|
-| Workload, Skiff API | `skiff` | 1 hour, refreshed at 50% by the agent |
+| Workload, Yoal API | `yoal` | 1 hour, refreshed at 50% by the agent |
 | Workload, AWS | `sts.amazonaws.com` | 1 hour |
 | Workload, GCP | The workload identity provider resource name, `//iam.googleapis.com/…` | 1 hour |
 | Workload, Azure | `api://AzureADTokenExchange` | 1 hour |
-| Skiff STS | Caller-chosen; defaults to the platform origin | 15 minutes default, trust cap up to 1 hour |
+| Yoal STS | Caller-chosen; defaults to the platform origin | 15 minutes default, trust cap up to 1 hour |
 
 The audience is 1–512 printable characters, with no control characters. Cloud providers also
 impose their own session limits; AWS role session duration and Azure token lifetime are set on the
@@ -201,14 +201,14 @@ Pipelines have two identities, and they are not the same thing:
   (D205). A person losing org access therefore does not stop the repository's automation, and the
   repository's blast radius is its own scope.
 
-`POST /api/iam/token` accepts a Skiff pipeline OIDC token as a subject token, so a job can exchange
-its repository-scoped CI token for a short-lived Skiff service-account token when a trust exists.
+`POST /api/iam/token` accepts a Yoal pipeline OIDC token as a subject token, so a job can exchange
+its repository-scoped CI token for a short-lived Yoal service-account token when a trust exists.
 The pipeline OIDC token is still minted with the repository subject shown above; the deploy
 principal is the separate `pipeline-<repo>` service account.
 
 ---
 
-## 3. Skiff token exchange (RFC 8693)
+## 3. Yoal token exchange (RFC 8693)
 
 `POST /api/iam/token` takes form-urlencoded fields (JSON is accepted for convenience). The subject
 token is the credential; the endpoint needs no session or API key.
@@ -286,23 +286,23 @@ and lifetime. It never records the subject token.
 From a workload:
 
 ```sh
-skif identity token --audience sts.amazonaws.com
+yoal identity token --audience sts.amazonaws.com
 ```
 
-The command reads `$SKIFF_TOKEN_FILE` (or `/var/run/skiff/token`) and, for a non-`skiff` audience,
-calls `$SKIFF_IDENTITY_URL` (or `http://127.0.0.1:8086`). It prints only the token; `--json` prints
+The command reads `$YOAL_TOKEN_FILE` (or `/var/run/yoal/token`) and, for a non-`yoal` audience,
+calls `$YOAL_IDENTITY_URL` (or `http://127.0.0.1:8086`). It prints only the token; `--json` prints
 the whole token response. The subject token is never printed.
 
 To run an exchange:
 
 ```sh
-skif sts exchange \
-  --subject-token-file "$SKIFF_TOKEN_FILE" \
+yoal sts exchange \
+  --subject-token-file "$YOAL_TOKEN_FILE" \
   --audience https://control.example.com \
   --scope project:read
 ```
 
-`skif sts exchange` posts to `/api/iam/token` at the active profile's platform URL. `--scope` may be
+`yoal sts exchange` posts to `/api/iam/token` at the active profile's platform URL. `--scope` may be
 repeated or comma-separated; `--trust-id` selects one trust. The command prints only
 `access_token`; `--json` prints the full response. The subject file is read silently and is never
 included in an error or a log line.
@@ -312,7 +312,7 @@ Equivalent raw calls:
 ```sh
 curl -fsS -X POST https://control.example.com/api/iam/token \
   -d grant_type=urn:ietf:params:oauth:grant-type:token-exchange \
-  -d subject_token="$(cat "$SKIFF_TOKEN_FILE")" \
+  -d subject_token="$(cat "$YOAL_TOKEN_FILE")" \
   -d audience=https://control.example.com \
   -d scope=project:read
 ```
@@ -321,8 +321,8 @@ and, inside a workload without the CLI:
 
 ```sh
 TOKEN=$(curl -fsS \
-  -H "Authorization: Bearer $(cat "$SKIFF_TOKEN_FILE")" \
-  "$SKIFF_IDENTITY_URL/identity/token?audience=sts.amazonaws.com" |
+  -H "Authorization: Bearer $(cat "$YOAL_TOKEN_FILE")" \
+  "$YOAL_IDENTITY_URL/identity/token?audience=sts.amazonaws.com" |
   jq -r .access_token)
 ```
 
@@ -333,7 +333,7 @@ mode 0400 and avoid shell tracing (`set -x`) around them.
 
 ## 4. Worked example: AWS
 
-The workload token is a standard OIDC web identity token. AWS trusts the Skiff issuer and returns
+The workload token is a standard OIDC web identity token. AWS trusts the Yoal issuer and returns
 temporary role credentials; no access key is stored in the workload.
 
 ### 4.1 Create the OIDC provider
@@ -385,46 +385,46 @@ you accept the wider blast radius.
 ### 4.3 Inside the workload
 
 ```sh
-ROLE_ARN="arn:aws:iam::123456789012:role/skiff-deploy"
+ROLE_ARN="arn:aws:iam::123456789012:role/yoal-deploy"
 
-TOKEN="$(skif identity token --audience sts.amazonaws.com)"
+TOKEN="$(yoal identity token --audience sts.amazonaws.com)"
 
 aws sts assume-role-with-web-identity \
   --role-arn "$ROLE_ARN" \
-  --role-session-name "skiff-$(date +%s)" \
+  --role-session-name "yoal-$(date +%s)" \
   --web-identity-token "$TOKEN" \
   --duration-seconds 3600
 ```
 
 The result is the usual `Credentials` object. Use the returned access key, secret key and session
-token in the SDK or the CLI; they expire on their own. If the workload does not contain the Skiff
+token in the SDK or the CLI; they expire on their own. If the workload does not contain the Yoal
 CLI, use the `curl` metadata form in §3.4 and feed `.access_token` to the same command.
 
-The role's policies, not Skiff, decide what the session can do. Nothing in Skiff stores an AWS
+The role's policies, not Yoal, decide what the session can do. Nothing in Yoal stores an AWS
 secret for this path.
 
 ---
 
 ## 5. Worked example: GCP
 
-GCP workload identity federation maps the Skiff workload onto a Google service account.
+GCP workload identity federation maps the Yoal workload onto a Google service account.
 
 ### 5.1 Create the pool and provider
 
 ```sh
 PROJECT_NUMBER=123456789012
-POOL=skiff
-PROVIDER=skiff-workloads
+POOL=yoal
+PROVIDER=yoal-workloads
 GCP_AUDIENCE="//iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL}/providers/${PROVIDER}"
 
 gcloud iam workload-identity-pools create "$POOL" \
   --location=global \
-  --display-name="Skiff workloads"
+  --display-name="Yoal workloads"
 
 gcloud iam workload-identity-pools providers create-oidc "$PROVIDER" \
   --location=global \
   --workload-identity-pool="$POOL" \
-  --display-name="Skiff workloads" \
+  --display-name="Yoal workloads" \
   --issuer-uri="https://control.example.com" \
   --allowed-audiences="$GCP_AUDIENCE" \
   --attribute-mapping="google.subject=assertion.sub,attribute.project=assertion.project_id,attribute.environment=assertion.environment,attribute.workload=assertion.act.sub" \
@@ -459,11 +459,11 @@ Write an external-account credential file that reads a subject token from a file
 ```json
 {
   "type": "external_account",
-  "audience": "//iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/skiff/providers/skiff-workloads",
+  "audience": "//iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/yoal/providers/yoal-workloads",
   "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
   "token_url": "https://sts.googleapis.com/v1/token",
   "credential_source": {
-    "file": "/run/skiff/gcp-subject.jwt"
+    "file": "/run/yoal/gcp-subject.jwt"
   }
 }
 ```
@@ -471,22 +471,22 @@ Write an external-account credential file that reads a subject token from a file
 Mint the subject token for the GCP audience first, then sign in:
 
 ```sh
-export GCP_AUDIENCE="//iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/skiff/providers/skiff-workloads"
-skif identity token --audience "$GCP_AUDIENCE" > /run/skiff/gcp-subject.jwt
-gcloud auth login --cred-file=/run/skiff/gcp-cred.json
+export GCP_AUDIENCE="//iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/yoal/providers/yoal-workloads"
+yoal identity token --audience "$GCP_AUDIENCE" > /run/yoal/gcp-subject.jwt
+gcloud auth login --cred-file=/run/yoal/gcp-cred.json
 gcloud auth print-access-token
 ```
 
 For application default credentials, point the SDK at the same file:
 
 ```sh
-export GOOGLE_APPLICATION_CREDENTIALS=/run/skiff/gcp-cred.json
+export GOOGLE_APPLICATION_CREDENTIALS=/run/yoal/gcp-cred.json
 ```
 
 The subject file is a one-hour credential. The Google auth libraries re-read
 `credential_source.file` when they refresh, so keep it current: mint it at startup and then before
 it expires (a small shell loop is enough), or have the entrypoint regenerate it. Do not copy the
-workload file itself into `credential_source.file`; it has audience `skiff` and will not match the
+workload file itself into `credential_source.file`; it has audience `yoal` and will not match the
 GCP provider.
 
 ---
@@ -494,7 +494,7 @@ GCP provider.
 ## 6. Worked example: Azure
 
 Azure calls the subject token a federated credential assertion. The app registration trusts the
-Skiff issuer for one subject and one audience.
+Yoal issuer for one subject and one audience.
 
 ### 6.1 Add the federated credential
 
@@ -502,9 +502,9 @@ Skiff issuer for one subject and one audience.
 APP_ID="00000000-0000-0000-0000-000000000000"   # the app registration's client id
 TENANT_ID="11111111-1111-1111-1111-111111111111"
 
-cat > skiff-federated-credential.json <<'JSON'
+cat > yoal-federated-credential.json <<'JSON'
 {
-  "name": "skiff-production",
+  "name": "yoal-production",
   "issuer": "https://control.example.com",
   "subject": "sa_01J9Z8K4Q7M2V6R3T5W8X1Y0AB",
   "audiences": ["api://AzureADTokenExchange"]
@@ -513,19 +513,19 @@ JSON
 
 az ad app federated-credential create \
   --id "$APP_ID" \
-  --parameters @skiff-federated-credential.json
+  --parameters @yoal-federated-credential.json
 ```
 
 The issuer is the exact platform origin, the subject is the workload's `sub` (`sa_…`), and the
 audience is exactly `api://AzureADTokenExchange`. A mismatch in any of the three is rejected by
-Entra ID before Skiff is involved.
+Entra ID before Yoal is involved.
 
 ### 6.2 Exchange the token
 
 The Azure CLI keeps the assertion out of your code and performs the exchange:
 
 ```sh
-TOKEN="$(skif identity token --audience api://AzureADTokenExchange)"
+TOKEN="$(yoal identity token --audience api://AzureADTokenExchange)"
 
 az login \
   --service-principal \
@@ -548,23 +548,23 @@ curl -fsS -X POST \
 
 The response contains an Azure access token with the app's permissions. `azure/login` in GitHub
 Actions performs exactly this exchange, but sources its assertion from GitHub's OIDC issuer, not
-Skiff's. For a workload running on Skiff, use `az login --federated-token` (a recent Azure CLI) or
-the raw request above; configure the federated credential with the Skiff issuer and `sa_…` subject.
+Yoal's. For a workload running on Yoal, use `az login --federated-token` (a recent Azure CLI) or
+the raw request above; configure the federated credential with the Yoal issuer and `sa_…` subject.
 
 ---
 
 ## 7. What is consumed, and what is not
 
-Skiff's own surfaces verify the same tokens the issuer mints (D195):
+Yoal's own surfaces verify the same tokens the issuer mints (D195):
 
-- **REST.** `principalFromRequest` falls back from a Better Auth key and a `skif_` access key to a
+- **REST.** `principalFromRequest` falls back from a Better Auth key and a `yoal_` access key to a
   workload/STS bearer token. The token must be signed by the ring, unexpired, issued by the
-  platform, and carry an accepted audience (`skiff` for a workload; `skiff` or the platform origin
+  platform, and carry an accepted audience (`yoal` for a workload; `yoal` or the platform origin
   for STS). It resolves to the service account's bindings, narrowed by the token's
   `scope`/`resources` (an absent scope means the bindings are the ceiling; an empty one is not
   widened).
 - **MCP.** The OAuth verifier runs first; on its 401 the route falls back to the ring with
-  `skiff` or the MCP resource as the STS audience and passes the service-account principal to the
+  `yoal` or the MCP resource as the STS audience and passes the service-account principal to the
   tool layer. Everything else keeps the OAuth challenge so clients can sign in.
 - **Registry realm.** The Docker token realm accepts a workload/STS token as `Bearer` or as the
   Basic password (Docker always sends Basic). The grant is still intersected with the caller's
@@ -584,7 +584,7 @@ The following are **not** built, and docs that describe them as working are ahea
 - **Automatic cloud setup.** Nothing creates an AWS OIDC provider, a GCP pool/provider, an Azure
   federated credential or an IAM role. Everything in §4–§6 is manual, one cloud at a time.
 - **A federation-trust dashboard beyond Settings → Access.** Trusts are managed at
-  `/api/v1/federation-trusts` and `skif federation` (D190); there is no separate page.
+  `/api/v1/federation-trusts` and `yoal federation` (D190); there is no separate page.
 - **Token revocation.** There is no `jti` denylist; keep TTLs short, as the defaults do.
 
 For a cloud-only use (the common case), none of the missing parts matter: AWS, GCP and Azure

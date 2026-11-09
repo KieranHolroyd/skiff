@@ -1,5 +1,5 @@
 <script lang="ts">
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { confirmEnableWrites, openReadOnly } from '#lib/studio/shell/actions.js';
 	import OpenSessionPanel from '#lib/studio/shell/OpenSessionPanel.svelte';
 	import StudioShell from '#lib/studio/shell/StudioShell.svelte';
@@ -16,7 +16,7 @@
 </script>
 
 <svelte:head>
-	<title>Studio · {db.name} · Skiff</title>
+	<title>Studio · {db.name} · Yoal</title>
 </svelte:head>
 
 <div class="space-y-4">

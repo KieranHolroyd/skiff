@@ -1,4 +1,4 @@
-// Spike 1: does @duckdb/node-api (N-API) work under Bun for Skiff's telemetry needs?
+// Spike 1: does @duckdb/node-api (N-API) work under Bun for Yoal's telemetry needs?
 // Checks: open file DB with memory limits, bulk ingest OTel-shaped rows, time-bucket rollup,
 // Parquet export + query-from-Parquet, concurrent reads, RSS footprint.
 import { DuckDBInstance } from "@duckdb/node-api";

@@ -1,19 +1,19 @@
 /**
- * Persistent CLI settings live in `~/.config/skiff/config.json` (or
- * `$SKIFF_CONFIG_DIR` / `$XDG_CONFIG_HOME/skiff/config.json`), mode 0600.
+ * Persistent CLI settings live in `~/.config/yoal/config.json` (or
+ * `$YOAL_CONFIG_DIR` / `$XDG_CONFIG_HOME/yoal/config.json`), mode 0600.
  *
  * The file holds one or more **named profiles**, each with its own control-plane
- * URL, API key and content domain. That lets one machine deploy to several Skiff
+ * URL, API key and content domain. That lets one machine deploy to several Yoal
  * installations (production, staging, a local dev server) without juggling env
- * vars. A profile is chosen by, in order: `--profile`, `$SKIFF_PROFILE`, the
- * active profile saved by `skif profile use`, or the only profile when exactly
+ * vars. A profile is chosen by, in order: `--profile`, `$YOAL_PROFILE`, the
+ * active profile saved by `yoal profile use`, or the only profile when exactly
  * one exists.
  *
  * Files written by older CLI versions have the settings at the top level. They
  * are read as a profile named `default` (and upgraded on the next write), so
  * existing logins keep working.
  *
- * `SKIFF_URL`, `SKIFF_TOKEN` and `SKIFF_CONTENT_DOMAIN` still override the
+ * `YOAL_URL`, `YOAL_TOKEN` and `YOAL_CONTENT_DOMAIN` still override the
  * selected profile, which keeps CI and agent use stateless.
  */
 import { chmod, mkdir, readFile, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
@@ -21,11 +21,11 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { ConfigError } from './errors.ts';
 
-export const CONFIG_ENV_DIR = 'SKIFF_CONFIG_DIR';
-export const URL_ENV = 'SKIFF_URL';
-export const TOKEN_ENV = 'SKIFF_TOKEN';
-export const CONTENT_DOMAIN_ENV = 'SKIFF_CONTENT_DOMAIN';
-export const PROFILE_ENV = 'SKIFF_PROFILE';
+export const CONFIG_ENV_DIR = 'YOAL_CONFIG_DIR';
+export const URL_ENV = 'YOAL_URL';
+export const TOKEN_ENV = 'YOAL_TOKEN';
+export const CONTENT_DOMAIN_ENV = 'YOAL_CONTENT_DOMAIN';
+export const PROFILE_ENV = 'YOAL_PROFILE';
 
 /** Implicit profile name used for a legacy single-profile config file. */
 export const DEFAULT_PROFILE = 'default';
@@ -35,7 +35,7 @@ const CONFIG_VERSION = 2;
 export type ConfigKey = 'url' | 'contentDomain' | 'token';
 
 export interface ConfigKeyInfo {
-	/** Canonical key name used in the config file and `skif config` output. */
+	/** Canonical key name used in the config file and `yoal config` output. */
 	key: ConfigKey;
 	description: string;
 	secret: boolean;
@@ -57,13 +57,13 @@ export const CONFIG_KEYS: Record<ConfigKey, ConfigKeyInfo> = {
 	},
 	token: {
 		key: 'token',
-		description: 'API key. Prefer `skif login`, which verifies it.',
+		description: 'API key. Prefer `yoal login`, which verifies it.',
 		secret: true,
 		env: TOKEN_ENV,
 	},
 };
 
-/** Friendly aliases so `skif config set content-domain …` works as expected. */
+/** Friendly aliases so `yoal config set content-domain …` works as expected. */
 const KEY_ALIASES: Record<string, ConfigKey> = {
 	url: 'url',
 	'platform-url': 'url',
@@ -196,7 +196,7 @@ export interface ProfileInput {
 	contentDomain?: string;
 }
 
-/** `--profile` wins over `$SKIFF_PROFILE` for the current process. */
+/** `--profile` wins over `$YOAL_PROFILE` for the current process. */
 let profileOverride: string | undefined;
 
 export function setProfileOverride(profile: string | undefined): void {
@@ -221,8 +221,8 @@ export function configDirectory(env: NodeJS.ProcessEnv = process.env): string {
 	const override = env[CONFIG_ENV_DIR]?.trim();
 	if (override) return override;
 	const xdg = env.XDG_CONFIG_HOME?.trim();
-	if (xdg) return join(xdg, 'skiff');
-	return join(env.HOME?.trim() || homedir(), '.config', 'skiff');
+	if (xdg) return join(xdg, 'yoal');
+	return join(env.HOME?.trim() || homedir(), '.config', 'yoal');
 }
 
 export function configFile(env: NodeJS.ProcessEnv = process.env): string {
@@ -401,7 +401,7 @@ export async function removeProfile(
 	};
 }
 
-/** Profile summaries for `skif profile list`, sorted by name. */
+/** Profile summaries for `yoal profile list`, sorted by name. */
 export async function describeProfiles(
 	env: NodeJS.ProcessEnv = process.env,
 ): Promise<ProfileReport> {
@@ -560,7 +560,7 @@ export async function unsetStoredConfigValue(
 	return { path, key, changed: existed, profile: name };
 }
 
-/** Effective settings plus where each value came from. Used by `skif config list`. */
+/** Effective settings plus where each value came from. Used by `yoal config list`. */
 export async function describeConfig(
 	env: NodeJS.ProcessEnv = process.env,
 ): Promise<ConfigReport> {
@@ -622,11 +622,11 @@ export async function resolveConfig(
 
 	if (!urlValue)
 		throw new ConfigError(
-			'Not logged in: no platform URL. Run `skif login`, or set SKIFF_URL and SKIFF_TOKEN.',
+			'Not logged in: no platform URL. Run `yoal login`, or set YOAL_URL and YOAL_TOKEN.',
 			{ suggestions: profileHint(state) },
 		);
 	if (!tokenValue)
-		throw new ConfigError('Not logged in: no API key. Run `skif login`, or set SKIFF_TOKEN.', {
+		throw new ConfigError('Not logged in: no API key. Run `yoal login`, or set YOAL_TOKEN.', {
 			suggestions: profileHint(state),
 		});
 
@@ -662,17 +662,17 @@ async function readConfigState(env: NodeJS.ProcessEnv = process.env): Promise<Co
 	try {
 		parsed = JSON.parse(text);
 	} catch {
-		throw new ConfigError(`${path} is not valid JSON. Run \`skif logout --all\` and log in again.`);
+		throw new ConfigError(`${path} is not valid JSON. Run \`yoal logout --all\` and log in again.`);
 	}
 	if (!isRecord(parsed))
 		throw new ConfigError(
-			`${path} must contain a JSON object. Run \`skif logout --all\` and log in again.`,
+			`${path} must contain a JSON object. Run \`yoal logout --all\` and log in again.`,
 		);
 
 	if (parsed.profiles !== undefined) {
 		if (!isRecord(parsed.profiles))
 			throw new ConfigError(
-				`${path} must contain a "profiles" object. Run \`skif logout --all\` and log in again.`,
+				`${path} must contain a "profiles" object. Run \`yoal logout --all\` and log in again.`,
 			);
 		const profiles = new Map<string, StoredConfig>();
 		for (const [rawName, value] of Object.entries(parsed.profiles)) {
@@ -686,7 +686,7 @@ async function readConfigState(env: NodeJS.ProcessEnv = process.env): Promise<Co
 			if (typeof parsed.activeProfile !== 'string')
 				throw new ConfigError(`${path} has a non-string "activeProfile".`);
 			activeProfile = normalizeProfileName(parsed.activeProfile);
-			// A stale activeProfile must not make `skif profile list/use` unusable.
+			// A stale activeProfile must not make `yoal profile list/use` unusable.
 			if (!profiles.has(activeProfile)) activeProfile = undefined;
 		}
 		return { path, profiles, activeProfile };
@@ -777,7 +777,7 @@ function compactProfile(profile: StoredConfig): StoredConfig {
 	};
 }
 
-/** Explicit flag > `--profile` override > `$SKIFF_PROFILE`. */
+/** Explicit flag > `--profile` override > `$YOAL_PROFILE`. */
 function requestedProfile(
 	explicit: string | undefined,
 	env: NodeJS.ProcessEnv,
@@ -847,8 +847,8 @@ function unknownProfile(state: ConfigState, name: string): ConfigError {
 		: 'No profiles are configured.';
 	return new ConfigError(`Unknown profile "${name}". ${available}`, {
 		suggestions: [
-			'Run `skif profile list` to see saved profiles.',
-			`Run \`skif profile add ${name} --url <control-url>\` to create it.`,
+			'Run `yoal profile list` to see saved profiles.',
+			`Run \`yoal profile add ${name} --url <control-url>\` to create it.`,
 		],
 	});
 }
@@ -856,8 +856,8 @@ function unknownProfile(state: ConfigState, name: string): ConfigError {
 function ambiguousProfile(names: string[]): ConfigError {
 	const sorted = [...names].sort();
 	return new ConfigError(
-		`Multiple profiles are configured (${sorted.join(', ')}), but none is active. Choose one with \`--profile <name>\`, set ${PROFILE_ENV}, or run \`skif profile use <name>\`.`,
-		{ suggestions: ['Run `skif profile list` to see the profiles.'] },
+		`Multiple profiles are configured (${sorted.join(', ')}), but none is active. Choose one with \`--profile <name>\`, set ${PROFILE_ENV}, or run \`yoal profile use <name>\`.`,
+		{ suggestions: ['Run `yoal profile list` to see the profiles.'] },
 	);
 }
 
@@ -871,11 +871,11 @@ function profileHint(state: ConfigState): string[] {
 function optionalString(value: unknown, field: string, path: string): string | undefined {
 	if (value === undefined || value === null) return undefined;
 	if (typeof value !== 'string')
-		throw new ConfigError(`${path} has a non-string "${field}". Run \`skif config unset ${field}\`.`);
+		throw new ConfigError(`${path} has a non-string "${field}". Run \`yoal config unset ${field}\`.`);
 	const trimmedValue = value.trim();
 	if (!trimmedValue)
 		throw new ConfigError(
-			`${path} has an empty "${field}". Run \`skif config unset ${field}\` or log in again.`,
+			`${path} has an empty "${field}". Run \`yoal config unset ${field}\` or log in again.`,
 		);
 	return trimmedValue;
 }

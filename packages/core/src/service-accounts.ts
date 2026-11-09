@@ -14,7 +14,7 @@ import {
 	SLUG_PATTERN,
 	type Permission,
 	type Principal,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from './errors.ts';
 import { newId, sha256Hex } from './util.ts';
@@ -165,7 +165,7 @@ export class ServiceAccountService {
 
 	/**
 	 * Mint a short-lived STS token for one service account (`serviceAccount:impersonate`, IAM.md
-	 * I13, §7.2). This is the equivalent of `skif sa token <name>`: a person debugs a CI identity
+	 * I13, §7.2). This is the equivalent of `yoal sa token <name>`: a person debugs a CI identity
 	 * without a standing key. The token names the account and carries the caller as its `act`
 	 * claim; it is audited as `service_account.impersonate` against the account.
 	 *
@@ -773,7 +773,7 @@ function impersonationTtl(value: number | undefined): number {
 }
 
 function impersonationAudience(value: string | undefined): string {
-	const audience = value?.trim() || 'skiff';
+	const audience = value?.trim() || 'yoal';
 	if (audience.length > 512 || /[\u0000-\u001f\u007f]/.test(audience))
 		throw new ValidationError('A token audience must be 1–512 printable characters.');
 	return audience;

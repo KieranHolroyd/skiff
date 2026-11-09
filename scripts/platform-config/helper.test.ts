@@ -9,7 +9,7 @@ import { BACKUP_UNITS, LITESTREAM_SHA256, PlatformConfigHelper, claimRequest, li
 
 const R2 = {
 	R2_ACCOUNT_ID: '0123456789abcdef0123456789abcdef',
-	R2_BUCKET: 'skiff-prod',
+	R2_BUCKET: 'yoal-prod',
 	R2_ACCESS_KEY_ID: 'abcdef0123456789abcdef0123456789',
 	R2_SECRET_ACCESS_KEY: 'f'.repeat(64),
 };
@@ -56,25 +56,25 @@ function fakeHost(): FakeHost {
 			return host.answers.shift() ?? true;
 		},
 		writeStatus: (status) => void host.statuses.push(status),
-		chownRootSkiff() {},
+		chownRootYoal() {},
 	};
 	return host;
 }
 
 beforeEach(() => {
-	root = mkdtempSync(join(tmpdir(), 'skiff-platform-config-'));
+	root = mkdtempSync(join(tmpdir(), 'yoal-platform-config-'));
 	const source = join(root, 'repo');
 	mkdirSync(join(source, 'scripts', 'systemd'), { recursive: true });
 	writeFileSync(join(source, 'scripts', 'litestream.yml'), 'bucket: ${R2_BUCKET}\n');
 	for (const unit of BACKUP_UNITS) writeFileSync(join(source, 'scripts', 'systemd', unit), `ExecStart=/usr/local/bin/litestream ${unit}\n`);
 	for (const dir of ['etc', 'systemd', 'sbin', 'bin', 'drill', 'request']) mkdirSync(join(root, dir));
 	layout = {
-		envFile: join(root, 'etc', 'skiff.env'),
+		envFile: join(root, 'etc', 'yoal.env'),
 		systemdDir: join(root, 'systemd'),
 		sbinDir: join(root, 'sbin'),
-		optDir: '/opt/skiff',
+		optDir: '/opt/yoal',
 		sourceDir: source,
-		bunBin: '/opt/skiff/runtime/bin/bun',
+		bunBin: '/opt/yoal/runtime/bin/bun',
 		litestreamBin: join(root, 'bin', 'litestream'),
 		litestreamConfig: join(root, 'etc', 'litestream.yml'),
 		drillDir: join(root, 'drill'),
@@ -117,14 +117,14 @@ describe('claimRequest', () => {
 describe('configure', () => {
 	test('writes only the allowlisted keys and restarts the control plane', async () => {
 		const host = fakeHost();
-		request({ action: 'configure', section: 'alerts', set: { SKIFF_ALERT_WEBHOOK: 'https://ntfy.sh/skiff' } });
+		request({ action: 'configure', section: 'alerts', set: { YOAL_ALERT_WEBHOOK: 'https://ntfy.sh/yoal' } });
 		const status = await new PlatformConfigHelper(layout, host).applyRequestFile();
 		expect(status?.outcome).toBe('applied');
-		expect(status?.changed).toEqual(['SKIFF_ALERT_WEBHOOK']);
+		expect(status?.changed).toEqual(['YOAL_ALERT_WEBHOOK']);
 		const env = readEnvFile(layout.envFile);
-		expect(env.get('SKIFF_ALERT_WEBHOOK')).toBe('https://ntfy.sh/skiff');
+		expect(env.get('YOAL_ALERT_WEBHOOK')).toBe('https://ntfy.sh/yoal');
 		expect(env.get('BETTER_AUTH_SECRET')).toBe('keep-me');
-		expect(host.commands).toContainEqual(['systemctl', 'restart', 'skiff-control-plane.service']);
+		expect(host.commands).toContainEqual(['systemctl', 'restart', 'yoal-control-plane.service']);
 	});
 
 	test('rejects a forged key without touching the env file', async () => {
@@ -142,7 +142,7 @@ describe('configure', () => {
 		// 60 failed health checks with the new settings, then healthy twice after the revert.
 		host.healthy = [...Array(60).fill(false), true, true];
 		const before = readFileSync(layout.envFile, 'utf8');
-		request({ action: 'configure', section: 'email', set: { SKIFF_SMTP_HOST: 'smtp.example.com', SKIFF_SMTP_PORT: '587', SKIFF_SMTP_FROM: 'Skiff <a@example.com>' } });
+		request({ action: 'configure', section: 'email', set: { YOAL_SMTP_HOST: 'smtp.example.com', YOAL_SMTP_PORT: '587', YOAL_SMTP_FROM: 'Yoal <a@example.com>' } });
 		const status = await new PlatformConfigHelper(layout, host).applyRequestFile();
 		expect(status?.outcome).toBe('reverted');
 		expect(readFileSync(layout.envFile, 'utf8')).toBe(before);
@@ -150,25 +150,25 @@ describe('configure', () => {
 
 	test('reports unchanged settings without restarting', async () => {
 		const host = fakeHost();
-		request({ action: 'configure', section: 'alerts', unset: ['SKIFF_ALERT_EMAIL'] });
+		request({ action: 'configure', section: 'alerts', unset: ['YOAL_ALERT_EMAIL'] });
 		const status = await new PlatformConfigHelper(layout, host).applyRequestFile();
 		expect(status?.outcome).toBe('unchanged');
 		expect(host.commands.some((cmd) => cmd[1] === 'restart')).toBe(false);
 	});
 
 	test('refuses to remove R2 credentials while artifacts live in R2', async () => {
-		writeFileSync(layout.envFile, `SKIFF_OBJECT_STORE=r2\n${Object.entries(R2).map(([k, v]) => `${k}=${v}`).join('\n')}\n`);
+		writeFileSync(layout.envFile, `YOAL_OBJECT_STORE=r2\n${Object.entries(R2).map(([k, v]) => `${k}=${v}`).join('\n')}\n`);
 		request({ action: 'configure', section: 'backups', unset: Object.keys(R2) });
 		const status = await new PlatformConfigHelper(layout, fakeHost()).applyRequestFile();
 		expect(status?.outcome).toBe('rejected');
-		expect(readEnvFile(layout.envFile).get('R2_BUCKET')).toBe('skiff-prod');
+		expect(readEnvFile(layout.envFile).get('R2_BUCKET')).toBe('yoal-prod');
 	});
 });
 
 describe('backups', () => {
 	test('saving R2 credentials installs the pinned Litestream and enables replication', async () => {
 		const host = fakeHost();
-		host.units['skiff-litestream.service'] = 'active';
+		host.units['yoal-litestream.service'] = 'active';
 		// Pretend the download matches by pinning its hash for this test.
 		host.downloadBytes = new TextEncoder().encode('litestream tarball');
 		const original = LITESTREAM_SHA256.amd64!;
@@ -185,8 +185,8 @@ describe('backups', () => {
 		expect(existsSync(layout.litestreamBin)).toBe(true);
 		expect(readFileSync(layout.litestreamConfig, 'utf8')).toContain('${R2_BUCKET}');
 		for (const unit of BACKUP_UNITS) expect(existsSync(join(layout.systemdDir, unit))).toBe(true);
-		expect(readFileSync(join(layout.sbinDir, 'skiff-alert'), 'utf8')).toContain('repo/scripts/skiff-alert.ts');
-		expect(host.commands).toContainEqual(['systemctl', 'enable', 'skiff-litestream.service', 'skiff-restore-drill.timer']);
+		expect(readFileSync(join(layout.sbinDir, 'yoal-alert'), 'utf8')).toContain('repo/scripts/yoal-alert.ts');
+		expect(host.commands).toContainEqual(['systemctl', 'enable', 'yoal-litestream.service', 'yoal-restore-drill.timer']);
 	});
 
 	test('a tampered Litestream download is refused', async () => {
@@ -210,10 +210,10 @@ describe('backups', () => {
 		const host = fakeHost();
 		request({ action: 'restore-drill' });
 		expect((await new PlatformConfigHelper(layout, host).applyRequestFile())?.outcome).toBe('rejected');
-		writeFileSync(join(layout.systemdDir, 'skiff-restore-drill.service'), '');
+		writeFileSync(join(layout.systemdDir, 'yoal-restore-drill.service'), '');
 		request({ action: 'restore-drill' });
 		expect((await new PlatformConfigHelper(layout, host).applyRequestFile())?.outcome).toBe('applied');
-		expect(host.commands).toContainEqual(['systemctl', 'start', '--no-block', 'skiff-restore-drill.service']);
+		expect(host.commands).toContainEqual(['systemctl', 'start', '--no-block', 'yoal-restore-drill.service']);
 	});
 });
 
@@ -225,7 +225,7 @@ test('litestreamAsset maps machine names', () => {
 
 describe('telemetry store (D101)', () => {
 	beforeEach(() => {
-		// Never let a test touch the real /opt/skiff or /var/lib/skiff.
+		// Never let a test touch the real /opt/yoal or /var/lib/yoal.
 		layout.optDir = join(root, 'opt');
 		layout.clickhouseDataDir = join(root, 'clickhouse-data');
 		mkdirSync(join(layout.optDir, 'clickhouse', '26.8.34.13'), { recursive: true });
@@ -235,9 +235,9 @@ describe('telemetry store (D101)', () => {
 	test('removing it strips only the ClickHouse settings, keeps data and restarts the control plane', async () => {
 		writeFileSync(
 			layout.envFile,
-			'# keep this comment\nNODE_ENV=production\nSKIFF_CLICKHOUSE_URL=http://127.0.0.1:18123\nSKIFF_CLICKHOUSE_PASSWORD=x\nBETTER_AUTH_SECRET=keep-me\n',
+			'# keep this comment\nNODE_ENV=production\nYOAL_CLICKHOUSE_URL=http://127.0.0.1:18123\nYOAL_CLICKHOUSE_PASSWORD=x\nBETTER_AUTH_SECRET=keep-me\n',
 		);
-		writeFileSync(join(layout.systemdDir, 'skiff-clickhouse.service'), '[Unit]\n');
+		writeFileSync(join(layout.systemdDir, 'yoal-clickhouse.service'), '[Unit]\n');
 		const host = fakeHost();
 		const status = await new PlatformConfigHelper(layout, host).apply({
 			id: 'req_0123456789',
@@ -248,13 +248,13 @@ describe('telemetry store (D101)', () => {
 			purgeData: false,
 		});
 		expect(status.outcome).toBe('applied');
-		expect(status.changed).toEqual(['SKIFF_CLICKHOUSE_URL', 'SKIFF_CLICKHOUSE_PASSWORD']);
+		expect(status.changed).toEqual(['YOAL_CLICKHOUSE_URL', 'YOAL_CLICKHOUSE_PASSWORD']);
 		expect(readFileSync(layout.envFile, 'utf8')).toBe('# keep this comment\nNODE_ENV=production\nBETTER_AUTH_SECRET=keep-me\n');
-		expect(existsSync(join(layout.systemdDir, 'skiff-clickhouse.service'))).toBe(false);
+		expect(existsSync(join(layout.systemdDir, 'yoal-clickhouse.service'))).toBe(false);
 		expect(existsSync(join(layout.optDir, 'clickhouse'))).toBe(false);
 		expect(existsSync(layout.clickhouseDataDir!)).toBe(true);
-		expect(host.commands).toContainEqual(['systemctl', 'disable', '--now', 'skiff-clickhouse.service']);
-		expect(host.commands).toContainEqual(['systemctl', 'restart', 'skiff-control-plane.service']);
+		expect(host.commands).toContainEqual(['systemctl', 'disable', '--now', 'yoal-clickhouse.service']);
+		expect(host.commands).toContainEqual(['systemctl', 'restart', 'yoal-control-plane.service']);
 	});
 
 	test('purge deletes the stored telemetry; removing nothing is a no-op', async () => {
@@ -280,7 +280,7 @@ describe('telemetry store (D101)', () => {
 		});
 		expect(status.outcome).toBe('error');
 		expect(status.message).toContain('could not be installed');
-		expect(host.commands.some((cmd) => cmd.includes('skiff-control-plane.service'))).toBe(false);
+		expect(host.commands.some((cmd) => cmd.includes('yoal-control-plane.service'))).toBe(false);
 	});
 });
 
@@ -298,27 +298,27 @@ describe('telemetry memory and restart', () => {
 	});
 
 	// Off Linux ensureClickHouse refuses at once, which exercises the revert path.
-	test.skipIf(process.platform === 'linux')('a ceiling ClickHouse cannot apply is reverted in skiff.env', async () => {
+	test.skipIf(process.platform === 'linux')('a ceiling ClickHouse cannot apply is reverted in yoal.env', async () => {
 		layout.optDir = join(root, 'opt');
-		writeFileSync(layout.envFile, 'NODE_ENV=production\nSKIFF_CLICKHOUSE_MEMORY_MB=1024\n');
-		writeFileSync(join(layout.systemdDir, 'skiff-clickhouse.service'), '[Unit]\n');
+		writeFileSync(layout.envFile, 'NODE_ENV=production\nYOAL_CLICKHOUSE_MEMORY_MB=1024\n');
+		writeFileSync(join(layout.systemdDir, 'yoal-clickhouse.service'), '[Unit]\n');
 		const host = fakeHost();
 		const status = await new PlatformConfigHelper(layout, host).apply({ ...base, action: 'telemetry-memory', memoryMb: 2048 });
 		expect(status.outcome).toBe('error');
-		expect(status.changed).toEqual(['SKIFF_CLICKHOUSE_MEMORY_MB']);
-		expect(readEnvFile(layout.envFile).get('SKIFF_CLICKHOUSE_MEMORY_MB')).toBe('1024');
-		expect(host.commands.some((cmd) => cmd.includes('skiff-control-plane.service'))).toBe(false);
+		expect(status.changed).toEqual(['YOAL_CLICKHOUSE_MEMORY_MB']);
+		expect(readEnvFile(layout.envFile).get('YOAL_CLICKHOUSE_MEMORY_MB')).toBe('1024');
+		expect(host.commands.some((cmd) => cmd.includes('yoal-control-plane.service'))).toBe(false);
 	});
 });
 
 describe('domains', () => {
 	const httpsTarget = { platformHost: 'control.example.com', contentDomain: 'example.dev', tls: true, acmeEmail: 'ops@example.com' };
 	const agentEnv = [
-		'SKIFF_CONTROL_URL=http://203.0.113.7',
-		'SKIFF_NODE_TOKEN=node-secret',
-		'SKIFF_CONTENT_DOMAIN=203-0-113-7.sslip.io',
-		'SKIFF_PLATFORM_HOST=203.0.113.7',
-		'SKIFF_TLS=0',
+		'YOAL_CONTROL_URL=http://203.0.113.7',
+		'YOAL_NODE_TOKEN=node-secret',
+		'YOAL_CONTENT_DOMAIN=203-0-113-7.sslip.io',
+		'YOAL_PLATFORM_HOST=203.0.113.7',
+		'YOAL_TLS=0',
 		'',
 	].join('\n');
 
@@ -326,7 +326,7 @@ describe('domains', () => {
 		layout = { ...layout, agentEnvFile: join(root, 'etc', 'agent.env'), cloudflareTokenFile: join(root, 'etc', 'cloudflare.token') };
 		writeFileSync(
 			layout.envFile,
-			'NODE_ENV=production\nBETTER_AUTH_SECRET=keep-me\nSKIFF_PLATFORM_ORIGIN=http://203.0.113.7\nSKIFF_CONTENT_DOMAIN=203-0-113-7.sslip.io\n',
+			'NODE_ENV=production\nBETTER_AUTH_SECRET=keep-me\nYOAL_PLATFORM_ORIGIN=http://203.0.113.7\nYOAL_CONTENT_DOMAIN=203-0-113-7.sslip.io\n',
 		);
 		writeFileSync(layout.agentEnvFile!, agentEnv);
 	});
@@ -337,20 +337,20 @@ describe('domains', () => {
 		const status = await new PlatformConfigHelper(layout, host).applyRequestFile();
 		expect(status?.outcome).toBe('applied');
 		const control = readEnvFile(layout.envFile);
-		expect(control.get('SKIFF_PLATFORM_ORIGIN')).toBe('https://control.example.com');
-		expect(control.get('SKIFF_CONTENT_DOMAIN')).toBe('example.dev');
-		expect(control.get('SKIFF_ACME_EMAIL')).toBe('ops@example.com');
+		expect(control.get('YOAL_PLATFORM_ORIGIN')).toBe('https://control.example.com');
+		expect(control.get('YOAL_CONTENT_DOMAIN')).toBe('example.dev');
+		expect(control.get('YOAL_ACME_EMAIL')).toBe('ops@example.com');
 		expect(control.get('BETTER_AUTH_SECRET')).toBe('keep-me');
 		const agent = readEnvFile(layout.agentEnvFile!);
-		expect(agent.get('SKIFF_CONTROL_URL')).toBe('https://control.example.com');
-		expect(agent.get('SKIFF_CONTROL_SOCKET')).toBe('/run/skiff/control.sock');
-		expect(agent.get('SKIFF_PLATFORM_HOST')).toBe('control.example.com');
-		expect(agent.get('SKIFF_TLS')).toBe('1');
-		expect(agent.get('SKIFF_CLOUDFLARE_API_TOKEN_FILE')).toBe(layout.cloudflareTokenFile);
-		expect(agent.get('SKIFF_NODE_TOKEN')).toBe('node-secret');
+		expect(agent.get('YOAL_CONTROL_URL')).toBe('https://control.example.com');
+		expect(agent.get('YOAL_CONTROL_SOCKET')).toBe('/run/yoal/control.sock');
+		expect(agent.get('YOAL_PLATFORM_HOST')).toBe('control.example.com');
+		expect(agent.get('YOAL_TLS')).toBe('1');
+		expect(agent.get('YOAL_CLOUDFLARE_API_TOKEN_FILE')).toBe(layout.cloudflareTokenFile);
+		expect(agent.get('YOAL_NODE_TOKEN')).toBe('node-secret');
 		expect(readFileSync(layout.cloudflareTokenFile!, 'utf8').trim()).toBe('cf'.repeat(20));
-		expect(host.commands).toContainEqual(['systemctl', 'restart', 'skiff-control-plane.service']);
-		expect(host.commands).toContainEqual(['systemctl', 'restart', 'skiff-agent.service']);
+		expect(host.commands).toContainEqual(['systemctl', 'restart', 'yoal-control-plane.service']);
+		expect(host.commands).toContainEqual(['systemctl', 'restart', 'yoal-agent.service']);
 		expect(host.probed.at(-1)).toBe('https://control.example.com');
 		expect(status?.message).toContain('https://control.example.com');
 	});
@@ -384,7 +384,7 @@ describe('domains', () => {
 	test('the same domains again change nothing and restart nothing', async () => {
 		const host = fakeHost();
 		request({ action: 'domains', platformHost: '203.0.113.7', contentDomain: '203-0-113-7.sslip.io', tls: false, acmeEmail: '' });
-		// The agent env lacks SKIFF_CONTROL_SOCKET at first, so the first run writes it.
+		// The agent env lacks YOAL_CONTROL_SOCKET at first, so the first run writes it.
 		expect((await new PlatformConfigHelper(layout, host).applyRequestFile())?.outcome).toBe('applied');
 		const second = fakeHost();
 		request({ action: 'domains', platformHost: '203.0.113.7', contentDomain: '203-0-113-7.sslip.io', tls: false, acmeEmail: '' });
@@ -392,13 +392,13 @@ describe('domains', () => {
 		expect(second.commands.some((cmd) => cmd[0] === 'systemctl')).toBe(false);
 	});
 
-	test('a control-plane-only install updates skiff.env and skips the Caddy check', async () => {
+	test('a control-plane-only install updates yoal.env and skips the Caddy check', async () => {
 		rmSync(layout.agentEnvFile!);
 		const host = fakeHost();
 		request({ action: 'domains', platformHost: 'control.example.com', contentDomain: 'example.dev', tls: false, acmeEmail: '' });
 		const status = await new PlatformConfigHelper(layout, host).applyRequestFile();
 		expect(status?.outcome).toBe('applied');
-		expect(readEnvFile(layout.envFile).get('SKIFF_PLATFORM_ORIGIN')).toBe('http://control.example.com');
+		expect(readEnvFile(layout.envFile).get('YOAL_PLATFORM_ORIGIN')).toBe('http://control.example.com');
 		expect(host.probed).toEqual([]);
 	});
 });
@@ -409,9 +409,9 @@ describe('push-keys', () => {
 		request({ action: 'push-keys' });
 		const first = await new PlatformConfigHelper(layout, host).applyRequestFile();
 		expect(first?.outcome).toBe('applied');
-		expect(first?.changed).toEqual(['SKIFF_VAPID_PUBLIC_KEY', 'SKIFF_VAPID_PRIVATE_KEY']);
+		expect(first?.changed).toEqual(['YOAL_VAPID_PUBLIC_KEY', 'YOAL_VAPID_PRIVATE_KEY']);
 		const env = readEnvFile(layout.envFile);
-		const publicKey = env.get('SKIFF_VAPID_PUBLIC_KEY');
+		const publicKey = env.get('YOAL_VAPID_PUBLIC_KEY');
 		expect(publicKey).toMatch(/^[A-Za-z0-9_-]{87}$/);
 		expect(env.get('BETTER_AUTH_SECRET')).toBe('keep-me');
 
@@ -419,8 +419,8 @@ describe('push-keys', () => {
 		const second = await new PlatformConfigHelper(layout, host).applyRequestFile();
 		expect(second?.outcome).toBe('applied');
 		expect(second?.changed).toEqual([]);
-		expect(readEnvFile(layout.envFile).get('SKIFF_VAPID_PUBLIC_KEY')).toBe(publicKey);
-		expect(host.commands.filter((cmd) => cmd.join(' ') === 'systemctl restart skiff-control-plane.service')).toHaveLength(2);
+		expect(readEnvFile(layout.envFile).get('YOAL_VAPID_PUBLIC_KEY')).toBe(publicKey);
+		expect(host.commands.filter((cmd) => cmd.join(' ') === 'systemctl restart yoal-control-plane.service')).toHaveLength(2);
 	});
 
 	test('removes the new keys again when the control plane does not come back', async () => {
@@ -429,6 +429,6 @@ describe('push-keys', () => {
 		request({ action: 'push-keys' });
 		const status = await new PlatformConfigHelper(layout, host).applyRequestFile();
 		expect(status?.outcome).toBe('reverted');
-		expect(readEnvFile(layout.envFile).has('SKIFF_VAPID_PUBLIC_KEY')).toBe(false);
+		expect(readEnvFile(layout.envFile).has('YOAL_VAPID_PUBLIC_KEY')).toBe(false);
 	});
 });

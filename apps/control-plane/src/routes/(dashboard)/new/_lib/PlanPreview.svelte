@@ -6,7 +6,7 @@
 	import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
 	import RocketIcon from '@lucide/svelte/icons/rocket';
 	import ShieldIcon from '@lucide/svelte/icons/shield';
-	import { githubRunnerLabels, type TemplatePlan } from '@skiff/contracts';
+	import { githubRunnerLabels, type TemplatePlan } from '@yoal/contracts';
 	import type { Component, Snippet } from 'svelte';
 	import CodeBlock from '../../_lib/CodeBlock.svelte';
 	import ProjectMark from '../../_lib/ProjectMark.svelte';
@@ -149,7 +149,7 @@
 
 		{#snippet deployBody()}
 			<p class="text-xs text-muted-foreground">
-				Recorded as <code class="font-mono">skiff-template.json</code> and promoted to production.
+				Recorded as <code class="font-mono">yoal-template.json</code> and promoted to production.
 			</p>
 		{/snippet}
 		{@render row(RocketIcon, 'First deployment', deployBody)}

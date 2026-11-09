@@ -34,7 +34,7 @@ const flags: FlagSpec = {
 	help: { type: 'boolean', short: 'h' },
 };
 
-const usage = `Usage: skif prune [--apply] [--plan <op_id>] [--scope org|platform] [--only <categories>]
+const usage = `Usage: yoal prune [--apply] [--plan <op_id>] [--scope org|platform] [--only <categories>]
                   [--older-than <days>] [--keep-tags <n>] [--yes] [--json]
 
 Find and remove data no live project references: leftover rows of deleted projects, orphaned
@@ -59,7 +59,7 @@ Options:
 Categories: ${pruneCategoryIds.join(', ')}
 
 Exit codes: 0 succeeded, 3 partial, 1 failed or cancelled. Ctrl-C detaches; the run carries
-on (\`skif operations watch <id>\`).`;
+on (\`yoal operations watch <id>\`).`;
 
 export async function pruneCommand(argv: string[]): Promise<void> {
 	const args = parseArgs(argv, flags);
@@ -122,7 +122,7 @@ export async function pruneCommand(argv: string[]): Promise<void> {
 	if (!args.boolean('apply')) {
 		if (!json) {
 			const onlyFlag = only && planId ? ` --only ${only.join(',')}` : '';
-			console.log(`\nThis was a dry run. To delete exactly this plan (within 1 hour):\n  skif prune --apply --plan ${plan.id}${onlyFlag}`);
+			console.log(`\nThis was a dry run. To delete exactly this plan (within 1 hour):\n  yoal prune --apply --plan ${plan.id}${onlyFlag}`);
 		}
 		return;
 	}
@@ -132,7 +132,7 @@ export async function pruneCommand(argv: string[]): Promise<void> {
 		// Off a terminal this refuses, but the scan is kept: it's a valid dry run to apply by id.
 		const confirmed = await confirmOrRefuse(pruneConfirmQuestion(shown.summary), {
 			yes: args.boolean('yes'),
-			refusal: `Not confirmed: stdin is not a terminal. The scan was kept as a dry run; apply it within 1 hour with \`skif prune --apply --plan ${plan.id}\`.`,
+			refusal: `Not confirmed: stdin is not a terminal. The scan was kept as a dry run; apply it within 1 hour with \`yoal prune --apply --plan ${plan.id}\`.`,
 		});
 		if (!confirmed) {
 			await discardPlan(client, plan.id);
@@ -153,7 +153,7 @@ export async function pruneCommand(argv: string[]): Promise<void> {
 		return;
 	}
 	console.log(outcomeLine(final));
-	if (final.status !== 'succeeded') console.log(`Details: skif operations show ${final.id}`);
+	if (final.status !== 'succeeded') console.log(`Details: yoal operations show ${final.id}`);
 }
 
 /** A whole number; `allowZero` lets `--keep-tags 0` mean "keep only in-use tags and latest". */
@@ -189,10 +189,10 @@ function narrow(plan: OperationView, only: string[]): OperationView {
 
 function notApplicable(plan: OperationView): CliError {
 	if (plan.status === 'applying')
-		return new CliError(`${plan.id} is already being applied.`, { suggestions: [`Follow it: skif operations watch ${plan.id}`] });
+		return new CliError(`${plan.id} is already being applied.`, { suggestions: [`Follow it: yoal operations watch ${plan.id}`] });
 	if (isTerminal(plan.status))
 		return new CliError(`${plan.id} is ${plan.status}; it can no longer be applied.`, {
-			suggestions: ['Scan again: skif prune'],
+			suggestions: ['Scan again: yoal prune'],
 		});
 	return new CliError(`${plan.id} is ${plan.status}, not planned.`);
 }

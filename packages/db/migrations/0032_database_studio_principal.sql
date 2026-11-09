@@ -1,5 +1,5 @@
 -- Read-only studio principal (plan 22, track G). Additive only.
--- Every managed database gets one `skiff_studio_ro` engine account that read-only studio sessions
+-- Every managed database gets one `yoal_studio_ro` engine account that read-only studio sessions
 -- connect as, so the database itself refuses their writes. Its password is sealed with the org
 -- data key and reaches the node only through the node-authenticated activation fetch.
 -- `studio_ro_generation` is bumped whenever the account may have been lost (restore, PITR,

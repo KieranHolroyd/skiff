@@ -44,7 +44,7 @@ const bulkFlags: FlagSpec = {
 /** Typing the count is required above this many purges (docs/OPERATIONS.md §6.2). */
 const PURGE_TYPED_CONFIRM_OVER = 10;
 
-const usage = `Usage: skif projects [list|delete|restore|trash|purge] [options]
+const usage = `Usage: yoal projects [list|delete|restore|trash|purge] [options]
 
 Commands:
   list                       List projects (the default)
@@ -67,7 +67,7 @@ Options:
 
 Every bulk command shows the server's plan first, then asks. Exit codes: 0 succeeded,
 3 partial, 1 failed or cancelled. Ctrl-C while it runs detaches; it keeps going on the
-server (\`skif operations watch <id>\`).`;
+server (\`yoal operations watch <id>\`).`;
 
 const subcommands: Record<string, (argv: string[]) => Promise<void>> = {
 	list: listProjects,
@@ -96,7 +96,7 @@ async function listProjects(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif projects [--json]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal projects [--json]');
 
 	const client = await authenticatedClient();
 	const { projects, raw } = await client.listProjects();
@@ -105,7 +105,7 @@ async function listProjects(argv: string[]): Promise<void> {
 		return;
 	}
 	if (projects.length === 0) {
-		console.log('No projects yet. Deploy one with `skif deploy`.');
+		console.log('No projects yet. Deploy one with `yoal deploy`.');
 		return;
 	}
 	const rows = projects.map((project) => [
@@ -121,10 +121,10 @@ async function listProjects(argv: string[]): Promise<void> {
 async function listTrash(argv: string[]): Promise<void> {
 	const args = parseArgs(argv, listFlags);
 	if (args.boolean('help')) {
-		console.log('Usage: skif projects trash [--json]\n\nList deleted projects and when each is purged for good.');
+		console.log('Usage: yoal projects trash [--json]\n\nList deleted projects and when each is purged for good.');
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif projects trash [--json]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal projects trash [--json]');
 
 	const client = await authenticatedClient();
 	const { projects, raw } = await client.listProjects({ trash: true });
@@ -144,7 +144,7 @@ async function listTrash(argv: string[]): Promise<void> {
 		project.purgeAt ? formatDurationShort(Date.parse(project.purgeAt) - now) : '-',
 	]);
 	console.log(renderTable(['SLUG', 'NAME', 'DELETED', 'PURGES IN'], rows));
-	console.log('\nRestore with `skif projects restore <slug…>`; purge now with `skif projects purge <slug…>`.');
+	console.log('\nRestore with `yoal projects restore <slug…>`; purge now with `yoal projects purge <slug…>`.');
 }
 
 async function bulk(action: BulkAction, argv: string[]): Promise<void> {
@@ -214,11 +214,11 @@ async function bulk(action: BulkAction, argv: string[]): Promise<void> {
 	if (action === 'project.delete' && succeeded.length > 0) {
 		console.log(
 			succeeded.length <= 20
-				? `Undo: skif projects restore ${succeeded.join(' ')}`
-				: 'Undo: restore them from the trash with `skif projects restore` (see `skif projects trash`).',
+				? `Undo: yoal projects restore ${succeeded.join(' ')}`
+				: 'Undo: restore them from the trash with `yoal projects restore` (see `yoal projects trash`).',
 		);
 	}
-	if (final.status !== 'succeeded') console.log(`Details: skif operations show ${final.id}`);
+	if (final.status !== 'succeeded') console.log(`Details: yoal operations show ${final.id}`);
 }
 
 interface Selection {
@@ -240,7 +240,7 @@ async function readSelection(args: ParsedArgs): Promise<Selection> {
 	};
 	if (args.boolean('stdin')) {
 		if (process.stdin.isTTY)
-			throw new UsageError('--stdin needs slugs piped in, e.g. `cat slugs.txt | skif projects delete --stdin --yes`.');
+			throw new UsageError('--stdin needs slugs piped in, e.g. `cat slugs.txt | yoal projects delete --stdin --yes`.');
 		explicit.push(...parseSlugList(await readAllStdin()));
 	}
 	if (explicit.length === 0 && !hasSelectors(selection))

@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
-import { createDb } from '@skiff/db';
-import type { Role } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import type { Role } from '@yoal/contracts';
 import { AuditService } from './audit.ts';
 import { ConnectedAppService, authDate, authList } from './connected-apps.ts';
 import type { CoreContext } from './context.ts';

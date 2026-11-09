@@ -3,7 +3,7 @@ import { APIError, createAuthEndpoint, sessionMiddleware } from 'better-auth/api
 import { symmetricDecrypt, symmetricEncrypt } from 'better-auth/crypto';
 import { deleteSessionCookie } from 'better-auth/cookies';
 import * as z from 'zod';
-import { STEP_UP_WINDOW_MS, type Principal } from '@skiff/contracts';
+import { STEP_UP_WINDOW_MS, type Principal } from '@yoal/contracts';
 import { platformOrigin, smtp } from '../config';
 import { core } from '../core';
 import { emailTransport } from '../email';
@@ -232,9 +232,9 @@ async function sendEmailCode(userEmail: string, code: string, action: string | u
 	const forAction = action ? `to ${action.replace(/[_-]/g, ' ')}` : 'for a sensitive action';
 	await emailTransport().send({
 		to: userEmail,
-		subject: 'Your Skiff verification code',
+		subject: 'Your Yoal verification code',
 		text:
-			`Your Skiff verification code is ${code}.\n\n` +
+			`Your Yoal verification code is ${code}.\n\n` +
 			`Enter it ${forAction}. It expires in ${STEP_UP_EMAIL_TTL_MS / 60_000} minutes and can be used once. ` +
 			`If you didn't ask to verify, ignore this email; nobody can continue without the code.`,
 	});
@@ -242,7 +242,7 @@ async function sendEmailCode(userEmail: string, code: string, action: string | u
 
 export function stepUp(): BetterAuthPlugin {
 	return {
-		id: 'skiff-step-up',
+		id: 'yoal-step-up',
 		endpoints: {
 			stepUpStatus: createAuthEndpoint(
 				'/step-up/status',

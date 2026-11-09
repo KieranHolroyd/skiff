@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import type { PipelineJobClaim } from '@skiff/contracts';
+import type { PipelineJobClaim } from '@yoal/contracts';
 import type { ActionHost } from './actions.ts';
 import type { JobApi } from './client.ts';
 import { MEDIA_TYPES, sha256Digest } from './image-registry.ts';

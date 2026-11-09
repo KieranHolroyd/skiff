@@ -21,7 +21,7 @@
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import { Kbd } from '#lib/components/ui/kbd/index.js';
-	import type { AssistantPageContext, AssistantStatus } from '@skiff/contracts';
+	import type { AssistantPageContext, AssistantStatus } from '@yoal/contracts';
 
 	let { status }: { status: AssistantStatus } = $props();
 
@@ -209,9 +209,9 @@
 
 	$effect(() => {
 		const root = document.documentElement;
-		root.classList.toggle('skiff-assistant-docked', docked);
-		root.style.setProperty('--skiff-assistant-width', `${width}px`);
-		return () => root.classList.remove('skiff-assistant-docked');
+		root.classList.toggle('yoal-assistant-docked', docked);
+		root.style.setProperty('--yoal-assistant-width', `${width}px`);
+		return () => root.classList.remove('yoal-assistant-docked');
 	});
 
 	function panelKeydown(event: KeyboardEvent) {
@@ -231,7 +231,7 @@
 			? 'shadow-none'
 			: ''}"
 		style:--panel-width="{width}px"
-		aria-label="Skiff assistant"
+		aria-label="Yoal assistant"
 		onkeydown={panelKeydown}
 		transition:fly={{ x: 40, duration: 180 }}
 	>
@@ -255,7 +255,7 @@
 				</div>
 				<div class="min-w-0 flex-1">
 					<p class="truncate text-sm font-semibold">
-						{assistant.active?.title ?? 'Skiff assistant'}
+						{assistant.active?.title ?? 'Yoal assistant'}
 					</p>
 					<p class="truncate font-mono text-[11px] text-muted-foreground">
 						{status.model ?? 'not configured'}

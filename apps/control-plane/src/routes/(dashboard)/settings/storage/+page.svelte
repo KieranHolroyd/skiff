@@ -23,11 +23,11 @@
 		type StorageDefaultTarget,
 		type StorageNodeView,
 		type StorageTier
-	} from '@skiff/contracts';
+	} from '@yoal/contracts';
 	import { notify, runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import VolumeProfileStats from '#lib/components/skiff/VolumeProfileStats.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import VolumeProfileStats from '#lib/components/yoal/VolumeProfileStats.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
@@ -99,9 +99,9 @@
 	function remove(disk: DiskView) {
 		askConfirm({
 			title: `Stop using “${disk.name}”?`,
-			description: disk.mountedBySkiff
-				? `Skiff unmounts ${disk.mountPath} on ${disk.nodeName ?? 'its node'}. The files on the disk stay.`
-				: `Skiff forgets the disk. It stays mounted at ${disk.mountPath} and its files stay.`,
+			description: disk.mountedByYoal
+				? `Yoal unmounts ${disk.mountPath} on ${disk.nodeName ?? 'its node'}. The files on the disk stay.`
+				: `Yoal forgets the disk. It stays mounted at ${disk.mountPath} and its files stay.`,
 			confirmLabel: 'Remove disk',
 			tone: 'danger',
 			action: '?/removeDisk',
@@ -151,7 +151,7 @@
 		<Alert.Description>
 			<ol class="mt-1 list-decimal space-y-0.5 pl-4">
 				<li>
-					Under each node, press <strong>Use this disk</strong> on the disks Skiff should store data on.
+					Under each node, press <strong>Use this disk</strong> on the disks Yoal should store data on.
 				</li>
 				<li>
 					Check each disk is marked <strong>fast</strong> (SSD, NVMe) or <strong>bulk</strong> (spinning
@@ -245,7 +245,7 @@
 	title="Disks"
 	icon={HardDriveIcon}
 	count={overview.nodes.reduce((sum, node) => sum + node.disks.length, 0)}
-	description="Skiff only uses filesystems the node already has. It never formats a disk, and it only writes inside its own skiff/ directory."
+	description="Yoal only uses filesystems the node already has. It never formats a disk, and it only writes inside its own yoal/ directory."
 	class="mb-5"
 >
 	{#snippet actions()}
@@ -435,7 +435,7 @@
 		title="Use {adding.candidate.device}"
 		description={adding.candidate.needsMount
 			? `${adding.node.name} mounts this ${adding.candidate.fsType} filesystem by its UUID at ${DISK_MOUNT_ROOT}/<name> and keeps it mounted across reboots. Nothing is formatted.`
-			: `Skiff stores data under ${adding.candidate.mountPath}/skiff. Nothing outside that directory is touched.`}
+			: `Yoal stores data under ${adding.candidate.mountPath}/yoal. Nothing outside that directory is touched.`}
 		action="?/addDisk"
 		submitLabel="Use this disk"
 	>

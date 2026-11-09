@@ -1,8 +1,8 @@
 /**
- * Build a Skiff function bundle from a wrangler project (docs/FUNCTIONS.md §4.3, FN8, D113).
+ * Build a Yoal function bundle from a wrangler project (docs/FUNCTIONS.md §4.3, FN8, D113).
  *
- * Skiff's own bundler (`worker-bundler.ts`, esbuild pinned in the CLI) compiles the Worker; this
- * module writes the modules into a fresh directory, generates the internal `skiff-function.json`
+ * Yoal's own bundler (`worker-bundler.ts`, esbuild pinned in the CLI) compiles the Worker; this
+ * module writes the modules into a fresh directory, generates the internal `yoal-function.json`
  * manifest, and copies the configured assets directory. The manifest never touches the user's
  * project, and Wrangler is never run: the wrangler config is only read.
  *
@@ -68,7 +68,7 @@ export interface FunctionManifest {
 }
 
 export interface BuiltFunctionBundle {
-	/** Directory holding the modules, assets and `skiff-function.json`. */
+	/** Directory holding the modules, assets and `yoal-function.json`. */
 	dir: string;
 	/** Temporary parent; remove it with `cleanup()`. */
 	tempDir: string;
@@ -97,7 +97,7 @@ export interface BindingMapContext {
 	projectSecrets?: string[];
 }
 
-/** Wrangler top-level keys Skiff cannot back; naming them beats silently dropping them. */
+/** Wrangler top-level keys Yoal cannot back; naming them beats silently dropping them. */
 const UNSUPPORTED_BINDINGS = [
 	'ai',
 	'browser',
@@ -113,7 +113,7 @@ const UNSUPPORTED_BINDINGS = [
 const ASSET_EXCLUDES = new Set(['.git', 'node_modules', '.DS_Store']);
 
 /**
- * Bundle the Worker with Skiff's pinned bundler and assemble a deployable directory with a
+ * Bundle the Worker with Yoal's pinned bundler and assemble a deployable directory with a
  * manifest.
  * On success the caller owns the temporary directory and must call `cleanup()`.
  */
@@ -131,8 +131,8 @@ export async function buildFunctionBundle(
 	const compatibilityFlags = stringList(config.compatibility_flags, label, 'compatibility_flags');
 	const triggers = recordOf(config.triggers, label, 'triggers');
 	const crons = stringList(triggers?.crons, label, 'triggers.crons');
-	const skiff = parseSkiffSettings(config.skiff, label);
-	const queueConsumers = mapQueueConsumers(config, label, skiff.brokers);
+	const yoal = parseYoalSettings(config.yoal, label);
+	const queueConsumers = mapQueueConsumers(config, label, yoal.brokers);
 	const { bindings, assets } = mapWranglerBindings(config, {
 		label,
 		workerName,
@@ -148,7 +148,7 @@ export async function buildFunctionBundle(
 				flags: compatibilityFlags,
 			});
 
-	const tempDir = await mkdtemp(join(tmpdir(), 'skiff-fn-'));
+	const tempDir = await mkdtemp(join(tmpdir(), 'yoal-fn-'));
 	const cleanup = async (): Promise<void> => {
 		await rm(tempDir, { recursive: true, force: true });
 	};
@@ -198,11 +198,11 @@ export async function buildFunctionBundle(
 			bindings,
 			triggers: { crons, queues: queueConsumers },
 			...(assets ? { assets } : {}),
-			...(skiff.idleStopSeconds !== undefined ? { idleStopSeconds: skiff.idleStopSeconds } : {}),
-			...(skiff.memoryMb !== undefined ? { memoryMb: skiff.memoryMb } : {}),
-			...(skiff.cpus !== undefined ? { cpus: skiff.cpus } : {}),
+			...(yoal.idleStopSeconds !== undefined ? { idleStopSeconds: yoal.idleStopSeconds } : {}),
+			...(yoal.memoryMb !== undefined ? { memoryMb: yoal.memoryMb } : {}),
+			...(yoal.cpus !== undefined ? { cpus: yoal.cpus } : {}),
 		};
-		await writeFile(join(bundleDir, 'skiff-function.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+		await writeFile(join(bundleDir, 'yoal-function.json'), `${JSON.stringify(manifest, null, 2)}\n`);
 
 		return {
 			dir: bundleDir,
@@ -222,8 +222,8 @@ export async function buildFunctionBundle(
 }
 
 /**
- * Map a wrangler config's bindings onto `skiff-function.json`, by binding name. Cloudflare
- * account ids are ignored; the `skiff` section supplies the Skiff-side resource names.
+ * Map a wrangler config's bindings onto `yoal-function.json`, by binding name. Cloudflare
+ * account ids are ignored; the `yoal` section supplies the Yoal-side resource names.
  */
 export function mapWranglerBindings(
 	config: Record<string, unknown>,
@@ -233,12 +233,12 @@ export function mapWranglerBindings(
 	for (const key of UNSUPPORTED_BINDINGS) {
 		if (config[key] !== undefined && config[key] !== null)
 			throw new CliError(
-				`${label}: "${key}" is not supported by Skiff Functions. Remove the ${key} binding or deploy this Worker to Cloudflare.`,
+				`${label}: "${key}" is not supported by Yoal Functions. Remove the ${key} binding or deploy this Worker to Cloudflare.`,
 				{ code: 'unsupported_binding' },
 			);
 	}
 
-	const skiff = parseSkiffSettings(config.skiff, label);
+	const yoal = parseYoalSettings(config.yoal, label);
 	const bindings = new Map<string, ManifestBinding>();
 	const add = (binding: ManifestBinding): void => {
 		bindings.set(binding.name, binding);
@@ -278,7 +278,7 @@ export function mapWranglerBindings(
 		add({
 			name,
 			type: 'r2',
-			storage: skiff.storage[name] ?? bucket,
+			storage: yoal.storage[name] ?? bucket,
 			bucket,
 			...(prefix ? { prefix } : {}),
 		});
@@ -297,7 +297,7 @@ export function mapWranglerBindings(
 	for (const value of arrayOf(config.hyperdrive, label, 'hyperdrive')) {
 		const entry = entryOf(value, label, 'hyperdrive');
 		const name = requiredField(entry, 'binding', label, 'hyperdrive');
-		add({ name, type: 'hyperdrive', database: skiff.hyperdrive[name] ?? name });
+		add({ name, type: 'hyperdrive', database: yoal.hyperdrive[name] ?? name });
 	}
 
 	for (const value of arrayOf(config.analytics_engine_datasets, label, 'analytics_engine_datasets')) {
@@ -318,9 +318,9 @@ export function mapWranglerBindings(
 			name: requiredField(entry, 'binding', label, 'queues.producers'),
 			type: 'queue',
 			queue,
-			// Queues live on a managed broker (D112); `skiff.brokers` names it per queue, otherwise the
+			// Queues live on a managed broker (D112); `yoal.brokers` names it per queue, otherwise the
 			// project's only attached broker is used.
-			...(skiff.brokers[queue] ? { broker: skiff.brokers[queue] } : {}),
+			...(yoal.brokers[queue] ? { broker: yoal.brokers[queue] } : {}),
 		});
 	}
 
@@ -362,22 +362,22 @@ export function mapWranglerBindings(
 		if (typeof name === 'string' && name.length > 0) add({ name, type: 'secret' });
 	}
 
-	for (const name of skiff.secrets) add({ name, type: 'secret' });
+	for (const name of yoal.secrets) add({ name, type: 'secret' });
 
-	// `skiff.bindings` is merged last so it can add secret references or override a mapped name.
-	for (const value of skiff.bindings) {
-		const entry = entryOf(value, label, 'skiff.bindings');
+	// `yoal.bindings` is merged last so it can add secret references or override a mapped name.
+	for (const value of yoal.bindings) {
+		const entry = entryOf(value, label, 'yoal.bindings');
 		add({
 			...entry,
-			name: requiredField(entry, 'name', label, 'skiff.bindings'),
-			type: requiredField(entry, 'type', label, 'skiff.bindings'),
+			name: requiredField(entry, 'name', label, 'yoal.bindings'),
+			type: requiredField(entry, 'type', label, 'yoal.bindings'),
 		});
 	}
 
 	return { bindings: [...bindings.values()], assets };
 }
 
-interface SkiffSettings {
+interface YoalSettings {
 	storage: Record<string, string>;
 	/** Queue name → managed broker name (D112). */
 	brokers: Record<string, string>;
@@ -390,20 +390,20 @@ interface SkiffSettings {
 }
 
 /**
- * Read the optional top-level `skiff` object. Wrangler ignores unknown top-level keys, so the
- * same file runs on Cloudflare and Skiff.
+ * Read the optional top-level `yoal` object. Wrangler ignores unknown top-level keys, so the
+ * same file runs on Cloudflare and Yoal.
  */
-export function parseSkiffSettings(value: unknown, label: string): SkiffSettings {
-	const record = recordOf(value, label, 'skiff') ?? {};
+export function parseYoalSettings(value: unknown, label: string): YoalSettings {
+	const record = recordOf(value, label, 'yoal') ?? {};
 	return {
-		storage: stringMap(record.storage, label, 'skiff.storage'),
-		brokers: stringMap(record.brokers, label, 'skiff.brokers'),
-		hyperdrive: stringMap(record.hyperdrive, label, 'skiff.hyperdrive'),
-		secrets: stringList(record.secrets, label, 'skiff.secrets'),
-		bindings: arrayOf(record.bindings, label, 'skiff.bindings'),
-		idleStopSeconds: numberField(record.idleStopSeconds, label, 'skiff.idleStopSeconds'),
-		memoryMb: numberField(record.memoryMb, label, 'skiff.memoryMb'),
-		cpus: numberField(record.cpus, label, 'skiff.cpus'),
+		storage: stringMap(record.storage, label, 'yoal.storage'),
+		brokers: stringMap(record.brokers, label, 'yoal.brokers'),
+		hyperdrive: stringMap(record.hyperdrive, label, 'yoal.hyperdrive'),
+		secrets: stringList(record.secrets, label, 'yoal.secrets'),
+		bindings: arrayOf(record.bindings, label, 'yoal.bindings'),
+		idleStopSeconds: numberField(record.idleStopSeconds, label, 'yoal.idleStopSeconds'),
+		memoryMb: numberField(record.memoryMb, label, 'yoal.memoryMb'),
+		cpus: numberField(record.cpus, label, 'yoal.cpus'),
 	};
 }
 
@@ -606,7 +606,7 @@ function numberField(value: unknown, label: string, what: string): number | unde
 
 /**
  * Wrangler `queues.consumers` → `triggers.queues` (D112). Cloudflare's names map one to one;
- * `max_concurrency` and `visibility_timeout_ms` have no Skiff equivalent and are refused rather
+ * `max_concurrency` and `visibility_timeout_ms` have no Yoal equivalent and are refused rather
  * than silently ignored.
  */
 export function mapQueueConsumers(
@@ -619,7 +619,7 @@ export function mapQueueConsumers(
 		const entry = entryOf(value, label, 'queues.consumers');
 		for (const key of ['max_concurrency', 'visibility_timeout_ms'])
 			if (entry[key] !== undefined)
-				throw new CliError(`${label}: queues.consumers.${key} is not supported by Skiff queues; remove it.`, {
+				throw new CliError(`${label}: queues.consumers.${key} is not supported by Yoal queues; remove it.`, {
 					code: 'unsupported_binding',
 				});
 		const queue = requiredField(entry, 'queue', label, 'queues.consumers');

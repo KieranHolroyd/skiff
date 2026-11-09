@@ -1,5 +1,5 @@
 /**
- * Query history per database (plan 22), kept in the browser's IndexedDB (`skiff-studio-history`)
+ * Query history per database (plan 22), kept in the browser's IndexedDB (`yoal-studio-history`)
  * with an in-memory fallback when IndexedDB is missing or refuses (private windows, SSR, tests).
  * Only the input and run metadata are stored, never results. Every call is best effort: history
  * must never break running a query.
@@ -22,7 +22,7 @@ export interface QueryHistory {
 }
 
 export const HISTORY_LIMIT = 200;
-const DB_NAME = 'skiff-studio-history';
+const DB_NAME = 'yoal-studio-history';
 const STORE = 'history';
 
 /** Memory fallback, shared per page so every tab of one database sees the same list. */

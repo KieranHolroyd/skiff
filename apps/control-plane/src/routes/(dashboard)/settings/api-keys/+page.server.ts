@@ -6,7 +6,7 @@ import {
 	roles,
 	statements,
 	type Permission
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { auth } from '#lib/server/auth.js';
 import { authErrorMessage } from '#lib/server/user-settings.js';
 import { formString } from '../../_lib/errors.js';

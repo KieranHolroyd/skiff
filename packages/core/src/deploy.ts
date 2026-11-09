@@ -1,12 +1,12 @@
 import { and, eq, isNull } from 'drizzle-orm';
-import { deployments, projects, releases } from '@skiff/db';
+import { deployments, projects, releases } from '@yoal/db';
 import { parseManifest } from './artifact.ts';
 import {
 	FUNCTION_MANIFEST_FILE,
 	type DeployFiles,
 	type DeploySite,
 	type Principal,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { NotFoundError, ValidationError } from './errors.ts';
 import type { DeploymentView } from './deployments.ts';
@@ -94,6 +94,6 @@ function looksLikeSpa(paths: string[]): boolean {
 }
 
 const SPA_HINT =
-	'This looks like a single-page app. Set `skiff.json` with { "spa": true } to route unknown paths to index.html.';
+	'This looks like a single-page app. Set `yoal.json` with { "spa": true } to route unknown paths to index.html.';
 
 export const _notFound = NotFoundError;

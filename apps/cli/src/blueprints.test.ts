@@ -41,8 +41,8 @@ const plan: BlueprintPlanView = {
 
 describe('blueprint output', () => {
 	test('finds the default file names in order', () => {
-		const present = new Set(['/w/skiff.blueprint.yml', '/w/skiff.blueprint.json']);
-		expect(findBlueprintFile(undefined, '/w', (path) => present.has(path))).toBe('/w/skiff.blueprint.yml');
+		const present = new Set(['/w/yoal.blueprint.yml', '/w/yoal.blueprint.json']);
+		expect(findBlueprintFile(undefined, '/w', (path) => present.has(path))).toBe('/w/yoal.blueprint.yml');
 		expect(findBlueprintFile('stack.yaml', '/w', () => false)).toBe('stack.yaml');
 		expect(findBlueprintFile(undefined, '/w', () => false)).toBeNull();
 	});
@@ -122,7 +122,7 @@ describe('blueprint API calls', () => {
 		});
 		try {
 			const client = new ApiClient({ baseUrl: `http://127.0.0.1:${server.port}`, token: 'sk_test', origin: 'http://127.0.0.1' });
-			expect((await client.validateBlueprint('apiVersion: skiff/v1\nname: shop\n')).validation.stack).toBe('shop');
+			expect((await client.validateBlueprint('apiVersion: yoal/v1\nname: shop\n')).validation.stack).toBe('shop');
 			expect((await client.planBlueprint('name: shop', { prune: true })).plan.planHash).toBe(hash);
 			const started = await client.applyBlueprint({ planHash: hash, confirm: 'shop' }, { waitSeconds: 5 });
 			expect(started.run).toMatchObject({ status: 'applying', resources: [] });

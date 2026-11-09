@@ -6,7 +6,7 @@ import {
 	type EmailMessageView,
 	type EmailOrgView,
 	type Principal
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { platformOrigin } from '#lib/server/config.js';
 import { failStatus, formString, toFormFailure } from '../../_lib/errors.js';
@@ -90,7 +90,7 @@ const addDomain: Action = async ({ request, locals }) => {
 	const values = {
 		name: formString(data, 'name').toLowerCase(),
 		sending: true,
-		// Skiff writes the records itself when Cloudflare holds the zone; otherwise this is a no-op.
+		// Yoal writes the records itself when Cloudflare holds the zone; otherwise this is a no-op.
 		autoDns: true
 	};
 	const parsed = emailDomainCreateSchema.safeParse(values);
@@ -126,7 +126,7 @@ const publishDomain: Action = async ({ request, locals }) => {
 			success:
 				domain.status === 'verified'
 					? `${what} ${domain.name} is verified.`
-					: `${what} DNS can take a few minutes to update; Skiff keeps checking.`
+					: `${what} DNS can take a few minutes to update; Yoal keeps checking.`
 		};
 	} catch (caught) {
 		return fail(failStatus(caught), toFormFailure(caught));

@@ -19,7 +19,7 @@ import { confirmOrRefuse } from './run-operation.ts';
  * Every check lives on the server; this is a thin client.
  */
 
-const usage = `Usage: skif events <command> [options]
+const usage = `Usage: yoal events <command> [options]
 
 Commands:
   list                         List event rules (the default)
@@ -55,14 +55,14 @@ Options:
   -h, --help                   Show this help
 
 The function consumes the queue like any other (wrangler \`queues.consumers\`) and receives each
-event in \`queue()\`. Attach the broker to the function project first: skif broker attach <broker> -p <fn>.
+event in \`queue()\`. Attach the broker to the function project first: yoal broker attach <broker> -p <fn>.
 
 Examples:
-  skif events create storage --storage media --bucket uploads --suffix .jpg --event object-create \\
+  yoal events create storage --storage media --bucket uploads --suffix .jpg --event object-create \\
     --broker jobs --queue images
-  skif events create alerts --event firing --broker jobs --queue pages
-  skif events create deployments --project shop --broker jobs --queue deploys
-  skif events test evr_…`;
+  yoal events create alerts --event firing --broker jobs --queue pages
+  yoal events create deployments --project shop --broker jobs --queue deploys
+  yoal events test evr_…`;
 
 const baseFlags: FlagSpec = {
 	json: { type: 'boolean' },
@@ -126,7 +126,7 @@ function parseOne(argv: string[], spec: FlagSpec, command: string, what = 'id') 
 		console.log(usage);
 		return null;
 	}
-	const line = `Usage: skif events ${command} <${what}>`;
+	const line = `Usage: yoal events ${command} <${what}>`;
 	rejectExtraPositionals(args, 1, line);
 	return { args, value: requirePositional(args, 0, `rule ${what}.\n\n${line}`) };
 }
@@ -137,7 +137,7 @@ async function listRules(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif events list [--json]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal events list [--json]');
 	const client = await authenticatedClient();
 	const { rules, raw } = await client.listEventRules();
 	if (args.boolean('json')) {
@@ -145,7 +145,7 @@ async function listRules(argv: string[]): Promise<void> {
 		return;
 	}
 	if (rules.length === 0) {
-		console.log('No event rules yet. Create one with `skif events create <source> --broker <name> --queue <name>`.');
+		console.log('No event rules yet. Create one with `yoal events create <source> --broker <name> --queue <name>`.');
 		return;
 	}
 	console.log(eventRuleTable(rules));
@@ -179,7 +179,7 @@ async function createRule(argv: string[]): Promise<void> {
 		return;
 	}
 	console.log(`Created ${created.id}: ${created.source} (${watching(created)}) → queue ${created.queue} on ${created.broker}.`);
-	console.log(`Consume it from a function: "queues": { "consumers": [{ "queue": "${created.queue}" }] } and skif broker attach ${created.broker} -p <fn>.`);
+	console.log(`Consume it from a function: "queues": { "consumers": [{ "queue": "${created.queue}" }] } and yoal broker attach ${created.broker} -p <fn>.`);
 	if (created.source === 'storage')
 		console.log('The storage instance restarts once to turn on bucket notifications.');
 }
@@ -256,7 +256,7 @@ async function testRule(argv: string[]): Promise<void> {
 		printJson(raw);
 		return;
 	}
-	console.log(`Queued test event ${delivery.id} (${delivery.type}). Watch it with: skif events deliveries ${parsed.value}`);
+	console.log(`Queued test event ${delivery.id} (${delivery.type}). Watch it with: yoal events deliveries ${parsed.value}`);
 }
 
 async function listDeliveries(argv: string[]): Promise<void> {
@@ -265,7 +265,7 @@ async function listDeliveries(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif events deliveries [<id>] [--status pending|delivered|failed] [--limit n]');
+	rejectExtraPositionals(args, 1, 'Usage: yoal events deliveries [<id>] [--status pending|delivered|failed] [--limit n]');
 	const status = args.string('status');
 	if (status && !['pending', 'delivered', 'failed'].includes(status))
 		throw new UsageError('--status must be pending, delivered or failed.');

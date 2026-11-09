@@ -1,4 +1,4 @@
--- One-time codes for the CLI browser login (`skif login --web`).
+-- One-time codes for the CLI browser login (`yoal login --web`).
 -- The CLI holds the PKCE verifier; only the code hash is stored.
 
 CREATE TABLE IF NOT EXISTS cli_login_codes (

@@ -60,7 +60,7 @@ export const previewPolicySchema = z
 		ttlHours: previewTtlHoursSchema,
 		maxConcurrent: z.number().int().min(1).max(previewLimits.maxConcurrentLimit).default(previewLimits.defaultMaxConcurrent),
 	})
-	.describe('Preview policy from skiff.yaml.');
+	.describe('Preview policy from yoal.yaml.');
 export type PreviewPolicy = z.input<typeof previewPolicySchema>;
 
 /**

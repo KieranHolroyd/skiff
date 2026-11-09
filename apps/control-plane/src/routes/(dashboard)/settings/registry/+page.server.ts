@@ -4,7 +4,7 @@ import {
 	hasPermission,
 	type RegistryMirrorUpstream,
 	type RegistrySettingsUpdate
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import type { Actions, PageServerLoad } from './$types';
 

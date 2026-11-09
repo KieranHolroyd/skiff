@@ -1,7 +1,7 @@
 <script lang="ts">
 	import DownloadIcon from '@lucide/svelte/icons/download';
-	import type { Cell, Column } from '@skiff/studio/protocol';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
+	import type { Cell, Column } from '@yoal/studio/protocol';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Sheet from '#lib/components/ui/sheet/index.js';

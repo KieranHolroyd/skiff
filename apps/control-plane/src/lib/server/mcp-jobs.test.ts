@@ -3,13 +3,13 @@ import { principalStub } from './principal-stub.test-support';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_FEATURES, nodeCapabilities } from '@skiff/contracts';
-import { LocalObjectStore, buildPrincipal, createCore, type Core } from '@skiff/core';
-import { createDb } from '@skiff/db';
+import { DEFAULT_FEATURES, nodeCapabilities } from '@yoal/contracts';
+import { LocalObjectStore, buildPrincipal, createCore, type Core } from '@yoal/core';
+import { createDb } from '@yoal/db';
 
 /** The job MCP tools (plan 09) against a real core; the node is simulated by leasing and completing runs. */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-mcp-jobs-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-mcp-jobs-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 const realCore: Core = createCore({
@@ -33,7 +33,7 @@ mock.module('./core', () => ({ core: realCore }));
 mock.module('./config', () => ({ platformOrigin: 'https://control.test', authSecret: 'test-secret' }));
 mock.module('./principal', () => principalStub({ principalFromMcp: () => null }));
 
-const { skiffToolDefinitions } = await import('./mcp');
+const { yoalToolDefinitions } = await import('./mcp');
 const { assistantTools } = await import('./assistant/tools');
 
 afterAll(() => {
@@ -98,7 +98,7 @@ describe('job MCP tools', () => {
 	});
 
 	test('are registered; the assistant confirms runs and deletes and hides writes from viewers', () => {
-		const names = new Set(skiffToolDefinitions(owner).map((entry) => entry.name));
+		const names = new Set(yoalToolDefinitions(owner).map((entry) => entry.name));
 		for (const name of TOOLS) expect(names.has(name)).toBe(true);
 		const tools = new Map(assistantTools(owner).map((entry) => [entry.name, entry]));
 		for (const name of ['run_job', 'run_command', 'delete_job']) expect(tools.get(name)?.destructive).toBe(true);

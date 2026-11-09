@@ -7,7 +7,7 @@ import {
 	storageAttachments,
 	storageInstances,
 	workloads,
-} from '@skiff/db';
+} from '@yoal/db';
 import type { ExistingEndpoint, EndpointService as PlannedService } from './endpoints.ts';
 import { planServiceEndpoints } from './endpoints.ts';
 import { featureEnabled } from './config.ts';

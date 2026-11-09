@@ -1,4 +1,4 @@
-import type { Cell, Column } from '@skiff/studio/protocol';
+import type { Cell, Column } from '@yoal/studio/protocol';
 
 /**
  * Result export (plan 22). Cells go out in their plain form: tagged cells (`bigint`, `decimal`,

@@ -2,13 +2,13 @@ import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:tes
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { PipelineJobClaim } from '@skiff/contracts';
+import type { PipelineJobClaim } from '@yoal/contracts';
 import { JobApi } from './client.ts';
 import { StepRunner, shellCommand } from './step-runner.ts';
 import { jobClaim, startFakeControlPlane, stepSpec, type FakeControlPlane } from './test-server.ts';
 
 const SECRET = 'sup3r-s3cret-value';
-const root = mkdtempSync(join(tmpdir(), 'skiff-step-runner-'));
+const root = mkdtempSync(join(tmpdir(), 'yoal-step-runner-'));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 let fake: FakeControlPlane;
@@ -55,7 +55,7 @@ describe('shellCommand', () => {
 });
 
 describe('StepRunner end-to-end (real bash, fake control plane)', () => {
-	test('outputs, $SKIFF_ENV, $SKIFF_PATH, env layering, masking and job outputs', async () => {
+	test('outputs, $YOAL_ENV, $YOAL_PATH, env layering, masking and job outputs', async () => {
 		mkdirSync(join(workspace, 'tools'));
 		writeFileSync(join(workspace, 'tools', 'hello-tool'), '#!/bin/sh\necho tool-ran\n', { mode: 0o755 });
 		const claim = jobClaim({
@@ -68,17 +68,17 @@ describe('StepRunner end-to-end (real bash, fake control plane)', () => {
 				stepSpec({
 					id: 'first',
 					run: [
-						'echo "greeting=hello" >> "$SKIFF_OUTPUT"',
+						'echo "greeting=hello" >> "$YOAL_OUTPUT"',
 						'{ echo "multi<<EOF"; echo "line one"; echo "line two"; echo "EOF"; } >> "$GITHUB_OUTPUT"',
 						'echo "FROM_FILE=file-value" >> "$GITHUB_ENV"',
-						'echo "$SKIFF_WORKSPACE/tools" >> "$SKIFF_PATH"',
+						'echo "$YOAL_WORKSPACE/tools" >> "$YOAL_PATH"',
 						'echo "::set-output name=legacy::old-style"',
 						'echo "secret: $MY"',
 						'printf "%s" "$MY" | base64',
 						'echo "::add-mask::dynamic-value"',
 						'echo "dynamic-value is hidden"',
-						'echo "level=$LEVEL derived=$DERIVED ci=$CI gh=$GITHUB_ACTIONS sha=$GITHUB_SHA ref_name=$SKIFF_REF_NAME"',
-						'echo "token=${SKIFF_JOB_TOKEN:-unset}"',
+						'echo "level=$LEVEL derived=$DERIVED ci=$CI gh=$GITHUB_ACTIONS sha=$GITHUB_SHA ref_name=$YOAL_REF_NAME"',
+						'echo "token=${YOAL_JOB_TOKEN:-unset}"',
 					].join('\n'),
 					env: { MY: '${{ secrets.MY_SECRET }}', LEVEL: 'step' },
 				}),
@@ -269,8 +269,8 @@ describe('StepRunner end-to-end (real bash, fake control plane)', () => {
 			steps: [
 				stepSpec({ id: 'up', uses: 'actions/upload-artifact@v4', with: { name: 'site', path: 'dist/\n!**/*.map' } }),
 				stepSpec({ uses: 'actions/upload-artifact@v4', with: { name: 'none', path: 'nope/*', 'if-no-files-found': 'error' }, continueOnError: true }),
-				stepSpec({ uses: 'skiff/download-artifact@v1', with: { name: 'site', path: 'restored' } }),
-				stepSpec({ uses: 'skiff/download-artifact@v1', with: { path: 'all' } }),
+				stepSpec({ uses: 'yoal/download-artifact@v1', with: { name: 'site', path: 'restored' } }),
+				stepSpec({ uses: 'yoal/download-artifact@v1', with: { path: 'all' } }),
 				stepSpec({ run: 'echo id=${{ steps.up.outputs.artifact-id }}' }),
 			],
 		});

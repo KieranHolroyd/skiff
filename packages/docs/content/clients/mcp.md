@@ -1,30 +1,30 @@
 ---
 title: MCP for AI agents
-description: Connect Claude Code, Claude.ai or another MCP client to Skiff, approve what it may do, and see every tool it can call.
+description: Connect Claude Code, Claude.ai or another MCP client to Yoal, approve what it may do, and see every tool it can call.
 ---
 
-Skiff runs a remote [Model Context Protocol](https://modelcontextprotocol.io) server at `/mcp` on your control plane. An agent connected to it can deploy sites, manage projects, databases, queues, object storage, alerts and email, and read logs. Every tool calls the same service layer as the dashboard, the REST API and the `skif` CLI, so an agent can do no more than you could do yourself. This page covers connecting a client, what you approve on the consent screen, how permissions and confirmations work, and the full tool list.
+Yoal runs a remote [Model Context Protocol](https://modelcontextprotocol.io) server at `/mcp` on your control plane. An agent connected to it can deploy sites, manage projects, databases, queues, object storage, alerts and email, and read logs. Every tool calls the same service layer as the dashboard, the REST API and the `yoal` CLI, so an agent can do no more than you could do yourself. This page covers connecting a client, what you approve on the consent screen, how permissions and confirmations work, and the full tool list.
 
 ## Connect a client
 
 The endpoint is your control plane's origin with `/mcp` added, for example `https://control.example.com/mcp`. In Claude Code, add it as a remote server:
 
 ```sh
-claude mcp add --transport http skiff https://control.example.com/mcp
+claude mcp add --transport http yoal https://control.example.com/mcp
 ```
 
-Claude.ai and other clients that support remote MCP servers take the same URL in their own settings. The client finds the authorization server by itself, so you don't create client IDs or secrets by hand. If a client doesn't start sign-in on its own, run `/mcp` in Claude Code and choose `skiff`.
+Claude.ai and other clients that support remote MCP servers take the same URL in their own settings. The client finds the authorization server by itself, so you don't create client IDs or secrets by hand. If a client doesn't start sign-in on its own, run `/mcp` in Claude Code and choose `yoal`.
 
 > [!NOTE]
-> MCP accepts OAuth tokens only. An API key (`skif_…`) does not work at `/mcp`. Scripts and CI should call the [REST API](/clients/rest-api) or the [CLI](/clients/cli) with a key instead; see [API keys and tokens](/accounts/api-keys-and-tokens).
+> MCP accepts OAuth tokens only. An API key (`yoal_…`) does not work at `/mcp`. Scripts and CI should call the [REST API](/clients/rest-api) or the [CLI](/clients/cli) with a key instead; see [API keys and tokens](/accounts/api-keys-and-tokens).
 
 ## How authorization works
 
-Skiff is an OAuth 2.1 authorization server for MCP clients. The flow is:
+Yoal is an OAuth 2.1 authorization server for MCP clients. The flow is:
 
-1. **Discovery.** An unauthenticated request to `/mcp` gets an RFC 9728 challenge that points the client at Skiff's protected-resource metadata. The client then reads the authorization server metadata from the `/.well-known/` paths on your control plane.
-2. **Client identity.** A client identifies itself with a Client ID Metadata Document (CIMD), the mechanism in the MCP 2026-07-28 revision. Older clients register dynamically (DCR). DCR is on by default. An operator can turn it off with `SKIFF_MCP_ALLOW_DCR=0`, which leaves only CIMD clients able to connect.
-3. **PKCE.** The client proves possession of its code verifier with the `S256` method. Skiff requires PKCE for public clients.
+1. **Discovery.** An unauthenticated request to `/mcp` gets an RFC 9728 challenge that points the client at Yoal's protected-resource metadata. The client then reads the authorization server metadata from the `/.well-known/` paths on your control plane.
+2. **Client identity.** A client identifies itself with a Client ID Metadata Document (CIMD), the mechanism in the MCP 2026-07-28 revision. Older clients register dynamically (DCR). DCR is on by default. An operator can turn it off with `YOAL_MCP_ALLOW_DCR=0`, which leaves only CIMD clients able to connect.
+3. **PKCE.** The client proves possession of its code verifier with the `S256` method. Yoal requires PKCE for public clients.
 4. **Consent.** You approve the client on the consent screen, described below.
 5. **Tokens.** The access token is issued for the `/mcp` resource only, and the REST API does not accept it.
 
@@ -33,8 +33,8 @@ The first connection runs like this:
 ```mermaid
 sequenceDiagram
   participant C as MCP client
-  participant M as Skiff /mcp
-  participant A as Skiff auth server
+  participant M as Yoal /mcp
+  participant A as Yoal auth server
   participant U as You (browser)
   C->>M: call /mcp without a token
   M-->>C: 401 with protected-resource metadata link
@@ -57,19 +57,19 @@ The consent screen lists every permission the client asked for, with a count of 
 - Destructive permissions carry a **destructive** badge and start unticked.
 - Permissions your role does not include are shown greyed out with **not in your role**, and you cannot select them.
 
-If you own the organisation and have not verified a second factor yet, Skiff sends you to the two-factor page before the consent screen appears. See [sign-in and two-factor](/accounts/sign-in-and-2fa).
+If you own the organisation and have not verified a second factor yet, Yoal sends you to the two-factor page before the consent screen appears. See [sign-in and two-factor](/accounts/sign-in-and-2fa).
 
 ### Asking for more later
 
-Clients ask for the permissions they need as they need them. When a tool needs a permission the token does not have, Skiff answers with `403 insufficient_scope`, and the client starts authorization again with the complete set. You see the consent screen again and approve the extra permission. A new permission outside the default set starts unticked, so tick it deliberately.
+Clients ask for the permissions they need as they need them. When a tool needs a permission the token does not have, Yoal answers with `403 insufficient_scope`, and the client starts authorization again with the complete set. You see the consent screen again and approve the extra permission. A new permission outside the default set starts unticked, so tick it deliberately.
 
 ### Disconnecting a client
 
-Every client you approve is listed in **Settings → Connected apps**, with the permissions you granted and when it last called. Select **Disconnect** to revoke it. Skiff deletes the approval and the client's refresh tokens, and checks the approval on every call to `/mcp`, so the client's next call gets `401` with the same `WWW-Authenticate` challenge as an unauthenticated request, even if its access token has not expired. Most clients then start authorization again, and the client can only reconnect after you approve it on the consent screen once more. Owners and admins can also disconnect other members' clients. See [connected apps](/accounts/api-keys-and-tokens#connected-apps), which also covers the REST routes.
+Every client you approve is listed in **Settings → Connected apps**, with the permissions you granted and when it last called. Select **Disconnect** to revoke it. Yoal deletes the approval and the client's refresh tokens, and checks the approval on every call to `/mcp`, so the client's next call gets `401` with the same `WWW-Authenticate` challenge as an unauthenticated request, even if its access token has not expired. Most clients then start authorization again, and the client can only reconnect after you approve it on the consent screen once more. Owners and admins can also disconnect other members' clients. See [connected apps](/accounts/api-keys-and-tokens#connected-apps), which also covers the REST routes.
 
 ## Permissions
 
-A token's effective permissions are its granted scopes **intersected with your current role** in the organisation. Scope names are the same `resource:action` strings used by the REST API and the CLI. Skiff reads your role on every call, so demoting someone narrows every token they hold straight away. Removing them from the organisation ends their access at the next call.
+A token's effective permissions are its granted scopes **intersected with your current role** in the organisation. Scope names are the same `resource:action` strings used by the REST API and the CLI. Yoal reads your role on every call, so demoting someone narrows every token they hold straight away. Removing them from the organisation ends their access at the next call.
 
 The roles are:
 
@@ -120,7 +120,7 @@ For a destructive tool such as `delete_project`, the exchange looks like this:
 ```mermaid
 sequenceDiagram
   participant C as MCP client
-  participant M as Skiff /mcp
+  participant M as Yoal /mcp
   participant U as You
   participant L as Audit log
   C->>M: call delete_project
@@ -142,14 +142,14 @@ Deletes are soft. A deleted project, database or storage instance stops serving 
 
 ## Resources
 
-Clients that support MCP resources can read Skiff's guides before they start a task. The server exposes these, all as Markdown:
+Clients that support MCP resources can read Yoal's guides before they start a task. The server exposes these, all as Markdown:
 
-- `skiff://guides/deploying`: the deploy paths, when to use a single call or an upload, and how promotion works.
-- `skiff://guides/limits`: artifact, file and inline-deploy sizes, and how many deployments are kept.
-- `skiff://guides/site-config`: `_redirects`, `_headers` and `skiff.json`.
-- `skiff://guides/databases`: the managed database engines, attachment, and the environment variables an attached app receives.
-- `skiff://guides/storage`: object storage instances, buckets, grants and the variables an attached app receives.
-- `skiff://guides/email`: setting up a sending domain and sending safely. This resource appears only while the Email feature is on, which it is by default.
+- `yoal://guides/deploying`: the deploy paths, when to use a single call or an upload, and how promotion works.
+- `yoal://guides/limits`: artifact, file and inline-deploy sizes, and how many deployments are kept.
+- `yoal://guides/site-config`: `_redirects`, `_headers` and `yoal.json`.
+- `yoal://guides/databases`: the managed database engines, attachment, and the environment variables an attached app receives.
+- `yoal://guides/storage`: object storage instances, buckets, grants and the variables an attached app receives.
+- `yoal://guides/email`: setting up a sending domain and sending safely. This resource appears only while the Email feature is on, which it is by default.
 
 ## Auditing
 
@@ -161,7 +161,7 @@ Agents can read the log themselves with `get_audit_log`. Calls made from the das
 
 You don't need to name tools. Ask in plain language and the agent picks them. These are the kinds of requests that work well:
 
-- "Which Skiff permissions does this connection have?"
+- "Which Yoal permissions does this connection have?"
 - "Deploy `./dist` as `launch-page` and give me a share link that expires on Friday."
 - "Roll `my-site` back to the deployment before this one."
 - "Create a Valkey cache called `sessions` and attach it to `my-site`."
@@ -221,13 +221,13 @@ See [Pipelines](/deploying/pipelines). There are no tools for secrets, variables
 
 | Tool | What it does | Permission |
 |---|---|---|
-| `list_github_repositories` | Repositories the organisation can use through Skiff's GitHub App | `build:read` |
-| `deploy_from_github` | Create a project from a GitHub repository: detects the framework, connects the repository, queues the first build and adds `.skiff/workflows` to Pipelines. Later pushes deploy through the App ([Deploy from GitHub](/deploying/github#deploy-from-github)) | `project:create`, `build:create` |
+| `list_github_repositories` | Repositories the organisation can use through Yoal's GitHub App | `build:read` |
+| `deploy_from_github` | Create a project from a GitHub repository: detects the framework, connects the repository, queues the first build and adds `.yoal/workflows` to Pipelines. Later pushes deploy through the App ([Deploy from GitHub](/deploying/github#deploy-from-github)) | `project:create`, `build:create` |
 | `list_git_repositories` | Repositories from every connected provider: the GitHub App and each GitLab, Gitea or Forgejo connection ([Git providers](/deploying/git-providers)) | `build:read` |
 | `deploy_from_git` | `deploy_from_github` for any provider; pass `connectionId` for a GitLab, Gitea or Forgejo repository | `project:create`, `build:create` |
 | `list_pipeline_runs` | List a repository's runs, newest first, with status and conclusion | `build:read` |
 | `get_pipeline_run` | Show a run's jobs and steps, plus the last 200 log lines of the first failed job | `build:read` |
-| `dispatch_workflow` | Start a workflow from `.skiff/workflows` (`workflow`) or inline YAML (`workflow_text`, always untrusted: no secrets, environments or deploys). The dashboard assistant asks to confirm | `build:create` |
+| `dispatch_workflow` | Start a workflow from `.yoal/workflows` (`workflow`) or inline YAML (`workflow_text`, always untrusted: no secrets, environments or deploys). The dashboard assistant asks to confirm | `build:create` |
 | `rerun_pipeline_run` | Re-run a completed run, or only its failed jobs. The dashboard assistant asks to confirm | `build:create` |
 | `cancel_pipeline_run` | Cancel a queued or running run | `build:cancel` |
 
@@ -255,7 +255,7 @@ See [Pipelines](/deploying/pipelines). There are no tools for secrets, variables
 | `list_images` | List the org's repositories in the platform registry, with the last tag, digest, size and deploy-on-push target | `image:pull` |
 | `image_tags` | List one repository's tags with their digests. Deployment pins are hidden | `image:pull` |
 
-There is no shell or command tool for containers. An agent reads untrusted text (logs, file contents), so running commands inside production stays with people: the dashboard's Shell section and `skif shell`.
+There is no shell or command tool for containers. An agent reads untrusted text (logs, file contents), so running commands inside production stays with people: the dashboard's Shell section and `yoal shell`.
 
 ### Functions
 

@@ -2,14 +2,14 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import { DEFAULT_FEATURES } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import { DEFAULT_FEATURES } from '@yoal/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore, EVENT_EXPIRY_MS, decodeS3Key, type Core } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 
 /** Event notifications into function queues (docs/EVENTS.md, D122). */
-const dir = mkdtempSync(join(tmpdir(), 'skiff-events-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-events-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 let clock = Date.parse('2026-11-07T10:00:00Z');
@@ -66,7 +66,7 @@ function rustfsEvent(eventName: string, key: string, bucket = 'uploads', size = 
 				eventName,
 				s3: {
 					s3SchemaVersion: '1.0',
-					configurationId: 'skiff',
+					configurationId: 'yoal',
 					bucket: { name: bucket, arn: `arn:aws:s3:::${bucket}` },
 					object: { key: encodeURIComponent(key), size, eTag: '82d23a757508346d5a74089eadddf9fa', contentType: 'image/jpeg' },
 				},
@@ -131,15 +131,15 @@ describe('event notifications', () => {
 		expect(after.objectStorage!.buckets.find((bucket) => bucket.name === 'other')!.notifications).toBe(false);
 		expect(after.env).toMatchObject({
 			RUSTFS_NOTIFY_ENABLE: 'true',
-			RUSTFS_NOTIFY_WEBHOOK_ENABLE_SKIFF: 'on',
-			RUSTFS_NOTIFY_WEBHOOK_ENDPOINT_SKIFF: `https://control.test/api/webhooks/storage/${storageId}`,
+			RUSTFS_NOTIFY_WEBHOOK_ENABLE_YOAL: 'on',
+			RUSTFS_NOTIFY_WEBHOOK_ENDPOINT_YOAL: `https://control.test/api/webhooks/storage/${storageId}`,
 		});
 		// Switching notifications on restarts the instance once; the token is a secret.
 		expect(after.activationVersion).not.toBe(before.activationVersion);
 		expect(JSON.stringify(after)).not.toContain(core.events.storageNotifyToken(storageId));
 		const activation = core.storage.activation(edgeId, storageId);
 		expect(activation.activationVersion).toBe(after.activationVersion);
-		expect(activation.env.RUSTFS_NOTIFY_WEBHOOK_AUTH_TOKEN_SKIFF).toBe(core.events.storageNotifyToken(storageId));
+		expect(activation.env.RUSTFS_NOTIFY_WEBHOOK_AUTH_TOKEN_YOAL).toBe(core.events.storageNotifyToken(storageId));
 	});
 
 	test('the webhook needs the instance token, and filters by event, prefix and suffix', () => {
@@ -169,7 +169,7 @@ describe('event notifications', () => {
 			bucket: 'uploads',
 			object: { key: 'incoming/cat.jpg', size: 8, eTag: '82d23a757508346d5a74089eadddf9fa' },
 			eventTime: '2026-11-07T11:04:18.532Z',
-			skiff: { type: 'storage.object-create', storage: 'media', eventName: 's3:ObjectCreated:Put' },
+			yoal: { type: 'storage.object-create', storage: 'media', eventName: 's3:ObjectCreated:Put' },
 		});
 		expect(decodeS3Key('incoming%2Fmy+cat.jpg')).toBe('incoming/my cat.jpg');
 	});
@@ -231,7 +231,7 @@ describe('event notifications', () => {
 		const rule = core.events.list(owner).find((view) => view.source === 'storage')!;
 		const sent = core.events.test(owner, rule.id);
 		expect(sent).toMatchObject({ type: 'storage.object-create', status: 'pending' });
-		expect((sent.body as { object: { key: string } }).object.key).toBe('incoming/skiff-test-event.jpg');
+		expect((sent.body as { object: { key: string } }).object.key).toBe('incoming/yoal-test-event.jpg');
 
 		core.events.delete(owner, rule.id);
 		expect(core.events.list(owner).some((view) => view.id === rule.id)).toBe(false);

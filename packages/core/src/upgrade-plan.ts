@@ -222,8 +222,8 @@ export function destructiveRefusal(migrations: PendingMigration[]): string {
 		})
 		.join('; ');
 	return [
-		`Destructive migration${one ? '' : 's'} ${details}: ${one ? 'it changes or removes' : 'they change or remove'} existing data, so Skiff will not apply ${one ? 'it' : 'them'} unattended.`,
-		`Review the SQL, then approve: in the dashboard, Settings → Updates → Review and approve; or on the server, sudo skiff-update-self --allow-destructive.`,
+		`Destructive migration${one ? '' : 's'} ${details}: ${one ? 'it changes or removes' : 'they change or remove'} existing data, so Yoal will not apply ${one ? 'it' : 'them'} unattended.`,
+		`Review the SQL, then approve: in the dashboard, Settings → Updates → Review and approve; or on the server, sudo yoal-update-self --allow-destructive.`,
 		'The control database is snapshotted first and restored if the update rolls back.'
 	].join(' ');
 }
@@ -298,7 +298,7 @@ export function evaluateUpgradePreflight(input: UpgradePreflightInput): UpgradeP
 		check(
 			'backup-target',
 			'error',
-			`The backup target (${input.backupTarget.kind}) is unreachable${input.backupTarget.error ? `: ${input.backupTarget.error}` : ''}. Fix it in Settings → Backups or check SKIFF_OBJECT_STORE / R2_* before upgrading.`
+			`The backup target (${input.backupTarget.kind}) is unreachable${input.backupTarget.error ? `: ${input.backupTarget.error}` : ''}. Fix it in Settings → Backups or check YOAL_OBJECT_STORE / R2_* before upgrading.`
 		);
 	} else {
 		check('backup-target', 'ok', `The ${input.backupTarget.kind} backup target is reachable.`);
@@ -322,7 +322,7 @@ export function evaluateUpgradePreflight(input: UpgradePreflightInput): UpgradeP
 
 	for (const dir of dataDirs) {
 		if (!dir.exists) check(`data:${dir.name}`, 'error', `Data directory ${dir.path} is missing. Run the installer again or restore the disk before upgrading.`);
-		else if (!dir.writable) check(`data:${dir.name}`, 'error', `Data directory ${dir.path} is not writable by the Skiff service. Fix its ownership and permissions before upgrading.`);
+		else if (!dir.writable) check(`data:${dir.name}`, 'error', `Data directory ${dir.path} is not writable by the Yoal service. Fix its ownership and permissions before upgrading.`);
 	}
 	if (dataDirs.every((dir) => dir.exists && dir.writable))
 		check('data-dirs', 'ok', `${dataDirs.length} data director${dataDirs.length === 1 ? 'y is' : 'ies are'} present and writable.`);
@@ -350,7 +350,7 @@ export function evaluateUpgradePreflight(input: UpgradePreflightInput): UpgradeP
 		check(
 			'postgres-major',
 			'error',
-			`PostgreSQL major change requested for ${list}. Run \`skif db upgrade <name> --to <version> --plan\`; a major upgrade is never applied automatically.`
+			`PostgreSQL major change requested for ${list}. Run \`yoal db upgrade <name> --to <version> --plan\`; a major upgrade is never applied automatically.`
 		);
 	} else if (managedDatabases.length > 0) {
 		check('postgres-major', 'ok', `No PostgreSQL major-version change requested for ${managedDatabases.length} managed database${managedDatabases.length === 1 ? '' : 's'}.`);
@@ -633,7 +633,7 @@ export function createUpgradeSnapshotBundle(input: UpgradeSnapshotInput): Upgrad
 	const copies: Array<{ source: string; destination: string; mode?: number }> = [];
 	if (input.envDir) {
 		copies.push(
-			{ source: join(input.envDir, 'skiff.env'), destination: join(temporary, 'config', 'skiff.env') },
+			{ source: join(input.envDir, 'yoal.env'), destination: join(temporary, 'config', 'yoal.env') },
 			{ source: join(input.envDir, 'agent.env'), destination: join(temporary, 'config', 'agent.env') },
 			{ source: join(input.envDir, 'master.key'), destination: join(temporary, 'config', 'master.key'), mode: 0o400 },
 			// Sealed with systemd-creds (scripts/install/master-key.ts): opens only on this host.
@@ -673,7 +673,7 @@ export function createUpgradeSnapshotBundle(input: UpgradeSnapshotInput): Upgrad
 		},
 		restore: {
 			controlDb: controlDb ? 'db/control.db' : null,
-			note: 'Restoring this bundle is a human decision. Stop skiff-control-plane, copy db/control.db over the live database, restore config/* only from the same point in time, then start the service. Data volumes and managed databases are never restored automatically.'
+			note: 'Restoring this bundle is a human decision. Stop yoal-control-plane, copy db/control.db over the live database, restore config/* only from the same point in time, then start the service. Data volumes and managed databases are never restored automatically.'
 		}
 	};
 	writeSealed(join(temporary, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
@@ -782,11 +782,11 @@ export function readAppliedMigrations(dbPath: string): string[] {
 	const db = new Database(dbPath, { readonly: true });
 	try {
 		const table = db
-			.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table' AND name='skiff_migrations'")
+			.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table' AND name='yoal_migrations'")
 			.get();
 		if (!table) return [];
 		return db
-			.query<{ id: string }, []>('SELECT id FROM skiff_migrations ORDER BY id')
+			.query<{ id: string }, []>('SELECT id FROM yoal_migrations ORDER BY id')
 			.all()
 			.map((row) => row.id);
 	} finally {

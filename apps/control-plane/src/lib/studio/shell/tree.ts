@@ -1,4 +1,4 @@
-import type { TreeNode } from '@skiff/studio/protocol';
+import type { TreeNode } from '@yoal/studio/protocol';
 
 /** The studio's lazy object tree (plan 22): items, flattening, filtering. Pure. */
 export interface TreeItem {

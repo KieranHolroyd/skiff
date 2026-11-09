@@ -5,9 +5,9 @@ import { gitFullNameSchema, type GitProviderKind } from './forges.ts';
 /**
  * Deploy from GitHub (docs/GITHUB.md §9, D172).
  *
- * Pick a repository the org's GitHub App can reach, let Skiff guess how to build it, adjust, and
+ * Pick a repository the org's GitHub App can reach, let Yoal guess how to build it, adjust, and
  * deploy: one step creates the project, its git source and the first build, and (when the
- * repository has `.skiff/workflows`) a pipeline repository. Pushes then build through the App's
+ * repository has `.yoal/workflows`) a pipeline repository. Pushes then build through the App's
  * webhook; there is nothing to set up on GitHub.
  */
 
@@ -50,7 +50,7 @@ const INSTALL = 'bun install';
 
 /**
  * Presets the dashboard offers. Every one installs and builds with Bun, which every Builder node
- * has (it ships with Skiff); Bun reads npm, Yarn and pnpm lockfiles and stands in for `node` when
+ * has (it ships with Yoal); Bun reads npm, Yarn and pnpm lockfiles and stands in for `node` when
  * a script needs it.
  */
 export const FRAMEWORK_PRESETS: Record<FrameworkId, FrameworkPreset> = {
@@ -201,11 +201,11 @@ export interface GithubImportDetection {
 	};
 	branch: string;
 	rootDir: string;
-	/** What Skiff would use; every field can be changed before deploying. */
+	/** What Yoal would use; every field can be changed before deploying. */
 	preset: FrameworkPreset;
 	/** Directories at the root directory, for choosing a monorepo package. */
 	directories: string[];
-	/** `.skiff/workflows/*.yml` at the repository root (pipelines run them on push). */
+	/** `.yoal/workflows/*.yml` at the repository root (pipelines run them on push). */
 	workflows: string[];
 	hasDockerfile: boolean;
 	/** A project name suggestion (the package name or the repository name). */
@@ -236,7 +236,7 @@ export const githubImportSchema = z
 		env: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string().max(16_384)).optional(),
 		productionAccess: z.enum(accessModes).default('public'),
 		previewAccess: z.enum(accessModes).default('platform'),
-		/** Also add the repository to Pipelines when it has `.skiff/workflows`. */
+		/** Also add the repository to Pipelines when it has `.yoal/workflows`. */
 		pipelines: z.boolean().default(true),
 	})
 	.refine((value) => value.runtime === 'process' || (!value.command && !value.env), {
@@ -244,7 +244,7 @@ export const githubImportSchema = z
 		path: ['command'],
 	})
 	.refine((value) => value.productionAccess !== 'password' && value.previewAccess !== 'password' && value.productionAccess !== 'access' && value.previewAccess !== 'access', {
-		message: 'Set password and Skiff Access protection from the project after importing',
+		message: 'Set password and Yoal Access protection from the project after importing',
 		path: ['productionAccess'],
 	});
 export type GithubImportInput = z.input<typeof githubImportSchema>;
@@ -259,7 +259,7 @@ export interface GithubImportResult {
 	warnings: string[];
 }
 
-/** Org setting: add App-covered repositories with `.skiff/workflows` to Pipelines on push (D172). */
+/** Org setting: add App-covered repositories with `.yoal/workflows` to Pipelines on push (D172). */
 export interface PipelineAutoSetupView {
 	enabled: boolean;
 	/** Repositories removed from Pipelines, which are not added back: `owner/name` on GitHub, `host/full name` on other forges. */

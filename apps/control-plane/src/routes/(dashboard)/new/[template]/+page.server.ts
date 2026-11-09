@@ -1,6 +1,6 @@
 import { error, fail, redirect } from '@sveltejs/kit';
-import { getAppTemplate } from '@skiff/contracts';
-import { CoreError, ValidationError } from '@skiff/core';
+import { getAppTemplate } from '@yoal/contracts';
+import { CoreError, ValidationError } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import { failStatus, formString, toFormFailure } from '../../_lib/errors.js';
 import type { Actions, PageServerLoad } from './$types';

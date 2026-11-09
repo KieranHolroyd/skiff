@@ -1,6 +1,6 @@
 <script lang="ts">
 	/** The actions menu entries for a rule: edit, pause/resume, evaluate, test, duplicate, delete. */
-	import type { AlertRuleSummary } from '@skiff/contracts';
+	import type { AlertRuleSummary } from '@yoal/contracts';
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import PauseIcon from '@lucide/svelte/icons/pause';
 	import PencilIcon from '@lucide/svelte/icons/pencil';

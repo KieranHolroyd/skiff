@@ -1,7 +1,7 @@
-# Skiff data platform — parallel build plan
+# Yoal data platform — parallel build plan
 
 This directory turns the research report into executable work. The report is
-[`reports/Skiff managed-data flagship features.md`](../../reports/Skiff%20managed-data%20flagship%20features.md).
+[`reports/Yoal managed-data flagship features.md`](../../reports/Yoal%20managed-data%20flagship%20features.md).
 
 Each numbered plan is a self-contained brief for one subagent. This document is the contract
 between them: build order, dependencies, file ownership, integration gates, and the rules that
@@ -11,7 +11,7 @@ keep parallel work from turning into a merge war.
 
 ## 1. The strategy in one paragraph
 
-Skiff already has the hard architecture: pull-based agents, immutable releases, one service layer,
+Yoal already has the hard architecture: pull-based agents, immutable releases, one service layer,
 scope ∩ role MCP, a ~250 MB baseline, and managed Postgres + RustFS. What it lacks is the data
 product around them: provable restore, a real bucket surface, pooling and TLS, isolation, app
 volumes, jobs, blueprints, preview data, and safe agent operations. Build the trust layer first
@@ -131,7 +131,7 @@ graph TD
 | 08 | Managed Valkey | 2 | F1 | 09 for queues | 11, 14, 19 |
 | 09 | Jobs, cron, one-off | 2 | F1, F4 | 01 | 11, 12, 14, 19 |
 | 10 | Cross-node private networking | 2 | 03, 04 | — | 12 |
-| 11 | `skiff.yaml` blueprints | 2–3 | F1, 08, 09, 13 | 07 | 12, 14, 18 |
+| 11 | `yoal.yaml` blueprints | 2–3 | F1, 08, 09, 13 | 07 | 12, 14, 18 |
 | 12 | Preview environments with data | 3 | 01, 04, 07, 09, 11 | 03, 10 | 20 |
 | 13 | Postgres extensions and slow queries | 2 | F1 | — | 11, 14 |
 | 14 | Curated stacks + compose import | 3 | 07, 08, 09, 11, 13 | 15 | — |
@@ -157,7 +157,7 @@ brief is [`plans/00-foundations.md`](plans/00-foundations.md).
 | **F2** | `ObjectStore.putStream/getStream/list` and `S3ObjectStore` (any endpoint, path-style); local store streaming | Unit tests against a fake S3 and local fs |
 | **F3** | Debian 13 + Podman ≥5 + netavark e2e fixture; a throwaway node harness; fake S3; Postgres fixture | One command runs the managed-data e2e lane |
 | **F4** | `SchedulerService` primitive: due-task claim, idempotency key, lease, retry, result recording | Unit tests; used by 01 and 09 |
-| **F5** | Feature flags (`SKIFF_FEATURE_*`), migration/rollback rules, pre-update snapshot hook | Documented; CI check; no flag on by default |
+| **F5** | Feature flags (`YOAL_FEATURE_*`), migration/rollback rules, pre-update snapshot hook | Documented; CI check; no flag on by default |
 
 **Do not start Wave 1 until F1/F2 are merged.** A feature built against a moving contract will be
 rewritten.
@@ -347,7 +347,7 @@ Keep it additive and optional so older agents ignore unknown fields. Do not over
 Copy this into every subagent prompt.
 
 ```text
-You are implementing plan NN in the Skiff repository.
+You are implementing plan NN in the Yoal repository.
 
 Read first:
 - docs/build-plan/README.md
@@ -404,7 +404,7 @@ Deliverable:
 
 ## 12. Feature flags and rollout
 
-Use `SKIFF_FEATURE_<AREA>` environment flags, read once at startup and exposed in `/api/setup/status`.
+Use `YOAL_FEATURE_<AREA>` environment flags, read once at startup and exposed in `/api/setup/status`.
 Default off for:
 
 - `BACKUPS_RESTORE` (until a restore drill passes)

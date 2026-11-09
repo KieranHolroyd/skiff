@@ -2,7 +2,7 @@ import { UsageError } from './errors.ts';
 import { formatTime, renderTable, truncate } from './output.ts';
 
 /**
- * Jobs (plan 09): view types mirrored from `@skiff/contracts` (job.ts) and the CLI's formatting.
+ * Jobs (plan 09): view types mirrored from `@yoal/contracts` (job.ts) and the CLI's formatting.
  * The server validates every field; these only shape output and catch obvious typos early.
  */
 
@@ -170,7 +170,7 @@ export function runSummary(run: JobRunView): string {
 }
 
 /**
- * What `skif run` and `skif jobs run` exit with: the command's own status when it ran, 124 for a
+ * What `yoal run` and `yoal jobs run` exit with: the command's own status when it ran, 124 for a
  * timeout (as timeout(1)), 130 for a cancel, 1 otherwise.
  */
 export function runExitCode(run: JobRunView): number {

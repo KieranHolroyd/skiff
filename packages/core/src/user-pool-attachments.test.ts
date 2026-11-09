@@ -2,8 +2,8 @@ import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import type { Principal } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import type { Principal } from '@yoal/contracts';
 import { createCore, type Core } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import { buildPrincipal } from './orgs.ts';
@@ -16,7 +16,7 @@ import { buildPrincipal } from './orgs.ts';
  * from its migration file here. The engine tables (0097) are already in the checked-in bundle.
  */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-user-pool-attachments-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-user-pool-attachments-'));
 const opened = createDb({ path: ':memory:' });
 opened.sqlite.exec(
 	readFileSync(new URL('../../db/migrations/0099_user_pool_attachments.sql', import.meta.url), 'utf8')

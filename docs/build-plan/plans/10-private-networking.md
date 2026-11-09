@@ -29,9 +29,9 @@ WireGuard, with TLS and a firewall that never exposes the data port publicly.
 - Private attachments are same-node only (D56): `DatabaseService.attach` rejects another node, and
   `resolveForConsumer` pins the project to the database's node.
 - `nodes` has `public_address`; no private address.
-- WireGuard is host-provisioned between edge and workers; Skiff uses it for edge → worker app
+- WireGuard is host-provisioned between edge and workers; Yoal uses it for edge → worker app
   proxying.
-- The agent/helper render `skiff-workloads` with loopback-published database ports.
+- The agent/helper render `yoal-workloads` with loopback-published database ports.
 
 ## Design
 
@@ -63,7 +63,7 @@ WireGuard, with TLS and a firewall that never exposes the data port publicly.
 
 ### DNS / discovery
 
-- v1: inject a stable `host` value (`db-<id>.skiff.internal`?) resolved how? Without DNS, use the
+- v1: inject a stable `host` value (`db-<id>.yoal.internal`?) resolved how? Without DNS, use the
   IP. To keep env stable, inject `db-<id>` as an alias on the consumer's network? Cross-node
   aliases do not resolve.
 - v1.5: a tiny per-node DNS resolver (dnsmasq) with records for managed resources, or a CoreDNS
@@ -119,7 +119,7 @@ WireGuard, with TLS and a firewall that never exposes the data port publicly.
 
 ## Rollout
 
-`SKIFF_FEATURE_CROSS_NODE_DATA` off by default. Same-node remains default. Enable for a two-node
+`YOAL_FEATURE_CROSS_NODE_DATA` off by default. Same-node remains default. Enable for a two-node
 test, then document the supported topology. Do not enable by default until the firewall test passes.
 
 ## Open questions

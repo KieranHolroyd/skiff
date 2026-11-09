@@ -21,7 +21,7 @@
 	} = $props();
 </script>
 
-<header data-skiff-target={target}>
+<header data-yoal-target={target}>
 	<div class="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
 		<div class="flex min-w-0 items-start gap-3">
 			<span

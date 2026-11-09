@@ -9,9 +9,9 @@
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import PlayIcon from '@lucide/svelte/icons/play';
 	import WorkflowIcon from '@lucide/svelte/icons/workflow';
-	import DataTable, { type DataColumn } from '#lib/components/skiff/DataTable.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import DataTable, { type DataColumn } from '#lib/components/yoal/DataTable.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Collapsible from '#lib/components/ui/collapsible/index.js';
@@ -135,7 +135,7 @@
 </script>
 
 <svelte:head>
-	<title>{repo} · Pipelines · Skiff</title>
+	<title>{repo} · Pipelines · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">
@@ -294,7 +294,7 @@
 							<option value={workflow.path}>{workflow.name}</option>
 						{/each}
 					</datalist>
-					<Field.Description>A file in .skiff/workflows, by name or path.</Field.Description>
+					<Field.Description>A file in .yoal/workflows, by name or path.</Field.Description>
 				</Field.Field>
 				<Field.Field>
 					<Field.Label for="dispatch-ref">Ref</Field.Label>

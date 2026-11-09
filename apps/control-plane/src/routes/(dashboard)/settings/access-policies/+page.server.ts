@@ -1,13 +1,13 @@
 import { fail } from '@sveltejs/kit';
-import type { AccessPolicy, AccessPolicyScope, AccessServiceToken } from '@skiff/contracts';
+import type { AccessPolicy, AccessPolicyScope, AccessServiceToken } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { formOptionalString, formString, failStatus, toFormFailure } from '../../_lib/errors.js';
 import { parseRuleLines } from './_lib/rules.js';
 import type { Actions, PageServerLoad } from './$types';
 
 /**
- * Settings → Skiff Access (IAM.md I25, §11.1). Deliberately compact: the policy list, its
- * ordered rules, and one form that turns Skiff Access on for a project or environment. A rule line
+ * Settings → Yoal Access (IAM.md I25, §11.1). Deliberately compact: the policy list, its
+ * ordered rules, and one form that turns Yoal Access on for a project or environment. A rule line
  * is `allow|deny <matcher> …`, e.g. `allow domain example.com` or `deny cidr 10.0.0.0/8`.
  */
 
@@ -119,7 +119,7 @@ export const actions: Actions = {
 	},
 
 	/**
-	 * Mint a named machine token: the raw `skiff_svc_…` value is returned once, and only its SHA-256
+	 * Mint a named machine token: the raw `yoal_svc_…` value is returned once, and only its SHA-256
 	 * is stored. Revoking the row later rotates the policy version, so cookies issued under the old
 	 * policy stop verifying. Creating a token does not sign anyone out.
 	 */
@@ -129,7 +129,7 @@ export const actions: Actions = {
 		try {
 			const created = core.accessPolicies.createServiceToken(principal, formString(data, 'id'), {
 				name: formString(data, 'name'),
-				header: formOptionalString(data, 'header') || 'X-Skiff-Access-Token',
+				header: formOptionalString(data, 'header') || 'X-Yoal-Access-Token',
 			});
 			return {
 				success: 'Machine token created. Copy it now: it is shown once.',
@@ -219,8 +219,8 @@ export const actions: Actions = {
 		}
 		return {
 			success: policyId
-				? 'Skiff Access is on for that host. Agents converge within seconds.'
-				: 'Skiff Access is off for that host; the site stays behind platform login.',
+				? 'Yoal Access is on for that host. Agents converge within seconds.'
+				: 'Yoal Access is off for that host; the site stays behind platform login.',
 		};
 	},
 };

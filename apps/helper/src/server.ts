@@ -79,7 +79,7 @@ export interface HelperRuntime {
 		username: string,
 		password?: string,
 	): Promise<void>;
-	/** Create or update the fixed read-only `skiff_studio_ro` principal (plan 22 track G). */
+	/** Create or update the fixed read-only `yoal_studio_ro` principal (plan 22 track G). */
 	ensureStudioPrincipal(id: string, password: string): Promise<void>;
 	/** Restart only the PgBouncer sidecar. */
 	restartPooler(id: string): Promise<void>;
@@ -91,21 +91,21 @@ export interface HelperRuntime {
 	replicationConfigure?(id: string, input: { slots?: unknown; password?: unknown }): Promise<{ slots: string[] }>;
 	replicationStatus?(id: string): Promise<{ slots: ReplicationSlotStatus[] }>;
 	replicaPromote?(id: string, input: { databaseId?: unknown }): Promise<{ databaseId: string; lsn: string | null }>;
-	/** `systemctl start skiff-studio.service` (plan 22). The unit name is fixed; no arguments. */
+	/** `systemctl start yoal-studio.service` (plan 22). The unit name is fixed; no arguments. */
 	/** Remove images no unit or container needs (docs/REGISTRY.md R3). Optional for test fakes. */
 	pruneImages?(): Promise<ImagePruneResult>;
 	/** The platform registry's pull-through mirror (docs/REGISTRY.md G4). Optional for test fakes. */
 	applyRegistryMirror?(request: MirrorRequest): Promise<{ upstreams: string[]; changed: boolean }>;
 	startStudio(): Promise<void>;
-	/** `systemctl stop skiff-studio.service`. */
+	/** `systemctl stop yoal-studio.service`. */
 	stopStudio(): Promise<void>;
-	/** `systemctl start skiff-mail.service` (docs/EMAIL.md). Optional: older runtimes answer 501. */
+	/** `systemctl start yoal-mail.service` (docs/EMAIL.md). Optional: older runtimes answer 501. */
 	startMail?(): Promise<void>;
-	/** `systemctl stop skiff-mail.service`. */
+	/** `systemctl stop yoal-mail.service`. */
 	stopMail?(): Promise<void>;
-	/** Copy the submission host's certificate from Caddy's storage for `skiff-mail`. */
+	/** Copy the submission host's certificate from Caddy's storage for `yoal-mail`. */
 	copyMailTls?(host: string): Promise<{ found: boolean; changed: boolean }>;
-	/** `systemctl start/stop skiff-identity.service` (docs/IAM.md §11.2). Optional for older runtimes. */
+	/** `systemctl start/stop yoal-identity.service` (docs/IAM.md §11.2). Optional for older runtimes. */
 	startIdentity?(): Promise<void>;
 	stopIdentity?(): Promise<void>;
 	/** Restore a custom-format dump into a managed database. */
@@ -380,7 +380,7 @@ export function createHandler(
 					return new Response(snapshot.body, {
 						headers: {
 							'content-type': 'application/gzip',
-							'x-skiff-snapshot-method': snapshot.method,
+							'x-yoal-snapshot-method': snapshot.method,
 							'cache-control': 'no-store',
 						},
 					});
@@ -490,8 +490,8 @@ export function createHandler(
 						headers: {
 							'content-type': 'application/octet-stream',
 							'content-length': String(file.sizeBytes),
-							'x-skiff-file-name': encodeURIComponent(file.name),
-							'x-skiff-file-path': encodeURIComponent(file.path),
+							'x-yoal-file-name': encodeURIComponent(file.name),
+							'x-yoal-file-path': encodeURIComponent(file.path),
 							'cache-control': 'no-store',
 						},
 					});
@@ -814,7 +814,7 @@ export async function startHelperServer(
 		groupId = await resolveGroupId(config.controlSocketGroup);
 		if (isRoot && groupId === null) {
 			throw new Error(
-				`Helper socket group "${config.controlSocketGroup}" does not exist; set SKIFF_HELPER_CONTROL_SOCKET_GROUP`,
+				`Helper socket group "${config.controlSocketGroup}" does not exist; set YOAL_HELPER_CONTROL_SOCKET_GROUP`,
 			);
 		}
 	}

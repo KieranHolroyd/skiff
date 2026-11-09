@@ -3,7 +3,7 @@ import {
 	serverErrorSources,
 	type ServerErrorListQuery,
 	type ServerErrorSource
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { failStatus, toFormFailure } from '../../_lib/errors.js';
 import { canChangeErrors, formStatus, requireErrorViewer } from './_lib/access.server.js';

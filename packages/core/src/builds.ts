@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, inArray, lt } from 'drizzle-orm';
-import { builds, deployments, gitSources, nodes, projects, releases } from '@skiff/db';
+import { builds, deployments, gitSources, nodes, projects, releases } from '@yoal/db';
 import {
 	buildCreateSchema,
 	contentUrl,
@@ -12,7 +12,7 @@ import {
 	type GitSourceInput,
 	type GitSourceView,
 	type Principal,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { entriesFromZip } from './artifact.ts';
@@ -92,7 +92,7 @@ export class BuildService {
 		});
 		const row = this.ctx.db.select().from(gitSources).where(eq(gitSources.projectId, project.id)).get();
 		if (!row) throw new CoreError('error', 'Git source was not saved.');
-		// D174: a repository on a connected forge gets Skiff's webhook, so pushes need no setup.
+		// D174: a repository on a connected forge gets Yoal's webhook, so pushes need no setup.
 		if (row.enabled) this.ctx.git.ensureWebhook(row.orgId, row.repoUrl);
 		return this.gitView(project, row);
 	}
@@ -476,8 +476,8 @@ export class BuildService {
 	/**
 	 * A delivery to the project's own webhook (`/api/webhooks/git/<project>`). GitHub, Gitea and
 	 * Forgejo sign it with the stored secret; GitLab sends it in `X-Gitlab-Token` (D174). Returns null
-	 * when the push is for another branch, the source is disabled, or Skiff's GitHub App or a
-	 * Skiff-created forge hook already delivers this repository's pushes (D165): one push must
+	 * when the push is for another branch, the source is disabled, or Yoal's GitHub App or a
+	 * Yoal-created forge hook already delivers this repository's pushes (D165): one push must
 	 * never queue two builds.
 	 */
 	async handleWebhook(project: ProjectRow, rawBody: string, headers: HeaderReader): Promise<BuildView | null> {
@@ -504,7 +504,7 @@ export class BuildService {
 		return this.handleWebhook(project, rawBody, headerReader({ 'x-hub-signature-256': signature, 'x-github-event': event ?? 'push' }));
 	}
 
-	/** A push delivered through Skiff's GitHub App (D165). Returns the build ids. */
+	/** A push delivered through Yoal's GitHub App (D165). Returns the build ids. */
 	async handleAppPush(orgId: string, fullName: string, payload: GithubPushEvent): Promise<string[]> {
 		const event = normaliseForgeEvent('github', 'push', payload);
 		if (event.kind !== 'push') return [];
@@ -512,7 +512,7 @@ export class BuildService {
 	}
 
 	/**
-	 * A push delivered by a Skiff-managed hook (the GitHub App, or a forge connection's hook, D174):
+	 * A push delivered by a Yoal-managed hook (the GitHub App, or a forge connection's hook, D174):
 	 * every enabled git source in the org whose repository has `identity` and whose branch was
 	 * pushed queues a build. Returns the build ids.
 	 */
@@ -579,7 +579,7 @@ export class BuildService {
 	}
 
 	/**
-	 * Commit status `skiff-build/<project>` for every state a build passes through, and a
+	 * Commit status `yoal-build/<project>` for every state a build passes through, and a
 	 * deployment when it succeeds (D164, D176): through the GitHub App or the forge connection that
 	 * serves the repository. Best effort, never throws.
 	 */
@@ -613,7 +613,7 @@ export class BuildService {
 			await this.ctx.git.commitStatus(project.orgId, source.repoUrl, {
 				sha: row.commitSha,
 				state,
-				context: `skiff-build/${project.slug}`,
+				context: `yoal-build/${project.slug}`,
 				description,
 				targetUrl: buildUrl,
 			});
@@ -630,7 +630,7 @@ export class BuildService {
 				ref: row.ref,
 				environment: row.promote ? project.slug : `${project.slug}-preview`,
 				production: row.promote,
-				description: `Skiff build ${row.id}`,
+				description: `Yoal build ${row.id}`,
 				environmentUrl,
 				logUrl: buildUrl,
 			});

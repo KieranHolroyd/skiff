@@ -2,14 +2,14 @@ import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import type { Permission, Principal } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import type { Permission, Principal } from '@yoal/contracts';
 import { ForbiddenError, NotFoundError } from './errors.ts';
 import { createCore, type Core } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import { buildPrincipal } from './orgs.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-user-pools-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-user-pools-'));
 const opened = createDb({ path: ':memory:' });
 opened.sqlite.exec(
 	readFileSync(new URL('../../db/migrations/0101_user_pool_passkeys.sql', import.meta.url), 'utf8')
@@ -62,7 +62,7 @@ beforeEach(() => {
 			org_id TEXT NOT NULL,
 			name TEXT NOT NULL,
 			description TEXT NOT NULL DEFAULT '',
-			engine TEXT NOT NULL DEFAULT 'skiff-identity',
+			engine TEXT NOT NULL DEFAULT 'yoal-identity',
 			issuer TEXT NOT NULL,
 			signing_key_id TEXT,
 			signup_mode TEXT NOT NULL DEFAULT 'invite',
@@ -121,7 +121,7 @@ describe('user pools', () => {
 			orgId: 'org_1',
 			name: 'shop',
 			description: 'Customers of the shop',
-			engine: 'skiff-identity',
+			engine: 'yoal-identity',
 			signupMode: 'open',
 			disabled: false,
 			disabledAt: null,

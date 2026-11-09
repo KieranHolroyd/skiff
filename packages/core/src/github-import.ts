@@ -10,21 +10,21 @@ import {
 	type GithubImportResult,
 	type GitRepositoryView,
 	type Principal,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { CoreError, ValidationError } from './errors.ts';
 import type { GitRepositoryRef } from './forges/router.ts';
 
-const WORKFLOW_DIR = '.skiff/workflows';
+const WORKFLOW_DIR = '.yoal/workflows';
 /** Directories never offered as a root directory. */
-const HIDDEN_DIRECTORIES = new Set(['node_modules', '.git', '.github', '.skiff', '.vscode', '.idea']);
+const HIDDEN_DIRECTORIES = new Set(['node_modules', '.git', '.github', '.yoal', '.vscode', '.idea']);
 
 /**
  * Deploy from Git (docs/GITHUB.md §9, D172; docs/FORGES.md §7, D177): read a repository through
  * the org's GitHub App or a GitLab/Gitea/Forgejo connection, guess how to build it, then create the
  * project, its git source, the first build and, when the repository has workflows, its pipeline
  * repository in one step. Everything after that is the existing machinery: pushes arrive on the
- * App's webhook (D165) or the hook Skiff creates on the forge (D174), Builders clone with a
+ * App's webhook (D165) or the hook Yoal creates on the forge (D174), Builders clone with a
  * narrowed token (D164, D175), and each build reports a commit status and a deployment.
  */
 export class GithubImportService {
@@ -41,7 +41,7 @@ export class GithubImportService {
 					)
 				: new CoreError(
 						'github_installation_missing',
-						`Skiff's GitHub App cannot reach ${ref.fullName} for this organisation. Install it on ${ref.fullName.split('/')[0]}, or grant it the repository, in Settings → GitHub.`,
+						`Yoal's GitHub App cannot reach ${ref.fullName} for this organisation. Install it on ${ref.fullName.split('/')[0]}, or grant it the repository, in Settings → GitHub.`,
 						409,
 					);
 		if (repo.archived) throw new ValidationError(`${repo.fullName} is archived on ${FORGE_LABELS[repo.provider]}, so it cannot be built on push.`);

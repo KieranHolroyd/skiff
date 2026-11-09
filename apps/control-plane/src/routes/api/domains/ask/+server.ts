@@ -1,4 +1,4 @@
-import { domainAskSchema } from '@skiff/contracts';
+import { domainAskSchema } from '@yoal/contracts';
 import { json } from '#lib/server/api.js';
 import { core } from '#lib/server/core.js';
 import type { RequestHandler } from './$types';

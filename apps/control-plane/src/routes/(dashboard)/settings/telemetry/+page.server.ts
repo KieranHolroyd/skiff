@@ -6,21 +6,21 @@ import {
 	TELEMETRY_MEMORY_ENV,
 	TELEMETRY_MEMORY_MB,
 	validateTelemetryMemoryMb
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { configState, queueConfig, requireOwnerPage } from '../_platform.server.js';
 import type { Actions, PageServerLoad } from './$types';
 
 /**
  * Settings → Telemetry (D101): install or remove the optional ClickHouse store. The root helper
- * (`skiff-platform-config`, action `telemetry`) does the work and restarts the control plane.
+ * (`yoal-platform-config`, action `telemetry`) does the work and restarts the control plane.
  */
 
-const SYSTEMD_DIR = process.env.SKIFF_SYSTEMD_DIR ?? '/etc/systemd/system';
-const ENV_FILE = process.env.SKIFF_ENV_FILE ?? '/etc/skiff/skiff.env';
+const SYSTEMD_DIR = process.env.YOAL_SYSTEMD_DIR ?? '/etc/systemd/system';
+const ENV_FILE = process.env.YOAL_ENV_FILE ?? '/etc/yoal/yoal.env';
 
 /**
- * The configured memory ceiling (MiB), or null for the default. Read from skiff.env (group skiff
+ * The configured memory ceiling (MiB), or null for the default. Read from yoal.env (group yoal
  * can read it) because changing it restarts only ClickHouse, so this process's env goes stale.
  */
 function configuredMemoryMb(): number | null {
@@ -50,7 +50,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			/** A ClickHouse connection is configured for this control plane. */
 			installed,
 			/** The systemd unit exists (installed by the installer or the helper). */
-			unitPresent: existsSync(join(SYSTEMD_DIR, 'skiff-clickhouse.service')),
+			unitPresent: existsSync(join(SYSTEMD_DIR, 'yoal-clickhouse.service')),
 			available,
 			error: installed && !available ? (telemetry?.error?.message ?? null) : null,
 			stats: available && telemetry ? await telemetry.stats() : null,

@@ -1,4 +1,4 @@
-import { readMembership } from '@skiff/core';
+import { readMembership } from '@yoal/core';
 import { devPasswordLogin } from './config';
 import { sqlite } from './db';
 import { membershipRoleIn } from './org-membership';
@@ -7,12 +7,12 @@ import { MAX_SECOND_FACTOR_FAILURES, type SecondFactor } from './second-factor-p
 /**
  * Wiring for the owner second-factor policy (see `second-factor-policy.ts` for the rules).
  *
- * Enforcement is on by default. `SKIFF_OWNER_2FA=0` turns it off; when unset it is also off in
+ * Enforcement is on by default. `YOAL_OWNER_2FA=0` turns it off; when unset it is also off in
  * dev password-login mode (never available in production), so local development and the e2e suites
  * can sign in headlessly.
  */
 export const enforceOwnerSecondFactor =
-	process.env.SKIFF_OWNER_2FA !== undefined ? process.env.SKIFF_OWNER_2FA === '1' : !devPasswordLogin;
+	process.env.YOAL_OWNER_2FA !== undefined ? process.env.YOAL_OWNER_2FA === '1' : !devPasswordLogin;
 
 /** Whether the user has any second factor enrolled: a passkey or a verified authenticator app. */
 export function userHasSecondFactor(userId: string): boolean {

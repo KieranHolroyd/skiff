@@ -13,7 +13,7 @@
  *
  *   bun tests/e2e/managed-data.e2e.ts
  *
- * Set `SKIFF_E2E_ENGINE=podman|docker` to require an engine, or `none` to force the skip path.
+ * Set `YOAL_E2E_ENGINE=podman|docker` to require an engine, or `none` to force the skip path.
  * The real Debian 13 wrapper is `scripts/e2e/debian13.sh`.
  */
 import { createHash } from 'node:crypto';
@@ -40,14 +40,14 @@ const IMAGES = {
 };
 
 // Deterministic, obviously-fake credentials. Nothing here is a secret.
-const PG_USER = 'skiff';
-const PG_PASSWORD = 'skiff-e2e-password';
-const PRIMARY_DB = 'skiff_e2e';
-const APP_DB = 'skiff_e2e_app';
-const S3_ACCESS_KEY = 'SKIFFE2EACCESSKEY';
-const S3_SECRET_KEY = 'skiff-e2e-rustfs-secret-0123456789';
+const PG_USER = 'yoal';
+const PG_PASSWORD = 'yoal-e2e-password';
+const PRIMARY_DB = 'yoal_e2e';
+const APP_DB = 'yoal_e2e_app';
+const S3_ACCESS_KEY = 'YOALE2EACCESSKEY';
+const S3_SECRET_KEY = 'yoal-e2e-rustfs-secret-0123456789';
 const S3_REGION = 'us-east-1';
-const BUCKET = 'skiff-e2e-bucket';
+const BUCKET = 'yoal-e2e-bucket';
 
 interface Result {
 	name: string;
@@ -66,8 +66,8 @@ process.on('beforeExit', () => {
 	if (harnessFinished) return;
 	console.error(
 		'FAIL  the harness exited before all checks completed (a promise is not keeping the event loop alive).\n' +
-			'      Leftover containers carry label skiff.e2e=true; remove them with:\n' +
-			'      podman ps -aq --filter label=skiff.e2e=true | xargs -r podman rm -f',
+			'      Leftover containers carry label yoal.e2e=true; remove them with:\n' +
+			'      podman ps -aq --filter label=yoal.e2e=true | xargs -r podman rm -f',
 	);
 	process.exit(1);
 });
@@ -134,11 +134,11 @@ function checksumRows(rows: Array<Record<string, unknown>>): { rows: number; tot
 }
 
 async function runHarness(runEngine: Engine): Promise<number> {
-	tempDir = await mkdtemp(join(tmpdir(), 'skiff-e2e-'));
+	tempDir = await mkdtemp(join(tmpdir(), 'yoal-e2e-'));
 	const rt = new ContainerRuntime(runEngine, tempDir);
 	runtime = rt;
 	const runSuffix = rt.runId.replace(/[^a-z0-9-]/gi, '').slice(-8);
-	const network = `skiff-e2e-${runSuffix}`;
+	const network = `yoal-e2e-${runSuffix}`;
 
 	const onSignal = async () => {
 		await rt.cleanup();
@@ -159,7 +159,7 @@ async function runHarness(runEngine: Engine): Promise<number> {
 
 		// ---------------------------------------------------------------- containers
 		const pg = await rt.runContainer({
-			name: `skiff-e2e-pg-${runSuffix}`,
+			name: `yoal-e2e-pg-${runSuffix}`,
 			image: IMAGES.postgres,
 			network,
 			ports: [[pgPort, 5432]],
@@ -171,7 +171,7 @@ async function runHarness(runEngine: Engine): Promise<number> {
 		});
 
 		const restore = await rt.runContainer({
-			name: `skiff-e2e-restore-${runSuffix}`,
+			name: `yoal-e2e-restore-${runSuffix}`,
 			image: IMAGES.postgres,
 			network,
 			ports: [[restorePort, 5432]],
@@ -183,7 +183,7 @@ async function runHarness(runEngine: Engine): Promise<number> {
 		});
 
 		const s3 = await rt.runContainer({
-			name: `skiff-e2e-s3-${runSuffix}`,
+			name: `yoal-e2e-s3-${runSuffix}`,
 			image: IMAGES.rustfs,
 			network,
 			ports: [[s3Port, 9000]],
@@ -267,7 +267,7 @@ async function runHarness(runEngine: Engine): Promise<number> {
 			assert(summary.checksum.length === 32, 'fixture checksum missing');
 		});
 
-		const dumpPath = join(tempDir, 'skiff-e2e.dump');
+		const dumpPath = join(tempDir, 'yoal-e2e.dump');
 		let dumpBytes = new Uint8Array();
 		await check('pg_dump -Fc streams a non-empty artifact', async () => {
 			dumpBytes = await rt.execBytes([

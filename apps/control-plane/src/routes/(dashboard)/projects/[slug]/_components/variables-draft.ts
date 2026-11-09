@@ -3,7 +3,7 @@
  * saved together. Everything here mutates the draft in place so it works on Svelte `$state`
  * proxies and on plain objects in tests alike.
  */
-import { formatEnvFile, parseEnvFile, secretRefEnvName, type WorkloadSpec } from '@skiff/contracts';
+import { formatEnvFile, parseEnvFile, secretRefEnvName, type WorkloadSpec } from '@yoal/contracts';
 
 type WorkloadSecretRef = WorkloadSpec['secrets'][number];
 

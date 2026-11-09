@@ -1,5 +1,5 @@
 import { and, eq, inArray, or } from 'drizzle-orm';
-import { disks, nodes, shareGrants, shareMounts, shares } from '@skiff/db';
+import { disks, nodes, shareGrants, shareMounts, shares } from '@yoal/db';
 import {
 	shareCreateSchema,
 	shareCredentialsSchema,
@@ -23,7 +23,7 @@ import {
 	type ShareUnmountDesired,
 	type ShareUpdate,
 	type ShareView,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, NotFoundError, ValidationError } from './errors.ts';
 import { newId, parseJson } from './util.ts';
@@ -42,7 +42,7 @@ const PLATFORM_KEY_ORG = 'platform';
  *
  * The registry holds protocol, server/export, failure-domain zone, org grants and sealed SMB
  * credentials. A **mount** asks one node's helper to mount the share at
- * `/mnt/skiff-shares/<name>`; the node reports the result in its heartbeat. A read-write mount
+ * `/mnt/yoal-shares/<name>`; the node reports the result in its heartbeat. A read-write mount
  * becomes a **disk** (D169): once the node's inventory shows the share's source key at that path,
  * services can be placed on it like on any other disk, and the helper verifies it before every
  * start (D76).
@@ -213,7 +213,7 @@ export class ShareService {
 	// ---------------------------------------------------------------- mounts
 
 	/**
-	 * Mount a share on a node. The node's helper mounts it at `/mnt/skiff-shares/<name>` on its
+	 * Mount a share on a node. The node's helper mounts it at `/mnt/yoal-shares/<name>` on its
 	 * next pull. A read-write share becomes the disk `diskName` (default: the share name) as soon
 	 * as the node reports the mount; a read-only one stays a plain mount.
 	 */
@@ -467,7 +467,7 @@ export class ShareService {
 			let diskId: string | null = null;
 			let message: string | null = null;
 			if (entry.mountPath !== mountPath) {
-				message = `The node also mounts ${sourceKey} at ${entry.mountPath}; unmount that copy so Skiff can use ${mountPath}.`;
+				message = `The node also mounts ${sourceKey} at ${entry.mountPath}; unmount that copy so Yoal can use ${mountPath}.`;
 			} else {
 				try {
 					diskId = this.ctx.disks.register({
@@ -498,7 +498,7 @@ export class ShareService {
 
 	private assertLinkable(share: ShareRow, node: NodeRow, diskName: string): void {
 		if (share.readOnly)
-			throw new ValidationError(`Share "${share.name}" is read-only, so Skiff cannot keep data on it. Make the share read-write first.`);
+			throw new ValidationError(`Share "${share.name}" is read-only, so Yoal cannot keep data on it. Make the share read-write first.`);
 		const clash = this.ctx.db
 			.select({ id: disks.id })
 			.from(disks)

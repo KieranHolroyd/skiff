@@ -9,7 +9,7 @@ import type {
 	AlertSilenceCreateInput,
 	AlertSilenceView,
 	AlertsOverview
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { HttpError } from '#lib/query.js';
 
 /**

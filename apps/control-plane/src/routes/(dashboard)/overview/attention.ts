@@ -4,8 +4,8 @@ import type {
 	DomainView,
 	QuotaWarning,
 	StorageView
-} from '@skiff/contracts';
-import type { DeploymentView, NodeView } from '@skiff/core';
+} from '@yoal/contracts';
+import type { DeploymentView, NodeView } from '@yoal/core';
 import { QUOTA_FIELDS } from '../settings/usage/quota-fields.js';
 
 /** Something on the fleet that wants a person's attention, most severe first. */

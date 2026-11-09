@@ -3,7 +3,7 @@
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
 	import MailCheckIcon from '@lucide/svelte/icons/mail-check';
-	import AuthShell from '#lib/components/skiff/AuthShell.svelte';
+	import AuthShell from '#lib/components/yoal/AuthShell.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import type { PageProps } from './$types';
@@ -17,7 +17,7 @@
 </script>
 
 <svelte:head>
-	<title>Confirm your email address · Skiff</title>
+	<title>Confirm your email address · Yoal</title>
 	<meta name="robots" content="noindex" />
 </svelte:head>
 
@@ -26,7 +26,7 @@
 	title={verified ? 'Address confirmed' : 'Confirm your email address'}
 	description={verified
 		? `${orgName} can now send test messages to ${verified.address}.`
-		: `${orgName} is setting up email on Skiff and asked to send test messages to this address.`}
+		: `${orgName} is setting up email on Yoal and asked to send test messages to this address.`}
 >
 	{#if verified}
 		<div class="flex items-center gap-3 rounded-xl border bg-card p-3.5 shadow-xs">

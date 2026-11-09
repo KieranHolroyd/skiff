@@ -2,7 +2,7 @@
 /**
  * CI: write and sign `manifest.json` for the release artifacts in a directory.
  *
- *   SKIFF_RELEASE_SIGNING_KEY=<pkcs8 pem> bun scripts/release/manifest.ts \
+ *   YOAL_RELEASE_SIGNING_KEY=<pkcs8 pem> bun scripts/release/manifest.ts \
  *     --version 0.6.4 --commit <sha> --repo owner/name --dir dist
  *
  * Refuses to publish a manifest the updater could not verify: the signature is checked against
@@ -33,24 +33,24 @@ const version = option('--version').replace(/^v/, '');
 const commit = option('--commit');
 const repo = option('--repo');
 const dir = option('--dir');
-const key = process.env.SKIFF_RELEASE_SIGNING_KEY;
-if (!key) throw new Error('SKIFF_RELEASE_SIGNING_KEY is not set; refusing to publish an unsigned release');
+const key = process.env.YOAL_RELEASE_SIGNING_KEY;
+if (!key) throw new Error('YOAL_RELEASE_SIGNING_KEY is not set; refusing to publish an unsigned release');
 if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`not a release version: ${version}`);
 if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error(`not a commit sha: ${commit}`);
 
 const artifacts: ReleaseManifest['artifacts'] = {};
-const pattern = new RegExp(`^skiff-${version.replace(/\./g, '\\.')}-(linux-[a-z0-9]+)\\.tar\\.gz$`);
+const pattern = new RegExp(`^yoal-${version.replace(/\./g, '\\.')}-(linux-[a-z0-9]+)\\.tar\\.gz$`);
 for (const file of readdirSync(dir).sort()) {
 	const match = pattern.exec(file);
 	if (!match) continue;
 	const path = join(dir, file);
 	artifacts[match[1]!] = { file, sha256: sha256File(path), size: statSync(path).size };
 }
-if (!Object.keys(artifacts).length) throw new Error(`no skiff-${version}-linux-*.tar.gz in ${dir}`);
+if (!Object.keys(artifacts).length) throw new Error(`no yoal-${version}-linux-*.tar.gz in ${dir}`);
 
-// Worker bundles for dashboard node updates (D99): just skiff-agent + skiff-helper per platform.
+// Worker bundles for dashboard node updates (D99): just yoal-agent + yoal-helper per platform.
 const nodeArtifacts: NonNullable<ReleaseManifest['nodeArtifacts']> = {};
-const nodePattern = new RegExp(`^skiff-node-${version.replace(/\./g, '\\.')}-(linux-[a-z0-9]+)\\.tar\\.gz$`);
+const nodePattern = new RegExp(`^yoal-node-${version.replace(/\./g, '\\.')}-(linux-[a-z0-9]+)\\.tar\\.gz$`);
 for (const file of readdirSync(dir).sort()) {
 	const match = nodePattern.exec(file);
 	if (!match) continue;
@@ -58,7 +58,7 @@ for (const file of readdirSync(dir).sort()) {
 	nodeArtifacts[match[1]!] = { file, sha256: sha256File(path), size: statSync(path).size };
 }
 const missingNode = Object.keys(artifacts).filter((platform) => !nodeArtifacts[platform]);
-if (missingNode.length) throw new Error(`no node bundle for ${missingNode.join(', ')} (skiff-node-${version}-<platform>.tar.gz)`);
+if (missingNode.length) throw new Error(`no node bundle for ${missingNode.join(', ')} (yoal-node-${version}-<platform>.tar.gz)`);
 
 const manifest: ReleaseManifest = {
 	schema: MANIFEST_SCHEMA,
@@ -76,7 +76,7 @@ const manifest: ReleaseManifest = {
 const bytes = new TextEncoder().encode(`${JSON.stringify(manifest, null, 2)}\n`);
 const signature = signManifest(bytes, key);
 
-// The updater on every host trusts only BUILTIN_RELEASE_KEYS (+ /etc/skiff/updater/keys). A key
+// The updater on every host trusts only BUILTIN_RELEASE_KEYS (+ /etc/yoal/updater/keys). A key
 // mismatch here would publish a release no host accepts; fail the pipeline instead.
 const trusted = new Map(Object.entries(BUILTIN_RELEASE_KEYS).map(([id, pem]) => [id, createPublicKey(pem)]));
 verifyManifest(bytes, signature, trusted);

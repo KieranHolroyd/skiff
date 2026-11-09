@@ -2,14 +2,14 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import { DEFAULT_FEATURES, databaseCreateSchema, databaseStudioPrincipalActivationSchema } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import { DEFAULT_FEATURES, databaseCreateSchema, databaseStudioPrincipalActivationSchema } from '@yoal/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import type { Core } from './index.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-studio-principal-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-studio-principal-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 let clock = Date.parse('2026-11-06T10:00:00Z');
@@ -87,8 +87,8 @@ beforeAll(() => {
 describe('read-only studio principal', () => {
 	test('the name is reserved for every engine', () => {
 		for (const engine of ['postgres', 'mysql', 'mariadb', 'mongodb', 'valkey', 'redis'] as const)
-			expect(databaseCreateSchema.safeParse({ name: 'skiff-studio-ro', engine }).success).toBe(false);
-		expect(() => core.databases.create(owner, { name: 'skiff-studio-ro', memoryMb: 128 })).toThrow(/reserved/);
+			expect(databaseCreateSchema.safeParse({ name: 'yoal-studio-ro', engine }).success).toBe(false);
+		expect(() => core.databases.create(owner, { name: 'yoal-studio-ro', memoryMb: 128 })).toThrow(/reserved/);
 	});
 
 	test('create mints it; the task waits until the database runs and never carries the password', async () => {
@@ -102,7 +102,7 @@ describe('read-only studio principal', () => {
 
 		const activation = core.databaseStudio.principals.activation(edgeId, db.id);
 		expect(databaseStudioPrincipalActivationSchema.parse(activation)).toEqual(activation);
-		expect(activation).toMatchObject({ databaseId: db.id, generation: 1, engine: 'postgres', user: 'skiff_studio_ro', database: 'shop_db' });
+		expect(activation).toMatchObject({ databaseId: db.id, generation: 1, engine: 'postgres', user: 'yoal_studio_ro', database: 'shop_db' });
 		expect(JSON.stringify(state)).not.toContain(activation.password);
 		// Only sealed at rest.
 		const raw = opened.sqlite
@@ -150,7 +150,7 @@ describe('read-only studio principal', () => {
 		const endpoint = core.databaseStudio.endpoint(owner, 'shop-db');
 		const readOnly = core.databaseStudio.activation(edgeId, endpoint.sessionId, endpoint.token);
 		const principal = core.databaseStudio.principals.activation(edgeId, db.id);
-		expect(readOnly).toMatchObject({ readOnly: true, user: 'skiff_studio_ro', password: principal.password });
+		expect(readOnly).toMatchObject({ readOnly: true, user: 'yoal_studio_ro', password: principal.password });
 
 		const owned = core.databases.credentials(owner, 'shop-db');
 		core.databaseStudio.open(owner, 'shop-db', { readOnly: false });
@@ -273,11 +273,11 @@ describe('read-only studio principal', () => {
 		beat();
 		expect(core.databaseStudio.view(owner, 'old-node-db')).toMatchObject({
 			principal: 'failed',
-			principalError: expect.stringContaining('old-node runs an older Skiff agent'),
+			principalError: expect.stringContaining('old-node runs an older Yoal agent'),
 		});
 		const view = core.databaseStudio.open(owner, 'old-node-db');
 		expect(view.principal).toBe('failed');
-		expect(failure(() => core.databaseStudio.endpoint(owner, 'old-node-db')).message).toMatch(/older Skiff agent/);
+		expect(failure(() => core.databaseStudio.endpoint(owner, 'old-node-db')).message).toMatch(/older Yoal agent/);
 
 		// Once the node is updated it is waited on again, and connects when it confirms.
 		beat(['studio-principal']);
@@ -292,9 +292,9 @@ describe('read-only studio principal', () => {
 	test('Valkey/Redis activations carry the password for the generated ACL; other engines do not', async () => {
 		const cache = core.databases.get(owner, 'cache-db');
 		const password = core.databaseStudio.principals.activation(edgeId, cache.id).password;
-		expect(core.workloads.activation(edgeId, cache.id).env.SKIFF_STUDIO_RO_PASSWORD).toBe(password);
+		expect(core.workloads.activation(edgeId, cache.id).env.YOAL_STUDIO_RO_PASSWORD).toBe(password);
 		const shop = core.databases.get(owner, 'shop-db');
-		expect(core.workloads.activation(edgeId, shop.id).env.SKIFF_STUDIO_RO_PASSWORD).toBeUndefined();
+		expect(core.workloads.activation(edgeId, shop.id).env.YOAL_STUDIO_RO_PASSWORD).toBeUndefined();
 		// Desired state (and so the activation version) never carries it.
 		const state = await core.nodes.desiredState(edgeToken);
 		expect(JSON.stringify(state)).not.toContain(password);

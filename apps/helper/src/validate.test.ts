@@ -33,7 +33,7 @@ export function workloadInput(overrides: Record<string, unknown> = {}): Record<s
 		runtime: 'process',
 		status: 'running',
 		release: SHA,
-		upstream: 'unix//run/skiff-workloads/prj_abc123.sock',
+		upstream: 'unix//run/yoal-workloads/prj_abc123.sock',
 		memoryMb: 256,
 		cpus: 1,
 		port: 3000,
@@ -73,7 +73,7 @@ describe('identifiers', () => {
 	});
 
 	test('absolute paths reject whitespace and relative forms', () => {
-		expect(assertAbsolutePath('/var/lib/skiff')).toBe('/var/lib/skiff');
+		expect(assertAbsolutePath('/var/lib/yoal')).toBe('/var/lib/yoal');
 		expect(() => assertAbsolutePath('var/lib')).toThrow(/absolute/);
 		expect(() => assertAbsolutePath('/tmp/a b')).toThrow(/unsupported/);
 	});
@@ -276,14 +276,14 @@ describe('database profile', () => {
 		expect(databaseImage({ engine: 'postgres', version: '16' })).toBe('docker.io/library/postgres:16-alpine');
 		expect(databaseImage({ engine: 'postgres', version: '18' })).toBe('docker.io/pgvector/pgvector:0.8.7-pg18-trixie');
 		expect(databaseImage({ engine: 'postgres', version: '18', variant: 'postgis' })).toBe(
-			'ghcr.io/kieranholroyd/skiff-postgres:18-postgis-1',
+			'ghcr.io/kieranholroyd/yoal-postgres:18-postgis-1',
 		);
 	});
 
-	test('Skiff-built variants (D126) are Postgres 18 only and pin their own image', () => {
+	test('Yoal-built variants (D126) are Postgres 18 only and pin their own image', () => {
 		const cron = parseWorkload(
 			databaseInput({
-				image: 'ghcr.io/kieranholroyd/skiff-postgres:18-pg_cron-1',
+				image: 'ghcr.io/kieranholroyd/yoal-postgres:18-pg_cron-1',
 				database: { engine: 'postgres', version: '18', variant: 'pg_cron' },
 			}),
 		);
@@ -508,19 +508,19 @@ describe('per-org network fields', () => {
 		expect(parseWorkload(workloadInput({ orgId: 'org_1' }))).toMatchObject({
 			orgId: 'org_1',
 		});
-		expect(parseWorkload(workloadInput({ orgId: 'org_1', networkName: 'skiff-org-org_1' })).networkName).toBe(
-			'skiff-org-org_1',
+		expect(parseWorkload(workloadInput({ orgId: 'org_1', networkName: 'yoal-org-org_1' })).networkName).toBe(
+			'yoal-org-org_1',
 		);
-		expect(orgNetworkName('org_1')).toBe('skiff-org-org_1');
+		expect(orgNetworkName('org_1')).toBe('yoal-org-org_1');
 	});
 
 	test('rejects a network name that does not belong to the org', () => {
 		expect(() =>
-			parseWorkload(workloadInput({ orgId: 'org_1', networkName: 'skiff-org-org_2' })),
+			parseWorkload(workloadInput({ orgId: 'org_1', networkName: 'yoal-org-org_2' })),
 		).toThrow(/derived/);
 		expect(() =>
 			parseWorkload(workloadInput({ networkName: 'host' })),
-		).toThrow(/skiff-workloads/);
+		).toThrow(/yoal-workloads/);
 	});
 });
 describe('app volume desired state', () => {

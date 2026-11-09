@@ -335,7 +335,7 @@ export class ContainerConsole {
 			'TERM=xterm-256color',
 			// Lets `close` find every process this shell started, however it was orphaned.
 			'--env',
-			`SKIFF_EXEC_ID=${execId}`,
+			`YOAL_EXEC_ID=${execId}`,
 			...(request.user === 'root' ? ['--user', '0:0'] : []),
 			containerName(id),
 			...shellArgv(request.shell),
@@ -494,7 +494,7 @@ export class ContainerConsole {
 
 	/** Signal every process on the host whose environment carries this shell's tag. */
 	private killTagged(execId: string, signal: NodeJS.Signals): number {
-		const needle = Buffer.from(`SKIFF_EXEC_ID=${execId}\0`);
+		const needle = Buffer.from(`YOAL_EXEC_ID=${execId}\0`);
 		let killed = 0;
 		let pids: string[];
 		try {
@@ -656,7 +656,7 @@ export class ContainerConsole {
 }
 
 export function containerName(id: string): string {
-	return `skiff-workload-${id}`;
+	return `yoal-workload-${id}`;
 }
 
 function newExecId(): string {

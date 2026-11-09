@@ -4,12 +4,12 @@ import {
 	type AccessIdentity,
 	type AccessPolicy,
 	type Principal,
-} from '@skiff/contracts';
-import { userPoolSessionCookieName, type UserPoolUserView } from '@skiff/core';
+} from '@yoal/contracts';
+import { userPoolSessionCookieName, type UserPoolUserView } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 
 /**
- * Skiff Access login (IAM.md I25, §11.1).
+ * Yoal Access login (IAM.md I25, §11.1).
  *
  * The agent redirects an unauthenticated visitor here with `host` and `return`. This endpoint
  * evaluates the host's ordered policy against whichever identity the request carries:
@@ -44,7 +44,7 @@ function allowedHost(host: string): boolean {
 
 function page(title: string, message: string): string {
 	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escape(title)} · Skiff</title>
+<title>${escape(title)} · Yoal</title>
 <style>body{font:15px/1.5 system-ui,sans-serif;background:#0a0a0a;color:#e5e5e5;display:grid;place-items:center;min-height:100svh;margin:0}
 main{width:min(420px,90vw);background:#171717;border:1px solid #333;border-radius:12px;padding:24px}
 h1{font-size:18px;margin:0 0 8px}p{color:#a3a3a3;margin:0}</style></head>
@@ -169,13 +169,13 @@ const handler: RequestHandler = async (event) => {
 		returnUrl = null;
 	}
 	const host = requestedHost || returnUrl?.hostname || '';
-	if (!host || !allowedHost(host)) return html(page('Unknown site', 'This host is not served by this Skiff platform.'), 404);
+	if (!host || !allowedHost(host)) return html(page('Unknown site', 'This host is not served by this Yoal platform.'), 404);
 	// A code is host-bound; never hand it to a callback on a different host.
 	if (returnUrl && returnUrl.hostname.toLowerCase() !== host)
 		return html(page('Invalid return address', 'The return address must be the same host.'), 400);
 
 	const resolved = core.accessPolicies.resolveForHost(host);
-	if (!resolved) return html(page('Not configured', 'This site does not use Skiff Access.'), 404);
+	if (!resolved) return html(page('Not configured', 'This site does not use Yoal Access.'), 404);
 	if (!resolved.policy.enabled) return html(page('Access closed', 'The policy for this site is disabled.'), 403);
 
 	const poolIds = policyPoolIds(resolved.policy);
@@ -274,7 +274,7 @@ const handler: RequestHandler = async (event) => {
 	const visit = core.access.accessVisit(visitPrincipal, host, identity.email ?? null);
 	// Stay on the scheme/host/port the visitor used; the callback is handled by the host's agent.
 	const target = returnUrl ?? new URL(`https://${host}/`);
-	const callback = new URL('/_skiff/access/callback', target);
+	const callback = new URL('/_yoal/access/callback', target);
 	callback.searchParams.set('token', visit.token);
 	const next = nextPath(returnUrl);
 	if (next) callback.searchParams.set('next', next);

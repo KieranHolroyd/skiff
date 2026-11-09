@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { CONTAINER_CONSOLE_TOKEN_HEADER, ForbiddenError, type Principal } from '@skiff/contracts';
+import { CONTAINER_CONSOLE_TOKEN_HEADER, ForbiddenError, type Principal } from '@yoal/contracts';
 import { handleContainerConsole, type ContainerConsoleDeps } from './container-console.js';
 
 const principal = {
@@ -86,7 +86,7 @@ describe('handleContainerConsole', () => {
 		const { call, seen, records } = setup({
 			upstream: () =>
 				new Response('bytes', {
-					headers: { 'content-length': '5', 'x-skiff-file-name': encodeURIComponent('a"b.txt') }
+					headers: { 'content-length': '5', 'x-yoal-file-name': encodeURIComponent('a"b.txt') }
 				})
 		});
 		expect((await call('files', {}, '?path=relative')).status).toBe(400);

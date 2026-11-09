@@ -19,7 +19,7 @@ ALTER TABLE database_replicas ADD COLUMN rebuild_on_purge INTEGER NOT NULL DEFAU
 -- Counts promotions; replicas follow the generation they were created under.
 ALTER TABLE databases ADD COLUMN primary_generation INTEGER NOT NULL DEFAULT 0;
 
--- One row per primary that serves (or last served) replicas: the sealed `skiff_repl` password
+-- One row per primary that serves (or last served) replicas: the sealed `yoal_repl` password
 -- and what the primary's node last applied. Deleted once the teardown is confirmed.
 CREATE TABLE IF NOT EXISTS database_replication (
   database_id TEXT PRIMARY KEY,

@@ -3,13 +3,13 @@ import { principalStub } from './principal-stub.test-support';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_FEATURES, nodeCapabilities } from '@skiff/contracts';
-import { LocalObjectStore, buildPrincipal, createCore, type Core } from '@skiff/core';
-import { createDb } from '@skiff/db';
+import { DEFAULT_FEATURES, nodeCapabilities } from '@yoal/contracts';
+import { LocalObjectStore, buildPrincipal, createCore, type Core } from '@yoal/core';
+import { createDb } from '@yoal/db';
 
 /** The read-replica MCP tools (list/create/delete; promotion is never exposed) against a real core. */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-mcp-db-replicas-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-mcp-db-replicas-'));
 const opened = createDb({ path: ':memory:' });
 const realCore: Core = createCore({
 	db: opened.db,
@@ -32,7 +32,7 @@ mock.module('./core', () => ({ core: realCore }));
 mock.module('./config', () => ({ platformOrigin: 'https://control.test', authSecret: 'test-secret' }));
 mock.module('./principal', () => principalStub({ principalFromMcp: () => null }));
 
-const { skiffToolDefinitions } = await import('./mcp');
+const { yoalToolDefinitions } = await import('./mcp');
 const { assistantTools } = await import('./assistant/tools');
 const { CONFIRM_TOOLS } = await import('./assistant/confirm-policy');
 
@@ -73,10 +73,10 @@ describe('database replica tools', () => {
 	});
 
 	test('promotion is not an MCP tool; removal is destructive; adding asks first in the assistant', () => {
-		const names = skiffToolDefinitions(owner).map((entry) => entry.name);
+		const names = yoalToolDefinitions(owner).map((entry) => entry.name);
 		expect(names).toEqual(expect.arrayContaining(['list_database_replicas', 'create_database_replica', 'delete_database_replica']));
 		expect(names.some((name) => name.includes('promote_database') || name.includes('replica_promote'))).toBe(false);
-		const remove = skiffToolDefinitions(owner).find((entry) => entry.name === 'delete_database_replica');
+		const remove = yoalToolDefinitions(owner).find((entry) => entry.name === 'delete_database_replica');
 		expect(remove?.config.annotations).toMatchObject({ destructiveHint: true });
 		expect(CONFIRM_TOOLS.has('create_database_replica')).toBe(true);
 	});

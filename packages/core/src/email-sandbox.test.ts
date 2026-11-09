@@ -2,8 +2,8 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import { DEFAULT_FEATURES, EMAIL_SANDBOX_ADDRESS_LIMITS, mailStateSchema, type MailInject } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import { DEFAULT_FEATURES, EMAIL_SANDBOX_ADDRESS_LIMITS, mailStateSchema, type MailInject } from '@yoal/contracts';
 import type { AlertMessage, EmailMessage } from './config.ts';
 import type { EmailDnsResolver } from './email.ts';
 import { createCore, type Core } from './index.ts';
@@ -12,7 +12,7 @@ import { buildPrincipal } from './orgs.ts';
 
 /** Email sandbox flows (docs/EMAIL.md §4.3, §7.3): verified recipients and production access requests. */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-email-sandbox-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-email-sandbox-'));
 const opened = createDb({ path: ':memory:' });
 let clock = Date.parse('2026-11-07T10:00:00Z');
 
@@ -39,7 +39,7 @@ const core: Core = createCore({
 	version: '0.1.0',
 	config: {
 		dataDir: dir,
-		platformOrigin: 'https://control.skiff.test',
+		platformOrigin: 'https://control.yoal.test',
 		contentDomain: 'sites.test',
 		objectStore: new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123'),
 		masterKey: new Uint8Array(32).fill(7),
@@ -91,7 +91,7 @@ function lastToken(): string {
 beforeAll(async () => {
 	opened.sqlite.run('CREATE TABLE IF NOT EXISTS "user" (id TEXT PRIMARY KEY, email TEXT, name TEXT, role TEXT)');
 	opened.sqlite.run('CREATE TABLE IF NOT EXISTS organization (id TEXT PRIMARY KEY, name TEXT, slug TEXT, createdAt TEXT)');
-	opened.sqlite.run(`INSERT INTO "user" (id, email, name) VALUES ('user_owner', 'owner@tenant.test', 'Owner'), ('user_admin', 'admin@skiff.test', 'Admin')`);
+	opened.sqlite.run(`INSERT INTO "user" (id, email, name) VALUES ('user_owner', 'owner@tenant.test', 'Owner'), ('user_admin', 'admin@yoal.test', 'Admin')`);
 	opened.sqlite.run(`INSERT INTO organization (id, name, slug) VALUES ('org_t', 'Tenant Ltd', 'tenant')`);
 
 	// A mail node and a verified domain for the tenant, so sends reach the sandbox check.
@@ -121,10 +121,10 @@ describe('sandbox recipients', () => {
 		expect(mail.length).toBe(smtpBefore);
 		const { payload, text } = lastQueued();
 		// Past the sandbox (the address isn't verified yet), logged under the org, sent as the platform.
-		expect(payload).toMatchObject({ orgId: 'org_t', from: 'no-reply@sites.test', recipients: ['ada@gmail.com'], tags: { skiff: 'sandbox-verification' } });
+		expect(payload).toMatchObject({ orgId: 'org_t', from: 'no-reply@sites.test', recipients: ['ada@gmail.com'], tags: { yoal: 'sandbox-verification' } });
 		expect(text).toContain('Tenant Ltd');
 		expect(text).toContain('owner@tenant.test');
-		expect(text).toContain('https://control.skiff.test/verify-email-address?token=');
+		expect(text).toContain('https://control.yoal.test/verify-email-address?token=');
 		expect(text).toContain('Auto-Submitted: auto-generated');
 		expect(core.email.listMessages(owner)[0]).toMatchObject({ from: 'no-reply@sites.test', recipients: [{ address: 'ada@gmail.com', status: 'accepted' }] });
 		expect(core.email.listSandboxAddresses(viewer).map((entry) => entry.address)).toEqual(['ada@gmail.com']);
@@ -248,7 +248,7 @@ describe('production access', () => {
 		const created = await core.email.requestProductionAccess(ownerKey, request);
 		expect(created).toMatchObject({ status: 'pending', orgName: 'Tenant Ltd', expectedDailyVolume: 500, requestedBy: { id: 'user_owner', email: 'owner@tenant.test' } });
 		expect(alerts.at(-1)).toMatchObject({ key: `email.access_request.${created.id}`, severity: 'info' });
-		expect(alerts.at(-1)!.detail).toContain('https://control.skiff.test/email/requests');
+		expect(alerts.at(-1)!.detail).toContain('https://control.yoal.test/email/requests');
 		await expect(core.email.requestProductionAccess(owner, request)).rejects.toThrow(/already waiting/);
 		expect(core.email.accessRequest(viewer)?.id).toBe(created.id);
 	});

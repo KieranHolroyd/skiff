@@ -9,8 +9,8 @@
 	import WebhookIcon from '@lucide/svelte/icons/webhook';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
@@ -40,12 +40,12 @@
 	const ready = $derived(canEdit && !data.inFlight);
 	const email = $derived(data.email.values);
 	const alerts = $derived(data.alerts.values);
-	const passwordSaved = $derived(data.email.secretsSet.includes('SKIFF_SMTP_PASSWORD'));
+	const passwordSaved = $derived(data.email.secretsSet.includes('YOAL_SMTP_PASSWORD'));
 	const sms = $derived(data.sms.values);
-	const authTokenSaved = $derived(data.sms.secretsSet.includes('SKIFF_TWILIO_AUTH_TOKEN'));
-	const webhookSecretSaved = $derived(data.alerts.secretsSet.includes('SKIFF_ALERT_WEBHOOK_SECRET'));
+	const authTokenSaved = $derived(data.sms.secretsSet.includes('YOAL_TWILIO_AUTH_TOKEN'));
+	const webhookSecretSaved = $derived(data.alerts.secretsSet.includes('YOAL_ALERT_WEBHOOK_SECRET'));
 	const smsNumbers = $derived(
-		(alerts.SKIFF_ALERT_SMS ?? '')
+		(alerts.YOAL_ALERT_SMS ?? '')
 			.split(',')
 			.map((n) => n.trim())
 			.filter(Boolean)
@@ -61,7 +61,7 @@
 		askConfirm({
 			title: 'Remove the SMTP settings?',
 			description:
-				'Skiff stops sending email: sign-in links, invitations and email alerts are only written to the server log until you set it up again. Passkey and GitHub sign-in keep working.',
+				'Yoal stops sending email: sign-in links, invitations and email alerts are only written to the server log until you set it up again. Passkey and GitHub sign-in keep working.',
 			confirmLabel: 'Remove',
 			tone: 'danger',
 			action: '?/removeEmail'
@@ -73,7 +73,7 @@
 			title: 'Remove the Twilio settings?',
 			description: smsNumbers.length
 				? 'SMS alerts stop. The numbers stay listed under Alerts and start receiving texts again if you set Twilio up later.'
-				: 'Skiff stops being able to send SMS.',
+				: 'Yoal stops being able to send SMS.',
 			confirmLabel: 'Remove',
 			tone: 'danger',
 			action: '?/removeSms'
@@ -94,7 +94,7 @@
 
 </script>
 
-<svelte:head><title>Notifications · Settings · Skiff</title></svelte:head>
+<svelte:head><title>Notifications · Settings · Yoal</title></svelte:head>
 
 <SettingsHeader id="notifications" />
 
@@ -111,7 +111,7 @@
 	<Panel
 		title="Outbound email"
 		icon={MailIcon}
-		description="Skiff's own mail: sign-in links, invitations and email alerts. Organisations send through the mail server in Email instead. Any SMTP server works; Amazon SES is the tested default."
+		description="Yoal's own mail: sign-in links, invitations and email alerts. Organisations send through the mail server in Email instead. Any SMTP server works; Amazon SES is the tested default."
 	>
 		{#snippet actions()}
 			<StatusBadge
@@ -124,16 +124,16 @@
 				<div class="space-y-1">
 					<dt class="text-xs text-muted-foreground">Server</dt>
 					<dd class="font-mono text-sm break-all">
-						{email.SKIFF_SMTP_HOST}:{email.SKIFF_SMTP_PORT ?? '587'}
+						{email.YOAL_SMTP_HOST}:{email.YOAL_SMTP_PORT ?? '587'}
 					</dd>
 				</div>
 				<div class="space-y-1">
 					<dt class="text-xs text-muted-foreground">From</dt>
-					<dd class="text-sm break-all">{email.SKIFF_SMTP_FROM ?? '—'}</dd>
+					<dd class="text-sm break-all">{email.YOAL_SMTP_FROM ?? '—'}</dd>
 				</div>
 				<div class="space-y-1">
 					<dt class="text-xs text-muted-foreground">Username</dt>
-					<dd class="font-mono text-sm break-all">{email.SKIFF_SMTP_USER ?? '—'}</dd>
+					<dd class="font-mono text-sm break-all">{email.YOAL_SMTP_USER ?? '—'}</dd>
 				</div>
 			</dl>
 		{:else}
@@ -141,7 +141,7 @@
 				icon={MailIcon}
 				compact
 				title="Email is not set up"
-				description="Until it is, sign-in links and invitations are only written to the server log (journalctl -u skiff-control-plane)."
+				description="Until it is, sign-in links and invitations are only written to the server log (journalctl -u yoal-control-plane)."
 			>
 				{#if canEdit}
 					<Button onclick={() => (emailOpen = true)} disabled={!ready}
@@ -198,11 +198,11 @@
 				</div>
 				<div class="space-y-1">
 					<dt class="text-xs text-muted-foreground">Account SID</dt>
-					<dd class="font-mono text-sm break-all">{sms.SKIFF_TWILIO_ACCOUNT_SID}</dd>
+					<dd class="font-mono text-sm break-all">{sms.YOAL_TWILIO_ACCOUNT_SID}</dd>
 				</div>
 				<div class="space-y-1">
 					<dt class="text-xs text-muted-foreground">Sends from</dt>
-					<dd class="font-mono text-sm break-all">{sms.SKIFF_TWILIO_FROM}</dd>
+					<dd class="font-mono text-sm break-all">{sms.YOAL_TWILIO_FROM}</dd>
 				</div>
 			</dl>
 		{:else}
@@ -256,10 +256,10 @@
 					<dt class="flex items-center gap-1.5 text-xs text-muted-foreground">
 						<WebhookIcon class="size-3.5" />Webhook
 					</dt>
-					<dd class="font-mono text-sm break-all">{alerts.SKIFF_ALERT_WEBHOOK ?? '—'}</dd>
-					{#if alerts.SKIFF_ALERT_WEBHOOK}
+					<dd class="font-mono text-sm break-all">{alerts.YOAL_ALERT_WEBHOOK ?? '—'}</dd>
+					{#if alerts.YOAL_ALERT_WEBHOOK}
 						<dd class="text-xs text-muted-foreground">
-							{webhookSecretSaved ? 'Signed with X-Skiff-Signature' : 'Not signed'}
+							{webhookSecretSaved ? 'Signed with X-Yoal-Signature' : 'Not signed'}
 						</dd>
 					{/if}
 				</div>
@@ -267,7 +267,7 @@
 					<dt class="flex items-center gap-1.5 text-xs text-muted-foreground">
 						<MailIcon class="size-3.5" />Email
 					</dt>
-					<dd class="text-sm break-all">{alerts.SKIFF_ALERT_EMAIL ?? '—'}</dd>
+					<dd class="text-sm break-all">{alerts.YOAL_ALERT_EMAIL ?? '—'}</dd>
 				</div>
 				<div class="space-y-1">
 					<dt class="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -350,7 +350,7 @@
 	bind:open={emailOpen}
 	icon={MailIcon}
 	title={data.email.configured ? 'Edit outbound email' : 'Set up outbound email'}
-	description="Skiff sends a test email to {data.adminEmail ??
+	description="Yoal sends a test email to {data.adminEmail ??
 		'you'} with these settings, and only saves them if it arrives at the server."
 	action="?/saveEmail"
 	submitLabel="Send test and save"
@@ -367,7 +367,7 @@
 					autocomplete="off"
 					spellcheck={false}
 					class="font-mono"
-					value={email.SKIFF_SMTP_HOST ?? ''}
+					value={email.YOAL_SMTP_HOST ?? ''}
 					placeholder="email-smtp.eu-west-2.amazonaws.com"
 					aria-invalid={fieldErrors.host ? 'true' : undefined}
 				/>
@@ -380,7 +380,7 @@
 					name="port"
 					inputmode="numeric"
 					class="font-mono"
-					value={email.SKIFF_SMTP_PORT ?? '587'}
+					value={email.YOAL_SMTP_PORT ?? '587'}
 					aria-invalid={fieldErrors.port ? 'true' : undefined}
 				/>
 				{#if fieldErrors.port}<Field.Error>{fieldErrors.port}</Field.Error>{/if}
@@ -393,7 +393,7 @@
 					autocomplete="off"
 					spellcheck={false}
 					class="font-mono"
-					value={email.SKIFF_SMTP_USER ?? ''}
+					value={email.YOAL_SMTP_USER ?? ''}
 				/>
 				{#if fieldErrors.user}<Field.Error>{fieldErrors.user}</Field.Error>{/if}
 			</Field.Field>
@@ -416,8 +416,8 @@
 				name="from"
 				required
 				autocomplete="off"
-				value={email.SKIFF_SMTP_FROM ?? ''}
-				placeholder="Skiff <noreply@example.com>"
+				value={email.YOAL_SMTP_FROM ?? ''}
+				placeholder="Yoal <noreply@example.com>"
 				aria-invalid={fieldErrors.from ? 'true' : undefined}
 			/>
 			{#if fieldErrors.from}<Field.Error>{fieldErrors.from}</Field.Error>
@@ -430,7 +430,7 @@
 				id="smtp-secure"
 				name="secure"
 				value="1"
-				checked={email.SKIFF_SMTP_SECURE === '1'}
+				checked={email.YOAL_SMTP_SECURE === '1'}
 			/>
 			<Field.Label for="smtp-secure" class="font-normal"
 				>Use implicit TLS (port 465). Leave off for STARTTLS on 587.</Field.Label
@@ -458,7 +458,7 @@
 				autocomplete="off"
 				spellcheck={false}
 				class="font-mono"
-				value={alerts.SKIFF_ALERT_WEBHOOK ?? ''}
+				value={alerts.YOAL_ALERT_WEBHOOK ?? ''}
 				placeholder="https://ntfy.sh/your-topic"
 				aria-invalid={fieldErrors.webhook ? 'true' : undefined}
 			/>
@@ -483,8 +483,8 @@
 			/>
 			{#if fieldErrors.webhookSecret}<Field.Error>{fieldErrors.webhookSecret}</Field.Error>
 			{:else}<Field.Description>
-					Signs each request with an HMAC-SHA256 <code>X-Skiff-Signature</code> header, so the receiver
-					can check it came from Skiff. Not used for Discord or Slack URLs.
+					Signs each request with an HMAC-SHA256 <code>X-Yoal-Signature</code> header, so the receiver
+					can check it came from Yoal. Not used for Discord or Slack URLs.
 				</Field.Description>{/if}
 		</Field.Field>
 		{#if webhookSecretSaved}
@@ -502,7 +502,7 @@
 				name="email"
 				type="email"
 				autocomplete="email"
-				value={alerts.SKIFF_ALERT_EMAIL ?? ''}
+				value={alerts.YOAL_ALERT_EMAIL ?? ''}
 				placeholder={data.adminEmail ?? 'ops@example.com'}
 				disabled={!data.email.configured}
 				aria-invalid={fieldErrors.email ? 'true' : undefined}
@@ -541,7 +541,7 @@
 	bind:open={smsOpen}
 	icon={MessageSquareTextIcon}
 	title={data.sms.configured ? 'Edit SMS' : 'Set up SMS'}
-	description="Skiff checks these credentials with Twilio before saving them. Nothing is sent and nothing is billed until you add a number under Alerts."
+	description="Yoal checks these credentials with Twilio before saving them. Nothing is sent and nothing is billed until you add a number under Alerts."
 	action="?/saveSms"
 	submitLabel="Verify and save"
 	size="lg"
@@ -556,7 +556,7 @@
 				autocomplete="off"
 				spellcheck={false}
 				class="font-mono"
-				value={sms.SKIFF_TWILIO_ACCOUNT_SID ?? ''}
+				value={sms.YOAL_TWILIO_ACCOUNT_SID ?? ''}
 				placeholder="AC…"
 				aria-invalid={fieldErrors.accountSid ? 'true' : undefined}
 			/>
@@ -585,7 +585,7 @@
 				autocomplete="off"
 				spellcheck={false}
 				class="font-mono"
-				value={sms.SKIFF_TWILIO_FROM ?? ''}
+				value={sms.YOAL_TWILIO_FROM ?? ''}
 				placeholder="+447700900000"
 				aria-invalid={fieldErrors.from ? 'true' : undefined}
 			/>

@@ -1,9 +1,9 @@
 /** Fixtures shared by the studio process and front tests. */
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { databaseEngines, type DatabaseEngine, type DatabaseStudioActivation } from '@skiff/contracts';
-import type { PluginLoader, StudioPlugin } from '@skiff/studio';
-import { createFakePlugin, type FakePluginOptions } from '@skiff/studio/fake';
+import { databaseEngines, type DatabaseEngine, type DatabaseStudioActivation } from '@yoal/contracts';
+import type { PluginLoader, StudioPlugin } from '@yoal/studio';
+import { createFakePlugin, type FakePluginOptions } from '@yoal/studio/fake';
 
 export function testActivation(
 	sessionId: string,
@@ -65,5 +65,5 @@ export function trackedFake(options: FakePluginOptions = {}) {
 }
 
 export function tempSocket(): string {
-	return join(tmpdir(), `skiff-studio-${Math.random().toString(36).slice(2, 10)}.sock`);
+	return join(tmpdir(), `yoal-studio-${Math.random().toString(36).slice(2, 10)}.sock`);
 }

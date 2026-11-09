@@ -1,6 +1,6 @@
 # Step-up verification ("Please verify it's you")
 
-Status: **Agreed and built (2026-11-09) → D186.** Enforcement ships behind `SKIFF_STEP_UP=1`; the
+Status: **Agreed and built (2026-11-09) → D186.** Enforcement ships behind `YOAL_STEP_UP=1`; the
 policy, plugin, API error mapping and VerifyDialog are in `apps/control-plane/src/lib/server/step-up/`
 and the catalog. Remaining work is listed in [IAM.md](./IAM.md) §13.
 
@@ -76,7 +76,7 @@ a cheap follow-up if anyone asks.
 
 ## 4. Which actions need it
 
-The registry lives in `@skiff/contracts` (`STEP_UP_ACTIONS`), so the REST, MCP, CLI and dashboard
+The registry lives in `@yoal/contracts` (`STEP_UP_ACTIONS`), so the REST, MCP, CLI and dashboard
 surfaces all read the same list. Each entry has a `level` (`window` | `always`) and a `tokens` rule
 (§7).
 
@@ -138,7 +138,7 @@ action's own audit entry gets `verifiedBy: <method>`.
 - `Principal` gains `verification?: { at: number; class: 'strong' | 'basic'; strongest: Class }`,
   filled in by `principalFromSession` with one extra query. The `userHasSecondFactor` query already
   answers most of it.
-- `requireStepUp(principal, action)` in `@skiff/contracts` throws `StepUpRequiredError`, next to
+- `requireStepUp(principal, action)` in `@yoal/contracts` throws `StepUpRequiredError`, next to
   `requirePermission`. Core services call it at the same point they check the permission, so form
   actions, REST, the assistant and MCP all get the same rule without per-route code.
 - Account-security and minting endpoints that are Better Auth's own (passkey register, twoFactor
@@ -170,7 +170,7 @@ action's own audit entry gets `verifiedBy: <method>`.
 API keys, CLI tokens and MCP tokens can't show a dialog, so:
 
 - `tokens: allow`: the token is allowed if its scopes permit the action. Minting the token already
-  needed step-up, so step-up happened when the token was created. This keeps `skif db credentials`
+  needed step-up, so step-up happened when the token was created. This keeps `yoal db credentials`
   and CI working.
 - `tokens: deny`: session only, the same idea as `canAdministerPlatform` today. Account security,
   minting new access, members, live shells.
@@ -180,7 +180,7 @@ so it gets the dialog.
 
 ## 8. Dev and tests
 
-- `SKIFF_STEP_UP=0|1`, defaulting to off in dev password-login mode the way `SKIFF_OWNER_2FA` does,
+- `YOAL_STEP_UP=0|1`, defaulting to off in dev password-login mode the way `YOAL_OWNER_2FA` does,
   so headless e2e keeps working. One e2e suite turns it on.
 - Unit tests: `chooseMethods` (every enrolment combination, and no downgrade), freshness (window
   edge, class upgrade and downgrade, clearing events), the registry vs. token rules, email-code
@@ -192,7 +192,7 @@ so it gets the dialog.
 
 - Re-auth through GitHub OAuth (`prompt=login` / `max_age`), because GitHub doesn't honour it reliably.
 - Remembering a device across sessions. The window belongs to the session and ends with it.
-- SMS. It isn't offered anywhere else in Skiff and it's weaker than email in practice (SIM swap).
+- SMS. It isn't offered anywhere else in Yoal and it's weaker than email in practice (SIM swap).
 - Org-configurable action lists.
 
 ## 10. Build order

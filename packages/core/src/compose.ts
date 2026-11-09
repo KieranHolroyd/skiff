@@ -4,7 +4,7 @@ import {
 	type ComposeRoute,
 	type ComposeService,
 	type ComposeSpec,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { ValidationError } from './errors.ts';
 
 /**
@@ -17,9 +17,9 @@ import { ValidationError } from './errors.ts';
  * Supported subset:
  *   - `services.<name>.image`, `command` (argv or a simple shell-form string), `environment`
  *     (map or `KEY=value` list), `depends_on`, `ports` (container port only), named `volumes`,
- *     `deploy.resources.limits.{memory,cpus}`, `x-skiff.healthPath`
+ *     `deploy.resources.limits.{memory,cpus}`, `x-yoal.healthPath`
  *   - top-level named `volumes`
- *   - `x-skiff.routes[]` for public routing (`service`, `port`, optional `host`, `healthPath`,
+ *   - `x-yoal.routes[]` for public routing (`service`, `port`, optional `host`, `healthPath`,
  *     `primary`)
  *
  * Deliberately unsupported: `build`, bind mounts, host networking, `privileged`, capabilities,
@@ -27,7 +27,7 @@ import { ValidationError } from './errors.ts';
  * not the default one. These are security boundaries, not missing conveniences.
  */
 
-const SUPPORTED_TOP_LEVEL = new Set(['version', 'name', 'services', 'volumes', 'networks', 'x-skiff']);
+const SUPPORTED_TOP_LEVEL = new Set(['version', 'name', 'services', 'volumes', 'networks', 'x-yoal']);
 const IGNORED_SERVICE_KEYS = new Set([
 	'container_name',
 	'hostname',
@@ -203,7 +203,7 @@ function parsePort(entry: unknown, path: string, unsupported: Unsupported[]): nu
 	const withoutProtocol = value.endsWith('/tcp') ? value.slice(0, -4) : value;
 	const parts = withoutProtocol.split(':');
 	if (parts.length > 2) {
-		unsupported.push({ path, reason: 'Host IP and host-port mapping are assigned by Skiff; use x-skiff.routes for public ports.' });
+		unsupported.push({ path, reason: 'Host IP and host-port mapping are assigned by Yoal; use x-yoal.routes for public ports.' });
 		return null;
 	}
 	const container = parts.at(-1)!;
@@ -353,7 +353,7 @@ export function parseComposeDocument(document: string | Record<string, unknown>)
 		order.push(name);
 
 		for (const key of Object.keys(raw)) {
-			if (['image', 'command', 'environment', 'depends_on', 'volumes', 'ports', 'expose', 'deploy', 'x-skiff'].includes(key))
+			if (['image', 'command', 'environment', 'depends_on', 'volumes', 'ports', 'expose', 'deploy', 'x-yoal'].includes(key))
 				continue;
 			if (UNSUPPORTED_SERVICE_KEYS.has(key)) {
 				if (key === 'privileged' && raw[key] !== true) continue;
@@ -362,7 +362,7 @@ export function parseComposeDocument(document: string | Record<string, unknown>)
 				continue;
 			}
 			if (IGNORED_SERVICE_KEYS.has(key)) {
-				warnings.push({ path: `services.${name}.${key}`, message: `\`${key}\` is managed by Skiff and ignored.` });
+				warnings.push({ path: `services.${name}.${key}`, message: `\`${key}\` is managed by Yoal and ignored.` });
 				continue;
 			}
 			if (key.startsWith('x-')) continue;
@@ -389,7 +389,7 @@ export function parseComposeDocument(document: string | Record<string, unknown>)
 				if (typeof entry === 'string' && entry.split(':').length === 2)
 					warnings.push({
 						path: `services.${name}.${field}[${index}]`,
-						message: `The host port in "${entry}" is ignored; Skiff assigns the public port from x-skiff.routes.`,
+						message: `The host port in "${entry}" is ignored; Yoal assigns the public port from x-yoal.routes.`,
 					});
 				const port = parsePort(entry, `services.${name}.${field}[${index}]`, unsupported);
 				if (port !== null && !ports.includes(port)) ports.push(port);
@@ -425,16 +425,16 @@ export function parseComposeDocument(document: string | Record<string, unknown>)
 			}
 		}
 
-		// A service-level x-skiff block may name the health path for its route.
+		// A service-level x-yoal block may name the health path for its route.
 		let healthPath: string | undefined;
-		if (raw['x-skiff'] !== undefined) {
-			if (!isRecord(raw['x-skiff'])) throw new ValidationError(`services.${name}.x-skiff must be a mapping.`);
-			const block = raw['x-skiff'];
+		if (raw['x-yoal'] !== undefined) {
+			if (!isRecord(raw['x-yoal'])) throw new ValidationError(`services.${name}.x-yoal must be a mapping.`);
+			const block = raw['x-yoal'];
 			for (const key of Object.keys(block))
-				if (key !== 'healthPath') unsupported.push({ path: `services.${name}.x-skiff.${key}`, reason: 'Only healthPath is supported here.' });
+				if (key !== 'healthPath') unsupported.push({ path: `services.${name}.x-yoal.${key}`, reason: 'Only healthPath is supported here.' });
 			if (block.healthPath !== undefined) {
 				if (typeof block.healthPath !== 'string' || !block.healthPath.startsWith('/'))
-					throw new ValidationError(`services.${name}.x-skiff.healthPath must start with "/".`);
+					throw new ValidationError(`services.${name}.x-yoal.healthPath must start with "/".`);
 				healthPath = block.healthPath;
 			}
 		}
@@ -455,13 +455,13 @@ export function parseComposeDocument(document: string | Record<string, unknown>)
 		});
 	}
 
-	const xskiff = root['x-skiff'];
+	const xyoal = root['x-yoal'];
 	let routeInputs: Array<Partial<ComposeRoute> & { service: string; port?: number }> = [];
-	if (xskiff !== undefined) {
-		if (!isRecord(xskiff)) throw new ValidationError('`x-skiff` must be a mapping.');
-		for (const key of Object.keys(xskiff))
-			if (key !== 'routes') unsupported.push({ path: `x-skiff.${key}`, reason: 'Only x-skiff.routes is supported.' });
-		routeInputs = parseRoutes(xskiff.routes, 'x-skiff.routes');
+	if (xyoal !== undefined) {
+		if (!isRecord(xyoal)) throw new ValidationError('`x-yoal` must be a mapping.');
+		for (const key of Object.keys(xyoal))
+			if (key !== 'routes') unsupported.push({ path: `x-yoal.${key}`, reason: 'Only x-yoal.routes is supported.' });
+		routeInputs = parseRoutes(xyoal.routes, 'x-yoal.routes');
 	}
 
 	// No explicit routes: expose the first service that declares a port, and warn about the rest.
@@ -470,8 +470,8 @@ export function parseComposeDocument(document: string | Record<string, unknown>)
 		if (first) {
 			routeInputs = [{ service: first.name, port: first.ports[0]!, primary: true }];
 			warnings.push({
-				path: 'x-skiff.routes',
-				message: `No routes declared; exposing "${first.name}" on port ${first.ports[0]}. Add x-skiff.routes to choose services and hostnames.`,
+				path: 'x-yoal.routes',
+				message: `No routes declared; exposing "${first.name}" on port ${first.ports[0]}. Add x-yoal.routes to choose services and hostnames.`,
 			});
 		}
 	}
@@ -480,8 +480,8 @@ export function parseComposeDocument(document: string | Record<string, unknown>)
 	const routes: ComposeRoute[] = routeInputs.map((route, index) => {
 		const service = byName.get(route.service);
 		const port = route.port ?? service?.ports[0];
-		if (!service) throw new ValidationError(`x-skiff.routes[${index}].service names unknown service "${route.service}".`);
-		if (port === undefined) throw new ValidationError(`x-skiff.routes[${index}] needs a port (service "${route.service}" declares none).`);
+		if (!service) throw new ValidationError(`x-yoal.routes[${index}].service names unknown service "${route.service}".`);
+		if (port === undefined) throw new ValidationError(`x-yoal.routes[${index}] needs a port (service "${route.service}" declares none).`);
 		if (!service.ports.includes(port))
 			throw new ValidationError(`Service "${route.service}" does not declare container port ${port}.`);
 		return {
@@ -526,7 +526,7 @@ export function assertComposeSupported(parsed: ParsedCompose): ComposeSpec {
 	if (parsed.unsupported.length === 0) return parsed.spec;
 	const lines = parsed.unsupported.slice(0, 8).map((entry) => `${entry.path}: ${entry.reason}`);
 	const more = parsed.unsupported.length > 8 ? `\n…and ${parsed.unsupported.length - 8} more.` : '';
-	throw new ValidationError(`This compose file uses features Skiff does not support:\n${lines.join('\n')}${more}`);
+	throw new ValidationError(`This compose file uses features Yoal does not support:\n${lines.join('\n')}${more}`);
 }
 
 /** Parse and refuse unsupported input in one step (the deploy path). */

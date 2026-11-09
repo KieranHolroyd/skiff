@@ -5,7 +5,7 @@
  */
 import { UsageError } from './errors.ts';
 
-/** Mirrors `operationLimits.bulkTargets` in @skiff/contracts. Keep in sync. */
+/** Mirrors `operationLimits.bulkTargets` in @yoal/contracts. Keep in sync. */
 export const MAX_BULK_TARGETS = 100;
 
 const durationUnits: Record<string, number> = {

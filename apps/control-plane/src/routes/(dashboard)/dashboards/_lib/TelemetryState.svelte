@@ -4,11 +4,11 @@
 	 * installed is a calm, normal state with a pointer to Settings → Telemetry; installed but not
 	 * answering is a warning with the server's reason. Nothing renders when it is available.
 	 */
-	import type { ObservabilitySchema } from '@skiff/contracts';
+	import type { ObservabilitySchema } from '@yoal/contracts';
 	import FeatherIcon from '@lucide/svelte/icons/feather';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Empty from '#lib/components/ui/empty/index.js';
 

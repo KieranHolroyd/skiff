@@ -19,7 +19,7 @@ import { confirmOrRefuse } from './run-operation.ts';
  * `PUT /api/v1/projects/:slug/workload` saves. Validation and admission stay on the platform.
  */
 
-const usage = `Usage: skif workload <command> [options]
+const usage = `Usage: yoal workload <command> [options]
 
 Commands:
   show <project>               Show the saved runtime spec and the running workload
@@ -50,11 +50,11 @@ Set options:
   -h, --help                   Show this help
 
 Examples:
-  skif workload show shop
-  skif workload set shop --engine node --port 8080 --memory 512M --idle-stop 300
-  skif workload set api --image ghcr.io/acme/api:1.4 --memory 1G
-  skif workload set shop --env NODE_ENV=production --secret STRIPE_KEY=2
-  skif workload reset shop --yes
+  yoal workload show shop
+  yoal workload set shop --engine node --port 8080 --memory 512M --idle-stop 300
+  yoal workload set api --image ghcr.io/acme/api:1.4 --memory 1G
+  yoal workload set shop --env NODE_ENV=production --secret STRIPE_KEY=2
+  yoal workload reset shop --yes
 
 The Variables tab's new secret values are not set here: create the secret first, then reference
 it by name. A reference without a version uses the latest version at activation.`;
@@ -114,12 +114,12 @@ export async function workloadCommand(argv: string[]): Promise<void> {
 	await show(argv);
 }
 
-/** Accept either `skif workload show <project>` or `skif workload show --project <project>`. */
+/** Accept either `yoal workload show <project>` or `yoal workload show --project <project>`. */
 function projectOf(args: ParsedArgs, index = 0): string {
 	const flag = args.string('project');
 	const positional = args.positionals[index];
 	const project = flag ?? positional;
-	if (!project) throw new UsageError('Name the project: skif workload show <project>.');
+	if (!project) throw new UsageError('Name the project: yoal workload show <project>.');
 	if (flag && positional && flag !== positional)
 		throw new UsageError(`Two different projects were given ("${flag}" and "${positional}").`);
 	return project;
@@ -131,7 +131,7 @@ async function show(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif workload show <project> [--json]');
+	rejectExtraPositionals(args, 1, 'Usage: yoal workload show <project> [--json]');
 	const project = projectOf(args);
 	const client = await authenticatedClient();
 	const [{ project: view, raw: projectRaw }, { spec, workload, raw }] = await Promise.all([
@@ -166,7 +166,7 @@ async function set(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif workload set <project> [options]');
+	rejectExtraPositionals(args, 1, 'Usage: yoal workload set <project> [options]');
 	const project = projectOf(args);
 	const client = await authenticatedClient();
 	const { project: view } = await client.getProject(project);
@@ -177,7 +177,7 @@ async function set(argv: string[]): Promise<void> {
 		);
 	if (view.runtime === 'function')
 		throw new CliError(
-			`Project "${project}" is a function; its runtime comes from skiff-function.json in the bundle.`,
+			`Project "${project}" is a function; its runtime comes from yoal-function.json in the bundle.`,
 			{ code: 'runtime_mismatch' },
 		);
 
@@ -267,7 +267,7 @@ async function reset(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif workload reset <project> [--yes]');
+	rejectExtraPositionals(args, 1, 'Usage: yoal workload reset <project> [--yes]');
 	const project = projectOf(args);
 	await confirmOrRefuse(
 		`Stop the workload for ${project} and clear its saved runtime spec? Releases are kept, but the app stays dark until it is configured and deployed again. [y/N] `,
@@ -288,7 +288,7 @@ async function capacity(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif workload capacity [--json]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal workload capacity [--json]');
 	const client = await authenticatedClient();
 	const { capacity: nodes, raw } = await client.getNodeCapacity();
 	if (args.boolean('json')) {

@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { isAbsolute, join, relative, sep } from 'node:path';
-import type { BuildJob, BuildLogChunk } from '@skiff/contracts';
+import type { BuildJob, BuildLogChunk } from '@yoal/contracts';
 import type { BuilderConfig } from './config.ts';
 import type { ControlClient } from './client.ts';
 import {

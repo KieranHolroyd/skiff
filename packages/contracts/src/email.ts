@@ -1,10 +1,10 @@
 import * as z from 'zod';
 
 /**
- * Email: Skiff's self-hosted SES (docs/EMAIL.md, D114–D120).
+ * Email: Yoal's self-hosted SES (docs/EMAIL.md, D114–D120).
  *
  * This module is shared by the control plane (`EmailService`), the agent (the mail bridge) and
- * `skiff-mail` (the MTA in `packages/mail`). It holds the wire shapes between them and the one
+ * `yoal-mail` (the MTA in `packages/mail`). It holds the wire shapes between them and the one
  * policy function every send path runs (`authorizeSend`, D117). Nothing here does I/O, so it is
  * safe in the dashboard bundle too.
  */
@@ -126,7 +126,7 @@ export function recipientAddress(recipient: z.infer<typeof emailRecipientSchema>
 
 // --- send input (EMAIL.md §5.1) ---------------------------------------------------------------
 
-/** Headers a caller may never set; Skiff owns them. Compared lowercased. */
+/** Headers a caller may never set; Yoal owns them. Compared lowercased. */
 export const EMAIL_RESERVED_HEADERS = new Set([
 	'from',
 	'sender',
@@ -199,8 +199,8 @@ export const emailSendSchema = z
 		if (Object.keys(input.tags).length > EMAIL_MAX_TAGS)
 			ctx.addIssue({ code: 'custom', path: ['tags'], message: `At most ${EMAIL_MAX_TAGS} tags.` });
 		for (const name of Object.keys(input.headers))
-			if (EMAIL_RESERVED_HEADERS.has(name.toLowerCase()) || name.toLowerCase().startsWith('x-skiff-'))
-				ctx.addIssue({ code: 'custom', path: ['headers', name], message: `${name} is set by Skiff.` });
+			if (EMAIL_RESERVED_HEADERS.has(name.toLowerCase()) || name.toLowerCase().startsWith('x-yoal-'))
+				ctx.addIssue({ code: 'custom', path: ['headers', name], message: `${name} is set by Yoal.` });
 	});
 export type EmailSendInput = z.input<typeof emailSendSchema>;
 export type EmailSend = z.infer<typeof emailSendSchema>;
@@ -411,7 +411,7 @@ export function spfInclude(platformDomain: string): string {
 }
 
 /**
- * Merge Skiff's include into an existing SPF record without duplicating it, keeping the
+ * Merge Yoal's include into an existing SPF record without duplicating it, keeping the
  * record's own `all` qualifier (or `~all` when there is none). With no SPF record it returns a
  * fresh one.
  */
@@ -424,7 +424,7 @@ export function mergeSpf(existing: string | null, include: string): string {
 	return [...terms.slice(0, allIndex), include, ...terms.slice(allIndex)].join(' ');
 }
 
-/** Whether an SPF record already carries Skiff's include. */
+/** Whether an SPF record already carries Yoal's include. */
 export function spfIncludes(record: string, include: string): boolean {
 	return record
 		.trim()
@@ -536,7 +536,7 @@ export function policyOrgFromState(state: MailState, orgId: string): EmailPolicy
 
 // --- outbox and injection (D117) ------------------------------------------------------------
 
-/** One message handed to `skiff-mail`: already rendered MIME, not yet DKIM-signed. */
+/** One message handed to `yoal-mail`: already rendered MIME, not yet DKIM-signed. */
 export const mailInjectSchema = z.object({
 	messageId: z.string().regex(/^em_[a-z0-9]{8,64}$/),
 	orgId: z.string(),
@@ -613,15 +613,15 @@ export const emailEventSchema = z.object({
 export type EmailEvent = z.infer<typeof emailEventSchema>;
 export type EmailEventInput = z.input<typeof emailEventSchema>;
 
-/** Agent → control plane: events pulled from `skiff-mail`, in seq order. */
+/** Agent → control plane: events pulled from `yoal-mail`, in seq order. */
 export const mailEventsBatchSchema = z.object({ events: z.array(emailEventSchema).max(1000) });
 
-/** Agent → control plane: outbox messages `skiff-mail` has spooled. */
+/** Agent → control plane: outbox messages `yoal-mail` has spooled. */
 export const mailOutboxAckSchema = z.object({
 	messageIds: z.array(z.string().regex(/^em_[a-z0-9]{8,64}$/)).max(500),
 });
 
-/** What `skiff-mail` returns from `GET /health` (the agent pushes state when `generation` is null or behind). */
+/** What `yoal-mail` returns from `GET /health` (the agent pushes state when `generation` is null or behind). */
 export const mailHealthSchema = z.object({
 	ok: z.boolean(),
 	generation: z.number().int().nullable(),
@@ -659,7 +659,7 @@ export interface EmailRecordCheck extends EmailDnsRecord {
 	ok: boolean;
 	/** What public DNS returned, for the dashboard's "found" column. */
 	found: string[];
-	/** Set when Skiff created or updated the record through Cloudflare. */
+	/** Set when Yoal created or updated the record through Cloudflare. */
 	managed: boolean;
 	note: string | null;
 }

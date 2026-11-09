@@ -1,6 +1,6 @@
 import { resolve } from '$app/paths';
-import { createLibrary, filesBySlug } from '@skiff/docs';
-import { createDocsDatabase } from '@skiff/docs/database';
+import { createLibrary, filesBySlug } from '@yoal/docs';
+import { createDocsDatabase } from '@yoal/docs/database';
 import { platformOrigin } from './config';
 import { platformVersion } from './version';
 

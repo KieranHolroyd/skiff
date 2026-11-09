@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { STUDIO_SESSION_HEADER, STUDIO_TOKEN_HEADER, type Principal } from '@skiff/contracts';
-import { NDJSON_CONTENT_TYPE, decodeEvents, encodeEvent } from '@skiff/studio/protocol';
+import { STUDIO_SESSION_HEADER, STUDIO_TOKEN_HEADER, type Principal } from '@yoal/contracts';
+import { NDJSON_CONTENT_TYPE, decodeEvents, encodeEvent } from '@yoal/studio/protocol';
 import {
 	STUDIO_MAX_BODY_BYTES,
 	handleStudioCall,
@@ -65,7 +65,7 @@ function setup(
 }
 
 function request(body: unknown, init: RequestInit = {}): Request {
-	return new Request('http://skiff.test/databases/app-db/studio/api/x', {
+	return new Request('http://yoal.test/databases/app-db/studio/api/x', {
 		method: 'POST',
 		headers: { 'content-type': 'application/json' },
 		body: typeof body === 'string' ? body : JSON.stringify(body),
@@ -126,7 +126,7 @@ describe('studio proxy: refusals', () => {
 				controller.close();
 			}
 		});
-		const req = new Request('http://skiff.test/x', {
+		const req = new Request('http://yoal.test/x', {
 			method: 'POST',
 			body: stream,
 			// @ts-expect-error Bun/undici need duplex for a stream body.

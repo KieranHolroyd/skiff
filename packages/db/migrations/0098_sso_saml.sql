@@ -6,7 +6,7 @@
 --
 --   issuer                  the IdP entity id (manual entry, or imported from IdP metadata)
 --   client_id                '' (SAML has no OAuth client)
---   client_secret_sealed     '' (no client secret; the IdP's private key never reaches Skiff)
+--   client_secret_sealed     '' (no client secret; the IdP's private key never reaches Yoal)
 --   discovery_url            the IdP metadata URL, when one was imported
 --   authorization/token/jwks NULL
 --   scopes_json              unused by SAML; the 0087 default stays for the row shape

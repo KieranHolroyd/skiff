@@ -2,12 +2,12 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
+import { createDb } from '@yoal/db';
 import { buildPrincipal } from './orgs.ts';
 import { createCore, type Core } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-cluster-config-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-cluster-config-'));
 const opened = createDb({ path: ':memory:' });
 const core: Core = createCore({
 	db: opened.db,
@@ -41,7 +41,7 @@ describe('cluster configuration', () => {
 			storage: { maxTargets: 2 },
 			controlPlane: { leaseTtlSeconds: 30, renewSeconds: 5 },
 			failover: { enabled: false, graceSeconds: 120 },
-			shares: { mountRoot: '/run/skiff-shares' },
+			shares: { mountRoot: '/run/yoal-shares' },
 		});
 	});
 

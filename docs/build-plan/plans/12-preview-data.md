@@ -137,7 +137,7 @@ Implementation:
 
 ## Rollout
 
-`SKIFF_FEATURE_PREVIEW_DATA` off by default. Start with `dataMode: none` for existing static
+`YOAL_FEATURE_PREVIEW_DATA` off by default. Start with `dataMode: none` for existing static
 previews, then `schema-seed` for one repo, then `fork` for trusted branches. Keep previews
 protected by default.
 
@@ -146,7 +146,7 @@ protected by default.
 - Same-instance clone vs a new instance per preview: same-instance is cheap and fast; a new instance
   is better isolation. Start same-instance with a scoped role.
 - Do we need a per-preview bucket or is a prefix enough? Prefix for v1; bucket flag later.
-- How do we seed? Use the project's `seed` command from `skiff.yaml`; no built-in fixture.
+- How do we seed? Use the project's `seed` command from `yoal.yaml`; no built-in fixture.
 
 ## File ownership
 

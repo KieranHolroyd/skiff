@@ -47,7 +47,7 @@ describe('workload spec idleStopSeconds', () => {
 			runtime: 'process',
 			status: 'running',
 			release: 'a'.repeat(64),
-			upstream: 'unix//run/skiff-workloads/prj_a.sock',
+			upstream: 'unix//run/yoal-workloads/prj_a.sock',
 			memoryMb: 128,
 			cpus: 1,
 			port: 3000,

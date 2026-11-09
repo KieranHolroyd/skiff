@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { Cell, Column } from '@skiff/studio/protocol';
+import type { Cell, Column } from '@yoal/studio/protocol';
 import {
 	addInsert,
 	buildChanges,

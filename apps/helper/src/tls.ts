@@ -36,7 +36,7 @@ export interface DatabaseTlsState {
 export interface DatabaseTlsOptions {
 	runner: TlsCommandRunner;
 	opensslPath: string;
-	/** Usually /run/skiff-workloads. */
+	/** Usually /run/yoal-workloads. */
 	runtimeDir: string;
 	id: string;
 	/** Postgres network alias, used as the certificate CN/SAN. */
@@ -137,7 +137,7 @@ export async function generateDatabaseTls(options: DatabaseTlsOptions): Promise<
 			'-days',
 			String(CA_VALIDITY_DAYS),
 			'-subj',
-			'/CN=Skiff managed database CA',
+			'/CN=Yoal managed database CA',
 			'-keyout',
 			caKey,
 			'-out',

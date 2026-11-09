@@ -19,13 +19,13 @@
 		type ForgeConnectionView,
 		type ForgeKind,
 		type ForgeWebhookView
-	} from '@skiff/contracts';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
-	import ForgeMark from '#lib/components/skiff/ForgeMark.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import GitHubMark from '#lib/components/skiff/GitHubMark.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	} from '@yoal/contracts';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
+	import DetailList from '#lib/components/yoal/DetailList.svelte';
+	import ForgeMark from '#lib/components/yoal/ForgeMark.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import GitHubMark from '#lib/components/yoal/GitHubMark.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
@@ -90,7 +90,7 @@
 		askConfirm({
 			title: `Remove ${connection.name}?`,
 			description:
-				'Skiff deletes the webhooks it created there. Git builds and pipelines for its repositories keep their settings but stop receiving events, clone with the build node’s own credentials, and post no statuses.',
+				'Yoal deletes the webhooks it created there. Git builds and pipelines for its repositories keep their settings but stop receiving events, clone with the build node’s own credentials, and post no statuses.',
 			confirmLabel: 'Remove connection',
 			tone: 'danger',
 			action: '?/remove',
@@ -101,7 +101,7 @@
 	function removeHook(connection: ForgeConnectionView, hook: ForgeWebhookView) {
 		askConfirm({
 			title: `Remove the webhook on ${hook.path}?`,
-			description: `${hook.scope === 'namespace' ? 'Repositories under it' : 'The repository'} stop sending events to Skiff unless a hand-made webhook remains.`,
+			description: `${hook.scope === 'namespace' ? 'Repositories under it' : 'The repository'} stop sending events to Yoal unless a hand-made webhook remains.`,
 			confirmLabel: 'Remove webhook',
 			tone: 'danger',
 			action: '?/removeWebhook',
@@ -112,12 +112,12 @@
 	const namespaceWord = (connection: ForgeConnectionView) => (connection.kind === 'gitlab' ? 'group' : 'organisation');
 </script>
 
-<svelte:head><title>Git providers · Settings · Skiff</title></svelte:head>
+<svelte:head><title>Git providers · Settings · Yoal</title></svelte:head>
 
 <SettingsHeader id="git" />
 
 <div class="space-y-6">
-	<Panel title="GitHub" icon={GitHubMark} description="GitHub connects through Skiff’s GitHub App, which has its own page.">
+	<Panel title="GitHub" icon={GitHubMark} description="GitHub connects through Yoal’s GitHub App, which has its own page.">
 		<div class="flex flex-wrap items-center justify-between gap-3">
 			<p class="flex items-center gap-2 text-sm">
 				{#if data.github.configured && data.github.installations > 0}
@@ -139,7 +139,7 @@
 		title="GitLab, Gitea and Forgejo"
 		icon={GitMergeIcon}
 		count={data.connections.length}
-		description="Connect an instance with an API token. Skiff then lists its repositories, creates their webhooks, clones private ones and posts commit statuses."
+		description="Connect an instance with an API token. Yoal then lists its repositories, creates their webhooks, clones private ones and posts commit statuses."
 	>
 		{#snippet actions()}
 			{#if data.canManage}
@@ -153,7 +153,7 @@
 				compact
 				title="No forge connected"
 				description={data.canManage
-					? 'gitlab.com, Codeberg and self-hosted GitLab, Gitea or Forgejo all work. You need an API token; Skiff checks it before saving.'
+					? 'gitlab.com, Codeberg and self-hosted GitLab, Gitea or Forgejo all work. You need an API token; Yoal checks it before saving.'
 					: 'An organisation owner or admin can connect GitLab, Gitea or Forgejo here.'}
 			>
 				{#if data.canManage}
@@ -266,8 +266,8 @@
 
 			{#snippet footer()}
 				<span>
-					Skiff adds a repository webhook when a git source or pipeline names the repository. A {namespaceWord(connection)} webhook
-					also lets pushes add repositories with .skiff/workflows to Pipelines{data.pipelineSetup.enabled ? '' : ' (turned off below)'}.
+					Yoal adds a repository webhook when a git source or pipeline names the repository. A {namespaceWord(connection)} webhook
+					also lets pushes add repositories with .yoal/workflows to Pipelines{data.pipelineSetup.enabled ? '' : ' (turned off below)'}.
 				</span>
 			{/snippet}
 		</Panel>
@@ -277,7 +277,7 @@
 		<Panel
 			title="Pipelines"
 			icon={WorkflowIcon}
-			description="Repositories under a watched group or organisation run their .skiff/workflows without being added by hand."
+			description="Repositories under a watched group or organisation run their .yoal/workflows without being added by hand."
 		>
 			<form
 				bind:this={autoForm}
@@ -339,7 +339,7 @@
 	<Panel title="What a connection does" icon={GitMergeIcon} description="The GitHub App’s features, through each forge’s API.">
 		<ul class="grid gap-4 sm:grid-cols-2">
 			<li class="space-y-1">
-				<p class="text-sm font-medium">Webhooks Skiff creates</p>
+				<p class="text-sm font-medium">Webhooks Yoal creates</p>
 				<p class="text-sm text-muted-foreground">No secret to copy: pushes and merge or pull requests arrive signed. Hand-made webhooks for the same repository are ignored.</p>
 			</li>
 			<li class="space-y-1">
@@ -359,7 +359,7 @@
 </div>
 
 {#if data.canManage}
-	<FormDialog bind:open={createOpen} icon={GitMergeIcon} title="Connect a forge" description="Skiff checks the token with the forge before saving it." action="?/create" submitLabel="Connect" size="lg">
+	<FormDialog bind:open={createOpen} icon={GitMergeIcon} title="Connect a forge" description="Yoal checks the token with the forge before saving it." action="?/create" submitLabel="Connect" size="lg">
 		<Field.Group>
 			<div class="grid gap-4 sm:grid-cols-[10rem_1fr]">
 				<Field.Field>
@@ -428,7 +428,7 @@
 			title={hookScope === 'namespace' ? `Watch a ${namespaceWord(editing)}` : 'Add a repository webhook'}
 			description={hookScope === 'namespace'
 				? `One webhook on the ${namespaceWord(editing)} delivers every repository in it${editing.kind === 'gitlab' ? ' (GitLab group webhooks need Premium or a self-managed instance with them)' : ''}.`
-				: 'Skiff adds these by itself for repositories it builds; use this to re-create one.'}
+				: 'Yoal adds these by itself for repositories it builds; use this to re-create one.'}
 			action="?/webhook"
 			submitLabel="Create webhook"
 		>

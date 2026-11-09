@@ -38,7 +38,7 @@ export type WarmPyodideResult = 'present' | 'warmed' | 'would-warm';
 
 const BUNDLE_SUFFIX = '.capnp.bin';
 /** Records which compatibility eras this cache was warmed for; eras can share one bundle. */
-const ERAS_MARKER = 'skiff-eras.json';
+const ERAS_MARKER = 'yoal-eras.json';
 
 /** Eras a previous warm recorded, sorted; empty when there is no marker. */
 export function warmedEras(dir: string): string[] {
@@ -98,7 +98,7 @@ export async function warmPyodideCache(options: WarmPyodideOptions): Promise<War
 		return 'would-warm';
 	}
 
-	const work = mkdtempSync(join(tmpdir(), 'skiff-pyodide-'));
+	const work = mkdtempSync(join(tmpdir(), 'yoal-pyodide-'));
 	writeFileSync(join(work, 'warm.py'), 'def on_fetch(request):\n    pass\n');
 	const scratches: string[] = [];
 	try {

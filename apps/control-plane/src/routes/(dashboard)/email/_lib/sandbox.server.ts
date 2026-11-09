@@ -3,7 +3,7 @@ import {
 	emailAccessRequestCreateSchema,
 	emailSandboxAddressCreateSchema,
 	type Principal
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { failStatus, formOptionalString, formString, toFormFailure } from '../../_lib/errors.js';
 import { fieldErrorsFrom } from '../../databases/_lib/forms.server.js';

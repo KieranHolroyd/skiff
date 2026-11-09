@@ -8,8 +8,8 @@
 	import TrashIcon from '@lucide/svelte/icons/trash';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import Notice from '#lib/components/skiff/Notice.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
@@ -51,7 +51,7 @@
 		askConfirm({
 			title: `Delete ${domain.name}?`,
 			description:
-				'Sends from this domain are refused straight away and its DKIM key is deleted. Records Skiff created in Cloudflare are removed; records you published yourself stay until you delete them.',
+				'Sends from this domain are refused straight away and its DKIM key is deleted. Records Yoal created in Cloudflare are removed; records you published yourself stay until you delete them.',
 			confirmLabel: 'Delete domain',
 			tone: 'danger',
 			typeToConfirm: domain.name,
@@ -61,7 +61,7 @@
 </script>
 
 <svelte:head>
-	<title>{domain.name} · Email · Skiff</title>
+	<title>{domain.name} · Email · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">
@@ -96,10 +96,10 @@
 	{#if page.url.searchParams.get('created') === '1' && domain.status !== 'verified'}
 		<Notice tone="info" title="Publish these records">
 			{#if domain.records.some((record) => record.managed)}
-				Skiff created the records it could in Cloudflare. DNS can take a few minutes to update; use
+				Yoal created the records it could in Cloudflare. DNS can take a few minutes to update; use
 				Check now to look again.
 			{:else}
-				Add the records below at your DNS provider, then use Check now. Skiff re-checks every domain
+				Add the records below at your DNS provider, then use Check now. Yoal re-checks every domain
 				daily.
 			{/if}
 		</Notice>
@@ -134,7 +134,7 @@
 			{:else}
 				Not checked yet.
 			{/if}
-			Skiff re-checks every domain daily{#if domain.verifiedAt}; verified
+			Yoal re-checks every domain daily{#if domain.verifiedAt}; verified
 				<time datetime={domain.verifiedAt}>{formatDate(domain.verifiedAt)}</time>{/if}.
 		{/snippet}
 	</Panel>

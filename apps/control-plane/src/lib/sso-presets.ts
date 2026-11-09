@@ -65,7 +65,7 @@ export interface SsoPreset {
 	fields: readonly SsoPresetField[];
 	/** Numbered steps at the IdP, in its own wording. The redirect URI is shown beside them. */
 	steps: readonly string[];
-	/** How (or whether) groups reach Skiff from this IdP. */
+	/** How (or whether) groups reach Yoal from this IdP. */
 	groups: string;
 	/** Where the steps start, when it can be worked out from the values. */
 	consoleUrl(values: SsoPresetValues): string | null;
@@ -169,7 +169,7 @@ const entra: SsoPreset = {
 	],
 	steps: [
 		'In the Microsoft Entra admin center, open Identity → Applications → App registrations and choose New registration.',
-		'Name it Skiff, choose “Accounts in this organizational directory only”, and add a Web redirect URI with the value shown here.',
+		'Name it Yoal, choose “Accounts in this organizational directory only”, and add a Web redirect URI with the value shown here.',
 		'Under Certificates & secrets, create a client secret and copy its Value (not the Secret ID).',
 		'Under Token configuration, add an optional claim of type ID: email. To map groups later, also choose Add groups claim → Security groups.',
 		'Copy the Application (client) ID and the Directory (tenant) ID from the Overview page.'
@@ -263,8 +263,8 @@ const okta: SsoPreset = {
 	steps: [
 		'In the Okta Admin Console, open Applications → Applications and choose Create App Integration.',
 		'Choose OIDC – OpenID Connect, then Web Application.',
-		'Name it Skiff, keep the Authorization Code grant, and set the Sign-in redirect URI to the value shown here.',
-		'Under Assignments, give access to the people or groups who should use Skiff.',
+		'Name it Yoal, keep the Authorization Code grant, and set the Sign-in redirect URI to the value shown here.',
+		'Under Assignments, give access to the people or groups who should use Yoal.',
 		'To map groups later, on the Sign On tab edit OpenID Connect ID Token and set Groups claim filter to groups, Matches regex, .*',
 		'Copy the client ID and client secret from the General tab.'
 	],
@@ -314,12 +314,12 @@ const auth0: SsoPreset = {
 	],
 	steps: [
 		'In the Auth0 Dashboard, open Applications → Applications and choose Create Application.',
-		'Name it Skiff and choose Regular Web Applications.',
+		'Name it Yoal and choose Regular Web Applications.',
 		'On the Settings tab, add the redirect URI shown here to Allowed Callback URLs and save.',
 		'Copy the Domain, Client ID and Client Secret from the same tab.'
 	],
 	groups:
-		'Auth0 has no groups claim of its own. A post-login Action can add one; set the groups claim below to its name (for example https://skiff/groups).',
+		'Auth0 has no groups claim of its own. A post-login Action can add one; set the groups claim below to its name (for example https://yoal/groups).',
 	consoleUrl: () => 'https://manage.auth0.com/',
 	resolve(values) {
 		const host = hostOf(required(values, 'domain', 'Auth0 domain'));
@@ -355,7 +355,7 @@ const onelogin: SsoPreset = {
 	],
 	steps: [
 		'In OneLogin Administration, open Applications → Applications and choose Add App.',
-		'Search for “OpenId Connect (OIDC)”, pick it and name it Skiff.',
+		'Search for “OpenId Connect (OIDC)”, pick it and name it Yoal.',
 		'On the Configuration tab, add the redirect URI shown here to Redirect URI’s.',
 		'On the SSO tab, set Application Type to Web and Token Endpoint Authentication Method to Basic, then copy the Client ID and Client Secret.',
 		'Under Access (or Users), grant the app to the roles or users who should sign in.'
@@ -395,7 +395,7 @@ const jumpcloud: SsoPreset = {
 	fields: [],
 	steps: [
 		'In the JumpCloud Admin Portal, open SSO Applications and choose Add New Application → Custom Application.',
-		'Choose Manage Single Sign-On (SSO) → Configure SSO with OIDC, and name it Skiff.',
+		'Choose Manage Single Sign-On (SSO) → Configure SSO with OIDC, and name it Yoal.',
 		'On the SSO tab, add the redirect URI shown here to Redirect URIs, set Client Authentication Type to Client Secret Basic, and set the Login URL to this dashboard’s address.',
 		'Under Attribute Mapping, keep the email and profile scopes. To map groups later, include the group attribute and name it groups.',
 		'Activate the app, copy the Client ID and Client Secret it shows once, and bind it to user groups on the User Groups tab.'
@@ -455,7 +455,7 @@ const pingone: SsoPreset = {
 		}
 	],
 	steps: [
-		'In the PingOne admin console, open Applications → Applications and add an application of type OIDC Web App named Skiff.',
+		'In the PingOne admin console, open Applications → Applications and add an application of type OIDC Web App named Yoal.',
 		'On the Configuration tab, add the redirect URI shown here to Redirect URIs and set Token Endpoint Authentication Method to Client Secret Basic.',
 		'On the Resources tab, allow the openid, profile and email scopes.',
 		'To map groups later, on Attribute Mappings add groups mapped to Group Names.',
@@ -519,10 +519,10 @@ const keycloak: SsoPreset = {
 	],
 	steps: [
 		'In the Keycloak admin console, switch to your realm and open Clients → Create client.',
-		'Keep OpenID Connect, set the client ID to skiff, and turn Client authentication on with the Standard flow.',
+		'Keep OpenID Connect, set the client ID to yoal, and turn Client authentication on with the Standard flow.',
 		'Add the redirect URI shown here to Valid redirect URIs and save.',
 		'Copy the client secret from the Credentials tab.',
-		'To map groups later, open Client scopes → skiff-dedicated → Add mapper → By configuration → Group Membership, with Token Claim Name groups and Full group path off.'
+		'To map groups later, open Client scopes → yoal-dedicated → Add mapper → By configuration → Group Membership, with Token Claim Name groups and Full group path off.'
 	],
 	groups: 'Keycloak sends group names in `groups` once a Group Membership mapper is added.',
 	consoleUrl(values) {
@@ -576,13 +576,13 @@ const authentik: SsoPreset = {
 		{
 			key: 'slug',
 			label: 'Application slug',
-			placeholder: 'skiff',
-			description: 'The slug of the application you create for Skiff.'
+			placeholder: 'yoal',
+			description: 'The slug of the application you create for Yoal.'
 		}
 	],
 	steps: [
 		'In the authentik admin interface, open Applications → Applications and choose Create with Provider (or Create with Wizard).',
-		'Name the application Skiff with slug skiff, and pick OAuth2/OpenID Provider.',
+		'Name the application Yoal with slug yoal, and pick OAuth2/OpenID Provider.',
 		'Set Client type to Confidential and add the redirect URI shown here as a Strict redirect URI.',
 		'Finish, then copy the Client ID and Client Secret from the provider.',
 		'Bind the application to the users or groups who should sign in, if it should not be open to everyone.'
@@ -634,12 +634,12 @@ function forgePreset(id: 'gitlab' | 'gitea' | 'forgejo'): SsoPreset {
 			id === 'gitlab'
 				? [
 						'In GitLab, open your group (or Admin → Applications on a self-managed instance) → Settings → Applications → Add new application.',
-						'Name it Skiff, paste the redirect URI shown here, keep Confidential on and tick the openid, profile and email scopes.',
+						'Name it Yoal, paste the redirect URI shown here, keep Confidential on and tick the openid, profile and email scopes.',
 						'Save, then copy the Application ID (client id) and Secret.'
 					]
 				: [
 						`In ${name}, open Settings → Applications (or Site administration → Integrations → Applications for an instance-wide app).`,
-						'Create an OAuth2 application named Skiff with the redirect URI shown here, keeping Confidential client on.',
+						'Create an OAuth2 application named Yoal with the redirect URI shown here, keeping Confidential client on.',
 						'Copy the client ID and client secret.'
 					],
 		groups:

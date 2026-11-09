@@ -6,7 +6,7 @@ import {
 	nodes,
 	projects,
 	workloads,
-} from '@skiff/db';
+} from '@yoal/db';
 import {
 	APP_VOLUME_ID_PREFIX,
 	APP_VOLUME_USAGE_WARN_PERCENT,
@@ -25,7 +25,7 @@ import {
 	type AppVolumeView,
 	type Principal,
 	type WorkloadVolumeMount,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { AppVolumeLifecycle } from './app-volume-lifecycle.ts';
 import { featureEnabled } from './config.ts';
@@ -102,7 +102,7 @@ export class AppVolumeService {
 		return featureEnabled(this.ctx.config, 'APP_VOLUMES');
 	}
 
-	/** Throws `feature_disabled` (404) while SKIFF_FEATURE_APP_VOLUMES is off. */
+	/** Throws `feature_disabled` (404) while YOAL_FEATURE_APP_VOLUMES is off. */
 	assertFeature(): void {
 		this.assertEnabled();
 	}
@@ -111,7 +111,7 @@ export class AppVolumeService {
 		if (!this.enabled())
 			throw new CoreError(
 				'feature_disabled',
-				'App volumes are not enabled on this platform (SKIFF_FEATURE_APP_VOLUMES).',
+				'App volumes are not enabled on this platform (YOAL_FEATURE_APP_VOLUMES).',
 				404,
 			);
 	}

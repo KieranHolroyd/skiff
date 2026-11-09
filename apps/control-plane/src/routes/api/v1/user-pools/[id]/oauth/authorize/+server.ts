@@ -1,5 +1,5 @@
 import type { RequestHandler } from './$types';
-import { userPoolSessionCookieName } from '@skiff/core';
+import { userPoolSessionCookieName } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import { route } from '#lib/server/api.js';
 

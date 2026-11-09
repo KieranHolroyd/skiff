@@ -1,11 +1,11 @@
-import type { AssistantAgentDetail, Principal } from '@skiff/contracts';
+import type { AssistantAgentDetail, Principal } from '@yoal/contracts';
 import { core } from '../core';
 import { sqlite } from '../db';
 import { ASSISTANT_SYSTEM } from './agents';
 
 /**
  * Owner-editable assistant details (Settings → Assistant → Instructions and tools). Provider
- * credentials stay in the environment (write-only, managed by `skiff-platform-config`); the prompt,
+ * credentials stay in the environment (write-only, managed by `yoal-platform-config`); the prompt,
  * model override and tool allowlist are ordinary settings in the `settings` table under one key.
  *
  * Reads are lenient: a malformed row falls back to the built-in defaults rather than breaking the

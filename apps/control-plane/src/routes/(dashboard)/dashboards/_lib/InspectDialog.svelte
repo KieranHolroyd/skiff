@@ -1,8 +1,8 @@
 <script lang="ts">
 	/** Inspect a panel: its rows, the SQL that ran with stats, the panel JSON, and a CSV download. */
-	import type { DashboardPanel, QueryResult } from '@skiff/contracts';
+	import type { DashboardPanel, QueryResult } from '@yoal/contracts';
 	import DownloadIcon from '@lucide/svelte/icons/download';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Dialog from '#lib/components/ui/dialog/index.js';
 	import * as Tabs from '#lib/components/ui/tabs/index.js';

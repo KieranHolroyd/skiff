@@ -4,7 +4,7 @@ import * as z from 'zod';
  * Functions: the fourth runtime tier (docs/FUNCTIONS.md, D110).
  *
  * A function is a Workers-compatible workload served by a pinned workerd process. This module is
- * the shared vocabulary for all of it: the `skiff-function.json` manifest a client uploads, the
+ * the shared vocabulary for all of it: the `yoal-function.json` manifest a client uploads, the
  * *resolved* runtime spec the control plane stores in the workload (what a node actually renders)
  * and the view the API, MCP and dashboard read.
  *
@@ -13,16 +13,16 @@ import * as z from 'zod';
  */
 
 /** Manifest file a function bundle must contain at its root (FN8). */
-export const FUNCTION_MANIFEST_FILE = 'skiff-function.json';
+export const FUNCTION_MANIFEST_FILE = 'yoal-function.json';
 /** Where the shim answers a health probe. Public, cheap and reveals nothing. */
-export const FUNCTION_HEALTH_PATH = '/__skiff/health';
+export const FUNCTION_HEALTH_PATH = '/__yoal/health';
 /**
  * Header the shim requires for its internal routes (`scheduled`, `queue`). Caddy always overwrites
  * it with "0" on the public proxy route, so a client can never reach them (FN9).
  */
-export const FUNCTION_INTERNAL_HEADER = 'x-skiff-internal';
+export const FUNCTION_INTERNAL_HEADER = 'x-yoal-internal';
 export const FUNCTION_INTERNAL_VALUE = '1';
-export const FUNCTION_INTERNAL_PREFIX = '/__skiff/';
+export const FUNCTION_INTERNAL_PREFIX = '/__yoal/';
 /**
  * Loopback port the node agent serves the Analytics Engine sink on (phase 2). A binding service
  * Worker forwards events here; the agent batches them into the telemetry channel.
@@ -30,8 +30,8 @@ export const FUNCTION_INTERNAL_PREFIX = '/__skiff/';
 export const FUNCTION_ANALYTICS_PORT = 8085;
 
 /**
- * The workerd release Skiff ships (FN1). The version doubles as the maximum compatibility date:
- * workerd refuses a date newer than the build. Bumped deliberately with a Skiff minor.
+ * The workerd release Yoal ships (FN1). The version doubles as the maximum compatibility date:
+ * workerd refuses a date newer than the build. Bumped deliberately with a Yoal minor.
  */
 export const WORKERD_PINNED_VERSION = '1.20261106.1';
 export const WORKERD_MAX_COMPATIBILITY_DATE = '2026-11-06';
@@ -47,7 +47,7 @@ export const FUNCTION_DEFAULT_MEMORY_MB = 128;
 export const FUNCTION_DEFAULT_IDLE_STOP_SECONDS = 300;
 /**
  * Python Workers (D121). A function whose `main` is a Python module runs on workerd's Pyodide
- * runtime: the `python_workers` flag is required (the control plane adds it), and the Skiff shim
+ * runtime: the `python_workers` flag is required (the control plane adds it), and the Yoal shim
  * becomes a separate JavaScript Worker that reaches the Python one over a service binding.
  */
 export const FUNCTION_PYTHON_COMPAT_FLAG = 'python_workers';
@@ -72,7 +72,7 @@ export const FUNCTION_PYTHON_BUNDLE_ERAS = ['2024-12-01', '2025-06-01', WORKERD_
  */
 export const FUNCTIONS_PYTHON_CAPABILITY = 'functions-python';
 /** Root of the pinned workerd installs on a node (FN1); the helper and installer use the same path. */
-export const WORKERD_INSTALL_DIR = '/usr/lib/skiff/workerd';
+export const WORKERD_INSTALL_DIR = '/usr/lib/yoal/workerd';
 
 /** True when the function's entry module is Python (D121). */
 export function functionIsPython(spec: { main: string; modules: Array<{ name: string; type: FunctionModuleType }> }): boolean {
@@ -202,7 +202,7 @@ export const FUNCTION_BINDING_PHASE: Readonly<Record<FunctionBindingType, number
 });
 
 /**
- * Which bindings this Skiff build can actually serve. A type may have a phase (the design's
+ * Which bindings this Yoal build can actually serve. A type may have a phase (the design's
  * roadmap) while remaining unimplemented here; the deploy validator refuses those with a clear
  * message instead of handing the node a binding it cannot back.
  */
@@ -360,7 +360,7 @@ export const functionRuntimeBindingSchema = z.discriminatedUnion('type', [
 	appBindingSchema.extend({
 		name: bindingName,
 		/**
-		 * Resolved target of a Skiff workload. Restricted to the shapes `upstreamFor` produces, so a
+		 * Resolved target of a Yoal workload. Restricted to the shapes `upstreamFor` produces, so a
 		 * hand-written spec cannot point a function at the agent socket or another local service.
 		 */
 		upstream: z
@@ -368,8 +368,8 @@ export const functionRuntimeBindingSchema = z.discriminatedUnion('type', [
 			.min(1)
 			.max(256)
 			.regex(
-				/^(?:unix\/\/run\/skiff-workloads\/[A-Za-z0-9_-]+\.sock|127\.0\.0\.1:[0-9]{1,5})$/,
-				'App binding upstreams are Skiff workload sockets or loopback ports.',
+				/^(?:unix\/\/run\/yoal-workloads\/[A-Za-z0-9_-]+\.sock|127\.0\.0\.1:[0-9]{1,5})$/,
+				'App binding upstreams are Yoal workload sockets or loopback ports.',
 			),
 	}),
 	durableObjectBindingSchema.extend({
@@ -500,7 +500,7 @@ export const functionRuntimeTriggersSchema = z.object({
 export type FunctionRuntimeTriggers = z.infer<typeof functionRuntimeTriggersSchema>;
 
 /**
- * `skiff-function.json`: what the user's bundler writes next to the modules (FN8). The control
+ * `yoal-function.json`: what the user's bundler writes next to the modules (FN8). The control
  * plane validates it and never bundles (D2).
  */
 export const functionManifestSchema = z

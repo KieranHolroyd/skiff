@@ -1,13 +1,13 @@
 import { and, desc, eq, ne, or } from "drizzle-orm";
 import { unzipSync } from "fflate";
-import { deployments, releases } from "@skiff/db";
+import { deployments, releases } from "@yoal/db";
 import {
   detectEnvNames,
   isEnvFileName,
   parseEnvFileNames,
   type DetectedEnvName,
   type Principal,
-} from "@skiff/contracts";
+} from "@yoal/contracts";
 import { parseManifest, type ManifestFile } from "./artifact.ts";
 import type { CoreContext } from "./context.ts";
 import type { DeploymentView } from "./deployments.ts";

@@ -2,7 +2,7 @@
 	import { enhance } from '$app/forms';
 	import { notify } from '#lib/actions.js';
 	import CodeBlock from '../../_lib/CodeBlock.svelte';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
 
 	/** The three steps from "nothing" to "runs on push". Without a repository the URL is a pattern. */
 	let {
@@ -19,11 +19,11 @@
 		webhookUrl: string;
 		hasRepository: boolean;
 		defaultBranch?: string;
-		/** Skiff's GitHub App covers the repository: no webhook step (docs/GITHUB.md). */
+		/** Yoal's GitHub App covers the repository: no webhook step (docs/GITHUB.md). */
 		viaGithubApp?: boolean;
-		/** A connected forge's webhook (created by Skiff) delivers the repository: its name (docs/FORGES.md). */
+		/** A connected forge's webhook (created by Yoal) delivers the repository: its name (docs/FORGES.md). */
 		viaForge?: string | null;
-		/** A connected forge serves the repository but no webhook of Skiff's covers it yet. */
+		/** A connected forge serves the repository but no webhook of Yoal's covers it yet. */
 		forgeMissing?: { name: string; error: string | null; canCreate: boolean } | null;
 		/** `not-selected` / `not-installed`: one click on GitHub makes the webhook step go away. */
 		coverage?: string | null;
@@ -74,7 +74,7 @@ jobs:
 					>actions/checkout</code
 				> work as is.
 			</p>
-			<CodeBlock code={example} label=".skiff/workflows/ci.yml" lang="yaml" />
+			<CodeBlock code={example} label=".yoal/workflows/ci.yml" lang="yaml" />
 		</div>
 	</li>
 	<li class="flex gap-3">
@@ -86,11 +86,11 @@ jobs:
 			{#if viaForge}
 				<p class="font-medium">Push</p>
 				<p class="text-muted-foreground">
-					Nothing to set up: Skiff created the webhook on {viaForge}, clones the repository and reports each
+					Nothing to set up: Yoal created the webhook on {viaForge}, clones the repository and reports each
 					run as a commit status.
 				</p>
 			{:else if forgeMissing}
-				<p class="font-medium">Let Skiff create the webhook on {forgeMissing.name}</p>
+				<p class="font-medium">Let Yoal create the webhook on {forgeMissing.name}</p>
 				<p class="text-muted-foreground">
 					{forgeMissing.error
 						? `The last attempt failed: ${forgeMissing.error}`
@@ -115,15 +115,15 @@ jobs:
 			{:else if viaGithubApp}
 				<p class="font-medium">Push</p>
 				<p class="text-muted-foreground">
-					Nothing to set up: Skiff’s GitHub App delivers this repository’s pushes and pull requests,
+					Nothing to set up: Yoal’s GitHub App delivers this repository’s pushes and pull requests,
 					clones it, and reports each run as a commit status.
 				</p>
 			{:else}
 				{#if manageUrl && (coverage === 'not-selected' || coverage === 'not-installed')}
 					<p class="font-medium">
 						{coverage === 'not-selected'
-							? 'Give Skiff’s GitHub App this repository'
-							: `Install Skiff’s GitHub App on ${owner ?? 'its owner'}`}
+							? 'Give Yoal’s GitHub App this repository'
+							: `Install Yoal’s GitHub App on ${owner ?? 'its owner'}`}
 					</p>
 					<p class="text-muted-foreground">
 						{coverage === 'not-selected'
@@ -144,7 +144,7 @@ jobs:
 					<p class="font-medium">Add a GitHub webhook</p>
 					<p class="text-muted-foreground">
 						Repository settings → Webhooks → Add webhook. Use the same secret you set here. Or install
-						Skiff’s GitHub App (Settings → GitHub) and skip this step.
+						Yoal’s GitHub App (Settings → GitHub) and skip this step.
 					</p>
 				{/if}
 				<dl class="grid grid-cols-[8rem_minmax(0,1fr)] items-center gap-x-3 gap-y-2 text-xs">

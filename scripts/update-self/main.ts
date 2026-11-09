@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 /**
- * skiff-update-self: pull the latest Skiff from GitHub, build it next to the running release,
+ * yoal-update-self: pull the latest Yoal from GitHub, build it next to the running release,
  * prove it boots, then hot-swap the control plane with automatic rollback.
  *
- * Installed by the installer as /usr/local/sbin/skiff-update-self, which runs this file from the
+ * Installed by the installer as /usr/local/sbin/yoal-update-self, which runs this file from the
  * *current* (known-good) release, so a broken updater in a new release can never block its own
  * rollback.
  */
@@ -80,18 +80,18 @@ import {
 	readLink,
 } from './updater.ts';
 
-const USAGE = `skiff-update-self — update the Skiff control plane from GitHub, reversibly
+const USAGE = `yoal-update-self — update the Yoal control plane from GitHub, reversibly
 
 Usage:
-  skiff-update-self [update] [options]   install the newest signed release if it is newer (semver)
-  skiff-update-self check [--json]       show the running and latest versions; change nothing
-  skiff-update-self plan [--json]        preflight the upgrade (disk, backup target, migrations)
-  skiff-update-self rollback [options]   switch back to the previous release (repeat to undo)
-  skiff-update-self status [--json]      show current/previous releases, verdicts and the last switch
-  skiff-update-self channel [canary|stable]  show or set this host's release channel
-  skiff-update-self recover [--boot]     resolve an interrupted update (--boot: filesystem only, at boot)
-  skiff-update-self self-test [--json]   qualify this updater binary (used before activating a new one)
-  skiff-update-self version              print this updater's identity
+  yoal-update-self [update] [options]   install the newest signed release if it is newer (semver)
+  yoal-update-self check [--json]       show the running and latest versions; change nothing
+  yoal-update-self plan [--json]        preflight the upgrade (disk, backup target, migrations)
+  yoal-update-self rollback [options]   switch back to the previous release (repeat to undo)
+  yoal-update-self status [--json]      show current/previous releases, verdicts and the last switch
+  yoal-update-self channel [canary|stable]  show or set this host's release channel
+  yoal-update-self recover [--boot]     resolve an interrupted update (--boot: filesystem only, at boot)
+  yoal-update-self self-test [--json]   qualify this updater binary (used before activating a new one)
+  yoal-update-self version              print this updater's identity
 
 update options:
   --source <mode>      auto (default): newest signed GitHub release, else build from source;
@@ -102,10 +102,10 @@ update options:
                        stable: only releases promoted by the Promote workflow. Remembered for
                        later runs. Never downgrades: a host ahead of stable waits for it.
   --ref <ref>          build this branch, tag or sha from source (implies --source build)
-  --repo <owner/name>  GitHub repository (default: from the current release, else KieranHolroyd/skiff)
+  --repo <owner/name>  GitHub repository (default: from the current release, else KieranHolroyd/yoal)
   --force              install even if not newer (rebuild/downgrade), or retry a release that failed
   --trigger <who>      cli (default) or dashboard; recorded in the status the dashboard shows
-  --no-agent           leave skiff-agent running its old binary (by default it restarts on the new
+  --no-agent           leave yoal-agent running its old binary (by default it restarts on the new
                        release, and back on rollback, so agent fixes take effect)
   --no-canary          skip the isolated pre-swap boot against a copy of the database
   --no-zero-downtime   stop the old release before starting the new one (no standby cutover)
@@ -118,33 +118,33 @@ update options:
 rollback options:
   --restore-db         also restore the database snapshot taken when the current release was activated
   --keep-db            run the previous code against the current (possibly newer) schema
-  --no-agent           do not restart skiff-agent on the previous release
+  --no-agent           do not restart yoal-agent on the previous release
   --dry-run            print the plan; change nothing
 
 Environment:
-  SKIFF_GITHUB_TOKEN   token for a private repository (or put it in /etc/skiff/github.token, 0600)
-  SKIFF_REPO, SKIFF_REF  defaults for --repo / --ref
-  SKIFF_UPDATE_SOURCE  default for --source (auto, download or build)
-  SKIFF_UPDATE_CHANNEL default channel until one is chosen (canary or stable)
-  SKIFF_UPDATER=source run the TypeScript updater from the current release instead of stage-0
+  YOAL_GITHUB_TOKEN   token for a private repository (or put it in /etc/yoal/github.token, 0600)
+  YOAL_REPO, YOAL_REF  defaults for --repo / --ref
+  YOAL_UPDATE_SOURCE  default for --source (auto, download or build)
+  YOAL_UPDATE_CHANNEL default channel until one is chosen (canary or stable)
+  YOAL_UPDATER=source run the TypeScript updater from the current release instead of stage-0
 
 Exit status: 0 updated / up to date / nothing to do, 1 nothing changed or rolled back to the old
 release (it is serving), 2 the old release could not be brought back (act now), 64 usage error.
 `;
 
 const layout = layoutFromEnv();
-const ETC_DIR = process.env.SKIFF_ETC_DIR ?? '/etc/skiff';
-const RUN_DIR = process.env.SKIFF_RUN_DIR ?? '/run/skiff';
-const ENV_FILE = join(ETC_DIR, 'skiff.env');
+const ETC_DIR = process.env.YOAL_ETC_DIR ?? '/etc/yoal';
+const RUN_DIR = process.env.YOAL_RUN_DIR ?? '/run/yoal';
+const ENV_FILE = join(ETC_DIR, 'yoal.env');
 const AGENT_ENV_FILE = join(ETC_DIR, 'agent.env');
 const MASTER_KEY_FILE = join(ETC_DIR, 'master.key');
 const SOCKETS = socketPaths(RUN_DIR);
-const UPDATE_COMMAND = '/usr/local/sbin/skiff-update-self';
-const STATUS_FILE = process.env.SKIFF_UPDATE_STATUS_FILE ?? SELF_UPDATE_DEFAULTS.statusFile;
-const LOG_FILE = process.env.SKIFF_UPDATE_LOG_FILE ?? SELF_UPDATE_DEFAULTS.logFile;
-const REQUEST_FILE = process.env.SKIFF_UPDATE_REQUEST_FILE ?? SELF_UPDATE_DEFAULTS.requestFile;
-const CHANNEL_FILE = process.env.SKIFF_UPDATE_CHANNEL_FILE ?? SELF_UPDATE_DEFAULTS.channelFile;
-const SYSTEMD_DIR = process.env.SKIFF_SYSTEMD_DIR ?? '/etc/systemd/system';
+const UPDATE_COMMAND = '/usr/local/sbin/yoal-update-self';
+const STATUS_FILE = process.env.YOAL_UPDATE_STATUS_FILE ?? SELF_UPDATE_DEFAULTS.statusFile;
+const LOG_FILE = process.env.YOAL_UPDATE_LOG_FILE ?? SELF_UPDATE_DEFAULTS.logFile;
+const REQUEST_FILE = process.env.YOAL_UPDATE_REQUEST_FILE ?? SELF_UPDATE_DEFAULTS.requestFile;
+const CHANNEL_FILE = process.env.YOAL_UPDATE_CHANNEL_FILE ?? SELF_UPDATE_DEFAULTS.channelFile;
+const SYSTEMD_DIR = process.env.YOAL_SYSTEMD_DIR ?? '/etc/systemd/system';
 
 const tty = process.stdout.isTTY;
 const paint = (code: number) => (s: string) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
@@ -198,14 +198,14 @@ const option = (name: string) => {
 };
 
 function usageError(text: string): never {
-	console.error(`skiff-update-self: ${text}\n\n${USAGE}`);
+	console.error(`yoal-update-self: ${text}\n\n${USAGE}`);
 	process.exit(64);
 }
 
 // ------------------------------------------------------------------- real host
 
 /**
- * Live update log for the dashboard (JSON Lines, root:skiff 0640). A fresh file per update run;
+ * Live update log for the dashboard (JSON Lines, root:yoal 0640). A fresh file per update run;
  * the control plane only reads it. Writing must never break an update, so every failure is silent
  * (after one console warning).
  */
@@ -234,14 +234,14 @@ function startUpdateLog(trigger: string): void {
 	try {
 		const dir = dirname(LOG_FILE);
 		mkdirSync(dir, { recursive: true, mode: 0o750 });
-		const gid = skiffGroupId();
+		const gid = yoalGroupId();
 		if (gid !== null) chownSync(dir, 0, gid);
 		chmodSync(dir, 0o750);
 		writeFileSync(LOG_FILE, '', { mode: 0o640 });
 		if (gid !== null) chownSync(LOG_FILE, 0, gid);
 		chmodSync(LOG_FILE, 0o640);
 		logEnabled = true;
-		appendLog('info', `Skiff self-update started from the ${trigger} at ${new Date().toISOString()}`);
+		appendLog('info', `Yoal self-update started from the ${trigger} at ${new Date().toISOString()}`);
 	} catch (error) {
 		logEnabled = false;
 		console.error(dim(`  (could not write ${LOG_FILE}: ${(error as Error).message})`));
@@ -322,7 +322,7 @@ async function runStreaming(cmd: string[], opts: { cwd?: string } = {}): Promise
 }
 
 function githubToken(): string | undefined {
-	if (process.env.SKIFF_GITHUB_TOKEN) return process.env.SKIFF_GITHUB_TOKEN;
+	if (process.env.YOAL_GITHUB_TOKEN) return process.env.YOAL_GITHUB_TOKEN;
 	const file = join(ETC_DIR, 'github.token');
 	return existsSync(file) ? readFileSync(file, 'utf8').trim() || undefined : undefined;
 }
@@ -331,13 +331,13 @@ function githubHeaders(accept: string): Record<string, string> {
 	const token = githubToken();
 	return {
 		Accept: accept,
-		'User-Agent': 'skiff-update-self',
+		'User-Agent': 'yoal-update-self',
 		'X-GitHub-Api-Version': '2022-11-28',
 		...(token ? { Authorization: `Bearer ${token}` } : {}),
 	};
 }
 
-const platformOrigin = () => readEnvFile(ENV_FILE).get('SKIFF_PLATFORM_ORIGIN')?.replace(/\/$/, '');
+const platformOrigin = () => readEnvFile(ENV_FILE).get('YOAL_PLATFORM_ORIGIN')?.replace(/\/$/, '');
 
 const probeOptions = () => ({ origin: platformOrigin() ?? null });
 
@@ -358,22 +358,22 @@ const unitState = (unit: string) =>
 
 // ------------------------------------------------------------- dashboard status
 
-let skiffGid: number | null | undefined;
-function skiffGroupId(): number | null {
-	if (skiffGid === undefined) {
-		const entry = run(['getent', 'group', 'skiff'], { quiet: true, allowFailure: true }).stdout;
+let yoalGid: number | null | undefined;
+function yoalGroupId(): number | null {
+	if (yoalGid === undefined) {
+		const entry = run(['getent', 'group', 'yoal'], { quiet: true, allowFailure: true }).stdout;
 		const gid = Number(entry.split(':')[2]);
-		skiffGid = Number.isInteger(gid) ? gid : null;
+		yoalGid = Number.isInteger(gid) ? gid : null;
 	}
-	return skiffGid;
+	return yoalGid;
 }
 
-/** root:skiff 0750 directory, root:skiff 0640 file: the control plane can read it, never write it. */
+/** root:yoal 0750 directory, root:yoal 0640 file: the control plane can read it, never write it. */
 function writeStatusFile(status: SelfUpdateStatus): void {
 	try {
 		const dir = dirname(STATUS_FILE);
 		mkdirSync(dir, { recursive: true, mode: 0o750 });
-		const gid = skiffGroupId();
+		const gid = yoalGroupId();
 		if (gid !== null) chownSync(dir, 0, gid);
 		chmodSync(dir, 0o750);
 		const tmp = `${STATUS_FILE}.tmp-${process.pid}`;
@@ -432,15 +432,15 @@ function outcomeMessage(result: UpdateResult): { outcome: SelfUpdateOutcome; mes
 function ensureTriggerUnits(): void {
 	ensureUpdateCommand();
 	let changed = false;
-	for (const [name, body] of Object.entries(triggerUnits({ requestFile: REQUEST_FILE, command: '/usr/local/sbin/skiff-update-self' }))) {
+	for (const [name, body] of Object.entries(triggerUnits({ requestFile: REQUEST_FILE, command: '/usr/local/sbin/yoal-update-self' }))) {
 		const path = join(SYSTEMD_DIR, name);
 		if (existsSync(path) && readFileSync(path, 'utf8') === body) continue;
 		writeFileSync(path, body, { mode: 0o644 });
 		changed = true;
 	}
-	// The control plane writes requests here; it must be the skiff user's, not root's.
+	// The control plane writes requests here; it must be the yoal user's, not root's.
 	mkdirSync(dirname(REQUEST_FILE), { recursive: true, mode: 0o750 });
-	run(['chown', 'skiff:skiff', dirname(REQUEST_FILE)], { quiet: true, allowFailure: true });
+	run(['chown', 'yoal:yoal', dirname(REQUEST_FILE)], { quiet: true, allowFailure: true });
 	if (changed) {
 		run(['systemctl', 'daemon-reload'], { quiet: true });
 		run(['systemctl', 'enable', '--now', TRIGGER_PATH_UNIT], { quiet: true, allowFailure: true });
@@ -536,7 +536,7 @@ async function ensureTelemetryStore(): Promise<void> {
 }
 
 /**
- * Web Push alerts (D108) need a VAPID key pair in skiff.env. Hosts installed before push existed
+ * Web Push alerts (D108) need a VAPID key pair in yoal.env. Hosts installed before push existed
  * get one here, on any updater run; an update then restarts the control plane with it. Never
  * replaces a valid pair (that would orphan every subscribed device). Any problem is a warning.
  */
@@ -546,7 +546,7 @@ function ensurePushKeys(): void {
 		const env = readEnvFile(ENV_FILE);
 		if (!ensureVapidKeys(env)) return;
 		writeEnvFile(ENV_FILE, env);
-		run(['chown', 'root:skiff', ENV_FILE], { quiet: true, allowFailure: true });
+		run(['chown', 'root:yoal', ENV_FILE], { quiet: true, allowFailure: true });
 		run(['chmod', '0640', ENV_FILE], { quiet: true, allowFailure: true });
 		host.log('generated the Web Push (VAPID) key pair; push alerts start with the next control-plane restart');
 	} catch (error) {
@@ -554,7 +554,7 @@ function ensurePushKeys(): void {
 	}
 }
 
-/** Keep /usr/local/sbin/skiff-update-self pointing at stage-0 with the source fallback. */
+/** Keep /usr/local/sbin/yoal-update-self pointing at stage-0 with the source fallback. */
 function ensureUpdateCommand(): void {
 	const body = updateCommandScript({ optDir: layout.optDir, bunBin: layout.bunBin, updaterDir: layout.updaterDir });
 	if (existsSync(UPDATE_COMMAND) && readFileSync(UPDATE_COMMAND, 'utf8') === body) return;
@@ -573,7 +573,7 @@ const SOURCE_ALIASES: Record<string, 'auto' | 'artifact' | 'source'> = {
 };
 
 function sourceOption(): 'auto' | 'artifact' | 'source' | undefined {
-	const value = option('--source') ?? process.env.SKIFF_UPDATE_SOURCE;
+	const value = option('--source') ?? process.env.YOAL_UPDATE_SOURCE;
 	if (!value) return undefined;
 	const mode = SOURCE_ALIASES[value];
 	if (mode) return mode;
@@ -600,7 +600,7 @@ function channelOption(): SelfUpdateChannel | undefined {
 	usageError(`--channel must be canary or stable (got ${value})`);
 }
 
-/** The remembered channel, else SKIFF_UPDATE_CHANNEL, else canary (the default path). */
+/** The remembered channel, else YOAL_UPDATE_CHANNEL, else canary (the default path). */
 function storedChannel(): SelfUpdateChannel {
 	try {
 		const value = readFileSync(CHANNEL_FILE, 'utf8').trim();
@@ -608,15 +608,15 @@ function storedChannel(): SelfUpdateChannel {
 	} catch {
 		// Never chosen on this host.
 	}
-	const fromEnv = process.env.SKIFF_UPDATE_CHANNEL;
+	const fromEnv = process.env.YOAL_UPDATE_CHANNEL;
 	return isSelfUpdateChannel(fromEnv) ? fromEnv : DEFAULT_SELF_UPDATE_CHANNEL;
 }
 
-/** root:skiff 0640 like the status file: the dashboard shows it, only root changes it. */
+/** root:yoal 0640 like the status file: the dashboard shows it, only root changes it. */
 function persistChannel(channel: SelfUpdateChannel): void {
 	const dir = dirname(CHANNEL_FILE);
 	mkdirSync(dir, { recursive: true, mode: 0o750 });
-	const gid = skiffGroupId();
+	const gid = yoalGroupId();
 	if (gid !== null) chownSync(dir, 0, gid);
 	const tmp = `${CHANNEL_FILE}.tmp-${process.pid}`;
 	writeFileSync(tmp, `${channel}\n`, { mode: 0o640 });
@@ -711,7 +711,7 @@ const host: Host = {
 		});
 		if (!response.ok)
 			throw new UpdateError(
-				`GitHub ${response.status} resolving ${repo}@${ref}${response.status === 404 ? ' (private repo? set SKIFF_GITHUB_TOKEN)' : ''}`,
+				`GitHub ${response.status} resolving ${repo}@${ref}${response.status === 404 ? ' (private repo? set YOAL_GITHUB_TOKEN)' : ''}`,
 			);
 		return (await response.text()).trim();
 	},
@@ -752,7 +752,7 @@ const host: Host = {
 			rmSync(archive, { force: true });
 		}
 		if (!existsSync(join(dest, 'apps', 'control-plane', 'package.json')))
-			throw new UpdateError(`${repo}@${commit} does not look like Skiff (no apps/control-plane)`);
+			throw new UpdateError(`${repo}@${commit} does not look like Yoal (no apps/control-plane)`);
 	},
 
 	async build(repoDir) {
@@ -764,7 +764,7 @@ const host: Host = {
 		await runStreaming([bun, 'run', '--cwd', 'apps/helper', 'build'], { cwd: repoDir });
 		// Stage-0 for this release (qualified and activated only after the release commits).
 		await runStreaming(
-			[bun, 'build', '--compile', 'scripts/update-self/main.ts', '--define', 'SKIFF_UPDATER_BUILD="host-build"', '--outfile', 'scripts/update-self/dist/skiff-updated'],
+			[bun, 'build', '--compile', 'scripts/update-self/main.ts', '--define', 'YOAL_UPDATER_BUILD="host-build"', '--outfile', 'scripts/update-self/dist/yoal-updated'],
 			{ cwd: repoDir },
 		);
 	},
@@ -787,7 +787,7 @@ const host: Host = {
 
 	/**
 	 * Run a release-owned hook with the release's own Bun and a hard timeout. Output is streamed
-	 * to the live log; the verdict is the last `SKIFF_HOOK_RESULT` line.
+	 * to the live log; the verdict is the last `YOAL_HOOK_RESULT` line.
 	 */
 	async releaseHook(release, hook, args, timeoutMs): Promise<HookOutcome> {
 		const script = join(release, 'repo', 'scripts', 'release', 'hooks.ts');
@@ -799,7 +799,7 @@ const host: Host = {
 		const child = Bun.spawn({
 			cmd,
 			cwd: join(release, 'repo'),
-			env: { ...process.env, SKIFF_ETC_DIR: ETC_DIR, BUN_RUNTIME_TRANSPILER_CACHE_PATH: '0' },
+			env: { ...process.env, YOAL_ETC_DIR: ETC_DIR, BUN_RUNTIME_TRANSPILER_CACHE_PATH: '0' },
 			stdout: 'pipe',
 			stderr: 'pipe',
 		});
@@ -892,8 +892,8 @@ const host: Host = {
 		}, timeoutMs, 2_000);
 	},
 	agentEnrolled: () => existsSync(AGENT_ENV_FILE),
-	chownToSkiff(path) {
-		run(['chown', '-R', 'skiff:skiff', path], { quiet: true });
+	chownToYoal(path) {
+		run(['chown', '-R', 'yoal:yoal', path], { quiet: true });
 	},
 	freeBytes(path) {
 		const line = run(['df', '-Pk', path], { quiet: true }).stdout.split('\n')[1] ?? '';
@@ -902,8 +902,8 @@ const host: Host = {
 	async backupTarget() {
 		try {
 			const env = readEnvFile(ENV_FILE);
-			if (env.get('SKIFF_OBJECT_STORE') !== 'r2') {
-				const dir = join(env.get('SKIFF_DATA_DIR') ?? dirname(layout.dbPath), 'objects');
+			if (env.get('YOAL_OBJECT_STORE') !== 'r2') {
+				const dir = join(env.get('YOAL_DATA_DIR') ?? dirname(layout.dbPath), 'objects');
 				mkdirSync(dir, { recursive: true });
 				return { ok: true, kind: 'local' };
 			}
@@ -955,14 +955,14 @@ const host: Host = {
 		}));
 	},
 	async fetchBytes(url) {
-		const response = await fetch(url, { headers: { 'User-Agent': 'skiff-update-self' }, signal: AbortSignal.timeout(30_000) });
+		const response = await fetch(url, { headers: { 'User-Agent': 'yoal-update-self' }, signal: AbortSignal.timeout(30_000) });
 		if (!response.ok) throw new UpdateError(`GET ${url} answered ${response.status}`);
 		const bytes = new Uint8Array(await response.arrayBuffer());
 		if (bytes.length > 1024 * 1024) throw new UpdateError(`${url} is unexpectedly large`);
 		return bytes;
 	},
 	async download(url, path) {
-		const response = await fetch(url, { headers: { 'User-Agent': 'skiff-update-self' }, signal: AbortSignal.timeout(900_000) });
+		const response = await fetch(url, { headers: { 'User-Agent': 'yoal-update-self' }, signal: AbortSignal.timeout(900_000) });
 		if (!response.ok) throw new UpdateError(`GET ${url} answered ${response.status}`);
 		await writeResponseBody(response, path);
 	},
@@ -1036,8 +1036,8 @@ const host: Host = {
 // ------------------------------------------------------------------- commands
 
 function preflight(): void {
-	if (process.platform !== 'linux') throw new UpdateError('skiff-update-self runs on the Skiff host (Linux).');
-	if (process.getuid?.() !== 0) throw new UpdateError('Run as root: sudo skiff-update-self');
+	if (process.platform !== 'linux') throw new UpdateError('yoal-update-self runs on the Yoal host (Linux).');
+	if (process.getuid?.() !== 0) throw new UpdateError('Run as root: sudo yoal-update-self');
 	if (!existsSync('/run/systemd/system')) throw new UpdateError('systemd is required.');
 	if (!existsSync(layout.bunBin)) throw new UpdateError(`Bun not found at ${layout.bunBin}.`);
 }
@@ -1085,7 +1085,7 @@ async function main(): Promise<number> {
 		if (flag('--boot')) {
 			// Boot guard: filesystem only, never touches units (it runs before the control plane).
 			const outcome = await updater.bootRecover();
-			console.log(`skiff-update-guard: ${outcome}`);
+			console.log(`yoal-update-guard: ${outcome}`);
 			return 0;
 		}
 		if (!updater.status().state.inProgress) {
@@ -1110,7 +1110,7 @@ async function main(): Promise<number> {
 		console.log(
 			before === value
 				? `already on the ${value} channel`
-				: `release channel: ${before} -> ${value}. Run ${bold('sudo skiff-update-self')} to update on it.`,
+				: `release channel: ${before} -> ${value}. Run ${bold('sudo yoal-update-self')} to update on it.`,
 		);
 		return 0;
 	}
@@ -1151,8 +1151,8 @@ async function main(): Promise<number> {
 
 	if (command === 'check') {
 		const result: CheckResult = await updater.check({
-			repo: option('--repo') ?? process.env.SKIFF_REPO,
-			ref: option('--ref') ?? process.env.SKIFF_REF,
+			repo: option('--repo') ?? process.env.YOAL_REPO,
+			ref: option('--ref') ?? process.env.YOAL_REF,
 			source: sourceOption(),
 			channel: channelOption() ?? storedChannel(),
 		});
@@ -1164,7 +1164,7 @@ async function main(): Promise<number> {
 				result.failed
 					? yellow(`${result.version} failed to install before (${result.failed}); \`update --force\` retries it`)
 					: result.available
-						? `update available — run ${bold('sudo skiff-update-self')}`
+						? `update available — run ${bold('sudo yoal-update-self')}`
 						: 'up to date',
 			);
 		}
@@ -1173,8 +1173,8 @@ async function main(): Promise<number> {
 
 	if (command === 'plan') {
 		const result = await updater.plan({
-			repo: option('--repo') ?? process.env.SKIFF_REPO,
-			ref: option('--ref') ?? process.env.SKIFF_REF,
+			repo: option('--repo') ?? process.env.YOAL_REPO,
+			ref: option('--ref') ?? process.env.YOAL_REF,
 			source: sourceOption(),
 			channel: channelOption() ?? storedChannel(),
 		});
@@ -1196,7 +1196,7 @@ async function main(): Promise<number> {
 	}
 
 	if (command === 'update') {
-		console.log(bold('Skiff self-update'));
+		console.log(bold('Yoal self-update'));
 		const trigger = option('--trigger') === 'dashboard' ? 'dashboard' : 'cli';
 		const dryRun = flag('--dry-run');
 		const method = resolveMethod(
@@ -1232,7 +1232,7 @@ async function main(): Promise<number> {
 			method === 'download'
 				? 'Install method: download the signed release'
 				: method === 'build'
-					? `Install method: build ${option('--ref') ?? process.env.SKIFF_REF ?? 'the configured ref'} from source`
+					? `Install method: build ${option('--ref') ?? process.env.YOAL_REF ?? 'the configured ref'} from source`
 					: 'Install method: automatic (signed release when published, otherwise source)',
 		);
 		const finish = (outcome: SelfUpdateOutcome, message: string, versions: Partial<SelfUpdateStatus> = {}) => {
@@ -1240,14 +1240,14 @@ async function main(): Promise<number> {
 			reportStatus({ running: false, phase: 'done', outcome, message, finishedAt: new Date().toISOString(), ...versions });
 		};
 		signals.on('exit', () => {
-			if (status?.running) finish('error', `The updater exited unexpectedly. Check journalctl -u skiff-update-self.`);
+			if (status?.running) finish('error', `The updater exited unexpectedly. Check journalctl -u yoal-update-self.`);
 		});
 		const publicCheck = flag('--no-public-check') ? 'skip' : flag('--require-public') ? 'require' : 'auto';
 		let result: UpdateResult;
 		try {
 			result = await updater.update({
-			repo: option('--repo') ?? process.env.SKIFF_REPO,
-			ref: option('--ref') ?? process.env.SKIFF_REF,
+			repo: option('--repo') ?? process.env.YOAL_REPO,
+			ref: option('--ref') ?? process.env.YOAL_REF,
 			force: flag('--force'),
 			withAgent: !flag('--no-agent'),
 			canary: !flag('--no-canary'),
@@ -1282,7 +1282,7 @@ async function main(): Promise<number> {
 	}
 
 	if (command === 'rollback') {
-		console.log(bold('Skiff rollback'));
+		console.log(bold('Yoal rollback'));
 		const result = await updater.rollback({
 			restoreDb: flag('--restore-db'),
 			keepDb: flag('--keep-db'),
@@ -1304,7 +1304,7 @@ async function main(): Promise<number> {
 main().then(
 	(code) => process.exit(code),
 	(error: unknown) => {
-		console.error(red(`skiff-update-self: ${error instanceof Error ? error.message : String(error)}`));
+		console.error(red(`yoal-update-self: ${error instanceof Error ? error.message : String(error)}`));
 		process.exit(error instanceof RecoveryError ? 2 : 1);
 	},
 );

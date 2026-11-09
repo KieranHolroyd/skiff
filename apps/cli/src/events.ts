@@ -1,11 +1,11 @@
 /**
  * Event notifications (docs/EVENTS.md, D122): the wire types the CLI reads and pure formatting for
- * `skif events`. Types mirror `packages/contracts/src/event-notification.ts`; the CLI bundle stays
+ * `yoal events`. Types mirror `packages/contracts/src/event-notification.ts`; the CLI bundle stays
  * free of runtime dependencies (D40), so keep them in sync. The server validates everything.
  */
 import { formatTime, renderTable, truncate } from './output.ts';
 
-/** Mirrors `eventTypesBySource` in @skiff/contracts. */
+/** Mirrors `eventTypesBySource` in @yoal/contracts. */
 export const EVENT_SOURCES = {
 	storage: ['object-create', 'object-delete'],
 	alerts: ['firing', 'resolved'],

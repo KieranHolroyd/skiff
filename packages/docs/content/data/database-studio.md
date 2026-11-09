@@ -61,7 +61,7 @@ The **Query** tab opens an editor for the database's own language: SQL for the r
 - Each run takes the **Max rows** you choose from the toolbar. The choices are 100 and 1,000, and the session cap applies on top of that.
 - **Explain** shows the plan the database would use for the statement, as a tree. It is available for PostgreSQL, MySQL, MariaDB and MongoDB.
 - Results appear in the grid below the editor. Use **Export** to download the loaded rows as CSV or JSON. The export contains only the rows already in the grid, so a truncated result exports truncated.
-- Recent queries are kept in your browser, up to 200 per database. They are not sent to Skiff.
+- Recent queries are kept in your browser, up to 200 per database. They are not sent to Yoal.
 
 ### Read-only queries
 
@@ -71,9 +71,9 @@ Only one statement can run at a time in a session. If you start another while on
 
 ## How the studio connects
 
-Skiff never gives the studio your owner credentials for read-only work. The safety model has four parts:
+Yoal never gives the studio your owner credentials for read-only work. The safety model has four parts:
 
-- **A read-only account for every database.** Each managed database has a `skiff_studio_ro` account with read rights only. Read-only sessions connect as this account, so the database itself refuses writes. The account is created when you first open a read-only session, and the studio shows **Preparing read-only access…** until it is ready. If that fails, the header shows the error, and opening the studio again retries.
+- **A read-only account for every database.** Each managed database has a `yoal_studio_ro` account with read rights only. Read-only sessions connect as this account, so the database itself refuses writes. The account is created when you first open a read-only session, and the studio shows **Preparing read-only access…** until it is ready. If that fails, the header shows the error, and opening the studio again retries.
 - **Write sessions use the owner.** A write session connects as the database's owner. It needs `database:update`, and stops working if that permission is removed.
 - **No credential in the browser.** The browser talks to the control plane, which checks your session, validates each request and adds the database credential. The credential is never sent to the browser or written to logs.
 - **Each session runs on the node that hosts the database.** The node starts a small studio process on demand, and stops it after five minutes with no open sessions.
@@ -114,6 +114,6 @@ When a result hits a row or byte limit, the grid says the result was cut at the 
 
 ## Audit
 
-Every studio action is recorded in the organisation's audit log, with the database, the user and the time. Skiff never records the text of a query or any cell value. A run is recorded as a fingerprint of its text and whether the session was read-only. An apply is recorded as counts of inserted, updated and deleted rows, and a structure change as the object and the kind of change.
+Every studio action is recorded in the organisation's audit log, with the database, the user and the time. Yoal never records the text of a query or any cell value. A run is recorded as a fingerprint of its text and whether the session was read-only. An apply is recorded as counts of inserted, updated and deleted rows, and a structure change as the object and the kind of change.
 
 If you need to know what a session did, look up the audit entries for the database. See [the security model](/accounts/security-model) for how audit fits with the rest of the platform.

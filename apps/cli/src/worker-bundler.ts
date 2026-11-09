@@ -1,10 +1,10 @@
 /**
- * Skiff's own Worker bundler (D113, docs/FUNCTIONS.md §4.3).
+ * Yoal's own Worker bundler (D113, docs/FUNCTIONS.md §4.3).
  *
- * `skif deploy` used to shell out to `wrangler deploy --dry-run`, which meant whatever Wrangler
+ * `yoal deploy` used to shell out to `wrangler deploy --dry-run`, which meant whatever Wrangler
  * the user had installed (or whatever npm resolved that day) decided what a function bundle
  * looked like. This module owns that step instead. It runs esbuild as a library, pinned to an
- * exact version in the CLI's package.json, so bundling only changes when Skiff ships a release.
+ * exact version in the CLI's package.json, so bundling only changes when Yoal ships a release.
  *
  * It follows the parts of Wrangler's bundling that decide whether a Worker runs:
  * - ESM output, `workerd`/`worker`/`browser` export conditions, `keep_names` on by default,
@@ -34,8 +34,8 @@ import { CliError } from './errors.ts';
 /** Must equal the exact `esbuild` version in apps/cli/package.json; a test enforces it. */
 export const ESBUILD_VERSION = '0.28.2';
 
-/** The bundler identity printed by `skif deploy`. */
-export const BUNDLER_DISPLAY = `skiff bundler (esbuild ${ESBUILD_VERSION})`;
+/** The bundler identity printed by `yoal deploy`. */
+export const BUNDLER_DISPLAY = `yoal bundler (esbuild ${ESBUILD_VERSION})`;
 
 /** `python` comes only from the Python bundler (`python-bundler.ts`, D121), never from esbuild. */
 export type WorkerModuleType = 'esm' | 'cjs' | 'text' | 'data' | 'wasm' | 'python';
@@ -135,7 +135,7 @@ export function readBuildSettings(
 
 	if (config.no_bundle === true)
 		fail(
-			'"no_bundle" is not supported by skif deploy. Remove it to let Skiff bundle the Worker, or deploy the already-built directory with skif deploy <dir> --no-wrangler.',
+			'"no_bundle" is not supported by yoal deploy. Remove it to let Yoal bundle the Worker, or deploy the already-built directory with yoal deploy <dir> --no-wrangler.',
 		);
 	if (config.find_additional_modules === true)
 		fail('"find_additional_modules" is not supported. Import the modules from your entrypoint so they are bundled.');
@@ -300,7 +300,7 @@ export async function bundleWorker(
 		result = await esbuild.build({
 			entryPoints: [settings.entry],
 			absWorkingDir: settings.projectRoot,
-			outdir: resolve(settings.projectRoot, '.skiff-bundle'),
+			outdir: resolve(settings.projectRoot, '.yoal-bundle'),
 			write: false,
 			bundle: true,
 			format: 'esm',
@@ -346,7 +346,7 @@ export async function bundleWorker(
 	const meta = Object.entries(result.metafile.outputs).find(([path]) => basename(path) === main)?.[1];
 	if (meta && meta.exports.length === 0)
 		throw new CliError(
-			`${relativeEntry(settings)} has no exports. Skiff Functions use the ES modules format: export default { async fetch(request, env, ctx) { … } }. Service-worker syntax (addEventListener("fetch")) is not supported.`,
+			`${relativeEntry(settings)} has no exports. Yoal Functions use the ES modules format: export default { async fetch(request, env, ctx) { … } }. Service-worker syntax (addEventListener("fetch")) is not supported.`,
 			{ code: 'bundle_failed' },
 		);
 
@@ -364,7 +364,7 @@ export async function bundleWorker(
 /** `cloudflare:*`, `workerd:*` and (with nodejs_compat) Node built-ins stay imports. */
 function runtimeExternalsPlugin(nodeCompat: boolean): Plugin {
 	return {
-		name: 'skiff-runtime-externals',
+		name: 'yoal-runtime-externals',
 		setup(build) {
 			build.onResolve({ filter: /^(?:cloudflare|workerd):/ }, (args) =>
 				RUNTIME_EXTERNAL.test(args.path) ? { path: args.path, external: true } : undefined,
@@ -388,9 +388,9 @@ function moduleRulesPlugin(rules: ModuleRule[], collected: Map<string, WorkerMod
 		type: RULE_MODULE_TYPES[rule.type],
 		patterns: rule.globs.map(globToRegExp),
 	}));
-	const RESOLVING = Symbol.for('skiff-module-rule');
+	const RESOLVING = Symbol.for('yoal-module-rule');
 	return {
-		name: 'skiff-module-rules',
+		name: 'yoal-module-rules',
 		setup(build: PluginBuild) {
 			build.onResolve({ filter: /.*/ }, async (args) => {
 				if (args.pluginData === RESOLVING || args.namespace !== 'file') return undefined;
@@ -432,13 +432,13 @@ async function loadEsbuild(): Promise<typeof import('esbuild')> {
 		esbuild = await import('esbuild');
 	} catch (error) {
 		throw new CliError(
-			`The function bundler could not load esbuild (${messageOf(error)}). Reinstall the Skiff CLI; esbuild ships with it.`,
+			`The function bundler could not load esbuild (${messageOf(error)}). Reinstall the Yoal CLI; esbuild ships with it.`,
 			{ code: 'bundler_missing', cause: error },
 		);
 	}
 	if (esbuild.version !== ESBUILD_VERSION)
 		throw new CliError(
-			`The function bundler expected esbuild ${ESBUILD_VERSION} but loaded ${esbuild.version}. Reinstall the Skiff CLI so its pinned esbuild is used.`,
+			`The function bundler expected esbuild ${ESBUILD_VERSION} but loaded ${esbuild.version}. Reinstall the Yoal CLI so its pinned esbuild is used.`,
 			{ code: 'bundler_version' },
 		);
 	return esbuild;

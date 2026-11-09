@@ -21,16 +21,16 @@ import { authenticatedClient } from './common.ts';
 import { confirmOrRefuse, discardPlan, emit, followWithProgress, outputMode } from './run-operation.ts';
 
 /**
- * `skif blueprint validate|plan|apply` (plan 11, docs/OPERATIONS.md §12). The file is sent as
+ * `yoal blueprint validate|plan|apply` (plan 11, docs/OPERATIONS.md §12). The file is sent as
  * text; the server parses it, diffs it against live state and runs the plan as one operation, so
  * this command never decides anything itself.
  */
 
-const usage = `Usage: skif blueprint <validate|plan|apply> [file] [options]
+const usage = `Usage: yoal blueprint <validate|plan|apply> [file] [options]
 
 Declare a stack (projects, environments, domains, workload settings, databases, storage buckets,
 brokers and attachments) in one file, then plan and apply it. A second apply of the same file is
-a no-op. Blueprints hold secret names, never values. Needs SKIFF_FEATURE_BLUEPRINTS on the server.
+a no-op. Blueprints hold secret names, never values. Needs YOAL_FEATURE_BLUEPRINTS on the server.
 
 Commands:
   validate [file]        Check the file (schema, names, cross references); reads no live state
@@ -43,7 +43,7 @@ Pass - to read the file from stdin.
 Options:
       --prune            Also delete resources this stack manages that the file no longer lists
                          (apply asks you to type the stack name; --yes confirms it for you)
-      --plan <hash>      apply: apply this plan (from \`skif blueprint plan\`) without planning again
+      --plan <hash>      apply: apply this plan (from \`yoal blueprint plan\`) without planning again
       --confirm <stack>  apply --plan: the stack name, when that plan deletes resources
       --all              plan/apply: also list resources that are up to date
   -y, --yes              Don't ask (required when stdin isn't a terminal)
@@ -51,7 +51,7 @@ Options:
   -h, --help             Show this help
 
 Exit codes: 0 applied (or nothing to do), 3 partial, 1 failed, declined or invalid.
-Ctrl-C while applying detaches; the run carries on (\`skif operations watch <id>\`).`;
+Ctrl-C while applying detaches; the run carries on (\`yoal operations watch <id>\`).`;
 
 const flags: FlagSpec = {
 	prune: { type: 'boolean' },
@@ -151,7 +151,7 @@ async function plan(args: ParsedArgs): Promise<void> {
 	printPlan(view, args.boolean('all'));
 	if (!hasChanges(view)) return;
 	console.log(
-		`\nPlan ${view.planHash.slice(0, 12)} (expires ${view.expiresAt ?? 'in an hour'}). Apply it with:\n  skif blueprint apply --plan ${view.planHash}${view.summary.delete ? ` --confirm ${view.stack}` : ''}`,
+		`\nPlan ${view.planHash.slice(0, 12)} (expires ${view.expiresAt ?? 'in an hour'}). Apply it with:\n  yoal blueprint apply --plan ${view.planHash}${view.summary.delete ? ` --confirm ${view.stack}` : ''}`,
 	);
 }
 
@@ -165,7 +165,7 @@ async function apply(args: ParsedArgs): Promise<void> {
 	let view: BlueprintPlanView | null = null;
 	if (planHash) {
 		if (args.positionals.length) throw new UsageError('--plan applies an existing plan; drop the file argument.');
-		if (!/^[a-f0-9]{64}$/.test(planHash)) throw new UsageError('--plan takes the 64-character plan hash from `skif blueprint plan`.');
+		if (!/^[a-f0-9]{64}$/.test(planHash)) throw new UsageError('--plan takes the 64-character plan hash from `yoal blueprint plan`.');
 	} else {
 		const { text } = await readDocument(args);
 		view = (await withIssues(() => client.planBlueprint(text, { prune: args.boolean('prune') }))).plan;
@@ -189,7 +189,7 @@ async function apply(args: ParsedArgs): Promise<void> {
 			const accepted = await confirmOrRefuse(`\nThis deletes ${deletes} resource${deletes === 1 ? '' : 's'}. Type the stack name "${stack}" to apply: `, {
 				yes: false,
 				accept: (answer) => answer.trim() === stack,
-				refusal: `Not applied: stdin is not a terminal. Re-run with --yes, or apply this plan within the hour with \`skif blueprint apply --plan ${view.planHash} --confirm ${stack}\`.`,
+				refusal: `Not applied: stdin is not a terminal. Re-run with --yes, or apply this plan within the hour with \`yoal blueprint apply --plan ${view.planHash} --confirm ${stack}\`.`,
 			});
 			if (!accepted) return declined(client, view);
 			confirm = stack;
@@ -197,7 +197,7 @@ async function apply(args: ParsedArgs): Promise<void> {
 	} else if (view) {
 		const accepted = await confirmOrRefuse(`\nApply these changes to "${view.stack}"? [y/N] `, {
 			yes,
-			refusal: `Not applied: stdin is not a terminal. Re-run with --yes, or apply this plan within the hour with \`skif blueprint apply --plan ${view.planHash}\`.`,
+			refusal: `Not applied: stdin is not a terminal. Re-run with --yes, or apply this plan within the hour with \`yoal blueprint apply --plan ${view.planHash}\`.`,
 		});
 		if (!accepted) return declined(client, view);
 	}

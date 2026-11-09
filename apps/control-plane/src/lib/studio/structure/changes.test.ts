@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { schemaChangeSchema, type Column, type ObjectRef, type StudioInfo } from '@skiff/studio/protocol';
+import { schemaChangeSchema, type Column, type ObjectRef, type StudioInfo } from '@yoal/studio/protocol';
 import {
 	canAlter,
 	columnEditChanges,

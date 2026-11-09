@@ -60,7 +60,7 @@ describe('diskMountProblem', () => {
 });
 
 describe('DiskMounter', () => {
-	const root = mkdtempSync(join(tmpdir(), 'skiff-disks-'));
+	const root = mkdtempSync(join(tmpdir(), 'yoal-disks-'));
 	afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 	function fakeRunner(options: { lsblk?: string; mountCode?: number; mountStderr?: string } = {}) {

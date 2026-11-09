@@ -3,7 +3,7 @@ import {
 	type ConfigExportHeader,
 	type ConfigExportSkip,
 	type Principal,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { CoreError } from './errors.ts';
 import type { Core } from './index.ts';
 

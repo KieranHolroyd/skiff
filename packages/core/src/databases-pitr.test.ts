@@ -2,23 +2,23 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import { DEFAULT_FEATURES, postgresPitrImage } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import { DEFAULT_FEATURES, postgresPitrImage } from '@yoal/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import type { Core } from './index.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-pitr-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-pitr-'));
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 let clock = Date.parse('2026-11-05T10:00:00Z');
 
 const repo = {
 	kind: 's3' as const,
 	endpoint: 'https://s3.example.test',
-	bucket: 'skiff-pitr',
+	bucket: 'yoal-pitr',
 	region: 'us-east-1',
-	pathPrefix: 'skiff/pitr',
+	pathPrefix: 'yoal/pitr',
 	forcePathStyle: true,
 	accessKeyId: 'access-key',
 	secretAccessKey: 'super-secret-key',

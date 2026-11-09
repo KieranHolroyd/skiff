@@ -8,7 +8,7 @@
 export const CHART_GRID = { strokeDasharray: '3 5', strokeOpacity: 0.18 } as const;
 
 /** Extra class on the built-in tooltip (styled in `routes/layout.css`). */
-export const CHART_TOOLTIP_CLASS = 'skiff-chart-tooltip';
+export const CHART_TOOLTIP_CLASS = 'yoal-chart-tooltip';
 
 /** Clock labels for a UTC time axis; hourly data also shows the date. */
 export function utcTimeFormat(interval: '1m' | '1h'): Intl.DateTimeFormat {

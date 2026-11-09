@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { AccessPolicy, AccessPolicyRule, AccessServiceToken } from '@skiff/contracts';
+	import type { AccessPolicy, AccessPolicyRule, AccessServiceToken } from '@yoal/contracts';
 	import { untrack } from 'svelte';
 	import { enhance, type SubmitFunction } from '$app/forms';
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
@@ -15,9 +15,9 @@
 	import { Input } from '#lib/components/ui/input/index.js';
 	import { Textarea } from '#lib/components/ui/textarea/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
 	import EmptyState from '../../_lib/EmptyState.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
 	import SettingsHeader from '../_lib/SettingsHeader.svelte';
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import { notify, runAction } from '#lib/actions.js';
@@ -39,7 +39,7 @@
 	let tokenOpen = $state(false);
 	let tokenPolicy = $state<PolicyWithTokens | null>(null);
 	let tokenName = $state('');
-	let tokenHeader = $state('X-Skiff-Access-Token');
+	let tokenHeader = $state('X-Yoal-Access-Token');
 	let tokenSecret = $state('');
 	let tokenError = $state('');
 	let tokenPending = $state(false);
@@ -87,7 +87,7 @@
 	function openServiceToken(policy: PolicyWithTokens) {
 		tokenPolicy = policy;
 		tokenName = '';
-		tokenHeader = 'X-Skiff-Access-Token';
+		tokenHeader = 'X-Yoal-Access-Token';
 		tokenSecret = '';
 		tokenError = '';
 		tokenOpen = true;
@@ -119,7 +119,7 @@
 		askConfirm({
 			title: `Revoke the ${rule.matcher.header} token?`,
 			description:
-				'The token stops working within seconds, and existing Skiff Access cookies for this policy are signed out.',
+				'The token stops working within seconds, and existing Yoal Access cookies for this policy are signed out.',
 			confirmLabel: 'Revoke token',
 			tone: 'danger',
 			action: '?/revokeServiceToken',
@@ -131,7 +131,7 @@
 		askConfirm({
 			title: `Revoke the “${token.name}” machine token?`,
 			description:
-				'The machine stops working within seconds, and existing Skiff Access cookies for this policy are signed out.',
+				'The machine stops working within seconds, and existing Yoal Access cookies for this policy are signed out.',
 			confirmLabel: 'Revoke machine token',
 			tone: 'danger',
 			action: '?/revokeServiceToken',
@@ -157,7 +157,7 @@
 
 <SettingsHeader
 	id="access-policies"
-	description="Skiff Access puts an identity-aware proxy in front of a site: Caddy asks the edge, and only a matching policy lets the visitor through. Rules are evaluated in order and a deny always wins."
+	description="Yoal Access puts an identity-aware proxy in front of a site: Caddy asks the edge, and only a matching policy lets the visitor through. Rules are evaluated in order and a deny always wins."
 >
 	{#snippet actions()}
 		<Button size="sm" onclick={() => (createOpen = true)}><PlusIcon />New policy</Button>
@@ -173,7 +173,7 @@
 {:else}
 	<Card.Root>
 		<Card.Header>
-			<Card.Title>Turn on Skiff Access</Card.Title>
+			<Card.Title>Turn on Yoal Access</Card.Title>
 			<Card.Description>
 				Pick a project scope and a policy. The host switches to the <code class="font-mono text-xs">access</code>
 				protection mode; clearing the policy leaves it behind platform login.
@@ -486,7 +486,7 @@
 						required
 						maxlength={80}
 						pattern="[A-Za-z0-9-]+"
-						placeholder="X-Skiff-Access-Token"
+						placeholder="X-Yoal-Access-Token"
 					/>
 					<Field.Description>
 						Most proxies pass a custom header unchanged. The value is generated for you.

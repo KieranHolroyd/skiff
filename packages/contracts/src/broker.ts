@@ -311,8 +311,8 @@ export const brokerMetricBucketSchema = z.object({
 });
 export type BrokerMetricBucket = z.infer<typeof brokerMetricBucketSchema>;
 
-/** Stream prefix of a function queue (D112): `SKIFF_Q_<queue>`. */
-export const BROKER_QUEUE_STREAM_PREFIX = 'SKIFF_Q_';
+/** Stream prefix of a function queue (D112): `YOAL_Q_<queue>`. */
+export const BROKER_QUEUE_STREAM_PREFIX = 'YOAL_Q_';
 
 /** At most this many streams, and consumers per stream, are reported per broker. */
 export const BROKER_SNAPSHOT_MAX_STREAMS = 200;
@@ -333,7 +333,7 @@ export type BrokerConsumerStats = z.infer<typeof brokerConsumerStatsSchema>;
 /** One JetStream stream as the dashboard lists it. Function queues carry their queue name. */
 export const brokerStreamStatsSchema = z.object({
 	stream: z.string().max(256),
-	/** The function queue (`SKIFF_Q_<queue>`), or null for a stream an app created itself. */
+	/** The function queue (`YOAL_Q_<queue>`), or null for a stream an app created itself. */
 	queue: z.string().max(63).nullable(),
 	subjects: z.array(z.string().max(256)).max(10).default([]),
 	storage: z.enum(['file', 'memory']).default('file'),

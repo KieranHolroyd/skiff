@@ -1,5 +1,5 @@
-import type { Permission, Principal, Role } from '@skiff/contracts';
-import { isPermission, roles as roleDefinitions } from '@skiff/contracts';
+import type { Permission, Principal, Role } from '@yoal/contracts';
+import { isPermission, roles as roleDefinitions } from '@yoal/contracts';
 
 /**
  * A complete stand-in for `./principal` in tests that `mock.module` it. Bun's module mocks are

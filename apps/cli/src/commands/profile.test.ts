@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 let dir = '';
 
 beforeEach(async () => {
-	dir = await mkdtemp(join(tmpdir(), 'skiff-cli-profile-command-'));
+	dir = await mkdtemp(join(tmpdir(), 'yoal-cli-profile-command-'));
 });
 
 afterEach(async () => {
@@ -45,11 +45,11 @@ function runWithEnv(
 function childEnv(): Record<string, string | undefined> {
 	return {
 		...process.env,
-		SKIFF_CONFIG_DIR: dir,
-		SKIFF_URL: '',
-		SKIFF_TOKEN: '',
-		SKIFF_CONTENT_DOMAIN: '',
-		SKIFF_PROFILE: '',
+		YOAL_CONFIG_DIR: dir,
+		YOAL_URL: '',
+		YOAL_TOKEN: '',
+		YOAL_CONTENT_DOMAIN: '',
+		YOAL_PROFILE: '',
 	};
 }
 
@@ -57,7 +57,7 @@ function json<T>(output: string): T {
 	return JSON.parse(output) as T;
 }
 
-describe('skif profile', () => {
+describe('yoal profile', () => {
 	test('adds profiles, lists them, and reports the current one', () => {
 		const added = run(
 			'profile',
@@ -115,7 +115,7 @@ describe('skif profile', () => {
 		expect(run('profile', 'current').stdout).toBe('prod');
 	});
 
-	test('selects a profile per command with --profile and SKIFF_PROFILE', () => {
+	test('selects a profile per command with --profile and YOAL_PROFILE', () => {
 		run(
 			'profile',
 			'add',
@@ -143,7 +143,7 @@ describe('skif profile', () => {
 		expect(run('config', 'get', 'url', '--profile', 'dev').stdout).toBe('http://localhost:5173');
 		expect(run('config', 'get', 'url').stdout).toBe('https://prod.example.com');
 
-		const viaEnv = runWithEnv({ SKIFF_PROFILE: 'dev' }, 'config', 'get', 'url');
+		const viaEnv = runWithEnv({ YOAL_PROFILE: 'dev' }, 'config', 'get', 'url');
 		expect(viaEnv.stdout).toBe('http://localhost:5173');
 	});
 

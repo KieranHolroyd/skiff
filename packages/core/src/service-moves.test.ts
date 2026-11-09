@@ -2,15 +2,15 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import { DEFAULT_FEATURES, type Heartbeat } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import { DEFAULT_FEATURES, type Heartbeat } from '@yoal/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import { MOVE_QUIESCE_TIMEOUT_MS } from './service-moves.ts';
 import type { Core } from './index.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-moves-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-moves-'));
 const opened = createDb({ path: ':memory:' });
 let clock = Date.parse('2026-11-06T10:00:00Z');
 

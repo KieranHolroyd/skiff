@@ -30,13 +30,13 @@ export const backupTargetNameSchema = z
 	.regex(SLUG_PATTERN, 'Use lowercase letters, digits and single hyphens; start and end with a letter or digit.')
 	.refine((name) => !name.includes('--'), 'Double hyphens are not allowed.');
 
-/** A local target must be an absolute, normalized path the `skiff` user can own. */
+/** A local target must be an absolute, normalized path the `yoal` user can own. */
 export const backupTargetLocalPathSchema = z
 	.string()
 	.trim()
 	.min(2)
 	.max(300)
-	.refine((value) => value.startsWith('/'), 'Use an absolute path, such as /var/lib/skiff/backups.')
+	.refine((value) => value.startsWith('/'), 'Use an absolute path, such as /var/lib/yoal/backups.')
 	.refine((value) => value !== '/' && !value.endsWith('/'), 'Use a directory below "/", without a trailing slash.')
 	.refine((value) => /^[A-Za-z0-9._/-]+$/.test(value), 'Use only letters, digits, ".", "_", "-" and "/".')
 	.refine(
@@ -114,7 +114,7 @@ const s3TargetCreateSchema = z
 		endpoint: backupTargetEndpointSchema.optional(),
 		bucket: bucketNameSchema,
 		region: backupTargetRegionSchema.default('us-east-1'),
-		pathPrefix: backupTargetPathPrefixSchema.default('skiff/backups'),
+		pathPrefix: backupTargetPathPrefixSchema.default('yoal/backups'),
 		/** RustFS, MinIO and most self-hosted endpoints need path-style addressing. */
 		forcePathStyle: z.boolean().default(true),
 		accessKeyId: accessKeyIdSchema,

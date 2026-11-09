@@ -3,8 +3,8 @@ import { createVerify, generateKeyPairSync } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import { GITHUB_RUNNER_JITCONFIG_ENV } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import { GITHUB_RUNNER_JITCONFIG_ENV } from '@yoal/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
@@ -12,7 +12,7 @@ import { githubAppJwt } from './github-runners.ts';
 import { aggregateReplicaReports } from './workloads.ts';
 import type { Core } from './index.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-runners-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-runners-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 
@@ -148,7 +148,7 @@ describe('GitHub Actions runner template', () => {
 		expect(mint.url).toBe('https://api.github.com/repos/acme/api/actions/runners/generate-jitconfig');
 		expect(mint.auth).toBe('Bearer github_pat_abc');
 		expect(mint.body?.labels).toEqual(['self-hosted', 'linux', 'gpu']);
-		expect(String(mint.body?.name)).toStartWith('skiff-ci-runners-1-');
+		expect(String(mint.body?.name)).toStartWith('yoal-ci-runners-1-');
 
 		calls.length = 0;
 		const second = await core.workloads.activationFor(nodeId, replica.id);

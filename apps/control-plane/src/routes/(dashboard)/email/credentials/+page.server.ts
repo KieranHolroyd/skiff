@@ -4,7 +4,7 @@ import {
 	hasPermission,
 	type EmailCredentialSecret,
 	type EmailCredentialView
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { failStatus, formString, toFormFailure } from '../../_lib/errors.js';
 import { fieldErrorsFrom } from '../../databases/_lib/forms.server.js';

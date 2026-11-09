@@ -1,9 +1,9 @@
 ---
 title: REST API
-description: Call the Skiff control plane over HTTP at /api/v1 with an API key, and find the endpoint for each resource.
+description: Call the Yoal control plane over HTTP at /api/v1 with an API key, and find the endpoint for each resource.
 ---
 
-The REST API is the HTTP interface behind the dashboard, the [`skif` CLI](/clients/cli) and the [MCP server](/clients/mcp). Every endpoint calls the same service layer, so a permission refused in one place is refused everywhere. Use the REST API when you want to script Skiff from CI, a cron job or your own code. This page covers how to authenticate, what requests and errors look like, and a reference of every endpoint grouped by resource. Each feature has its own page for what the resource does.
+The REST API is the HTTP interface behind the dashboard, the [`yoal` CLI](/clients/cli) and the [MCP server](/clients/mcp). Every endpoint calls the same service layer, so a permission refused in one place is refused everywhere. Use the REST API when you want to script Yoal from CI, a cron job or your own code. This page covers how to authenticate, what requests and errors look like, and a reference of every endpoint grouped by resource. Each feature has its own page for what the resource does.
 
 ## Base URL and authentication
 
@@ -16,10 +16,10 @@ https://control.example.com/api/v1
 Send an API key as a bearer token:
 
 ```http
-Authorization: Bearer skif_…
+Authorization: Bearer yoal_…
 ```
 
-A bearer value that does not start with `skif_` is rejected with `401`. MCP tokens are not accepted here. Create keys in the dashboard or through `skif login`; see [API keys and tokens](/accounts/api-keys-and-tokens).
+A bearer value that does not start with `yoal_` is rejected with `401`. MCP tokens are not accepted here. Create keys in the dashboard or through `yoal login`; see [API keys and tokens](/accounts/api-keys-and-tokens).
 
 A key can only do what its scopes allow. If a key lacks the permission an endpoint needs, the response is `403` and names the permission. Some permissions are never granted by default, such as the `*:credentials` permissions that reveal secrets; add them to a key on purpose.
 
@@ -92,38 +92,38 @@ Some size limits apply to uploads and writes:
 - An upload archive may be up to 500 MiB.
 - An upload session expires after one hour. Finalise it once; a second finalise returns `422`.
 - An inline deploy (`POST /projects/{slug}/deploy`) may carry up to 20,000 files.
-- A direct object `PUT` through the API is limited to 100 MiB by default (`SKIFF_STORAGE_OBJECT_MAX_BYTES`). Use a presigned upload or the CLI for larger files.
+- A direct object `PUT` through the API is limited to 100 MiB by default (`YOAL_STORAGE_OBJECT_MAX_BYTES`). Use a presigned upload or the CLI for larger files.
 
 ## Examples
 
 Set your key and platform origin once for the examples below:
 
 ```sh
-export SKIFF_KEY=skif_…
-export SKIFF_ORIGIN=https://control.example.com
+export YOAL_KEY=yoal_…
+export YOAL_ORIGIN=https://control.example.com
 ```
 
 ### List projects
 
 ```sh
-curl -sS "$SKIFF_ORIGIN/api/v1/projects" \
-  -H "Authorization: Bearer $SKIFF_KEY"
+curl -sS "$YOAL_ORIGIN/api/v1/projects" \
+  -H "Authorization: Bearer $YOAL_KEY"
 ```
 
 The response is `{ "projects": [ … ] }`.
 
 ### Deploy with an upload session
 
-A deploy is three calls: open an upload session, put the zipped build to the signed URL, then finalise. The signed URL needs no Skiff credentials.
+A deploy is three calls: open an upload session, put the zipped build to the signed URL, then finalise. The signed URL needs no Yoal credentials.
 
 ```sh
 # Zip the built site, so its files sit at the root of the archive.
 (cd dist && zip -qr ../site.zip .)
 
 # 1. Open an upload session. The response has uploadId, url, method, headers and expiresAt.
-UPLOAD=$(curl -sS -X POST "$SKIFF_ORIGIN/api/v1/uploads" \
-  -H "Authorization: Bearer $SKIFF_KEY" \
-  -H "Origin: $SKIFF_ORIGIN" \
+UPLOAD=$(curl -sS -X POST "$YOAL_ORIGIN/api/v1/uploads" \
+  -H "Authorization: Bearer $YOAL_KEY" \
+  -H "Origin: $YOAL_ORIGIN" \
   -H "Content-Type: application/json" \
   -d '{"project":"my-site"}')
 UPLOAD_ID=$(printf '%s' "$UPLOAD" | jq -r '.uploadId')
@@ -135,9 +135,9 @@ curl -sS -X PUT "$UPLOAD_URL" \
   --data-binary @site.zip
 
 # 3. Finalise. This builds the release and, with promote true, makes it production.
-curl -sS -X POST "$SKIFF_ORIGIN/api/v1/uploads/$UPLOAD_ID/finalize" \
-  -H "Authorization: Bearer $SKIFF_KEY" \
-  -H "Origin: $SKIFF_ORIGIN" \
+curl -sS -X POST "$YOAL_ORIGIN/api/v1/uploads/$UPLOAD_ID/finalize" \
+  -H "Authorization: Bearer $YOAL_KEY" \
+  -H "Origin: $YOAL_ORIGIN" \
   -H "Content-Type: application/json" \
   -d '{"project":"my-site","promote":true,"message":"Release 2026-11-07"}'
 ```
@@ -149,16 +149,16 @@ Finalising returns the new deployment, including its `id`, `shortId`, `previewUr
 Promotion points production at an existing deployment. Find its id first:
 
 ```sh
-curl -sS "$SKIFF_ORIGIN/api/v1/projects/my-site/deployments?limit=10" \
-  -H "Authorization: Bearer $SKIFF_KEY"
+curl -sS "$YOAL_ORIGIN/api/v1/projects/my-site/deployments?limit=10" \
+  -H "Authorization: Bearer $YOAL_KEY"
 ```
 
 Then promote it. The body must repeat the project slug as well as the URL:
 
 ```sh
-curl -sS -X POST "$SKIFF_ORIGIN/api/v1/projects/my-site/promote" \
-  -H "Authorization: Bearer $SKIFF_KEY" \
-  -H "Origin: $SKIFF_ORIGIN" \
+curl -sS -X POST "$YOAL_ORIGIN/api/v1/projects/my-site/promote" \
+  -H "Authorization: Bearer $YOAL_KEY" \
+  -H "Origin: $YOAL_ORIGIN" \
   -H "Content-Type: application/json" \
   -d '{"project":"my-site","deploymentId":"dep_…"}'
 ```
@@ -170,9 +170,9 @@ curl -sS -X POST "$SKIFF_ORIGIN/api/v1/projects/my-site/promote" \
 Rollback points production back at the deployment that was promoted before the current one:
 
 ```sh
-curl -sS -X POST "$SKIFF_ORIGIN/api/v1/projects/my-site/rollback" \
-  -H "Authorization: Bearer $SKIFF_KEY" \
-  -H "Origin: $SKIFF_ORIGIN" \
+curl -sS -X POST "$YOAL_ORIGIN/api/v1/projects/my-site/rollback" \
+  -H "Authorization: Bearer $YOAL_KEY" \
+  -H "Origin: $YOAL_ORIGIN" \
   -H "Content-Type: application/json" \
   -d '{}'
 ```
@@ -272,7 +272,7 @@ Each table has one row per path. Where a path takes several methods, they share 
 | GET, DELETE | `/databases/{name}/backups/{backupId}` | Read or delete a backup. |
 | POST | `/databases/{name}/backups/{backupId}/restore` | Restore a backup into a new database. |
 | GET, PATCH | `/databases/{name}/backup-policy` | Read or set the backup schedule and retention. |
-| GET, PATCH | `/databases/{name}/pitr` | Point-in-time recovery status, including `recoverableFrom` and `recoverableTo`, and `{"enabled": true}` to turn it on. PostgreSQL 18, behind the `SKIFF_FEATURE_PITR` flag. |
+| GET, PATCH | `/databases/{name}/pitr` | Point-in-time recovery status, including `recoverableFrom` and `recoverableTo`, and `{"enabled": true}` to turn it on. PostgreSQL 18, behind the `YOAL_FEATURE_PITR` flag. |
 | POST | `/databases/{name}/pitr/backups` | Queue a PITR base backup: `{"type": "full"}`, `"diff"` or `"incr"`. |
 | POST | `/databases/{name}/pitr/restore` | Restore to `targetTime` (inside the recoverable window) into a new database named `name`. |
 | GET, POST | `/databases/{name}/replicas` | List read replicas with `primaryGeneration` and the promotion history, or add one with `{"node": "<id or name>"}` and an optional `storage` target. PostgreSQL only. |
@@ -348,7 +348,7 @@ Each table has one row per path. Where a path takes several methods, they share 
 | GET | `/email` | Your org's sending state and quotas. Platform admins also see mail node settings. |
 | PATCH | `/email/settings` | Pick the mail node and pause or resume sending. Platform admin, session only. |
 | PATCH | `/email/orgs/{orgId}` | Set an org's sending state and limits. Platform admin, session only. |
-| GET, POST | `/email/domains` | List sending domains, or add one. Skiff creates DNS records where it can. |
+| GET, POST | `/email/domains` | List sending domains, or add one. Yoal creates DNS records where it can. |
 | GET, PATCH, DELETE | `/email/domains/{name}` | Read, turn sending on or off, or remove a domain. |
 | POST | `/email/domains/{name}/check` | Look up the domain's DNS records now. |
 | POST | `/email/send` | Send one message. Returns `202` with the message id. |
@@ -357,7 +357,7 @@ Each table has one row per path. Where a path takes several methods, they share 
 | GET | `/email/messages/{id}` | One message, with each recipient's status. |
 | GET, POST | `/email/suppressions` | List suppressed addresses, or add one. |
 | DELETE | `/email/suppressions/{address}` | Remove an address from the suppression list. |
-| GET, POST | `/email/addresses` | List sandbox recipients, or add one: Skiff emails it a confirmation link. `201` for a new link, `200` if it is already verified. |
+| GET, POST | `/email/addresses` | List sandbox recipients, or add one: Yoal emails it a confirmation link. `201` for a new link, `200` if it is already verified. |
 | DELETE | `/email/addresses/{address}` | Remove a sandbox recipient. |
 | GET, POST | `/email/access-request` | Your org's latest production access request (`null` if none), or send one with `useCase`, `expectedDailyVolume` and optional `website`. Owners and admins. |
 | GET | `/email/access-requests` | Every org's requests, pending first, filtered by `status` and `limit`. Platform admin. |

@@ -1,7 +1,7 @@
--- Access keys in a Skiff table (IAM.md I14, §4, §7.2). Additive only.
+-- Access keys in a Yoal table (IAM.md I14, §4, §7.2). Additive only.
 --
 -- A key is bound to one org and one principal, either a user or a service account (`sa_…`). Only
--- the SHA-256 hex of the raw `skif_…` key is stored; `prefix` (`skif_`) and `start` (the first eight
+-- the SHA-256 hex of the raw `yoal_…` key is stored; `prefix` (`yoal_`) and `start` (the first eight
 -- visible characters) are kept for display. The raw key is returned once, at creation, and never
 -- again.
 --
@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS access_keys (
   principal_type TEXT NOT NULL,
   principal_id TEXT NOT NULL,
   name TEXT NOT NULL,
-  -- `skif_`
+  -- `yoal_`
   prefix TEXT NOT NULL,
   -- The first eight visible characters, for the key list.
   start TEXT NOT NULL,

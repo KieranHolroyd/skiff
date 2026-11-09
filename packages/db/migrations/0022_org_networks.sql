@@ -80,7 +80,7 @@ SELECT
   d.org_id,
   d.id,
   'monitor',
-  'skiff_monitor',
+  'yoal_monitor',
   d.monitor_secret,
   'Stats sampler (built in)',
   'ready',

@@ -11,12 +11,12 @@
 		SystemAlertRouting,
 		SystemAlertsUpdate,
 		SystemAlertsView
-	} from '@skiff/contracts';
+	} from '@yoal/contracts';
 	import { untrack } from 'svelte';
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { toast } from 'svelte-sonner';
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';

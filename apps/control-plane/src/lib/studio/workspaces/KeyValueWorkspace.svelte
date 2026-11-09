@@ -11,8 +11,8 @@
 		ObjectDescription,
 		ObjectRef,
 		RowChange
-	} from '@skiff/studio/protocol';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	} from '@yoal/studio/protocol';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';

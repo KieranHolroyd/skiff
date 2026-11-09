@@ -10,7 +10,7 @@ import {
 	type BrokerStreamStats,
 	type WorkloadActivation,
 	type WorkloadStatus,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { NatsConnection, jsApi } from '../../../packages/function-bindings/src/nats.js';
 import type { BrokerConnector } from './function-queues.ts';
 import { connectTcp } from './tcp-stream.ts';
@@ -254,10 +254,10 @@ export class BrokerStatsSampler {
 		if (cached && cached.activationVersion === target.activationVersion && !cached.connection.closed) return cached.connection;
 		this.drop(target.id);
 		const activation = await this.fetchActivation(target.id, signal);
-		const user = activation.env.SKIFF_BROKER_USER;
-		const pass = activation.env.SKIFF_BROKER_PASSWORD;
+		const user = activation.env.YOAL_BROKER_USER;
+		const pass = activation.env.YOAL_BROKER_PASSWORD;
 		if (!user || !pass) throw new Error(`Broker ${target.id} has no credentials in its activation`);
-		const connection = await this.connect({ host: '127.0.0.1', port: target.port, user, pass, name: 'skiff-stats' });
+		const connection = await this.connect({ host: '127.0.0.1', port: target.port, user, pass, name: 'yoal-stats' });
 		this.handles.set(target.id, { activationVersion: target.activationVersion, connection });
 		return connection;
 	}

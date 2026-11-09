@@ -1,7 +1,7 @@
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import { zipSync } from 'fflate';
-import { limits } from '@skiff/contracts';
+import { limits } from '@yoal/contracts';
 import { BuildValidationError } from './command.ts';
 
 export interface ZipDirectoryOptions {

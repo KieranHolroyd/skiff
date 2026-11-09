@@ -1,5 +1,5 @@
 -- Registry deployment pins and deploy-on-push (docs/REGISTRY.md R11, §5.3). Additive only.
--- A pin is a hidden `skiff-d-<deployment id>` tag on the digest a deployment runs, so retention
+-- A pin is a hidden `yoal-d-<deployment id>` tag on the digest a deployment runs, so retention
 -- never deletes an image a deployment (or its rollback) needs. A row lives until the pin tag is
 -- removed from the registry after its deployment row is gone.
 

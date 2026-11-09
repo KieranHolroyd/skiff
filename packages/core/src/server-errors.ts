@@ -23,8 +23,8 @@ import type {
 	ServerErrorListView,
 	ServerErrorSource,
 	ServerErrorStatus,
-} from '@skiff/contracts';
-import { serverErrorListQuerySchema, serverErrorStatuses } from '@skiff/contracts';
+} from '@yoal/contracts';
+import { serverErrorListQuerySchema, serverErrorStatuses } from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { ForbiddenError, NotFoundError, ValidationError } from './errors.ts';
 import { newId, parseJson, sha256Hex } from './util.ts';
@@ -116,8 +116,8 @@ const SCRUBBERS: Array<[RegExp, string]> = [
 	[/\b([a-z][a-z0-9+.-]*:\/\/[^\s:/@]+):([^\s@/]+)@/gi, '$1:[redacted]@'],
 	[/\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, '$1 [redacted]'],
 	[/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, '[jwt]'],
-	// Skiff keys and common provider tokens.
-	[/\b(skif|sk|pk|rk|ghp|gho|ghs|ghu|github_pat|xox[abprs])_[A-Za-z0-9_-]{8,}/g, '$1_[redacted]'],
+	// Yoal keys and common provider tokens.
+	[/\b(yoal|sk|pk|rk|ghp|gho|ghs|ghu|github_pat|xox[abprs])_[A-Za-z0-9_-]{8,}/g, '$1_[redacted]'],
 	[/\bAKIA[0-9A-Z]{16}\b/g, '[aws-key]'],
 	// key=value and "key": "value" pairs whose name says secret.
 	[

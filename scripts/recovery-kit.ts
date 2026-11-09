@@ -1,12 +1,12 @@
 #!/usr/bin/env bun
 /**
- * Skiff recovery kit (DESIGN §2, §10; D25): a passphrase-encrypted export of the master key
- * (and optionally /etc/skiff/skiff.env), so a lost VPS can be rebuilt and existing secrets
+ * Yoal recovery kit (DESIGN §2, §10; D25): a passphrase-encrypted export of the master key
+ * (and optionally /etc/yoal/yoal.env), so a lost VPS can be rebuilt and existing secrets
  * still decrypt.
  *
- *   sudo skiff-recovery-kit export [--out <file>] [--include-env] [--passphrase-file <file>]
- *   sudo skiff-recovery-kit verify <file> [--passphrase-file <file>]
- *   sudo skiff-recovery-kit import <file> [--restore-env] [--force] [--passphrase-file <file>]
+ *   sudo yoal-recovery-kit export [--out <file>] [--include-env] [--passphrase-file <file>]
+ *   sudo yoal-recovery-kit verify <file> [--passphrase-file <file>]
+ *   sudo yoal-recovery-kit import <file> [--restore-env] [--force] [--passphrase-file <file>]
  *
  * The kit is a standard age v1 file (scrypt passphrase recipient, ASCII armored), so it can be
  * opened with stock `age -d kit.age` on any machine. age is implemented here (ChaCha20-Poly1305
@@ -18,7 +18,7 @@
  * systemd-creds sealed `master.key.cred` (decrypted with `systemd-creds decrypt`, root only) or
  * the plaintext `master.key`. `import` writes back into the same kind of store.
  *
- * The passphrase comes from `--passphrase-file`, `$SKIFF_RECOVERY_PASSPHRASE_FILE`, or a no-echo
+ * The passphrase comes from `--passphrase-file`, `$YOAL_RECOVERY_PASSPHRASE_FILE`, or a no-echo
  * prompt on /dev/tty. An empty passphrase on export generates a strong one and prints it once.
  */
 
@@ -294,7 +294,7 @@ export function dearmor(text: string): Uint8Array {
 // ---------------------------------------------------------------------------------------------
 
 export interface RecoveryKit {
-	format: 'skiff-recovery-kit';
+	format: 'yoal-recovery-kit';
 	version: 1;
 	createdAt: string;
 	host: string;
@@ -302,7 +302,7 @@ export interface RecoveryKit {
 	/** sha256(master key)[0..16] in hex, to match a kit to a host without revealing the key. */
 	fingerprint: string;
 	masterKey: string;
-	/** Raw /etc/skiff/skiff.env, when exported with --include-env. */
+	/** Raw /etc/yoal/yoal.env, when exported with --include-env. */
 	env?: string;
 }
 
@@ -313,9 +313,9 @@ export function fingerprint(masterKey: string): string {
 export function buildKit(input: { masterKey: string; env?: string; host?: string; now?: Date }): RecoveryKit {
 	const masterKey = input.masterKey.trim();
 	if (!masterKey) throw new Error('master key is empty');
-	const origin = input.env ? envValue(input.env, 'SKIFF_PLATFORM_ORIGIN') : null;
+	const origin = input.env ? envValue(input.env, 'YOAL_PLATFORM_ORIGIN') : null;
 	return {
-		format: 'skiff-recovery-kit',
+		format: 'yoal-recovery-kit',
 		version: 1,
 		createdAt: (input.now ?? new Date()).toISOString(),
 		host: input.host ?? hostname(),
@@ -331,10 +331,10 @@ export function parseKit(plaintext: Uint8Array): RecoveryKit {
 	try {
 		kit = JSON.parse(Buffer.from(plaintext).toString('utf8')) as RecoveryKit;
 	} catch {
-		throw new Error('decrypted file is not a Skiff recovery kit');
+		throw new Error('decrypted file is not a Yoal recovery kit');
 	}
-	if (kit?.format !== 'skiff-recovery-kit' || kit.version !== 1 || typeof kit.masterKey !== 'string' || !kit.masterKey)
-		throw new Error('decrypted file is not a Skiff recovery kit (or an unsupported version)');
+	if (kit?.format !== 'yoal-recovery-kit' || kit.version !== 1 || typeof kit.masterKey !== 'string' || !kit.masterKey)
+		throw new Error('decrypted file is not a Yoal recovery kit (or an unsupported version)');
 	if (fingerprint(kit.masterKey) !== kit.fingerprint) throw new Error('recovery kit fingerprint does not match its master key');
 	return kit;
 }
@@ -370,15 +370,15 @@ export function generatePassphrase(): string {
 // CLI
 // ---------------------------------------------------------------------------------------------
 
-const ETC = process.env.SKIFF_ETC_DIR ?? '/etc/skiff';
-const MASTER_KEY_FILE = process.env.SKIFF_MASTER_KEY_PATH ?? `${ETC}/master.key`;
-const ENV_FILE = process.env.SKIFF_ENV_FILE ?? `${ETC}/skiff.env`;
+const ETC = process.env.YOAL_ETC_DIR ?? '/etc/yoal';
+const MASTER_KEY_FILE = process.env.YOAL_MASTER_KEY_PATH ?? `${ETC}/master.key`;
+const ENV_FILE = process.env.YOAL_ENV_FILE ?? `${ETC}/yoal.env`;
 const MIN_PASSPHRASE = 12;
 
 class UsageError extends Error {}
 
 function fail(message: string): never {
-	process.stderr.write(`skiff-recovery-kit: error: ${message}\n`);
+	process.stderr.write(`yoal-recovery-kit: error: ${message}\n`);
 	process.exit(1);
 }
 
@@ -405,7 +405,7 @@ function promptTty(prompt: string): string {
 	if (!existsSync('/dev/tty')) throw new Error('no terminal: pass --passphrase-file');
 	const result = spawnSync('sh', ['-c', PROMPT_SCRIPT, 'sh', prompt], { stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8' });
 	if (result.status === 130 || result.signal === 'SIGINT') {
-		process.stderr.write('skiff-recovery-kit: cancelled\n');
+		process.stderr.write('yoal-recovery-kit: cancelled\n');
 		process.exit(130);
 	}
 	if (result.status !== 0) throw new Error('could not read the passphrase from the terminal (pass --passphrase-file)');
@@ -419,7 +419,7 @@ function readPassphraseFile(path: string): string {
 }
 
 function passphraseFor(mode: 'encrypt' | 'decrypt', file: string | undefined): { passphrase: string; generated: boolean } {
-	const path = file ?? process.env.SKIFF_RECOVERY_PASSPHRASE_FILE;
+	const path = file ?? process.env.YOAL_RECOVERY_PASSPHRASE_FILE;
 	if (path) {
 		const passphrase = readPassphraseFile(path);
 		if (mode === 'encrypt' && passphrase.length < MIN_PASSPHRASE) throw new Error(`passphrase must be at least ${MIN_PASSPHRASE} characters`);
@@ -468,9 +468,9 @@ function parseArgs(argv: string[]): Args {
 }
 
 const USAGE = `Usage:
-  skiff-recovery-kit export [--out <file>] [--include-env] [--passphrase-file <file>]
-  skiff-recovery-kit verify <file> [--passphrase-file <file>]
-  skiff-recovery-kit import <file> [--restore-env] [--force] [--passphrase-file <file>]
+  yoal-recovery-kit export [--out <file>] [--include-env] [--passphrase-file <file>]
+  yoal-recovery-kit verify <file> [--passphrase-file <file>]
+  yoal-recovery-kit import <file> [--restore-env] [--force] [--passphrase-file <file>]
 
 The kit is a standard age file: \`age -d kit.age\` also opens it.
 `;
@@ -526,11 +526,11 @@ export async function main(argv: string[]): Promise<void> {
 
 	if (args.command === 'export') {
 		const store = locateMasterKey(MASTER_KEY_FILE);
-		if (!store) fail(`missing ${MASTER_KEY_FILE} (is Skiff installed?)`);
+		if (!store) fail(`missing ${MASTER_KEY_FILE} (is Yoal installed?)`);
 		const masterKey = keyOf(store);
 		const env = args.includeEnv ? readFileSync(ENV_FILE, 'utf8') : undefined;
 		const kit = buildKit({ masterKey, env });
-		const out = args.out ?? `${isRoot ? '/root' : process.env.HOME ?? '.'}/skiff-recovery-kit-${kit.host}-${kit.createdAt.slice(0, 10)}.age`;
+		const out = args.out ?? `${isRoot ? '/root' : process.env.HOME ?? '.'}/yoal-recovery-kit-${kit.host}-${kit.createdAt.slice(0, 10)}.age`;
 		if (existsSync(out) && !args.force) fail(`${out} already exists (use --force or --out)`);
 		const { passphrase, generated } = passphraseFor('encrypt', args.passphraseFile);
 		const armored = encryptKit(kit, passphrase, args.workFactor);
@@ -543,7 +543,7 @@ export async function main(argv: string[]): Promise<void> {
 			'',
 			`Recovery kit written to ${out}`,
 			`  master key fingerprint: ${kit.fingerprint}`,
-			`  contents: master key${env !== undefined ? ' + skiff.env (R2, SMTP and auth secrets)' : ''}`,
+			`  contents: master key${env !== undefined ? ' + yoal.env (R2, SMTP and auth secrets)' : ''}`,
 		];
 		if (generated) lines.push('', 'Generated passphrase (shown once, write it down):', '', `  ${passphrase}`, '');
 		lines.push(
@@ -553,7 +553,7 @@ export async function main(argv: string[]): Promise<void> {
 			'     with the passphrase kept separately (password manager).',
 			`  2. Delete it from the server: shred -u ${out}`,
 			'  3. Re-export after every master-key rotation.',
-			'Restore on a fresh host: skiff-restore --recovery-kit <file>   (or: age -d <file>)',
+			'Restore on a fresh host: yoal-restore --recovery-kit <file>   (or: age -d <file>)',
 			'',
 		);
 		process.stdout.write(lines.join('\n'));
@@ -589,7 +589,7 @@ export async function main(argv: string[]): Promise<void> {
 		process.stdout.write(
 			`Recovery kit ${basename(args.file)}: created ${kit.createdAt} on ${kit.host}` +
 				`${kit.platformOrigin ? ` (${kit.platformOrigin})` : ''}, fingerprint ${kit.fingerprint}` +
-				`${kit.env !== undefined ? ', includes skiff.env' : ''}\n`,
+				`${kit.env !== undefined ? ', includes yoal.env' : ''}\n`,
 		);
 
 		if (args.command === 'verify') {
@@ -600,7 +600,7 @@ export async function main(argv: string[]): Promise<void> {
 			return;
 		}
 
-		if (!isRoot && !process.env.SKIFF_ETC_DIR) fail('run as root');
+		if (!isRoot && !process.env.YOAL_ETC_DIR) fail('run as root');
 		if (unreadable !== null && !args.force)
 			fail(`${unreadable}; pass --force to replace it with the kit's key (a backup copy is kept)`);
 		if (current !== null && current !== kit.fingerprint && !args.force)
@@ -622,9 +622,9 @@ export async function main(argv: string[]): Promise<void> {
 			process.stdout.write(`Wrote ${MASTER_KEY_FILE}${backup ? ` (previous key kept at ${backup})` : ''}\n`);
 		}
 		if (args.restoreEnv) {
-			if (kit.env === undefined) process.stdout.write('The kit has no skiff.env (exported without --include-env); left it unchanged.\n');
+			if (kit.env === undefined) process.stdout.write('The kit has no yoal.env (exported without --include-env); left it unchanged.\n');
 			else {
-				const gid = isRoot ? groupId('skiff') : null;
+				const gid = isRoot ? groupId('yoal') : null;
 				const backup = installFile(ENV_FILE, kit.env, 0o640, isRoot ? { uid: 0, gid: gid ?? 0 } : null);
 				process.stdout.write(`Wrote ${ENV_FILE}${backup ? ` (previous file kept at ${backup})` : ''}\n`);
 			}

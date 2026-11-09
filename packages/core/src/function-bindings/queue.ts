@@ -1,6 +1,6 @@
 import { and, eq, isNull } from 'drizzle-orm';
-import { brokerAttachments, brokers } from '@skiff/db';
-import type { FunctionRuntimeBinding } from '@skiff/contracts';
+import { brokerAttachments, brokers } from '@yoal/db';
+import type { FunctionRuntimeBinding } from '@yoal/contracts';
 import type { CoreContext } from '../context.ts';
 import { ValidationError } from '../errors.ts';
 import type { ProjectRow } from '../projects.ts';
@@ -36,15 +36,15 @@ export function resolveQueueBroker(
 			.get();
 		throw new ValidationError(
 			exists
-				? `${label}: attach broker "${name}" to "${project.slug}" before using it for queues (skif broker attach ${name} --project ${project.slug}).`
-				: `${label}: broker "${name}" does not exist in this organisation. Create it with skif broker create ${name} --project ${project.slug}.`,
+				? `${label}: attach broker "${name}" to "${project.slug}" before using it for queues (yoal broker attach ${name} --project ${project.slug}).`
+				: `${label}: broker "${name}" does not exist in this organisation. Create it with yoal broker create ${name} --project ${project.slug}.`,
 		);
 	}
 	if (attached.length === 1) return attached[0]!;
 	throw new ValidationError(
 		attached.length === 0
-			? `${label}: queues run on a managed broker. Create and attach one (skif broker create <name> --project ${project.slug}) and deploy again.`
-			: `${label}: "${project.slug}" has ${attached.length} brokers attached (${attached.map((item) => item.broker).join(', ')}); name one with skiff.brokers in wrangler config.`,
+			? `${label}: queues run on a managed broker. Create and attach one (yoal broker create <name> --project ${project.slug}) and deploy again.`
+			: `${label}: "${project.slug}" has ${attached.length} brokers attached (${attached.map((item) => item.broker).join(', ')}); name one with yoal.brokers in wrangler config.`,
 	);
 }
 

@@ -16,7 +16,7 @@
 		type DashboardSpec,
 		type DashboardVariable,
 		type ObservabilitySchema
-	} from '@skiff/contracts';
+	} from '@yoal/contracts';
 	import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
 	import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
 	import PlusIcon from '@lucide/svelte/icons/plus';

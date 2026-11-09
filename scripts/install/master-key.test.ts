@@ -24,12 +24,12 @@ import {
 	type MasterKeyAction,
 } from './master-key.ts';
 
-const root = mkdtempSync(join(tmpdir(), 'skiff-master-key-'));
+const root = mkdtempSync(join(tmpdir(), 'yoal-master-key-'));
 let counter = 0;
 
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-/** A fresh /etc/skiff stand-in plus a fake systemd-creds configured with `env`. */
+/** A fresh /etc/yoal stand-in plus a fake systemd-creds configured with `env`. */
 function host(env: Record<string, string> = {}) {
 	const dir = join(root, `host-${++counter}`);
 	mkdirSync(dir, { recursive: true });
@@ -59,22 +59,22 @@ describe('stores and directives', () => {
 	test('the sealed store wins when both exist', () => {
 		const files = new Set<string>();
 		const exists = (path: string) => files.has(path);
-		expect(locateMasterKey('/etc/skiff/master.key', exists)).toBeNull();
-		files.add('/etc/skiff/master.key');
-		expect(locateMasterKey('/etc/skiff/master.key', exists)).toEqual({ kind: 'plain', path: '/etc/skiff/master.key' });
-		files.add('/etc/skiff/master.key.cred');
-		expect(locateMasterKey('/etc/skiff/master.key', exists)).toEqual({ kind: 'sealed', path: '/etc/skiff/master.key.cred' });
+		expect(locateMasterKey('/etc/yoal/master.key', exists)).toBeNull();
+		files.add('/etc/yoal/master.key');
+		expect(locateMasterKey('/etc/yoal/master.key', exists)).toEqual({ kind: 'plain', path: '/etc/yoal/master.key' });
+		files.add('/etc/yoal/master.key.cred');
+		expect(locateMasterKey('/etc/yoal/master.key', exists)).toEqual({ kind: 'sealed', path: '/etc/yoal/master.key.cred' });
 	});
 
 	test('unit directives', () => {
-		expect(credentialDirective({ kind: 'sealed', path: '/etc/skiff/master.key.cred' })).toBe(
-			'LoadCredentialEncrypted=master-key:/etc/skiff/master.key.cred',
+		expect(credentialDirective({ kind: 'sealed', path: '/etc/yoal/master.key.cred' })).toBe(
+			'LoadCredentialEncrypted=master-key:/etc/yoal/master.key.cred',
 		);
-		expect(credentialDirective({ kind: 'plain', path: '/etc/skiff/master.key' })).toBe('LoadCredential=master-key:/etc/skiff/master.key');
+		expect(credentialDirective({ kind: 'plain', path: '/etc/yoal/master.key' })).toBe('LoadCredential=master-key:/etc/yoal/master.key');
 		// An old stage-0 passes the plain path; a sealed file beside it switches to the encrypted form.
-		expect(credentialDirectiveFor('/etc/skiff/master.key', () => false)).toBe('LoadCredential=master-key:/etc/skiff/master.key');
-		expect(credentialDirectiveFor('/etc/skiff/master.key', (path) => path.endsWith('.cred'))).toBe(
-			'LoadCredentialEncrypted=master-key:/etc/skiff/master.key.cred',
+		expect(credentialDirectiveFor('/etc/yoal/master.key', () => false)).toBe('LoadCredential=master-key:/etc/yoal/master.key');
+		expect(credentialDirectiveFor('/etc/yoal/master.key', (path) => path.endsWith('.cred'))).toBe(
+			'LoadCredentialEncrypted=master-key:/etc/yoal/master.key.cred',
 		);
 		expect(credentialDirectiveFor('/x/master.key.cred', () => false)).toBe('LoadCredentialEncrypted=master-key:/x/master.key.cred');
 	});
@@ -276,7 +276,7 @@ describe('ensureMasterKey', () => {
 		const h = host();
 		sealMasterKey(generateMasterKey(), h.sealedPath, { tpm2: false, bin: h.bin });
 		const rebuilt = fakeCredsBinary(mkdtempSync(join(root, 'rebuilt-')), { FAKE_CREDS_HOST: 'host-b' });
-		expect(() => ensureMasterKey({ plainPath: h.plainPath, bin: rebuilt })).toThrow('skiff-recovery-kit import');
+		expect(() => ensureMasterKey({ plainPath: h.plainPath, bin: rebuilt })).toThrow('yoal-recovery-kit import');
 	});
 
 	test('keep-sealed warns about a stray plaintext file beside it', () => {

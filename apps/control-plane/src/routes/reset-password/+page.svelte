@@ -6,7 +6,7 @@
 	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import { authClient } from '#lib/auth-client.js';
-	import AuthShell from '#lib/components/skiff/AuthShell.svelte';
+	import AuthShell from '#lib/components/yoal/AuthShell.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
@@ -58,7 +58,7 @@
 </script>
 
 <svelte:head>
-	<title>Choose a new password · Skiff</title>
+	<title>Choose a new password · Yoal</title>
 	<meta name="robots" content="noindex" />
 	<meta name="referrer" content="no-referrer" />
 </svelte:head>

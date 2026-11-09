@@ -1,7 +1,7 @@
 # Prometheus metrics (`/metrics`)
 
-Skiff exports Prometheus text so you can chart your own usage in Grafana (D16, D104). There is
-no scraper to run on the Skiff side: point Prometheus, Grafana Alloy or Grafana Agent at the
+Yoal exports Prometheus text so you can chart your own usage in Grafana (D16, D104). There is
+no scraper to run on the Yoal side: point Prometheus, Grafana Alloy or Grafana Agent at the
 control plane.
 
 ## Who sees what
@@ -9,7 +9,7 @@ control plane.
 | Request | Result |
 |---|---|
 | `GET /metrics`, no credentials | Fleet summary: node, disk and platform-wide traffic counts. Off when Settings → Metrics → *Public fleet summary* is off (then 401). |
-| `GET /metrics` with `Authorization: Bearer skif_…` (or a dashboard session) | Every enabled section for **the key's organisation only**. Needs `metrics:read`; sections the key cannot read (`project:read`, `database:read`, `storage:read`, `broker:read`) are left out. |
+| `GET /metrics` with `Authorization: Bearer yoal_…` (or a dashboard session) | Every enabled section for **the key's organisation only**. Needs `metrics:read`; sections the key cannot read (`project:read`, `database:read`, `storage:read`, `broker:read`) are left out. |
 | `GET /metrics/<section>[/<name>]` | One section, or one app / database / storage instance / broker. Always needs a key. |
 | An `Authorization` header that does not resolve | 401, never the public view. |
 
@@ -34,12 +34,12 @@ seconds.
 
 ```yaml
 scrape_configs:
-  - job_name: skiff-apps
+  - job_name: yoal-apps
     scheme: https
     metrics_path: /metrics/apps
     scrape_interval: 60s
     authorization:
-      credentials: skif_...   # Settings → API keys, scope metrics:read (+ project:read)
+      credentials: yoal_...   # Settings → API keys, scope metrics:read (+ project:read)
     static_configs:
       - targets: ['control.example.com']
 ```
@@ -54,76 +54,76 @@ telemetry store's TTL would make a running total go backwards.
 
 **Org** (`/metrics`, `/metrics/usage`)
 
-- `skiff_quota_used{metric,unit}`, `skiff_quota_limit{metric,unit}` (absent when unlimited),
-  `skiff_quota_used_ratio{metric}`. `metric` is a quota key from docs/QUOTAS.md. `egressBytes` is
+- `yoal_quota_used{metric,unit}`, `yoal_quota_limit{metric,unit}` (absent when unlimited),
+  `yoal_quota_used_ratio{metric}`. `metric` is a quota key from docs/QUOTAS.md. `egressBytes` is
   a 30-day sum.
 
 **Apps** (label `project` = slug)
 
-- `skiff_project_info{project,name,runtime,placement}`, `skiff_project_created_timestamp_seconds`
-- `skiff_project_deployments{status}`, `skiff_project_last_deploy_timestamp_seconds`,
-  `skiff_project_release_bytes`
-- `skiff_project_builds_24h{status}`, `skiff_project_build_duration_seconds_avg_24h{status}`
-- `skiff_project_workload_up{runtime}`, `skiff_project_workload_memory_limit_bytes`,
-  `skiff_project_workload_cpu_limit`
-- `skiff_project_domains{status}`
-- Traffic (needs the telemetry store): `skiff_project_http_requests_1h{status_class}`,
-  `skiff_project_http_response_bytes_1h`, `skiff_project_http_duration_p50_ms_1h`,
-  `skiff_project_http_duration_p95_ms_1h`
-- Volumes: `skiff_project_volume_ready{volume}`, `skiff_project_volume_size_bytes`,
-  `skiff_project_volume_used_bytes`
+- `yoal_project_info{project,name,runtime,placement}`, `yoal_project_created_timestamp_seconds`
+- `yoal_project_deployments{status}`, `yoal_project_last_deploy_timestamp_seconds`,
+  `yoal_project_release_bytes`
+- `yoal_project_builds_24h{status}`, `yoal_project_build_duration_seconds_avg_24h{status}`
+- `yoal_project_workload_up{runtime}`, `yoal_project_workload_memory_limit_bytes`,
+  `yoal_project_workload_cpu_limit`
+- `yoal_project_domains{status}`
+- Traffic (needs the telemetry store): `yoal_project_http_requests_1h{status_class}`,
+  `yoal_project_http_response_bytes_1h`, `yoal_project_http_duration_p50_ms_1h`,
+  `yoal_project_http_duration_p95_ms_1h`
+- Volumes: `yoal_project_volume_ready{volume}`, `yoal_project_volume_size_bytes`,
+  `yoal_project_volume_used_bytes`
 
 **Databases** (labels `database`, `database_id`)
 
-- `skiff_database_info{engine,version}`, `skiff_database_running`,
-  `skiff_database_{memory_limit_bytes,cpu_limit,storage_limit_bytes}`, `skiff_database_size_bytes`
-- Latest sample: `skiff_database_up`, `_connections`, `_max_connections`, `_memory_bytes`,
+- `yoal_database_info{engine,version}`, `yoal_database_running`,
+  `yoal_database_{memory_limit_bytes,cpu_limit,storage_limit_bytes}`, `yoal_database_size_bytes`
+- Latest sample: `yoal_database_up`, `_connections`, `_max_connections`, `_memory_bytes`,
   `_pooler_up`, `_pool_active`, `_pool_idle`, `_pool_waiting`, `_pool_saturation`,
   `_pool_avg_wait_ms`
-- Last hour: `skiff_database_transactions_1h{result}`, `skiff_database_tuples_1h{op}`,
-  `skiff_database_blocks_1h{source}`, `skiff_database_deadlocks_1h`, `skiff_database_temp_bytes_1h`
+- Last hour: `yoal_database_transactions_1h{result}`, `yoal_database_tuples_1h{op}`,
+  `yoal_database_blocks_1h{source}`, `yoal_database_deadlocks_1h`, `yoal_database_temp_bytes_1h`
 
 **Object storage** (labels `storage`, `storage_id`)
 
-- `skiff_storage_info{engine,version,public}`, `skiff_storage_running`,
-  `skiff_storage_{memory_limit_bytes,storage_limit_bytes}`, `skiff_storage_used_bytes`,
-  `skiff_storage_objects`, `skiff_storage_up`, `skiff_storage_buckets`, `skiff_storage_memory_bytes`
+- `yoal_storage_info{engine,version,public}`, `yoal_storage_running`,
+  `yoal_storage_{memory_limit_bytes,storage_limit_bytes}`, `yoal_storage_used_bytes`,
+  `yoal_storage_objects`, `yoal_storage_up`, `yoal_storage_buckets`, `yoal_storage_memory_bytes`
 
 **Queue brokers** (labels `broker`, `broker_id`; D123, [BROKERS.md](./BROKERS.md) §7)
 
-- `skiff_broker_info{engine,version}`, `skiff_broker_running`,
-  `skiff_broker_{memory_limit_bytes,cpu_limit,storage_limit_bytes}`, `skiff_broker_store_bytes`,
-  `skiff_broker_messages` (the last good sample, so they survive ClickHouse being off)
-- Latest sample: `skiff_broker_up`, `_connections`, `_streams`, `_consumers`,
+- `yoal_broker_info{engine,version}`, `yoal_broker_running`,
+  `yoal_broker_{memory_limit_bytes,cpu_limit,storage_limit_bytes}`, `yoal_broker_store_bytes`,
+  `yoal_broker_messages` (the last good sample, so they survive ClickHouse being off)
+- Latest sample: `yoal_broker_up`, `_connections`, `_streams`, `_consumers`,
   `_memory_store_bytes`, `_pending`, `_ack_pending`, `_redelivered`,
   `_oldest_message_age_seconds`, `_memory_bytes`
-- Last hour: `skiff_broker_published_1h`, `skiff_broker_messages_1h{direction}`,
-  `skiff_broker_bytes_1h{direction}` (`in` = sent by clients), `skiff_broker_slow_consumers_1h`
+- Last hour: `yoal_broker_published_1h`, `yoal_broker_messages_1h{direction}`,
+  `yoal_broker_bytes_1h{direction}` (`in` = sent by clients), `yoal_broker_slow_consumers_1h`
 - Per stream, from the newest listing (labels `stream`, `queue` = the function queue or empty):
-  `skiff_broker_stream_{messages,bytes,consumers,pending,ack_pending,redelivered}`,
-  `skiff_broker_stream_oldest_message_age_seconds`, plus
-  `skiff_broker_streams_timestamp_seconds` for when the node took the listing. At most 200
+  `yoal_broker_stream_{messages,bytes,consumers,pending,ack_pending,redelivered}`,
+  `yoal_broker_stream_oldest_message_age_seconds`, plus
+  `yoal_broker_streams_timestamp_seconds` for when the node took the listing. At most 200
   streams per broker.
 
 Brokers are not in the public fleet summary.
 
 **Fleet** (public `/metrics`, `/metrics/platform`)
 
-- `skiff_nodes_total`, `skiff_nodes_online`, `skiff_projects_total`, `skiff_deployments_active`,
-  `skiff_storage_bytes`, `skiff_agent_desired_version_info{version}`
-- `skiff_node_up{node,mode}`, `skiff_node_info{status,agent_version}`,
-  `skiff_node_last_heartbeat_timestamp_seconds`, `skiff_node_cpu_percent`, `skiff_node_load1`,
-  `skiff_node_memory_{used,total}_bytes`, `skiff_node_disk_{used,total,free}_bytes`,
-  `skiff_node_uptime_seconds`, `skiff_node_cert_expiry_timestamp_seconds{host}`
-- Disks: `skiff_volume_up{node,volume,kind,tier}`, `skiff_volume_size_bytes`,
-  `skiff_volume_free_bytes` (D80). The names predate disks and stay; `volume` is the disk name and
+- `yoal_nodes_total`, `yoal_nodes_online`, `yoal_projects_total`, `yoal_deployments_active`,
+  `yoal_storage_bytes`, `yoal_agent_desired_version_info{version}`
+- `yoal_node_up{node,mode}`, `yoal_node_info{status,agent_version}`,
+  `yoal_node_last_heartbeat_timestamp_seconds`, `yoal_node_cpu_percent`, `yoal_node_load1`,
+  `yoal_node_memory_{used,total}_bytes`, `yoal_node_disk_{used,total,free}_bytes`,
+  `yoal_node_uptime_seconds`, `yoal_node_cert_expiry_timestamp_seconds{host}`
+- Disks: `yoal_volume_up{node,volume,kind,tier}`, `yoal_volume_size_bytes`,
+  `yoal_volume_free_bytes` (D80). The names predate disks and stay; `volume` is the disk name and
   `tier` is `fast` or `bulk` ([STORAGE.md](./STORAGE.md)).
-- Public `/metrics` only: `skiff_http_requests_total{host}`, `skiff_http_errors_total`,
-  `skiff_bytes_total` (last hour), and `skiff_database_*` / `skiff_storage_*` keyed by id.
+- Public `/metrics` only: `yoal_http_requests_total{host}`, `yoal_http_errors_total`,
+  `yoal_bytes_total` (last hour), and `yoal_database_*` / `yoal_storage_*` keyed by id.
 
-**Scrape meta**: `skiff_scrape_duration_seconds`, `skiff_telemetry_up` (0 when ClickHouse is not
+**Scrape meta**: `yoal_scrape_duration_seconds`, `yoal_telemetry_up` (0 when ClickHouse is not
 installed or not reachable; traffic and live samples are then absent),
-`skiff_scrape_truncated{section="apps"}`.
+`yoal_scrape_truncated{section="apps"}`.
 
 ## Settings → Metrics (owner)
 
@@ -135,7 +135,7 @@ restart.
 | Public fleet summary | on | Unauthenticated `GET /metrics`. Turn it off, or restrict the path in Caddy, if the platform origin is public. |
 | Sections | all on | A disabled section is skipped in `/metrics` and 404s on its own path. Traffic is the costliest because it reads ClickHouse. |
 | Cache | 15 s | Rendered scrapes are reused per org, path and permission set. Concurrent scrapes share one render. 0 turns caching off. |
-| Max apps per scrape | 500 | Caps `/metrics` and `/metrics/apps` (alphabetical by slug). `skiff_scrape_truncated` reports a cut. Per-app paths are never capped. |
+| Max apps per scrape | 500 | Caps `/metrics` and `/metrics/apps` (alphabetical by slug). `yoal_scrape_truncated` reports a cut. Per-app paths are never capped. |
 
 ## Cost
 

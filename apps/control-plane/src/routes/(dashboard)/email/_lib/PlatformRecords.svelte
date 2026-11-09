@@ -1,5 +1,5 @@
 <script lang="ts">
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
 	import * as Table from '#lib/components/ui/table/index.js';
 
 	/**

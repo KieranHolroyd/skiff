@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite';
-import { leasePolicySchema, type LeasePolicy, type LeaseRecord } from '@skiff/contracts';
+import { leasePolicySchema, type LeasePolicy, type LeaseRecord } from '@yoal/contracts';
 
 /**
  * Control-plane lease (docs/CLUSTERING.md §6.3, C6).

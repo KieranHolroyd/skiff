@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { NetworkManager } from './network.ts';
 import type { CommandRunner } from './wireguard.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-network-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-network-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 function runnerFor(status: { ufw?: string; firewalld?: string }, calls: string[][]): CommandRunner {
@@ -39,10 +39,10 @@ describe('NetworkManager', () => {
 
 	test('falls back to a dedicated nftables table', async () => {
 		const calls: string[][] = [];
-		const path = join(dir, 'skiff.nft');
+		const path = join(dir, 'yoal.nft');
 		const manager = new NetworkManager({ runner: runnerFor({}, calls), paths: { configPath: path } });
 		expect(await manager.apply()).toEqual({ backend: 'nftables', opened: 3 });
-		expect(readFileSync(path, 'utf8')).toContain('table inet skiff');
+		expect(readFileSync(path, 'utf8')).toContain('table inet yoal');
 		// Before the fix only 8080 was accepted, so every provider listener was dropped on wg0.
 		expect(readFileSync(path, 'utf8')).toContain('tcp dport 15432-16431 accept');
 		expect(readFileSync(path, 'utf8')).toContain('tcp dport 19000-19999 accept');

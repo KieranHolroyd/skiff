@@ -6,14 +6,14 @@ import { SLUG_PATTERN } from './slugs.ts';
  *
  * A pool is an org resource: a hosted OIDC provider for one deployed app's own end users. This
  * module owns the metadata and OIDC client shapes only. Users, passwords, sessions, MFA and the
- * hosted sign-in pages belong to the native `skiff-identity` engine (I27), which runs outside the
+ * hosted sign-in pages belong to the native `yoal-identity` engine (I27), which runs outside the
  * control plane; the dashboard deliberately does not fake any of them.
  *
- * The engine list is contract data, like database and broker engines (D95): `skiff-identity`
+ * The engine list is contract data, like database and broker engines (D95): `yoal-identity`
  * ships first, and a later Keycloak or Authentik entry is a registry change, not a migration.
  */
 
-export const userPoolEngines = ['skiff-identity'] as const;
+export const userPoolEngines = ['yoal-identity'] as const;
 export type UserPoolEngineId = (typeof userPoolEngines)[number];
 
 export const userPoolSignupModes = ['invite', 'open'] as const;
@@ -98,7 +98,7 @@ export type UserPoolTheme = z.infer<typeof userPoolThemeSchema>;
 export const userPoolCreateSchema = z.object({
 	name: userPoolNameSchema,
 	description: z.string().trim().max(1000).optional(),
-	engine: z.enum(userPoolEngines).default('skiff-identity'),
+	engine: z.enum(userPoolEngines).default('yoal-identity'),
 	signupMode: z.enum(userPoolSignupModes).default('invite'),
 	theme: userPoolThemeSchema.optional(),
 	/**
@@ -402,7 +402,7 @@ export interface UserPoolPasskeyAuthenticationChallenge {
 
 /** Version of the pool JSON export. Import refuses a file from a newer major schema. */
 export const USER_POOL_EXPORT_VERSION = 1;
-export const USER_POOL_EXPORT_SCHEMA = 'skiff.user-pool';
+export const USER_POOL_EXPORT_SCHEMA = 'yoal.user-pool';
 
 /**
  * Algorithms the importer can keep usable. `bcrypt` and `argon2id` are verified by `Bun.password`;
@@ -413,7 +413,7 @@ export const userPoolPasswordAlgorithms = ['argon2id', 'bcrypt', 'scrypt', 'none
 export type UserPoolPasswordAlgorithm = (typeof userPoolPasswordAlgorithms)[number];
 
 /** Formats `POST /api/v1/user-pools/:id/import` accepts. `auto` sniffs the document. */
-export const userPoolImportFormats = ['auto', 'skiff', 'auth0', 'cognito', 'firebase'] as const;
+export const userPoolImportFormats = ['auto', 'yoal', 'auth0', 'cognito', 'firebase'] as const;
 export type UserPoolImportFormatId = (typeof userPoolImportFormats)[number];
 /** The concrete format a report names (never `auto`). */
 export type UserPoolImportFormat = Exclude<UserPoolImportFormatId, 'auto'>;

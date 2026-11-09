@@ -7,7 +7,7 @@ import {
 	type NodeRole,
 	type WireguardPeer,
 	type WireguardState,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 
 /**
  * Overlay address allocation and peer graph (docs/CLUSTERING.md §4.1, phase C1).

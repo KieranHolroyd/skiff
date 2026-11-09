@@ -150,7 +150,7 @@
 				source,
 				languageFor(targetPath),
 				monaco.Uri.parse(
-					`skiff://release/${encodeURIComponent(releaseId)}/${encodeURIComponent(targetPath)}`
+					`yoal://release/${encodeURIComponent(releaseId)}/${encodeURIComponent(targetPath)}`
 				)
 			);
 			models[key] = model;
@@ -176,7 +176,7 @@
 
 	$effect(() => {
 		const dark = mode.current === 'dark';
-		if (ready && monaco) monaco.editor.setTheme(dark ? 'skiff-dark' : 'skiff-light');
+		if (ready && monaco) monaco.editor.setTheme(dark ? 'yoal-dark' : 'yoal-light');
 	});
 
 	$effect(() => {
@@ -190,7 +190,7 @@
 	});
 
 	function themeName(): string {
-		return mode.current === 'dark' ? 'skiff-dark' : 'skiff-light';
+		return mode.current === 'dark' ? 'yoal-dark' : 'yoal-light';
 	}
 
 	// ---- theme palette ---------------------------------------------------------
@@ -279,7 +279,7 @@
 		if (themesDefined) return;
 		themesDefined = true;
 		monacoInstance.editor.defineTheme(
-			'skiff-dark',
+			'yoal-dark',
 			themeFrom('vs-dark', readPalette(true), [
 				{ token: 'comment', foreground: '7d8598', fontStyle: 'italic' },
 				{ token: 'keyword', foreground: 'e8a06b' },
@@ -303,7 +303,7 @@
 			])
 		);
 		monacoInstance.editor.defineTheme(
-			'skiff-light',
+			'yoal-light',
 			themeFrom('vs', readPalette(false), [
 				{ token: 'comment', foreground: '8b8f9a', fontStyle: 'italic' },
 				{ token: 'keyword', foreground: 'b45309' },

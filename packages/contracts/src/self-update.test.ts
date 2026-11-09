@@ -24,8 +24,8 @@ describe('self-update install method', () => {
 	});
 
 	test('derives the sidecar from the configured request path', () => {
-		expect(selfUpdateModeFile('/var/lib/skiff/update/request')).toBe(
-			'/var/lib/skiff/update/request.mode'
+		expect(selfUpdateModeFile('/var/lib/yoal/update/request')).toBe(
+			'/var/lib/yoal/update/request.mode'
 		);
 	});
 });
@@ -49,8 +49,8 @@ describe('self-update release channel', () => {
 	});
 
 	test('derives the channel sidecar from the request path', () => {
-		expect(selfUpdateChannelFile('/var/lib/skiff/update/request')).toBe(
-			'/var/lib/skiff/update/request.channel'
+		expect(selfUpdateChannelFile('/var/lib/yoal/update/request')).toBe(
+			'/var/lib/yoal/update/request.channel'
 		);
 	});
 });

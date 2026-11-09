@@ -27,12 +27,12 @@
 	const INCLUDED = [
 		['Projects', 'Settings, access modes, environments, domains, workload spec, function, jobs, volumes, secret names and attachments'],
 		['Managed services', 'Databases, object storage with buckets, and queue brokers'],
-		['Access and identity', 'Roles, bindings, groups, guardrails, auth policy, service accounts, access keys, federation, Skiff Access policies, user pools and clients'],
+		['Access and identity', 'Roles, bindings, groups, guardrails, auth policy, service accounts, access keys, federation, Yoal Access policies, user pools and clients'],
 		['Integrations', 'Log drains, backup targets, event rules, alert rules, email settings and domains, pipeline repositories with variables and environments, registry logins, Git providers, shares and templates']
 	] as const;
 </script>
 
-<svelte:head><title>Config export · Settings · Skiff</title></svelte:head>
+<svelte:head><title>Config export · Settings · Yoal</title></svelte:head>
 
 <SettingsHeader id="export" />
 
@@ -129,7 +129,7 @@
 	<Panel
 		title="What the file holds"
 		icon={ListChecksIcon}
-		description="Configuration only, no data. Recreate it on another instance with skif import. To recover the whole platform with its data, use skiff-restore with a recovery kit."
+		description="Configuration only, no data. Recreate it on another instance with yoal import. To recover the whole platform with its data, use yoal-restore with a recovery kit."
 	>
 		<dl class="divide-y text-sm">
 			{#each INCLUDED as [label, detail] (label)}
@@ -154,11 +154,11 @@
 		icon={TerminalIcon}
 		description="The same export, written to a file, and the import that recreates it elsewhere. Import only creates what is missing and is safe to run again."
 	>
-		<pre class="overflow-x-auto px-4 py-3 font-mono text-xs leading-relaxed">skif export
-skif export --project shop-web,shop-api --out -
+		<pre class="overflow-x-auto px-4 py-3 font-mono text-xs leading-relaxed">yoal export
+yoal export --project shop-web,shop-api --out -
 
 # on the new instance: see the plan, then apply it with the secret values
-skif import skiff-config-acme-2026-11-09.yaml
-skif import skiff-config-acme-2026-11-09.yaml --secrets secrets.env --apply</pre>
+yoal import yoal-config-acme-2026-11-09.yaml
+yoal import yoal-config-acme-2026-11-09.yaml --secrets secrets.env --apply</pre>
 	</Panel>
 </div>

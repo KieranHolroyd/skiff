@@ -1,4 +1,4 @@
--- Email: Skiff's self-hosted SES (docs/EMAIL.md, D114–D120). Additive only.
+-- Email: Yoal's self-hosted SES (docs/EMAIL.md, D114–D120). Additive only.
 -- Platform settings (the mail node, the global pause, the mail-state generation) live in the
 -- `settings` key/value table under `email.*` keys, so only tenant data gets tables here.
 
@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS email_domains (
   dkim_selector TEXT NOT NULL,
   dkim_public TEXT NOT NULL,
   dkim_private_sealed TEXT NOT NULL,
-  -- Last check result (EmailRecordCheck[] as JSON) and the Cloudflare record ids Skiff manages.
+  -- Last check result (EmailRecordCheck[] as JSON) and the Cloudflare record ids Yoal manages.
   records_json TEXT NOT NULL DEFAULT '[]',
   managed_json TEXT NOT NULL DEFAULT '{}',
   last_checked_at INTEGER,

@@ -1,5 +1,5 @@
 import { checkServerIdentity, connect } from 'node:tls';
-import { HEARTBEAT_CERTS_MAX } from '@skiff/contracts';
+import { HEARTBEAT_CERTS_MAX } from '@yoal/contracts';
 
 /** One served certificate: the SNI probed and its expiry (ISO 8601). */
 export interface CertInfo {
@@ -32,7 +32,7 @@ export const CERT_NEW_HOST_RETRY_MS = 2 * 60_000;
 const NEW_HOST_WINDOW_MS = 30 * 60_000;
 const PROBE_TIMEOUT_MS = 5_000;
 /** A label under the content domain that never has a route; the wildcard cert answers for it. */
-const WILDCARD_PROBE_LABEL = 'skiff-cert-probe';
+const WILDCARD_PROBE_LABEL = 'yoal-cert-probe';
 
 /**
  * The hosts whose certificates this node serves: the content apex, the content wildcard (probed

@@ -8,7 +8,7 @@ import { applySpaConfig, buildZip, collectFiles, crc32, readEntries } from './zi
 let dir = '';
 
 beforeEach(async () => {
-	dir = await mkdtemp(join(tmpdir(), 'skiff-cli-zip-'));
+	dir = await mkdtemp(join(tmpdir(), 'yoal-cli-zip-'));
 	await mkdir(join(dir, 'src'), { recursive: true });
 	await mkdir(join(dir, 'assets', 'nested'), { recursive: true });
 	await mkdir(join(dir, 'sub'), { recursive: true });
@@ -55,7 +55,7 @@ describe('collectFiles', () => {
 	});
 
 	test('rejects an empty deployment', async () => {
-		const empty = await mkdtemp(join(tmpdir(), 'skiff-cli-empty-'));
+		const empty = await mkdtemp(join(tmpdir(), 'yoal-cli-empty-'));
 		try {
 			await expect(collectFiles(empty)).rejects.toThrow('No files to deploy');
 		} finally {
@@ -89,17 +89,17 @@ describe('buildZip', () => {
 		expect(entries.get('assets/nested/app.js')).toBe('console.log("hi")');
 	});
 
-	test('--spa merges into an existing skiff.json', () => {
+	test('--spa merges into an existing yoal.json', () => {
 		const entries = applySpaConfig([
 			{
-				path: 'skiff.json',
+				path: 'yoal.json',
 				data: new TextEncoder().encode('{"cleanUrls":true,"spa":false}'),
 			},
 			{ path: 'index.html', data: new TextEncoder().encode('<html></html>') },
 		]);
-		const skiffJson = entries.find((entry) => entry.path === 'skiff.json');
-		expect(skiffJson).toBeDefined();
-		const parsed = JSON.parse(new TextDecoder().decode(skiffJson!.data)) as Record<string, unknown>;
+		const yoalJson = entries.find((entry) => entry.path === 'yoal.json');
+		expect(yoalJson).toBeDefined();
+		const parsed = JSON.parse(new TextDecoder().decode(yoalJson!.data)) as Record<string, unknown>;
 		expect(parsed).toEqual({ cleanUrls: true, spa: true });
 	});
 });

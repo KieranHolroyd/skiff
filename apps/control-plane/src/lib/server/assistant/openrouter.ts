@@ -4,7 +4,7 @@
  * OpenAI-compatible client; this is only a discovery convenience.
  */
 
-import type { AssistantModelInfo } from '@skiff/contracts';
+import type { AssistantModelInfo } from '@yoal/contracts';
 
 export type OpenRouterModel = AssistantModelInfo;
 
@@ -63,7 +63,7 @@ export async function listOpenRouterModels(
 		return { ok: true, models: cache.models };
 	try {
 		const response = await fetch(MODELS_URL, {
-			headers: { accept: 'application/json', 'x-title': 'Skiff' },
+			headers: { accept: 'application/json', 'x-title': 'Yoal' },
 			signal: options.signal
 		});
 		if (!response.ok) {

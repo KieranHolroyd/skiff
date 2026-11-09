@@ -20,10 +20,10 @@ describe('frontmatter', () => {
 
 describe('renderDoc', () => {
 	test('headings get anchors and land in the TOC', async () => {
-		const doc = await renderDoc('## Promote and roll back\n\n### `skif deploy` flags\n\n## Promote and roll back', opts);
+		const doc = await renderDoc('## Promote and roll back\n\n### `yoal deploy` flags\n\n## Promote and roll back', opts);
 		expect(doc.headings.map((h) => h.id)).toEqual([
 			'promote-and-roll-back',
-			'skif-deploy-flags',
+			'yoal-deploy-flags',
 			'promote-and-roll-back-1'
 		]);
 		expect(doc.html).toContain('id="promote-and-roll-back"');
@@ -47,7 +47,7 @@ describe('renderDoc', () => {
 	});
 
 	test('code is highlighted with dual themes; raw HTML is escaped', async () => {
-		const doc = await renderDoc('```sh\nskif deploy ./dist\n```\n\n<script>alert(1)</script>', opts);
+		const doc = await renderDoc('```sh\nyoal deploy ./dist\n```\n\n<script>alert(1)</script>', opts);
 		expect(doc.html).toContain('--shiki-dark');
 		expect(doc.html).toContain('data-lang="sh"');
 		expect(doc.html).not.toContain('<script>');

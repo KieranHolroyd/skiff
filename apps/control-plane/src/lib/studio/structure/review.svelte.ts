@@ -1,4 +1,4 @@
-import type { AlterResult, SchemaChangeInput } from '@skiff/studio/protocol';
+import type { AlterResult, SchemaChangeInput } from '@yoal/studio/protocol';
 import { studioCall } from '../client.js';
 import { studioErrorMessage } from '../document/apply.js';
 import { confirmPhrase, DESTRUCTIVE_OPS } from './changes.js';

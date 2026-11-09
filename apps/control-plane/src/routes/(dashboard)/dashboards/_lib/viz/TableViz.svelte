@@ -3,7 +3,7 @@
 	 * Query rows as a sortable table. Numbers are unit-formatted (time columns as UTC timestamps,
 	 * id columns as display names) and the sort works on the raw values.
 	 */
-	import type { QueryResult } from '@skiff/contracts';
+	import type { QueryResult } from '@yoal/contracts';
 	import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
 	import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
 	import type { ResolvedOptions } from '../panel.js';

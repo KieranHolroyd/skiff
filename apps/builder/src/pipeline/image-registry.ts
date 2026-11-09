@@ -3,7 +3,7 @@ import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /**
- * A small OCI distribution client for `skiff/image-index` (docs/PIPELINES.md §4.3, W6): the token
+ * A small OCI distribution client for `yoal/image-index` (docs/PIPELINES.md §4.3, W6): the token
  * flow (401 `WWW-Authenticate: Bearer realm,service,scope` → GET realm with Basic credentials →
  * bearer), manifests and blobs, cross-repository blob mounts and copies, and writing one OCI image
  * index from per-architecture images. No Docker, skopeo or crane in the job image.
@@ -302,7 +302,7 @@ export class RegistryClient {
 			location = response.headers.get('location');
 		}
 		if (!location) throw new RegistryError(`${to.host} returned no upload location`);
-		const spoolDir = join(this.tempDir ?? (process.env.TMPDIR || '/tmp'), `skiff-blob-${randomUUID()}`);
+		const spoolDir = join(this.tempDir ?? (process.env.TMPDIR || '/tmp'), `yoal-blob-${randomUUID()}`);
 		await mkdir(spoolDir, { recursive: true, mode: 0o700 });
 		const spool = join(spoolDir, 'blob');
 		try {

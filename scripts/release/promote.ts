@@ -104,7 +104,7 @@ function listReleases(repo: string): ListedRelease[] {
 
 /** Download and verify the signed manifest exactly as a host would. */
 function verifyRelease(repo: string, tag: string, version: string): string {
-	const dir = mkdtempSync(join(tmpdir(), 'skiff-promote-'));
+	const dir = mkdtempSync(join(tmpdir(), 'yoal-promote-'));
 	try {
 		gh(['release', 'download', tag, '--repo', repo, '--dir', dir, '--pattern', 'manifest.json', '--pattern', 'manifest.json.sig']);
 		const manifest = verifyManifest(

@@ -4,7 +4,7 @@
 	 * variables substituted) and offer the distinct values of its first column; custom variables
 	 * offer their comma-separated list; textboxes take free text.
 	 */
-	import type { DashboardVariable, QueryResult, QueryVariables } from '@skiff/contracts';
+	import type { DashboardVariable, QueryResult, QueryVariables } from '@yoal/contracts';
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import { Button } from '#lib/components/ui/button/index.js';

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { NodeView } from '@skiff/core';
+import type { NodeView } from '@yoal/core';
 import { summariseResources } from './resources.js';
 
 const GB = 1024 ** 3;

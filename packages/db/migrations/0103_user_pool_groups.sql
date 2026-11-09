@@ -2,7 +2,7 @@
 --
 -- Groups are the pool's own, not platform IAM groups: a pool visitor's membership is keyed to
 -- `user_pool_users`, and the names travel as the `groups` claim in an access token and userinfo.
--- Skiff Access rules can therefore match a `userPool` matcher with `groups`.
+-- Yoal Access rules can therefore match a `userPool` matcher with `groups`.
 --
 -- The name is unique within a pool (case-insensitively) so an admin cannot create two groups that a
 -- claim consumer would read as one. Membership is a plain join row; `pool_id` is repeated there so

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
+	import DetailList from '#lib/components/yoal/DetailList.svelte';
 	import { resolve } from '$app/paths';
 	import BotIcon from '@lucide/svelte/icons/bot';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
@@ -9,7 +9,7 @@
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import ServerIcon from '@lucide/svelte/icons/server';
 	import UserRoundIcon from '@lucide/svelte/icons/user-round';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
@@ -72,7 +72,7 @@
 </script>
 
 <svelte:head>
-	<title>Audit log · Skiff</title>
+	<title>Audit log · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">

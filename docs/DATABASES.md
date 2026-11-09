@@ -1,11 +1,11 @@
-# Skiff — Managed databases
+# Yoal — Managed databases
 
 Status: **implemented, 2026-11-05** (not yet exercised on a real Debian/Podman node; the container lockdown, monitor bootstrap, sampler SQL, backup/restore verbs and health probe were checked against `postgres:17-alpine`). Decisions are recorded in [DECISIONS.md](./DECISIONS.md) as D55–D61 and D83–D86.
 
 A managed database is an org-owned database instance (PostgreSQL by default; MySQL, MariaDB,
-MongoDB, Valkey or Redis on request, §17) that Skiff provisions, runs, observes and connects to apps. It is not a project: it has no releases, deployments or routes. It reuses the
-tier-3 runtime (DESIGN §3.4): a rootful Quadlet container rendered by `skiff-helper`, inside
-`skiff-workloads.slice`, admitted against the node's memory budget (D41, D42).
+MongoDB, Valkey or Redis on request, §17) that Yoal provisions, runs, observes and connects to apps. It is not a project: it has no releases, deployments or routes. It reuses the
+tier-3 runtime (DESIGN §3.4): a rootful Quadlet container rendered by `yoal-helper`, inside
+`yoal-workloads.slice`, admitted against the node's memory budget (D41, D42).
 
 Everything goes through `packages/core` (`DatabaseService`); REST, MCP, CLI and the dashboard stay
 thin surfaces.
@@ -42,9 +42,9 @@ the wire for a database:
 - `PGDATA=/data/pgdata`, `Tmpfs=/var/run/postgresql` for the socket, `TimeoutStartSec=600` for the
   first image pull.
 - `PublishPort=127.0.0.1:<hostPort>:5432` only. Nothing listens on a public or WireGuard address.
-- `Network=skiff-workloads.network` with `NetworkAlias=db-<id hex>`. Container apps join the same
+- `Network=yoal-workloads.network` with `NetworkAlias=db-<id hex>`. Container apps join the same
   Podman network, so they reach the database by name.
-- `MemoryMax`, `CPUQuota`, `Slice=skiff-workloads.slice` as for any workload. Databases count
+- `MemoryMax`, `CPUQuota`, `Slice=yoal-workloads.slice` as for any workload. Databases count
   toward the node's reserved memory (admission, D42).
 - The fixed `Exec=` starts Postgres with `shared_preload_libraries=pg_stat_statements` so slow
   queries work without a manual restart (D84); when pooling is enabled, a second Quadlet unit runs
@@ -53,7 +53,7 @@ the wire for a database:
 The agent's health probe for a database is TCP, not HTTP: it connects to `127.0.0.1:<hostPort>`
 and sends a Postgres `SSLRequest`, because Podman's port forwarder accepts connections before the
 server is up. Quadlet files (`.container`, `.network`) go to `/etc/containers/systemd`
-(`SKIFF_HELPER_QUADLET_DIR`); systemd units stay in `/etc/systemd/system`. Desired state always
+(`YOAL_HELPER_QUADLET_DIR`); systemd units stay in `/etc/systemd/system`. Desired state always
 asks for a database to run; the observed status is never echoed back, so a reported `stopped`
 can't make the agent remove the unit.
 
@@ -77,7 +77,7 @@ query path (Prisma uses `url = _POOL_URL`, `directUrl = _URL`).
   credential cannot be revoked while any app is attached with it. PgBouncer's userlist carries
   only the owner, so such an attachment connects directly and gets no `<P>_POOL_*` variables.
 - Process app on the database's node → `127.0.0.1:<hostPort>`.
-- Container app on the database's node → `db-<id hex>:5432` over `skiff-workloads` network.
+- Container app on the database's node → `db-<id hex>:5432` over `yoal-workloads` network.
 - **Same node only in v1.** A project with attachments is placed on the database's node at deploy
   time (this overrides `auto`; an explicit placement on another node is rejected, as are
   attachments that live on different nodes). Cross-node access waits for a dedicated node
@@ -104,7 +104,7 @@ query path (Prisma uses `url = _POOL_URL`, `directUrl = _URL`).
   which is never pre-ticked for agents, and every read is audited.
 - **MCP never returns credentials.** Agents get the URL injected into the apps they deploy, which
   is all they need.
-- **Public URL is an operator-managed secret.** Skiff still keeps Postgres loopback-only (D56); an
+- **Public URL is an operator-managed secret.** Yoal still keeps Postgres loopback-only (D56); an
   operator who exposes it through their own TCP proxy or tunnel can store the full public
   `postgres://…` URL. It is sealed with the org key, only its configured/updated metadata appears
   in `DatabaseView`, and the URL itself is decrypted only by `GET /databases/:name/public-url`
@@ -112,7 +112,7 @@ query path (Prisma uses `url = _POOL_URL`, `directUrl = _URL`).
   it needs `database:update` and is audited. It never enters desired state, agent memory, logs,
   MCP or the audit arguments.
 - Named credentials (§16) are revealed one at a time by
-  `GET /api/v1/databases/:name/credentials/named/:id` (dashboard row menu, `skif db credentials
+  `GET /api/v1/databases/:name/credentials/named/:id` (dashboard row menu, `yoal db credentials
   reveal`), gated the same way and audited as `database.credentials.reveal`. Listing, creating,
   rotating and revoking return metadata only, so those are also available over MCP.
 - Rotation: §11 (owner/monitor) and §16 (named credentials).
@@ -120,7 +120,7 @@ query path (Prisma uses `url = _POOL_URL`, `directUrl = _URL`).
 ## 5. Observability (D57)
 
 The agent samples every running database once a minute with Bun's built-in Postgres client,
-connecting as `skiff_monitor` (`pg_monitor` only). On the first healthy start the agent creates that
+connecting as `yoal_monitor` (`pg_monitor` only). On the first healthy start the agent creates that
 role with the owner credentials from the activation payload, then keeps only the monitor
 credentials, in memory. Credentials are never written to the agent's disk.
 
@@ -149,7 +149,7 @@ is an `admin_users` entry). A failed pooler sample records `pooler_up=0` and lea
 sample intact. Pool saturation is `(active + waiting) / max_client_conn` (200).
 
 Surfaces: `GET /api/v1/databases/:name/metrics`, charts and a tables list on the dashboard,
-`skiff_database_*` series on `/metrics`, and three alerts (size above 85% of the storage budget,
+`yoal_database_*` series on `/metrics`, and three alerts (size above 85% of the storage budget,
 connections above 90% of `max_connections`, pool saturation above 90%).
 
 ## 6. Lifecycle
@@ -184,7 +184,7 @@ connections above 90% of `max_connections`, pool saturation above 90%).
 **Data location.** A database goes on the storage target its create request names (`storage`:
 `system`, `fast`, `bulk` or a disk name; CLI `--disk`), else the `databases` default in Settings →
 Storage, else the system disk, where the data dir lives under the helper's state root. On a disk
-its data lives at `<mount>/skiff/<id>` (D169, D78), and the node refuses to start it when the mount
+its data lives at `<mount>/yoal/<id>` (D169, D78), and the node refuses to start it when the mount
 is missing (D76). Replicas, moves and restores keep the database's tier unless they name another
 target. See [STORAGE.md](./STORAGE.md).
 
@@ -194,7 +194,7 @@ target. See [STORAGE.md](./STORAGE.md).
 |---|---|
 | REST | `GET/POST /api/v1/databases`, `GET/PATCH/DELETE /api/v1/databases/:name`, `POST …/:name/restore`, `GET …/:name/credentials`, `GET/POST …/:name/credentials/named`, `GET/DELETE …/:name/credentials/named/:id`, `POST …/:name/credentials/named/:id/rotate`, `GET …/:name/metrics`, `GET …/:name/logs`, `GET/POST …/:name/backups`, `GET/DELETE …/:name/backups/:id`, `POST …/:name/backups/:id/restore`, `GET/PATCH …/:name/backup-policy`, `GET/POST …/:name/rotate`, `POST …/:name/restart`, `GET/POST/DELETE …/:name/studio`, `GET/POST …/:name/replicas`, `DELETE …/:name/replicas/:id`, `POST …/:name/replicas/:id/promote` (`If-Match: <primaryGeneration>`), `GET/POST /api/v1/projects/:slug/databases`, `DELETE …/databases/:name` |
 | MCP | `list_databases`, `get_database`, `create_database`, `attach_database`, `detach_database`, `delete_database` (confirmed, soft), `list_database_backups`, `backup_database`, `restore_database`, `set_database_backup_policy`, `rotate_database_credentials`, `list_database_credentials`, `create_database_credential`, `rotate_database_credential`, `revoke_database_credential` (confirmed), `restart_database`, `update_database` (resize, pooler, extensions, forward version moves; the assistant asks first), `get_database_logs`, `list_database_replicas`, `create_database_replica` (the assistant asks first), `delete_database_replica` (confirmed); never promote |
-| CLI | `skif db list\|create\|info\|update\|attach\|detach\|delete\|restore\|credentials [list\|create\|rotate\|revoke\|reveal]\|logs\|backups\|backup\|backup-delete\|restore-backup\|backup-policy\|rotate\|restart\|upgrade\|replica [list\|add\|remove\|promote]` |
+| CLI | `yoal db list\|create\|info\|update\|attach\|detach\|delete\|restore\|credentials [list\|create\|rotate\|revoke\|reveal]\|logs\|backups\|backup\|backup-delete\|restore-backup\|backup-policy\|rotate\|restart\|upgrade\|replica [list\|add\|remove\|promote]` |
 | Dashboard | Databases list + create, detail (status, connection, pooler, attached projects, charts, tables, extensions/slow queries, backups/restore, rotate, restart, logs), **Studio** tab (native studio, read-only by default), attach from a project |
 
 ## 8. Backups and restore (D83)
@@ -214,7 +214,7 @@ duplicated.
   --no-owner --exit-on-error` and runs `SELECT 1` before reporting success. Only then is the
   backup marked verified (`verified_at`, `restored_database_id`) and scheduled backups resume.
 - Retention deletes expired artifacts and their objects, but never a pinned backup or the newest
-  good backup. `skif db backups|backup|restore-backup|backup-policy` and the dashboard Backups panel
+  good backup. `yoal db backups|backup|restore-backup|backup-policy` and the dashboard Backups panel
   expose the same service methods as REST/MCP.
 
 **Where a backup lives (0053).** Target resolution (org's oldest backup target → platform target →
@@ -228,14 +228,14 @@ adding a target or switching the default never moves an existing backup. The vie
 
 - A target that holds retained backups (`ok`, `pending`, `running`) **cannot be deleted**, and its
   `path`, `endpoint`, `bucket` and `pathPrefix` cannot change. The sealed credentials are the only
-  way Skiff can reach those objects, so a mistaken delete would be unrecoverable; refusing costs one
-  step. `DELETE /backup-targets/:id?force=1` (`skif backup-target remove --force`) overrides this
+  way Yoal can reach those objects, so a mistaken delete would be unrecoverable; refusing costs one
+  step. `DELETE /backup-targets/:id?force=1` (`yoal backup-target remove --force`) overrides this
   when nothing is in flight or being restored. The backups stay listed as unavailable with the
   exact location; restore refuses them with that message, retention and purge skip them (the row
   is the only record of the object), and `backup-delete` drops the row and leaves the object.
 - Adding a target with the same location (kind, directory or endpoint+bucket, prefix) in the same
   scope reconnects unavailable backups, which undoes a forced delete.
-- The newest-good-backup rule counts only backups Skiff can still reach. A queued backup or restore
+- The newest-good-backup rule counts only backups Yoal can still reach. A queued backup or restore
   whose target vanished out of band fails with the reason instead of staying pending.
 - Migration 0053 backfills existing rows with the target that resolved for their org at migration
   time, which is where every read looked for them before. Rows a rolled-back release writes later
@@ -245,8 +245,8 @@ The local filesystem object store buffers uploads and enforces the 500 MB artifa
 direct presigned PUT with no buffering. A production install should use R2 for large databases.
 
 PITR (pgBackRest WAL archiving and restore-to-time) is a separate, flag-gated path documented in
-[PITR.md](./PITR.md): PostgreSQL 18 on the standard image only, which then runs the Skiff-built
-`skiff-postgres-pitr` image. `SKIFF_FEATURE_PITR` is on by default but needs the pgBackRest repository settings; logical
+[PITR.md](./PITR.md): PostgreSQL 18 on the standard image only, which then runs the Yoal-built
+`yoal-postgres-pitr` image. `YOAL_FEATURE_PITR` is on by default but needs the pgBackRest repository settings; logical
 backups remain the proven restore path until the restore drill (`scripts/pitr-drill.sh`) passes on a
 Linux node.
 A PITR restore, like a logical one, always creates a new database on the source's node.
@@ -268,8 +268,8 @@ moving an existing cluster from musl to glibc would change collation order under
 indexes, so getting pgvector on an older database is a dump/restore into a new 18 database.
 
 **Image variants (D126).** `databases.variant` (`standard` by default) picks the image at create
-and never changes. `postgis` and `pg_cron` are Skiff-built Postgres 18 images
-(`ghcr.io/kieranholroyd/skiff-postgres:18-<variant>-<revision>`, from `docker/postgres/Dockerfile`
+and never changes. `postgis` and `pg_cron` are Yoal-built Postgres 18 images
+(`ghcr.io/kieranholroyd/yoal-postgres:18-<variant>-<revision>`, from `docker/postgres/Dockerfile`
 and `.github/workflows/postgres-images.yml`): the pinned pgvector image plus
 `postgresql-18-postgis-3` or `postgresql-18-cron` from the PGDG apt repo the base already has.
 Same uid 70, entrypoint and lockdown. Create adds the variant's extension; `postgis` and `pg_cron`
@@ -285,7 +285,7 @@ the database exists. Restores (logical and PITR) copy the variant, because a dum
 pg_cron objects only restores where the extension exists. Restored `cron.job` rows still name the
 source database. The upgrade planner blocks a major the variant has no image for. Tags are
 immutable: changing the Dockerfile or base means bumping the revision in the contract
-(`SKIFF_POSTGRES_IMAGE_REVISION`), the helper and the workflow together.
+(`YOAL_POSTGRES_IMAGE_REVISION`), the helper and the workflow together.
 
 Excluded on purpose: anything that reaches outside the container (`dblink`, `postgres_fdw`,
 `file_fdw`, `adminpack`), procedural languages (the image ships `plperl`/`pltcl` control files
@@ -304,7 +304,7 @@ Removing an extension from the list never drops it automatically.
 ## 10. Connection pooling and TLS (D85)
 
 New databases get a transaction-mode PgBouncer sidecar by default. The helper renders a second
-Quadlet unit with a loopback-only `PublishPort`, the `skiff-workloads` network, a 0600 config and
+Quadlet unit with a loopback-only `PublishPort`, the `yoal-workloads` network, a 0600 config and
 userlist owned by the image's uid 70, and the fixed `edoburu/pgbouncer` digest. It is deliberately
 separate from the Postgres unit: a pooler crash leaves direct connections working.
 
@@ -319,10 +319,10 @@ both URLs and a "use direct for migrations" note.
 
 ### TLS
 
-`SKIFF_FEATURE_DB_TLS` (default on) asks the helper to generate a per-database CA and server
+`YOAL_FEATURE_DB_TLS` (default on) asks the helper to generate a per-database CA and server
 certificate with the host's fixed `openssl` argv. Files live at
-`/run/skiff-workloads/<id>/tls/{ca.crt,server.crt,server.key}`, are `0400`, and are handed to the
-image's uid/gid 70. The Postgres unit mounts that directory read-only at `/run/skiff-tls` and starts
+`/run/yoal-workloads/<id>/tls/{ca.crt,server.crt,server.key}`, are `0400`, and are handed to the
+image's uid/gid 70. The Postgres unit mounts that directory read-only at `/run/yoal-tls` and starts
 with `ssl=on`, `ssl_cert_file`, `ssl_key_file` and `ssl_min_protocol_version=TLSv1.2`.
 
 - `<PREFIX>_URL` / `<PREFIX>_POOL_URL` carry `?sslmode=require`. PgBouncer mounts the same
@@ -341,7 +341,7 @@ with `ssl=on`, `ssl_cert_file`, `ssl_key_file` and `ssl_min_protocol_version=TLS
   the CA PEM is relayed. TLS state is derived from the helper's files, so there is no schema column.
 
 The pinned Postgres image does not generate certificates, so Debian's `openssl` is a helper
-dependency (`SKIFF_HELPER_OPENSSL`, default `/usr/bin/openssl`).
+dependency (`YOAL_HELPER_OPENSSL`, default `/usr/bin/openssl`).
 
 ## 11. Credential rotation (D86)
 
@@ -354,7 +354,7 @@ value. A failed rotation leaves the old secret in place and records the error.
 
 The restart comes from the consumer's activation version (D56), which includes a hash of the
 sealed secret the app connects with: always for a named credential, and for the owner once the
-database has had its first confirmed owner rotation (so upgrading Skiff does not restart apps
+database has had its first confirmed owner rotation (so upgrading Yoal does not restart apps
 whose password never changed). Named credentials rotate the same way through
 `POST …/credentials/named/:id/rotate` (§16); only apps attached with that credential restart.
 
@@ -367,7 +367,7 @@ whose password never changed). Named credentials rotate the same way through
   `databasePoolerRestarts`, calls the helper's dedicated fixed verb (`systemctl restart` on the
   pooler unit only), and acknowledges it on the next heartbeat. Postgres connections are untouched.
 - Both actions require `database:update`, are audited, and are exposed as
-  `POST /databases/:name/restart` (`{ target: "database" | "pooler" }`), `skif db restart <name>
+  `POST /databases/:name/restart` (`{ target: "database" | "pooler" }`), `yoal db restart <name>
   [--pooler]`, the MCP `restart_database` tool, the per-row **Restart** action on the Databases
   list, and the dashboard Resources/Pooler controls.
 - **Bulk actions** are on the Databases page header: **Restart all services** (databases and
@@ -375,7 +375,7 @@ whose password never changed). Named credentials rotate the same way through
   per-item methods and return per-item skips. REST: `POST /services/restart`
   (`{ scope: "all" | "databases" | "storage", databases?, storage? }`) and
   `POST /services/backup-databases`; MCP: `restart_services`, `backup_all_databases`; CLI:
-  `skif db restart --all`, `skif db backup --all`, `skif storage restart --all`.
+  `yoal db restart --all`, `yoal db backup --all`, `yoal storage restart --all`.
 
 ## 13. Logs
 
@@ -385,7 +385,7 @@ database id, org and node) with the same 7-day retention as runtime logs. Lifecy
 (restart and rotation requests) are written into the same stream.
 
 Surfaces: `GET /api/v1/databases/:name/logs` (`after`, `limit`, `level`, `q`), the dashboard live
-tail at `/databases/:name/logs` (pause, level filter, search, download, clear view), `skif db logs
+tail at `/databases/:name/logs` (pause, level filter, search, download, clear view), `yoal db logs
 <name> [--follow]`, and the MCP `get_database_logs` tool. Reading needs `logs:read` plus
 `database:read`; the API route resolves the database through the normal service permission check.
 
@@ -393,9 +393,9 @@ tail at `/databases/:name/logs` (pause, level filter, search, download, clear vi
 
 Each managed database has a native, built-in studio at `/databases/<name>/studio`: an object
 tree, a data grid with filter/sort/paging and inline edits, and a query editor. Each engine is a
-`@skiff/studio` plugin (Postgres, MySQL/MariaDB, MongoDB, Valkey/Redis) with declared
+`@yoal/studio` plugin (Postgres, MySQL/MariaDB, MongoDB, Valkey/Redis) with declared
 capabilities; the workspace reads the capabilities and never branches on the engine name. It is on
-by default behind `SKIFF_FEATURE_DB_STUDIO` (set `0` to hide the Studio tab and the route). It
+by default behind `YOAL_FEATURE_DB_STUDIO` (set `0` to hide the Studio tab and the route). It
 replaced D60's per-database sidecar studio, which was deleted at the cutover.
 
 - **Sessions.** Opening creates a per-user session (several people can have a studio open on the
@@ -404,15 +404,15 @@ replaced D60's per-database sidecar studio, which was deleted at the cutover.
   60 minutes (configurable 5–480) and closes after 15 minutes idle (configurable 5–240); the
   maintenance sweep closes lapsed sessions. Deleting, moving or changing the mode of a database
   closes its open sessions.
-- **Where queries run.** On the database's node, `skiff-studio.service` runs the agent binary's
+- **Where queries run.** On the database's node, `yoal-studio.service` runs the agent binary's
   `studio` entrypoint in its own cgroup (`MemoryMax=256M`), on a unix socket only
-  (`/run/skiff/studio.sock`) and with no node token. The helper starts it on demand through its
+  (`/run/yoal/studio.sock`) and with no node token. The helper starts it on demand through its
   fixed `POST /v1/studio/start` verb, and it exits after 5 idle minutes; a node that never opens a
   studio never runs it. The unit has no `[Install]` section, so nothing starts it at boot.
 - **Reachability.** The agent fronts the studio process on one loopback port per node
-  (`SKIFF_STUDIO_PORT`, default `8083`). The control plane reaches it only through the node's
+  (`YOAL_STUDIO_PORT`, default `8083`). The control plane reaches it only through the node's
   internal Caddy gateway (D82), on host `n-<label>.studio.internal` at
-  `127.0.0.1:<SKIFF_DATABASE_GATEWAY_PORT>` (default `8082`); the edge forwards a worker's host
+  `127.0.0.1:<YOAL_DATABASE_GATEWAY_PORT>` (default `8082`); the edge forwards a worker's host
   over WireGuard. The agent front pulls each session's activation from
   `GET /api/agent/database-studio/:id` with the session token, so there is still no
   control-plane-to-agent command channel, and databases stay loopback-only (D56).
@@ -420,7 +420,7 @@ replaced D60's per-database sidecar studio, which was deleted at the cutover.
   agent scope. Only interactive user sessions can use it: an API key cannot reuse a user's
   session. Write sessions also need `database:update`, are confirmed in the UI, and are
   re-checked on every call, so losing the role locks the user out mid-session.
-- **Read-only by credential.** Read-only sessions connect as a per-database `skiff_studio_ro`
+- **Read-only by credential.** Read-only sessions connect as a per-database `yoal_studio_ro`
   principal (Postgres `pg_read_all_data`; MySQL/MariaDB `SELECT, SHOW VIEW`; Mongo `read`;
   Valkey/Redis a read-only ACL), so the database itself refuses writes. Session flags are a second
   layer: read-only transactions on SQL engines and a command check on Valkey/Redis. Write sessions
@@ -436,7 +436,7 @@ replaced D60's per-database sidecar studio, which was deleted at the cutover.
     `server.conf`, so it survives restarts.
   - **Connection limit:** the principal allows 4 connections, so about two read-only sessions
     per database can be open at once.
-  - **Reserved name:** `skiff-studio-ro` (the database identifier `skiff_studio_ro`) is reserved
+  - **Reserved name:** `yoal-studio-ro` (the database identifier `yoal_studio_ro`) is reserved
     on every engine.
 - **Structure editing.** Write sessions can change structure from the workspace, through the
   typed `alter` op rather than free text. Each change runs as a dry run first and shows the
@@ -482,10 +482,10 @@ API), and the **Studio** tab on the database pages. Query history lives in the b
 
 ## 16. Per-org networks and named credentials (plan 04b)
 
-When `SKIFF_FEATURE_ORG_NETWORKS` is on, each workload carries `orgId` and `networkName` in desired
-state and the helper renders `skiff-org-<orgId>.network`. Only that org's containers join it, so
+When `YOAL_FEATURE_ORG_NETWORKS` is on, each workload carries `orgId` and `networkName` in desired
+state and the helper renders `yoal-org-<orgId>.network`. Only that org's containers join it, so
 aliases such as `db-<id>` resolve only inside the org. Workloads without `orgId` keep the legacy
-`skiff-workloads` network, so old desired state and running installs continue to converge unchanged.
+`yoal-workloads` network, so old desired state and running installs continue to converge unchanged.
 Caddy still proxies to `127.0.0.1:<port>`; it never joins a tenant network. Database ports remain
 loopback-only.
 
@@ -496,7 +496,7 @@ change, so a failed apply never locks an app out. Attachments reference the buil
 credential row unless they were attached with `credential` (§3).
 
 - **Roles.** `app` reads and writes tables in the `public` schema, `readonly` can only `SELECT`,
-  `backup` reads what a dump needs. Usernames are generated (`skiff_<role>_<hex>`); a purpose and
+  `backup` reads what a dump needs. Usernames are generated (`yoal_<role>_<hex>`); a purpose and
   an expiry are optional. Creating needs `database:credentials` and `database:update` and the
   engine's `namedCredentials` capability (Postgres).
 - **Lifecycle.** A credential is `pending` until the node confirms the `CREATE/ALTER ROLE`, then
@@ -512,12 +512,12 @@ credential row unless they were attached with `credential` (§3).
 - **Surfaces.** REST `GET/POST /databases/:name/credentials/named`, `GET/DELETE …/named/:id`
   (reveal/revoke), `POST …/named/:id/rotate`; MCP `list_database_credentials`,
   `create_database_credential`, `rotate_database_credential`, `revoke_database_credential`
-  (confirmed); CLI `skif db credentials list|create|rotate|revoke|reveal` and
-  `skif db attach --credential`; the dashboard's Credentials panel on the database overview and the
+  (confirmed); CLI `yoal db credentials list|create|rotate|revoke|reveal` and
+  `yoal db attach --credential`; the dashboard's Credentials panel on the database overview and the
   "Connect as" choice in the attach dialog.
 
 **Rollback / existing installs:** the network name is derived, not stored, so turning the flag off
-returns every workload to `skiff-workloads` on its next activation. The migration is additive
+returns every workload to `yoal-workloads` on its next activation. The migration is additive
 (`0022_org_networks.sql`); existing databases are backfilled with owner/monitor credential rows and
 existing attachments stay NULL (they keep using their current secret). Reverting the release is a
 pre-restore snapshot/rollback; no table or column is dropped.
@@ -572,7 +572,7 @@ arguments sized from the unit's `MemoryMax`:
   `maxmemory` to 75% with `noeviction`, so a full instance refuses writes instead of being OOM-killed
   or dropping keys. Clients authenticate with `user:password`.
 - ClickHouse (uid/gid 101): no server arguments. The helper writes a standalone `config.xml` and
-  `users.xml` into a 0700 directory (owned by 101) mounted read-only at `/etc/skiff/clickhouse`, and
+  `users.xml` into a 0700 directory (owned by 101) mounted read-only at `/etc/yoal/clickhouse`, and
   fixes `CLICKHOUSE_CONFIG`, `CLICKHOUSE_SKIP_USER_SETUP=1` and `CLICKHOUSE_WATCHDOG_ENABLE=0`, so
   the image entrypoint only creates the owner's database on first start. Data lives under
   `/data/clickhouse/`; logs go to stderr only (journald). `max_server_memory_usage` is 75% of the
@@ -585,7 +585,7 @@ arguments sized from the unit's `MemoryMax`:
 
 MySQL and MariaDB keep `root` on the owner's password but bound to `localhost`, i.e. the container's
 own socket; that is how the helper's fixed dump/restore/rotate verbs authenticate (`MYSQL_PWD` in
-podman's environment, never argv). The helper marks non-Postgres env files with `SKIFF_DB_ENGINE`;
+podman's environment, never argv). The helper marks non-Postgres env files with `YOAL_DB_ENGINE`;
 a file without it is Postgres, so existing env files and units are unchanged.
 
 **Health.** The agent's TCP probe performs each engine's smallest handshake and needs an answer
@@ -617,7 +617,7 @@ the target database (`--nsFrom '$db$.$coll$'`); the tools read the password from
 written over stdin into the container's `/tmp` tmpfs and removed afterwards.
 
 Valkey/Redis and ClickHouse dumps are files the server writes itself, so they are staged in a 0700
-`skiff-dumps/` directory inside the database's own data dir (owned by the engine's uid; `/data/skiff-dumps/`
+`yoal-dumps/` directory inside the database's own data dir (owned by the engine's uid; `/data/yoal-dumps/`
 in the container) rather than the helper's runtime tmpfs. The helper returns the file from there
 (0400); the HTTP layer's cleanup timer deletes it, and leftovers older than an hour are pruned
 before the next dump or restore. Staging names are fixed (`dump-|restore-<uuid>.rdb|zip`) and every
@@ -634,9 +634,9 @@ environment (`REDISCLI_AUTH`, `CLICKHOUSE_PASSWORD`).
   the swap fails), and `PING` must return `PONG`, which it only does once the dataset has loaded
   (up to ~10 minutes). A snapshot from a newer server version than the target's cannot load; restores
   always use the source's version.
-- **ClickHouse**: `BACKUP DATABASE <db> AS skiff_backup TO File('/data/skiff-dumps/…zip')` (the
+- **ClickHouse**: `BACKUP DATABASE <db> AS yoal_backup TO File('/data/yoal-dumps/…zip')` (the
   native format: schema, parts and checksums; `backups.allowed_path` in the generated config allows
-  only the staging dir). Storing it under a fixed name lets `RESTORE DATABASE skiff_backup AS
+  only the staging dir). Storing it under a fixed name lets `RESTORE DATABASE yoal_backup AS
   <target> … SETTINGS allow_different_database_def = 1` restore it into the new instance's own
   (empty, entrypoint-created) database on the running server, which re-checks every checksum; a
   `system.databases` lookup as the owner is the verification query. SQL-created users and roles are
@@ -668,14 +668,14 @@ Postgres only, `async` only (sync is refused: there is no downgrade path yet), a
   in desired state. It reserves the database's memory on its node. A replica on the primary's own
   node is allowed (read scaling) but is never promoted.
 - **Link.** The walreceiver connects to a unix socket, `<agent data dir>/replication/<id>/.s.PGSQL.5432`,
-  which the helper bind-mounts read-only at `/run/skiff-upstream`; the agent pipes it to the
+  which the helper bind-mounts read-only at `/run/yoal-upstream`; the agent pipes it to the
   primary's loopback port (same node) or the primary node's pinned-mTLS provider listener (another
   node; the provider merges replica and C2 consumer fingerprints on the database's host port).
 - **Primary.** `databaseReplication` tasks (version = hash of slots + secret) make the agent fetch the
-  `skiff_repl` password from `GET /api/agent/database-replication/:id` and call the helper's fixed
-  `replication/configure` verb: a managed `host replication skiff_repl all scram-sha-256` block in
+  `yoal_repl` password from `GET /api/agent/database-replication/:id` and call the helper's fixed
+  `replication/configure` verb: a managed `host replication yoal_repl all scram-sha-256` block in
   `pg_hba.conf`, the role, `wal_keep_size = 512MB`, `max_slot_wal_keep_size = 2GB`,
-  `wal_sender_timeout = 60s` (ALTER SYSTEM + reload, no restart), exactly the listed `skiff_*`
+  `wal_sender_timeout = 60s` (ALTER SYSTEM + reload, no restart), exactly the listed `yoal_*`
   physical slots (others dropped, walsender terminated first). An empty list tears it all down.
   Every 30 s the agent samples `pg_replication_slots ⟕ pg_stat_replication` (`replication/status`);
   the sample is the replica's status (`streaming`, `lagging` past 30 s / 256 MB, `stopped`, `lost`
@@ -683,7 +683,7 @@ Postgres only, `async` only (sync is refused: there is no downgrade path yet), a
 - **Replica.** The helper-written start script runs `pg_basebackup -X stream -c fast --max-rate=50M
   --slot=<slot>` through the link into `pgdata.partial` (retrying every 10 s) when there is no
   `PG_VERSION`, always touches `standby.signal`, then execs the image entrypoint with
-  `hot_standby=on`, `hot_standby_feedback=on`, `primary_conninfo=host=/run/skiff-upstream …`,
+  `hot_standby=on`, `hot_standby_feedback=on`, `primary_conninfo=host=/run/yoal-upstream …`,
   `primary_slot_name`. The replication password is `PGPASSWORD` in its env file (activation only).
 - **Read URLs.** While a replica the consumer can reach is `streaming` or `lagging`, attachments get
   `<P>_READ_URL`, `_READ_URLS`, `_READ_HOST`, `_READ_PORT` (same credentials): same-node replicas
@@ -702,5 +702,5 @@ Postgres only, `async` only (sync is refused: there is no downgrade path yet), a
   → completed when the database reports running there. The old primary's data dir is purged when
   its node returns. Lag budget 64 MB / 60 s, report ≤ 2 min old and the primary's node online, else
   `acceptDataLoss`. The failover controller's database handler (`failoverHandler()`) drives the
-  same steps and is registered only with `SKIFF_FEATURE_DB_AUTO_PROMOTE`.
+  same steps and is registered only with `YOAL_FEATURE_DB_AUTO_PROMOTE`.
 - Moves and Postgres major upgrades are refused while replicas exist.

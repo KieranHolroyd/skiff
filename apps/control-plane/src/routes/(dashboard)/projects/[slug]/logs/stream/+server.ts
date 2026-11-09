@@ -1,5 +1,5 @@
 import type { RequestHandler } from './$types';
-import { hasPermission } from '@skiff/contracts';
+import { hasPermission } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 
 const TAIL_LIMIT = 500;

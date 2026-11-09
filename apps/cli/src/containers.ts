@@ -365,7 +365,7 @@ function bytes(value: number | null | undefined): string {
 	return value === null || value === undefined ? '-' : formatBytes(value);
 }
 
-/** The status block `skif container inspect` prints. */
+/** The status block `yoal container inspect` prints. */
 export function inspectReport(container: ContainerInspect, target: ContainerTarget | undefined): string[] {
 	const status = !container.exists
 		? `${container.state.status} (unit ${container.unit.activeState}/${container.unit.subState})`

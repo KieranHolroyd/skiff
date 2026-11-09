@@ -73,11 +73,11 @@ describe('function manifest', () => {
 	test('resolved runtime spec keeps app bindings pinned to an upstream', () => {
 		const spec = functionRuntimeSpecSchema.parse({
 			...manifest(),
-			bindings: [{ name: 'WEB', type: 'app', project: 'web', upstream: 'unix//run/skiff-workloads/prj_1.sock' }],
+			bindings: [{ name: 'WEB', type: 'app', project: 'web', upstream: 'unix//run/yoal-workloads/prj_1.sock' }],
 			assets: { directory: 'public', runWorkerFirst: ['/api/*'] },
 			workerdVersion: '1.20261106.1',
 		});
-		expect(spec.bindings[0]).toMatchObject({ type: 'app', upstream: 'unix//run/skiff-workloads/prj_1.sock' });
+		expect(spec.bindings[0]).toMatchObject({ type: 'app', upstream: 'unix//run/yoal-workloads/prj_1.sock' });
 		expect(spec.assets?.runWorkerFirst).toEqual(['/api/*']);
 		expect(spec.idleStopSeconds).toBe(300);
 	});
@@ -92,16 +92,16 @@ describe('function manifest', () => {
 		).toBe(false);
 	});
 
-	test('app bindings can only name a Skiff workload target', () => {
+	test('app bindings can only name a Yoal workload target', () => {
 		const base = { ...manifest(), workerdVersion: '1.20261106.1' };
 		const ok = functionRuntimeSpecSchema.safeParse({
 			...base,
-			bindings: [{ name: 'WEB', type: 'app', project: 'web', upstream: 'unix//run/skiff-workloads/prj_1.sock' }],
+			bindings: [{ name: 'WEB', type: 'app', project: 'web', upstream: 'unix//run/yoal-workloads/prj_1.sock' }],
 		});
 		expect(ok.success).toBe(true);
 		for (const upstream of [
-			'unix//run/skiff/agent.sock',
-			'/run/skiff-workloads/prj_1.sock',
+			'unix//run/yoal/agent.sock',
+			'/run/yoal-workloads/prj_1.sock',
 			'http://169.254.169.254/latest/meta-data',
 			'127.0.0.1',
 		]) {
@@ -129,7 +129,7 @@ describe('function manifest', () => {
 	});
 
 	test('the manifest file name is stable', () => {
-		expect(FUNCTION_MANIFEST_FILE).toBe('skiff-function.json');
+		expect(FUNCTION_MANIFEST_FILE).toBe('yoal-function.json');
 	});
 });
 
@@ -155,7 +155,7 @@ describe('function workloads', () => {
 			runtime: 'function',
 			memoryMb: 128,
 			function: fn(),
-			healthPath: '/__skiff/health',
+			healthPath: '/__yoal/health',
 		});
 		expect(spec.runtime).toBe('function');
 		expect(spec.ingress).toBe('http');

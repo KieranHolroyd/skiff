@@ -17,14 +17,14 @@ DBGate is the only open-source option that supports a subpath (`WEB_ROOT`), basi
   Postgres at `db-<id>:5432`.
 - The control plane never dials a node loopback directly. It uses the same internal Caddy gateway
   pattern as the object browser (D82): the node gets `databaseGateway` host routes for
-  `db-<label>.console.internal`, and the edge dials `127.0.0.1:<SKIFF_DATABASE_GATEWAY_PORT>`.
+  `db-<label>.console.internal`, and the edge dials `127.0.0.1:<YOAL_DATABASE_GATEWAY_PORT>`.
 - The platform proxies `/databases/<name>/studio/proxy/*` to that gateway. The platform session is
   the authentication; DBGate additionally requires HTTP Basic, whose password is generated per
   session, sealed with the org key, and injected by the proxy only. The password never reaches the
   browser, desired state, logs or MCP.
 - Opening/closing does **not** re-apply the Postgres workload, so it never restarts the database.
   It travels as a separate `databaseConsoles` task list, executed by the helper's fixed verbs.
-- Read-only is the default (`READONLY_skiff=1`). Write mode also requires `database:update` and is
+- Read-only is the default (`READONLY_yoal=1`). Write mode also requires `database:update` and is
   confirmed in the UI. The console session expires after 60 minutes and idle-stops after 15.
 
 ## Core API (implemented in `packages/core/src/databases.ts`)
@@ -101,5 +101,5 @@ The sealed password and the auth header never appear in a view.
 - Close, expire and idle-stop a session; the sidecar stops and Postgres uptime is unchanged.
 - Check `database.console.open|close|expired` audit rows and verify the password never appears in
   views, desired state, logs or MCP.
-- Set `SKIFF_FEATURE_DB_CONSOLE=0` and confirm the Studio tab, console API and proxy path are
+- Set `YOAL_FEATURE_DB_CONSOLE=0` and confirm the Studio tab, console API and proxy path are
   unavailable.

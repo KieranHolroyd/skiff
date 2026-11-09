@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import { CoreError } from '@skiff/core';
+import { CoreError } from '@yoal/core';
 
 /** JSON endpoints never cache a challenge or a session decision. */
 export const NO_STORE = { 'cache-control': 'no-store' } as const;

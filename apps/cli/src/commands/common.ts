@@ -12,7 +12,7 @@ export async function authenticatedContext(): Promise<{
 		baseUrl: config.url,
 		token: config.token,
 		origin: config.origin,
-		userAgent: 'skif-cli',
+		userAgent: 'yoal-cli',
 	});
 	return { client, config };
 }
@@ -79,13 +79,13 @@ export function printOutcome(outcome: FinalizeOutcome, projectSlug: string): voi
 			? outcome.nextSteps
 			: outcome.promoted
 				? [
-						`Roll back:   skif rollback ${slug}`,
-						`View logs:   skif logs ${slug}`,
-						`Open:        skif open ${slug}`,
+						`Roll back:   yoal rollback ${slug}`,
+						`View logs:   yoal logs ${slug}`,
+						`Open:        yoal open ${slug}`,
 					]
 				: [
 						`Preview:     ${preview ?? 'see the deployment in the dashboard'}`,
-						`Promote:     skif promote ${slug} ${deployment?.id ?? '<deployment-id>'}`,
+						`Promote:     yoal promote ${slug} ${deployment?.id ?? '<deployment-id>'}`,
 					];
 	if (nextSteps.length > 0) console.log(`\nNext steps:\n${indent(nextSteps)}`);
 }

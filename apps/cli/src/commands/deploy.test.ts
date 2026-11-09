@@ -12,7 +12,7 @@ let dir = '';
 const temps: string[] = [];
 
 beforeEach(async () => {
-	dir = await mkdtemp(join(tmpdir(), 'skiff-cli-deploy-'));
+	dir = await mkdtemp(join(tmpdir(), 'yoal-cli-deploy-'));
 });
 
 afterEach(async () => {
@@ -104,7 +104,7 @@ function emptyState(overrides: Partial<FakeState> = {}): FakeState {
 }
 
 async function projectDir(files: Record<string, string> = {}): Promise<string> {
-	const project = await mkdtemp(join(tmpdir(), 'skiff-cli-deploy-project-'));
+	const project = await mkdtemp(join(tmpdir(), 'yoal-cli-deploy-project-'));
 	temps.push(project);
 	for (const [name, contents] of Object.entries(files)) {
 		const path = join(project, ...name.split('/'));
@@ -115,7 +115,7 @@ async function projectDir(files: Record<string, string> = {}): Promise<string> {
 	return project;
 }
 
-describe('skif deploy with a wrangler project', () => {
+describe('yoal deploy with a wrangler project', () => {
 	test('creates a function project, bundles with the pinned bundler and uploads the generated manifest', async () => {
 		const project = await projectDir({
 			'wrangler.jsonc': `{
@@ -152,16 +152,16 @@ describe('skif deploy with a wrangler project', () => {
 			previewAccess: 'platform',
 		});
 		expect(state.listSecretsCalls).toBe(1);
-		expect(logs.some((line) => line.startsWith('Bundling with the skiff bundler (esbuild '))).toBe(true);
+		expect(logs.some((line) => line.startsWith('Bundling with the yoal bundler (esbuild '))).toBe(true);
 
 		expect(state.uploads).toHaveLength(1);
 		const entries = readZip(state.uploads[0]!);
 		const wasmModule = `${createHash('sha1').update('wasm').digest('hex')}-mod.wasm`;
 		expect([...entries.keys()].sort()).toEqual(
-			[wasmModule, 'index.js', 'public/index.html', 'skiff-function.json'].sort(),
+			[wasmModule, 'index.js', 'public/index.html', 'yoal-function.json'].sort(),
 		);
 		expect(entries.get('index.js')).toContain(`from "./${wasmModule}"`);
-		const manifest = JSON.parse(entries.get('skiff-function.json')!) as {
+		const manifest = JSON.parse(entries.get('yoal-function.json')!) as {
 			version: number;
 			main: string;
 			compatibilityDate: string;
@@ -178,7 +178,7 @@ describe('skif deploy with a wrangler project', () => {
 		expect(manifest.bindings).not.toContainEqual({ name: 'ORG_KEY', type: 'secret' });
 
 		// The manifest is generated into the temporary bundle, never the user's project.
-		await expect(stat(join(project, 'skiff-function.json'))).rejects.toThrow();
+		await expect(stat(join(project, 'yoal-function.json'))).rejects.toThrow();
 
 		expect(state.finalized).toEqual([
 			{ uploadId: 'up_1', project: 'demo-fn', promote: true, message: 'first function' },
@@ -232,13 +232,13 @@ describe('skif deploy with a wrangler project', () => {
 		expect(state.created).toEqual([]);
 		expect(state.uploads).toHaveLength(1);
 		expect(state.finalized[0]!.promote).toBe(false);
-		expect(readZip(state.uploads[0]!).has('skiff-function.json')).toBe(true);
+		expect(readZip(state.uploads[0]!).has('yoal-function.json')).toBe(true);
 	});
 
 	test('static deploy is unchanged', async () => {
 		const project = await projectDir({
 			'index.html': '<h1>Static</h1>',
-			'skiff.json': '{"cleanUrls":true}',
+			'yoal.json': '{"cleanUrls":true}',
 		});
 		const state = emptyState();
 
@@ -250,9 +250,9 @@ describe('skif deploy with a wrangler project', () => {
 		expect(state.created).toHaveLength(1);
 		expect(state.created[0]!.runtime).toBeUndefined();
 		const entries = readZip(state.uploads[0]!);
-		expect([...entries.keys()]).toEqual(['index.html', 'skiff.json']);
-		expect(JSON.parse(entries.get('skiff.json')!)).toEqual({ cleanUrls: true, spa: true });
-		expect(entries.has('skiff-function.json')).toBe(false);
+		expect([...entries.keys()]).toEqual(['index.html', 'yoal.json']);
+		expect(JSON.parse(entries.get('yoal.json')!)).toEqual({ cleanUrls: true, spa: true });
+		expect(entries.has('yoal-function.json')).toBe(false);
 	});
 
 	test('--no-wrangler deploys the plain directory without a runtime', async () => {
@@ -271,7 +271,7 @@ describe('skif deploy with a wrangler project', () => {
 		expect(state.created[0]!.runtime).toBeUndefined();
 		const entries = readZip(state.uploads[0]!);
 		expect([...entries.keys()]).toEqual(['index.html', 'wrangler.jsonc']);
-		expect(entries.has('skiff-function.json')).toBe(false);
+		expect(entries.has('yoal-function.json')).toBe(false);
 	});
 
 	test('--wrangler uses an explicit config path', async () => {
@@ -291,7 +291,7 @@ describe('skif deploy with a wrangler project', () => {
 		});
 
 		expect(state.created[0]!.runtime).toBe('function');
-		expect(readZip(state.uploads[0]!).has('skiff-function.json')).toBe(true);
+		expect(readZip(state.uploads[0]!).has('yoal-function.json')).toBe(true);
 	});
 
 	test('continues with a note when project secrets cannot be listed', async () => {
@@ -358,7 +358,7 @@ function readZip(zip: Uint8Array): Map<string, string> {
 	return out;
 }
 
-describe('skif deploy with a compose file', () => {
+describe('yoal deploy with a compose file', () => {
 	test('detects docker-compose.yml, creates a level-4 project and sends the document', async () => {
 		const dir = await projectDir({
 			'docker-compose.yml': 'services:\n  web:\n    image: nginx:1.27\n    ports: ["80"]\n',

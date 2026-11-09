@@ -1,7 +1,7 @@
 /**
  * Read-only studio principal end-to-end (plan 22, track G). For every engine, a container set up
- * the way Skiff runs it (owner env, MySQL root on the owner's password at localhost, Mongo's owner
- * in `admin`, the helper's generated Valkey/Redis config) gets `skiff_studio_ro` from the helper's
+ * the way Yoal runs it (owner env, MySQL root on the owner's password at localhost, Mongo's owner
+ * in `admin`, the helper's generated Valkey/Redis config) gets `yoal_studio_ro` from the helper's
  * own statements (`apps/helper/src/studio-principal.ts`), executed with `docker exec` exactly as the
  * helper runs them with `podman exec`. Then:
  *
@@ -10,9 +10,9 @@
  * - re-applying is idempotent;
  * - Valkey/Redis: a restart without the generated config line loses the user, and with it keeps it.
  *
- *   SKIFF_E2E_STUDIO=1 SKIFF_E2E_ENGINE=docker bun test tests/e2e/studio/principal.e2e.test.ts
+ *   YOAL_E2E_STUDIO=1 YOAL_E2E_ENGINE=docker bun test tests/e2e/studio/principal.e2e.test.ts
  *
- * `SKIFF_E2E_STUDIO_RO_MATRIX=1` adds every other version Skiff ships. Without `SKIFF_E2E_STUDIO=1`
+ * `YOAL_E2E_STUDIO_RO_MATRIX=1` adds every other version Yoal ships. Without `YOAL_E2E_STUDIO=1`
  * it registers one skipped test.
  */
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from 'bun:test';
@@ -40,12 +40,12 @@ import { ContainerRuntime, detectEngine, freePort, waitFor } from '../lib/contai
 
 setDefaultTimeout(120_000);
 
-/** Skiff passwords are 24 random bytes in base64url. */
+/** Yoal passwords are 24 random bytes in base64url. */
 const OWNER_PASSWORD = 'OwnerPw_0123456789-abcdefghijklm';
 const RO_PASSWORD = 'StudioRo_0123456789-abcdefghijkl';
 const RO_PASSWORD_2 = 'StudioRo_rotated_9876543210-zyxw';
 const DB = 'shop_db';
-const RO = 'skiff_studio_ro';
+const RO = 'yoal_studio_ro';
 
 type Engine = StudioPrincipalOwner['engine'];
 
@@ -145,7 +145,7 @@ const cases: Case[] = [
 	},
 ];
 
-if (process.env.SKIFF_E2E_STUDIO_RO_MATRIX === '1') {
+if (process.env.YOAL_E2E_STUDIO_RO_MATRIX === '1') {
 	const more: Array<[Engine, string, string]> = [
 		['postgres', '16', 'postgres:16-alpine'],
 		['mysql', '9.7', 'mysql:9.7'],
@@ -160,11 +160,11 @@ if (process.env.SKIFF_E2E_STUDIO_RO_MATRIX === '1') {
 	}
 }
 
-const enabled = process.env.SKIFF_E2E_STUDIO === '1';
+const enabled = process.env.YOAL_E2E_STUDIO === '1';
 const engine = enabled ? await detectEngine() : null;
 
 if (!enabled || !engine) {
-	test.skip('studio read-only principal e2e (set SKIFF_E2E_STUDIO=1 and have Docker or Podman)', () => {});
+	test.skip('studio read-only principal e2e (set YOAL_E2E_STUDIO=1 and have Docker or Podman)', () => {});
 } else {
 	const tempDir = await mkdtemp(join(tmpdir(), 'studio-ro-'));
 	const runtime = new ContainerRuntime(engine, tempDir);
@@ -243,8 +243,8 @@ if (!enabled || !engine) {
 				await writeConfig(instance, null);
 				await runtime.runContainer({
 					...common,
-					volumes: [[instance.configPath, '/etc/skiff/server.conf']],
-					command: [instance.engine === 'valkey' ? 'valkey-server' : 'redis-server', '/etc/skiff/server.conf'],
+					volumes: [[instance.configPath, '/etc/yoal/server.conf']],
+					command: [instance.engine === 'valkey' ? 'valkey-server' : 'redis-server', '/etc/yoal/server.conf'],
 				});
 				break;
 		}
@@ -415,7 +415,7 @@ if (!enabled || !engine) {
 					try {
 						await sql.unsafe('SET default_transaction_read_only = off');
 						await expect(sql.unsafe("INSERT INTO public.items VALUES (9, 'x')")).rejects.toThrow(/permission denied/);
-						const [role] = await sql.unsafe("SELECT rolconnlimit, rolsuper, rolcreaterole, rolcreatedb FROM pg_roles WHERE rolname = 'skiff_studio_ro'");
+						const [role] = await sql.unsafe("SELECT rolconnlimit, rolsuper, rolcreaterole, rolcreatedb FROM pg_roles WHERE rolname = 'yoal_studio_ro'");
 						expect(role).toEqual({ rolconnlimit: 4, rolsuper: false, rolcreaterole: false, rolcreatedb: false });
 					} finally {
 						await sql.close();
@@ -428,7 +428,7 @@ if (!enabled || !engine) {
 					try {
 						const [rows] = await connection.query('SHOW GRANTS');
 						const grants = (rows as Array<Record<string, string>>).map((row) => Object.values(row)[0]!).join('\n');
-						expect(grants).toMatch(/GRANT SELECT, SHOW VIEW ON `shop_db`\.\* TO `skiff_studio_ro`@`%`/);
+						expect(grants).toMatch(/GRANT SELECT, SHOW VIEW ON `shop_db`\.\* TO `yoal_studio_ro`@`%`/);
 						expect(grants).not.toMatch(/INSERT|UPDATE|DELETE|ALL PRIVILEGES/);
 						await expect(connection.query('SELECT * FROM mysql.user')).rejects.toThrow(/denied/);
 					} finally {

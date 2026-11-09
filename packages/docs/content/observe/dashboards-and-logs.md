@@ -3,7 +3,7 @@ title: Dashboards, logs and audit
 description: Read traffic and errors, build dashboards over the telemetry store, tail and forward logs, and check who changed what in the audit log.
 ---
 
-Skiff keeps four kinds of operational history: request traffic and errors, dashboards built over that telemetry, project and service logs, and an audit log of changes made in your organisation. This page covers what each one records, how long it is kept and where to find it. Traffic and dashboards need the optional telemetry store. Logs and the audit log work without it.
+Yoal keeps four kinds of operational history: request traffic and errors, dashboards built over that telemetry, project and service logs, and an audit log of changes made in your organisation. This page covers what each one records, how long it is kept and where to find it. Traffic and dashboards need the optional telemetry store. Logs and the audit log work without it.
 
 ## Overview
 
@@ -33,7 +33,7 @@ flowchart LR
   Agent -->|"log lines, every 2 s"| CP
   CP -->|"buckets and samples"| CH["ClickHouse (optional)"]
   CH --> Views["Overview and dashboards"]
-  CP -->|"stored log lines"| Logs["Dashboard, skif logs, API"]
+  CP -->|"stored log lines"| Logs["Dashboard, yoal logs, API"]
 ```
 
 The control plane keeps two resolutions:
@@ -47,7 +47,7 @@ A periodic maintenance job runs every 60 seconds. It rolls minute data up into h
 
 ### ClickHouse is optional
 
-The telemetry store is a small ClickHouse server on the control-plane host. It is off by default because it is the heaviest part of a host: about 240 MB to download, capped at 1 GB of memory, and typically 300 to 800 MB in use. Without it, Skiff runs as normal, with these differences:
+The telemetry store is a small ClickHouse server on the control-plane host. It is off by default because it is the heaviest part of a host: about 240 MB to download, capped at 1 GB of memory, and typically 300 to 800 MB in use. Without it, Yoal runs as normal, with these differences:
 
 - Traffic charts, the database and storage stats tabs and dashboards show that telemetry is not installed. The Overview traffic panel shows the reason instead of data.
 - Agents keep working. While the control plane is unreachable, an agent holds up to 5,000 one-minute buckets in memory and then drops the oldest.
@@ -59,7 +59,7 @@ Installing or removing ClickHouse is done by a platform owner in **Settings → 
 - **Remove**, which stops and uninstalls ClickHouse but keeps its data, so a reinstall picks up where it left off.
 - **Remove and delete data**, which also deletes every stored traffic, database and storage sample. Archives already in object storage are kept.
 
-On the server, `sudo skiff-platform-config telemetry on` and `sudo skiff-platform-config telemetry off` do the same, with `--purge` to delete the data. The installer asks the same question, or you can pass `--clickhouse` or `--no-clickhouse`. See [installation](/self-hosting/installation).
+On the server, `sudo yoal-platform-config telemetry on` and `sudo yoal-platform-config telemetry off` do the same, with `--purge` to delete the data. The installer asks the same question, or you can pass `--clickhouse` or `--no-clickhouse`. See [installation](/self-hosting/installation).
 
 ## Dashboards
 
@@ -67,7 +67,7 @@ On the server, `sudo skiff-platform-config telemetry on` and `sudo skiff-platfor
 
 The starter templates are **Traffic overview** (with a host variable), **Managed databases**, **Object storage** and **Queue brokers**. A new dashboard starts with a default time range of the last 6 hours. Saving also stores the current time range and variable values as the defaults.
 
-Dashboards are versioned. If someone saves a dashboard while you are editing it, Skiff shows a conflict and lets you reload their version or overwrite it. To back up a dashboard, use **Export JSON** on the dashboard; **Import** on the list page takes a JSON export back in.
+Dashboards are versioned. If someone saves a dashboard while you are editing it, Yoal shows a conflict and lets you reload their version or overwrite it. To back up a dashboard, use **Export JSON** on the dashboard; **Import** on the list page takes a JSON export back in.
 
 ### The query model
 
@@ -101,13 +101,13 @@ Variables take their values from a query's first column, from a comma-separated 
 
 ## Logs
 
-Skiff collects logs from three places:
+Yoal collects logs from three places:
 
 - **Builds**: git builds stream their output while they run.
 - **Workloads**: the agent reads each app's journal every few seconds, so runtime output appears within seconds.
 - **Managed services**: databases, object storage and brokers each have their own log view.
 
-Lines are stored with a source, a stream (stdout or stderr), a level (debug, info, warn or error) and a deployment or build id. Skiff removes terminal colour codes and detects the level from common formats such as JSON, syslog and plain text. A line that has no recognisable level is `info`, or `warn` when it came from stderr during a build.
+Lines are stored with a source, a stream (stdout or stderr), a level (debug, info, warn or error) and a deployment or build id. Yoal removes terminal colour codes and detects the level from common formats such as JSON, syslog and plain text. A line that has no recognisable level is `info`, or `warn` when it came from stderr during a build.
 
 ### Viewing and tailing in the dashboard
 
@@ -115,14 +115,14 @@ Open **Projects → my-site → Logs**. Choose the source, a deployment's runtim
 
 The view tails new lines live over a server-sent event stream. If the connection drops, it resumes from the last line it received, so you do not miss or repeat lines. **Pause** stops the view from moving while lines keep arriving, and **Download** and **Copy** act on the lines currently visible. Static sites have no runtime process, so only their build logs appear.
 
-### skif logs
+### yoal logs
 
-`skif logs` prints the newest lines for a project and exits. It does not follow the output, so use the dashboard for a live tail.
+`yoal logs` prints the newest lines for a project and exits. It does not follow the output, so use the dashboard for a live tail.
 
 ```sh
-skif logs my-site
-skif logs my-site --lines 500
-skif logs my-site --json
+yoal logs my-site
+yoal logs my-site --lines 500
+yoal logs my-site --json
 ```
 
 | Flag | Meaning |
@@ -141,9 +141,9 @@ Log drains (below) keep their own copy elsewhere if you need logs for longer.
 
 ## Log drains
 
-A log drain forwards your logs to a service you run or pay for: any HTTPS endpoint that accepts a POST, or an OpenTelemetry (OTLP) receiver such as Grafana Cloud, Datadog, Honeycomb, New Relic, Axiom or your own OpenTelemetry Collector. Skiff sends each line it stores, a few seconds after it arrives, starting from when you create the drain. Earlier lines are not sent.
+A log drain forwards your logs to a service you run or pay for: any HTTPS endpoint that accepts a POST, or an OpenTelemetry (OTLP) receiver such as Grafana Cloud, Datadog, Honeycomb, New Relic, Axiom or your own OpenTelemetry Collector. Yoal sends each line it stores, a few seconds after it arrives, starting from when you create the drain. Earlier lines are not sent.
 
-Set one up under **Settings → Log drains**, with `skif log-drain create`, through `POST /api/v1/log-drains` or with the MCP tool `create_log_drain`. Organisation owners and admins manage drains; anyone with `logs:read` can see them. An organisation can have up to 10.
+Set one up under **Settings → Log drains**, with `yoal log-drain create`, through `POST /api/v1/log-drains` or with the MCP tool `create_log_drain`. Organisation owners and admins manage drains; anyone with `logs:read` can see them. An organisation can have up to 10.
 
 | Setting | Meaning |
 | --- | --- |
@@ -163,9 +163,9 @@ Each request carries up to 500 lines from each log store (project logs, database
 {"id":"log:48213","time":"2026-11-07T10:00:00.000Z","level":"error","message":"payment failed","source":"runtime","stream":"stderr","org":"org_…","project":"shop","projectId":"prj_…","deploymentId":"dep_…","buildId":null,"node":"node_…","service":null}
 ```
 
-Managed-service lines have `project` set to `null` and `service` set to `{ "kind": "database", "id": "…", "name": "main" }`. Each request also has an `X-Skiff-Drain` header with the drain id and an `X-Skiff-Batch` header that stays the same when a batch is retried.
+Managed-service lines have `project` set to `null` and `service` set to `{ "kind": "database", "id": "…", "name": "main" }`. Each request also has an `X-Yoal-Drain` header with the drain id and an `X-Yoal-Batch` header that stays the same when a batch is retried.
 
-Every webhook drain gets its own signing secret, shown once when you create it. Requests carry `X-Skiff-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256>` over `<t>.<raw body>`, the same scheme as the [alert webhook](/observe/alerts#verify-the-webhook-signature), which shows how to verify it. **Rotate signing secret** (or `skif log-drain update <id> --rotate-secret`) issues a new one; the old one stops working at once.
+Every webhook drain gets its own signing secret, shown once when you create it. Requests carry `X-Yoal-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256>` over `<t>.<raw body>`, the same scheme as the [alert webhook](/observe/alerts#verify-the-webhook-signature), which shows how to verify it. **Rotate signing secret** (or `yoal log-drain update <id> --rotate-secret`) issues a new one; the old one stops working at once.
 
 OTLP drains are not signed: authenticate them with the header your receiver asks for. Each line becomes a log record with `service.name` set to the project slug or service name, and `log.record.uid` set to the line `id`.
 
@@ -176,10 +176,10 @@ Delivery is at least once. A batch that fails (a timeout, a connection error or 
 The drain list shows each drain's status (**Delivering**, **Failing**, **Waiting for logs** or **Paused**), how many lines it has sent and dropped, and the last error. **Test** sends one line straight away and shows what the receiver answered, without touching the counters. Pausing a drain stops it; resuming it starts again from new lines, so nothing logged while it was paused is sent.
 
 ```sh
-skif log-drain create archive --url https://logs.example.com/skiff -H "Authorization: Bearer …"
-skif log-drain create grafana --otlp --url https://otlp-gateway.example.com/otlp -H "Authorization: Basic …"
-skif log-drain test ldr_…
-skif log-drain list
+yoal log-drain create archive --url https://logs.example.com/yoal -H "Authorization: Bearer …"
+yoal log-drain create grafana --otlp --url https://otlp-gateway.example.com/otlp -H "Authorization: Basic …"
+yoal log-drain test ldr_…
+yoal log-drain list
 ```
 
 Drains only reach public addresses: a URL that resolves to a private, loopback or link-local address is refused. To send to a collector on your own network, a platform admin can tick **Allow private addresses** when creating the drain in the dashboard, which also permits plain `http://`.
@@ -205,22 +205,22 @@ The audit page lists the newest entries first. Use the **Action** field for an e
 The REST API takes the same filters. `from` and `to` accept a date (`2026-11-07`), an ISO timestamp or epoch milliseconds, and a date as `to` covers that whole day. The response has `entries` and `nextCursor`; pass `nextCursor` as `cursor` to get the next, older page. It is `null` on the last page.
 
 ```sh
-curl -H "Authorization: Bearer skif_…" \
+curl -H "Authorization: Bearer yoal_…" \
   "https://control.example.com/api/v1/audit?from=2026-11-01&to=2026-11-07&resource=project&limit=100"
 ```
 
-The MCP tool `get_audit_log` takes the same `from`, `to` and `cursor` arguments, and `skif audit` prints a page with the command for the next one (`--all` follows every page):
+The MCP tool `get_audit_log` takes the same `from`, `to` and `cursor` arguments, and `yoal audit` prints a page with the command for the next one (`--all` follows every page):
 
 ```sh
-skif audit --from 2026-11-01 --to 2026-11-07
-skif audit --resource log_drain --all --json
+yoal audit --from 2026-11-01 --to 2026-11-07
+yoal audit --resource log_drain --all --json
 ```
 
 A page holds at most 200 entries. Reading the audit log needs `project:read`, which every built-in role has.
 
 ### Retention
 
-Skiff does not delete audit entries automatically, and there is no setting that shortens how long they are kept.
+Yoal does not delete audit entries automatically, and there is no setting that shortens how long they are kept.
 
 ## Where these settings live
 

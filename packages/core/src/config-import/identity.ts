@@ -2,7 +2,7 @@ import { arr, obj, pick, str, strings, type ImportContext, type Item } from './c
 
 /**
  * Access and identity (docs/OPERATIONS.md §14): members (reported), custom roles, groups and their
- * members, service accounts, federation trusts, user pools and clients, Skiff Access policies and
+ * members, service accounts, federation trusts, user pools and clients, Yoal Access policies and
  * their assignments, guardrails, bindings and the org auth policy.
  *
  * People cannot be imported: a user exists here only once they sign up. Users are matched by email

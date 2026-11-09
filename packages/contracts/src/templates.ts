@@ -90,7 +90,7 @@ export interface TemplatePlan {
 	/** Existing secrets the spec references; each must resolve before anything is created. */
 	requiredSecrets: string[];
 	spec: WorkloadSpec;
-	/** Recorded as `skiff-template.json` in the first release, so the deployment is reproducible. */
+	/** Recorded as `yoal-template.json` in the first release, so the deployment is reproducible. */
 	manifest: { template: string; version: number; values: Record<string, unknown> };
 }
 
@@ -206,7 +206,7 @@ export const githubRunnerTemplateInputSchema = z
 		if (input.privateKey && input.auth !== 'app')
 			ctx.addIssue({ code: 'custom', path: ['privateKey'], message: 'A private key is only used with GitHub App authentication.' });
 		if (input.existingSecret && input.auth === 'installation')
-			ctx.addIssue({ code: 'custom', path: ['existingSecret'], message: 'Skiff’s GitHub App needs no secret.' });
+			ctx.addIssue({ code: 'custom', path: ['existingSecret'], message: 'Yoal’s GitHub App needs no secret.' });
 	});
 export type GithubRunnerTemplateInput = z.input<typeof githubRunnerTemplateInputSchema>;
 
@@ -229,7 +229,7 @@ export const githubRunnerTemplate: AppTemplate = {
 		'Room on a node for every runner’s memory: the whole pool runs on one node.',
 	],
 	groups: [
-		{ id: 'project', title: 'Project', description: 'The Skiff project that owns the runner pool.' },
+		{ id: 'project', title: 'Project', description: 'The Yoal project that owns the runner pool.' },
 		{ id: 'github', title: 'Repository', description: 'Where the runners register and which jobs they pick up.' },
 		{ id: 'credential', title: 'GitHub credential', description: 'Used by the control plane to mint a single-use runner config per job.' },
 		{ id: 'capacity', title: 'Capacity', description: 'Memory and CPU apply per runner; admission reserves memory for every runner.' },
@@ -280,7 +280,7 @@ export const githubRunnerTemplate: AppTemplate = {
 				{ value: 'app', label: 'GitHub App', description: 'Not tied to a person; GitHub issues short-lived tokens.' },
 				{
 					value: 'installation',
-					label: 'Skiff’s GitHub App',
+					label: 'Yoal’s GitHub App',
 					description: 'The App connected in Settings → GitHub, installed on this owner. Nothing to paste.',
 				},
 			],

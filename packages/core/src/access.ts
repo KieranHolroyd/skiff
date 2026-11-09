@@ -1,11 +1,11 @@
 import { and, desc, eq, sql } from 'drizzle-orm';
-import { deployments, domains, environments, projects, shareLinks, shareRedemptions } from '@skiff/db';
+import { deployments, domains, environments, projects, shareLinks, shareRedemptions } from '@yoal/db';
 import {
 	contentUrl,
 	type AccessMode,
 	type Principal,
 	type ShareLinkCreate,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { siteKeyFor } from './config.ts';
@@ -21,7 +21,7 @@ import {
 } from './util.ts';
 import type { ProjectRow } from './projects.ts';
 
-/** Lifetime of the one-time `/_skiff/callback?token=` token (DESIGN §6.4). */
+/** Lifetime of the one-time `/_yoal/callback?token=` token (DESIGN §6.4). */
 export const CALLBACK_TOKEN_TTL_SECONDS = 60;
 
 export interface ShareLinkView {
@@ -66,7 +66,7 @@ export type AccessScope =
 	| { kind: 'environment'; environmentId: string };
 
 /**
- * The protection mode a scope actually uses. A scope with a Skiff Access policy is `access`; the
+ * The protection mode a scope actually uses. A scope with a Yoal Access policy is `access`; the
  * legacy `production_access`/`preview_access`/`environments.access` columns keep a value an older
  * control plane can still act on (`platform`, so nothing becomes public).
  */
@@ -95,7 +95,7 @@ export interface ContentRoute {
 	production: boolean;
 	/** Access mode the agent applies to this exact host. */
 	access: AccessMode;
-	/** The Skiff Access policy that decided it, when `access` is `access`. */
+	/** The Yoal Access policy that decided it, when `access` is `access`. */
 	policyId: string | null;
 	/** The scope whose access mode (and password) applies to this host. */
 	scope: AccessScope;
@@ -173,7 +173,7 @@ export class AccessService {
 		});
 		// The clear-text token is returned once; the view embeds a non-reversible suffix.
 		const view = this.view(row);
-		view.url = `${contentUrl(this.ctx.config.platformOrigin, view.host)}/?_skiff_share=${token}`;
+		view.url = `${contentUrl(this.ctx.config.platformOrigin, view.host)}/?_yoal_share=${token}`;
 		return view;
 	}
 
@@ -459,9 +459,9 @@ export class AccessService {
 	}
 
 	/**
-	 * A visitor who passed the host's Skiff Access policy (IAM.md I25). The caller evaluates the
+	 * A visitor who passed the host's Yoal Access policy (IAM.md I25). The caller evaluates the
 	 * policy first; this only mints the host-bound, one-time callback token the agent exchanges for
-	 * its host-only cookie. `email` is carried so the app receives `Skiff-Access-Email`.
+	 * its host-only cookie. `email` is carried so the app receives `Yoal-Access-Email`.
 	 */
 	accessVisit(principal: Principal, host: string, email: string | null): SiteVisit {
 		const resolved = this.resolveHost(host);

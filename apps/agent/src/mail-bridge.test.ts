@@ -4,16 +4,16 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SMTPServer } from 'smtp-server';
-import { mailHostnames, type EmailEvent, type MailInject, type MailState } from '@skiff/contracts';
-import { MailServer } from '@skiff/mail';
+import { mailHostnames, type EmailEvent, type MailInject, type MailState } from '@yoal/contracts';
+import { MailServer } from '@yoal/mail';
 import { MailBridge, type HelperMailApi } from './mail-bridge.ts';
 
-/** The bridge end to end: control plane (fake) ⇄ agent bridge ⇄ skiff-mail (real) → recipient MX (fake). */
+/** The bridge end to end: control plane (fake) ⇄ agent bridge ⇄ yoal-mail (real) → recipient MX (fake). */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-mail-bridge-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-mail-bridge-'));
 const socketPath = join(dir, 'mail.sock');
 const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
-const hostnames = mailHostnames('skiff.test');
+const hostnames = mailHostnames('yoal.test');
 
 const state: MailState = {
 	generation: 3,
@@ -119,7 +119,7 @@ describe('mail bridge', () => {
 		loops: false,
 	});
 
-	test('starts skiff-mail, pushes state once, and asks for the submission certificate', async () => {
+	test('starts yoal-mail, pushes state once, and asks for the submission certificate', async () => {
 		(bridge as unknown as { options: { controlUrl: string } }).options.controlUrl = `http://127.0.0.1:${control.port}`;
 		bridge.apply({ generation: 3, hostnames });
 		await bridge.tick();
@@ -130,7 +130,7 @@ describe('mail bridge', () => {
 		expect(seen.stateFetches).toBe(1);
 	});
 
-	test('outbox → skiff-mail → MX, with the ack sent only once spooled', async () => {
+	test('outbox → yoal-mail → MX, with the ack sent only once spooled', async () => {
 		expect(await bridge.drainOutbox(0)).toBe(1);
 		expect(seen.acked).toEqual(['em_00000000000000000000000000000001']);
 		await mail.queue.tick();
@@ -144,7 +144,7 @@ describe('mail bridge', () => {
 		expect(mail.spool.pendingEvents()).toBe(0);
 	});
 
-	test('a newer generation is pushed; leaving the mail role stops skiff-mail', async () => {
+	test('a newer generation is pushed; leaving the mail role stops yoal-mail', async () => {
 		state.generation = 4;
 		bridge.apply({ generation: 4, hostnames });
 		await bridge.tick();

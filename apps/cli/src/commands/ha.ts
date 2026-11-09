@@ -10,7 +10,7 @@ const flags: FlagSpec = {
 	help: { type: 'boolean', short: 'h' },
 };
 
-const usage = `Usage: skif ha status [--events <n>] [--json]
+const usage = `Usage: yoal ha status [--events <n>] [--json]
 
 Show the failover controller (platform admin): whether automatic failover is on, the
 controller lease, how long each node has been silent, the ingress record set, databases

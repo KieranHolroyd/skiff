@@ -9,7 +9,7 @@ const TOKEN = 'j'.repeat(32);
 const directories: string[] = [];
 
 async function tempDir(): Promise<string> {
-	const dir = await fs.mkdtemp(join(tmpdir(), 'skiff-agent-join-'));
+	const dir = await fs.mkdtemp(join(tmpdir(), 'yoal-agent-join-'));
 	directories.push(dir);
 	return dir;
 }
@@ -27,7 +27,7 @@ describe('parseJoinArgs', () => {
 		expect(options.controlUrl).toBe('https://cloud.example.com');
 		expect(options.token).toBe(TOKEN);
 		expect(options.name).toBe('edge-1');
-		expect(options.dataDir).toBe('/var/lib/skiff-agent');
+		expect(options.dataDir).toBe('/var/lib/yoal-agent');
 		expect(options.version).toBe(BUILD_VERSION);
 		expect(options.publicAddress).toBeUndefined();
 	});
@@ -38,12 +38,12 @@ describe('parseJoinArgs', () => {
 				'https://cloud.example.com',
 				`--token=${TOKEN}`,
 				'--name=worker-1',
-				'--data-dir=/srv/skiff',
+				'--data-dir=/srv/yoal',
 				'--public-address=203.0.113.4',
 			],
-			{ SKIFF_AGENT_VERSION: '1.2.3', SKIFF_DATA_DIR: '/ignored' },
+			{ YOAL_AGENT_VERSION: '1.2.3', YOAL_DATA_DIR: '/ignored' },
 		);
-		expect(options.dataDir).toBe('/srv/skiff');
+		expect(options.dataDir).toBe('/srv/yoal');
 		expect(options.version).toBe('1.2.3');
 		expect(options.publicAddress).toBe('203.0.113.4');
 	});
@@ -89,7 +89,7 @@ describe('joinNode', () => {
 
 		const options = parseJoinArgs(
 			['https://cloud.example.com', '--token', TOKEN, '--name', 'edge-1', '--data-dir', dir],
-			{ SKIFF_AGENT_VERSION: '2.0.0' },
+			{ YOAL_AGENT_VERSION: '2.0.0' },
 		);
 		const joined = await joinNode(options, fakeFetch);
 
@@ -144,9 +144,9 @@ describe('joinNode', () => {
 			mode: 'worker',
 			joinedAt: '2026-11-03T00:00:00.000Z',
 		});
-		expect(env).toContain('SKIFF_CONTROL_URL=https://cloud.example.com');
-		expect(env).toContain('SKIFF_NODE_ID=nod_1');
-		expect(env).toContain('SKIFF_NODE_TOKEN=node-token');
-		expect(env).toContain('SKIFF_NODE_MODE=worker');
+		expect(env).toContain('YOAL_CONTROL_URL=https://cloud.example.com');
+		expect(env).toContain('YOAL_NODE_ID=nod_1');
+		expect(env).toContain('YOAL_NODE_TOKEN=node-token');
+		expect(env).toContain('YOAL_NODE_MODE=worker');
 	});
 });

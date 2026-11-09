@@ -1,5 +1,5 @@
-import type { DeployLevel, WorkloadRuntime } from '@skiff/contracts';
-import { deployLevelFor } from '@skiff/contracts';
+import type { DeployLevel, WorkloadRuntime } from '@yoal/contracts';
+import { deployLevelFor } from '@yoal/contracts';
 
 /**
  * The runtime tier a row actually is (D1 as amended by D110 and the compose runtime).

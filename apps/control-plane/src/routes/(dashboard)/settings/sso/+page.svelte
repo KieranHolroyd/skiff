@@ -16,9 +16,9 @@
 	import { toast } from 'svelte-sonner';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
@@ -445,7 +445,7 @@
 	}
 </script>
 
-<svelte:head><title>SSO · Settings · Skiff</title></svelte:head>
+<svelte:head><title>SSO · Settings · Yoal</title></svelte:head>
 
 <SettingsHeader id="sso" />
 
@@ -454,7 +454,7 @@
 		title="Identity provider"
 		icon={FingerprintIcon}
 		count={data.providers.length}
-		description="OpenID Connect or SAML 2.0. Users sign in at your IdP; Skiff trusts the email claim from a verified domain."
+		description="OpenID Connect or SAML 2.0. Users sign in at your IdP; Yoal trusts the email claim from a verified domain."
 		flush
 	>
 		{#snippet actions()}
@@ -488,7 +488,7 @@
 				{#if data.canManage}
 					<p class="text-sm font-medium">Choose your identity provider</p>
 					<p class="mt-0.5 text-xs text-muted-foreground">
-						Skiff fills in the issuer, scopes and claims, and shows the steps and the redirect URI
+						Yoal fills in the issuer, scopes and claims, and shows the steps and the redirect URI
 						for that provider’s console. It checks the provider’s discovery document when you save.
 					</p>
 					<div class="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
@@ -663,7 +663,7 @@
 			<span>
 				An OIDC client secret is write-only: it is sealed with this organisation's key and never
 				returned. IdP SAML signing certificates are public, and the IdP holds their private keys.
-				Skiff's own SP signing and encryption private keys are sealed with the platform key; only
+				Yoal's own SP signing and encryption private keys are sealed with the platform key; only
 				their certificates are published. {#if !data.canManage}Org owners and admins manage SSO.{/if}
 			</span>
 		{/snippet}
@@ -688,7 +688,7 @@
 					icon={GlobeIcon}
 					compact
 					title="No verified domains"
-					description="Add the domain your users' email addresses use, for example example.com. Skiff gives you a TXT record to publish; the same pattern the email service uses."
+					description="Add the domain your users' email addresses use, for example example.com. Yoal gives you a TXT record to publish; the same pattern the email service uses."
 				>
 					{#if data.canManage}
 						<Button size="sm" onclick={() => (domainOpen = true)}><PlusIcon />Add a domain</Button>
@@ -897,7 +897,7 @@
 		title="Group mapping"
 		icon={UsersIcon}
 		count={data.groupMappings.length}
-		description="IdP groups become Skiff groups on each SSO sign-in, so roles follow the directory. Local and SCIM-managed membership is left alone."
+		description="IdP groups become Yoal groups on each SSO sign-in, so roles follow the directory. Local and SCIM-managed membership is left alone."
 		flush
 	>
 		{#snippet actions()}
@@ -919,7 +919,7 @@
 					compact
 					title="No group mapping"
 					description={data.providers.length === 0
-						? 'Add an identity provider first, then map its groups to Skiff groups.'
+						? 'Add an identity provider first, then map its groups to Yoal groups.'
 						: data.groups.length === 0
 							? 'Create a group under IAM first, then map an IdP group claim to it.'
 							: 'Without a mapping, every SSO user gets the default role and no group-derived access.'}
@@ -930,7 +930,7 @@
 				<Table.Header class="bg-muted/45">
 					<Table.Row>
 						<Table.Head class="pl-4">IdP group claim</Table.Head>
-						<Table.Head>Skiff group</Table.Head>
+						<Table.Head>Yoal group</Table.Head>
 						<Table.Head class="hidden lg:table-cell">Added</Table.Head>
 						<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
 					</Table.Row>
@@ -1143,7 +1143,7 @@
 				<span class="font-medium"
 					>{data.defaultSsoRole === 'none' ? 'no organisation role' : 'viewer role'}</span
 				>{#if data.defaultSsoRole === 'none'}
-					(server started with <span class="font-mono">SKIFF_SSO_DEFAULT_ROLE=none</span>){/if}.
+					(server started with <span class="font-mono">YOAL_SSO_DEFAULT_ROLE=none</span>){/if}.
 			</p>
 
 			<div class="mt-5 flex justify-end">
@@ -1169,8 +1169,8 @@
 		description={protocol === 'saml'
 			? 'Import the IdP metadata URL, or enter the SSO URL and signing certificate. The certificate is public; the private key stays with the IdP.'
 			: activePreset
-				? 'Create a client at the provider, then paste its client ID and secret here. Skiff works out the rest and checks it against the provider’s discovery document.'
-				: 'Skiff fetches the issuer’s discovery document and stores the endpoints. The client secret is sealed with this organisation’s key.'}
+				? 'Create a client at the provider, then paste its client ID and secret here. Yoal works out the rest and checks it against the provider’s discovery document.'
+				: 'Yoal fetches the issuer’s discovery document and stores the endpoints. The client secret is sealed with this organisation’s key.'}
 		action="?/saveProvider"
 		submitLabel={editing ? 'Save provider' : 'Add provider'}
 		size="lg"
@@ -1489,7 +1489,7 @@
 								{/if}
 							{:else}
 								<p class="mt-1 text-xs text-muted-foreground">
-									Skiff generates an RSA key and self-signed certificate when the provider is saved.
+									Yoal generates an RSA key and self-signed certificate when the provider is saved.
 									AuthnRequests and logout messages are signed from then on, and the certificate
 									appears here for the IdP.
 								</p>
@@ -1541,7 +1541,7 @@
 								{/if}
 							{:else if saml.wantAssertionsEncrypted}
 								<p class="mt-1 text-xs text-muted-foreground">
-									Skiff generates a separate RSA key and certificate when you save. Import the
+									Yoal generates a separate RSA key and certificate when you save. Import the
 									certificate at the IdP afterwards, then rotate it with “Rotate SP encryption key”
 									when it changes.
 								</p>
@@ -1568,7 +1568,7 @@
 							class="font-mono text-sm"
 						/>
 						<Field.Description>
-							Skiff imports the entity id, SSO URL and signing certificate. Leave blank to enter
+							Yoal imports the entity id, SSO URL and signing certificate. Leave blank to enter
 							them below.
 						</Field.Description>
 					</Field.Field>
@@ -1614,7 +1614,7 @@
 							class="font-mono text-sm"
 						/>
 						<Field.Description>
-							What Skiff calls itself to the IdP. Leave blank to use the metadata URL.
+							What Yoal calls itself to the IdP. Leave blank to use the metadata URL.
 						</Field.Description>
 					</Field.Field>
 					<Field.Field class="sm:col-span-2">
@@ -1649,7 +1649,7 @@
 							class="font-mono text-sm"
 						/>
 						<Field.Description>
-							Where the browser goes after Skiff clears its own session. Leave blank to sign out
+							Where the browser goes after Yoal clears its own session. Leave blank to sign out
 							locally only.
 						</Field.Description>
 					</Field.Field>
@@ -1769,7 +1769,7 @@
 							</Field.Label>
 							<Field.Description>
 								Publish a separate SP encryption certificate and ask the IdP to encrypt assertions
-								to it. Import the certificate at the IdP before turning this on. Skiff fails closed
+								to it. Import the certificate at the IdP before turning this on. Yoal fails closed
 								if the sealed key is missing.
 							</Field.Description>
 						</Field.Field>
@@ -1815,7 +1815,7 @@
 		bind:open={domainOpen}
 		icon={GlobeIcon}
 		title="Add an email domain"
-		description="Skiff checks for a TXT record at the domain itself. Nothing routes until it is found."
+		description="Yoal checks for a TXT record at the domain itself. Nothing routes until it is found."
 		action="?/addDomain"
 		submitLabel="Add domain"
 	>
@@ -1841,7 +1841,7 @@
 		bind:open={mappingOpen}
 		icon={UsersIcon}
 		title="Map an IdP group"
-		description="The claim value is matched case-insensitively on each SSO sign-in. It becomes this Skiff group's membership."
+		description="The claim value is matched case-insensitively on each SSO sign-in. It becomes this Yoal group's membership."
 		action="?/saveGroupMapping"
 		submitLabel="Save mapping"
 	>
@@ -1874,7 +1874,7 @@
 			<Field.Description>The exact value the IdP sends in its groups claim.</Field.Description>
 		</Field.Field>
 		<Field.Field>
-			<Field.Label for="mapping-group">Skiff group</Field.Label>
+			<Field.Label for="mapping-group">Yoal group</Field.Label>
 			<NativeSelect.Root id="mapping-group" name="groupId" bind:value={mappingGroup} class="w-full">
 				{#each data.groups as group (group.id)}
 					<NativeSelect.Option value={group.id}>

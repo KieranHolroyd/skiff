@@ -2,15 +2,15 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CONFIG_EXPORT_VERSION, DEFAULT_FEATURES } from '@skiff/contracts';
-import { createDb } from '@skiff/db';
+import { CONFIG_EXPORT_VERSION, DEFAULT_FEATURES } from '@yoal/contracts';
+import { createDb } from '@yoal/db';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import type { Core } from './index.ts';
 
 /** Config export (docs/OPERATIONS.md §13): read-only, secrets by name, skips what it can't read. */
-const dir = mkdtempSync(join(tmpdir(), 'skiff-config-export-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-config-export-'));
 const opened = createDb({ path: ':memory:' });
 const clock = Date.parse('2026-11-09T10:00:00Z');
 

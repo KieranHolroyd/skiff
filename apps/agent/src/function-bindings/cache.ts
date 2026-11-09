@@ -6,7 +6,7 @@ import cacheWorkerSource from '../../../../packages/function-bindings/src/cache.
 export const CACHE_BINDING_FILE = 'binding-cache';
 
 /**
- * Phase-2 Cache API: one Skiff-supplied Worker service per cache binding, backed by a Durable
+ * Phase-2 Cache API: one Yoal-supplied Worker service per cache binding, backed by a Durable
  * Object namespace the service owns (docs/FUNCTIONS.md §4.5, FN10).
  *
  * Unlike KV, the main Worker gets no named binding: workerd exposes the Cache API implicitly and
@@ -58,7 +58,7 @@ export const renderCacheBinding: BindingRenderer = (context) => {
 
 /**
  * Stable workerd namespace key: project + binding name, never the renameable slug. workerd accepts
- * arbitrary text here, but Skiff's runtime namespace keys use `[A-Za-z0-9._-]` (see the contract's
+ * arbitrary text here, but Yoal's runtime namespace keys use `[A-Za-z0-9._-]` (see the contract's
  * `uniqueKey` pattern), so fold anything else to `-` rather than let a hand-written desired-state
  * spec drift outside that alphabet. Project ids are already URL-safe, so this is a no-op in
  * practice.

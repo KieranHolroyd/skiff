@@ -3,13 +3,13 @@ import { principalStub } from './principal-stub.test-support';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_FEATURES } from '@skiff/contracts';
-import { LocalObjectStore, buildPrincipal, createCore, type Core } from '@skiff/core';
-import { createDb } from '@skiff/db';
+import { DEFAULT_FEATURES } from '@yoal/contracts';
+import { LocalObjectStore, buildPrincipal, createCore, type Core } from '@yoal/core';
+import { createDb } from '@yoal/db';
 
-/** `update_database` (the MCP twin of `PATCH /databases/:name` and `skif db update`) against a real core. */
+/** `update_database` (the MCP twin of `PATCH /databases/:name` and `yoal db update`) against a real core. */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-mcp-db-update-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-mcp-db-update-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 const realCore: Core = createCore({
@@ -33,7 +33,7 @@ mock.module('./core', () => ({ core: realCore }));
 mock.module('./config', () => ({ platformOrigin: 'https://control.test', authSecret: 'test-secret' }));
 mock.module('./principal', () => principalStub({ principalFromMcp: () => null }));
 
-const { skiffToolDefinitions } = await import('./mcp');
+const { yoalToolDefinitions } = await import('./mcp');
 const { assistantTools } = await import('./assistant/tools');
 const { CONFIRM_TOOLS } = await import('./assistant/confirm-policy');
 
@@ -58,7 +58,7 @@ describe('update_database', () => {
 	});
 
 	test('is registered as non-destructive, but the assistant asks first', () => {
-		const definition = skiffToolDefinitions(owner).find((entry) => entry.name === 'update_database');
+		const definition = yoalToolDefinitions(owner).find((entry) => entry.name === 'update_database');
 		expect(definition?.config.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false });
 		expect(CONFIRM_TOOLS.has('update_database')).toBe(true);
 	});
@@ -73,7 +73,7 @@ describe('update_database', () => {
 	test('refuses a PostgreSQL major and points at the upgrade planner', async () => {
 		const result = await call('update_database', { database: 'main-db', version: '18' });
 		expect(result.ok).toBe(false);
-		expect(result.text).toContain('skif db upgrade main-db --to 18 --plan');
+		expect(result.text).toContain('yoal db upgrade main-db --to 18 --plan');
 		expect(realCore.databases.get(owner, 'main-db').version).toBe('17');
 	});
 });

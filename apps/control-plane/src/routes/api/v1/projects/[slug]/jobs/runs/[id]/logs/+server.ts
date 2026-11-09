@@ -1,5 +1,5 @@
 import type { RequestHandler } from './$types';
-import { logLevels, type LogLevel } from '@skiff/contracts';
+import { logLevels, type LogLevel } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { route } from '#lib/server/api.js';
 import { requirePrincipal } from '#lib/server/principal.js';

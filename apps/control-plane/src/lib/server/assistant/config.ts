@@ -1,9 +1,9 @@
-import type { AssistantStatus } from '@skiff/contracts';
+import type { AssistantStatus } from '@yoal/contracts';
 
 /**
  * Settings → Assistant (docs/ASSISTANT.md). The assistant is optional and off until an owner
  * configures an OpenAI-compatible model provider. Values come from the process environment, which
- * in production is `/etc/skiff/skiff.env` (written by `skiff-platform-config`) and in development is
+ * in production is `/etc/yoal/yoal.env` (written by `yoal-platform-config`) and in development is
  * `.data/platform-settings.json`.
  */
 
@@ -22,7 +22,7 @@ const DEFAULT_BASE_URL: Record<AssistantRuntimeConfig['provider'], string> = {
 };
 
 function providerFromEnv(): AssistantRuntimeConfig['provider'] {
-	const value = process.env.SKIFF_ASSISTANT_PROVIDER;
+	const value = process.env.YOAL_ASSISTANT_PROVIDER;
 	return value === 'openai' || value === 'openrouter' || value === 'ollama'
 		? value
 		: 'openai-compatible';
@@ -30,19 +30,19 @@ function providerFromEnv(): AssistantRuntimeConfig['provider'] {
 
 /** `null` means the feature is not configured (or explicitly disabled). */
 export function assistantConfig(): AssistantRuntimeConfig | null {
-	if (process.env.SKIFF_ASSISTANT_DISABLED === '1') return null;
+	if (process.env.YOAL_ASSISTANT_DISABLED === '1') return null;
 	const provider = providerFromEnv();
-	const baseUrl = (process.env.SKIFF_ASSISTANT_BASE_URL ?? DEFAULT_BASE_URL[provider]).replace(
+	const baseUrl = (process.env.YOAL_ASSISTANT_BASE_URL ?? DEFAULT_BASE_URL[provider]).replace(
 		/\/$/,
 		''
 	);
-	const model = process.env.SKIFF_ASSISTANT_MODEL;
+	const model = process.env.YOAL_ASSISTANT_MODEL;
 	if (!baseUrl || !model) return null;
 	return {
 		provider,
 		baseUrl,
 		model,
-		apiKey: process.env.SKIFF_ASSISTANT_API_KEY || undefined
+		apiKey: process.env.YOAL_ASSISTANT_API_KEY || undefined
 	};
 }
 
@@ -65,8 +65,8 @@ export function providerHeaders(config: AssistantRuntimeConfig): Record<string, 
 	if (config.apiKey) headers.authorization = `Bearer ${config.apiKey}`;
 	if (config.provider === 'openrouter') {
 		// OpenRouter's optional attribution headers; harmless for other gateways.
-		headers['x-title'] = 'Skiff';
-		const origin = process.env.SKIFF_PLATFORM_ORIGIN;
+		headers['x-title'] = 'Yoal';
+		const origin = process.env.YOAL_PLATFORM_ORIGIN;
 		if (origin) headers['http-referer'] = origin;
 	}
 	return headers;

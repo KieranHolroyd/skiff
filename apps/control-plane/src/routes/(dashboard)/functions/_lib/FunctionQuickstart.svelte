@@ -5,7 +5,7 @@
 	import { deployCommands, starterWorker, starterWrangler } from '../../_lib/function-view.js';
 
 	/**
-	 * First-deploy guide. The Wrangler file is the only config a user keeps: `skif deploy` bundles
+	 * First-deploy guide. The Wrangler file is the only config a user keeps: `yoal deploy` bundles
 	 * with Wrangler, generates the internal manifest and deploys (FN8).
 	 */
 	let { slug }: { slug: string } = $props();
@@ -18,7 +18,7 @@
 			Deploy your first function
 		</Card.Title>
 		<Card.Description>
-			Write ordinary Workers code. <code class="font-mono text-xs">skif deploy</code> finds
+			Write ordinary Workers code. <code class="font-mono text-xs">yoal deploy</code> finds
 			<code class="font-mono text-xs">wrangler.jsonc</code>, bundles with Wrangler (installing it if
 			needed) and deploys. The same project still deploys to Cloudflare.
 		</Card.Description>
@@ -33,7 +33,7 @@
 			Bindings map by name: <code class="font-mono">vars</code>, KV, D1, Durable Objects, queues,
 			Analytics Engine, assets and services work as written. Hyperdrive and R2 also need the
 			database or storage attached under <span class="font-medium text-foreground">Data</span> and
-			named in the <code class="font-mono">skiff</code> section. Project secrets are bound automatically.
+			named in the <code class="font-mono">yoal</code> section. Project secrets are bound automatically.
 		</p>
 	</Card.Content>
 </Card.Root>

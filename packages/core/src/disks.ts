@@ -12,7 +12,7 @@ import {
 	shares,
 	storageDefaults,
 	storageInstances,
-} from '@skiff/db';
+} from '@yoal/db';
 import {
 	DISK_ID_PREFIX,
 	DISK_MIN_FREE_PERCENT,
@@ -60,7 +60,7 @@ import {
 	type VolumeInventoryEntry,
 	type VolumeProfileResult,
 	type VolumeProfileTask,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, NotFoundError, ValidationError } from './errors.ts';
 import type { PlacementCandidate } from './placement.ts';
@@ -72,7 +72,7 @@ type NodeRow = typeof nodes.$inferSelect;
 
 const MB = 1024 * 1024;
 const ONBOARDING_KEY = 'storage.onboarding';
-const SHARE_MOUNT_ROOT = '/mnt/skiff-shares';
+const SHARE_MOUNT_ROOT = '/mnt/yoal-shares';
 
 /**
  * Where a new resource goes (docs/STORAGE.md §2.2): the system disk, a tier, or one disk.
@@ -90,7 +90,7 @@ export interface StoragePlan {
  *
  * A disk is a mounted filesystem on one node; each is `fast` or `bulk`. Settings → Storage holds
  * one default target per kind of service (`system`, `fast` or `bulk`), and every create path asks
- * `prepare()` → placement → `pick()`. A tier that cannot hold the resource is a refusal; Skiff
+ * `prepare()` → placement → `pick()`. A tier that cannot hold the resource is a refusal; Yoal
  * never swaps in another tier or the system disk, and nothing already placed moves.
  *
  * The node protocol (registry, partition mounts, profiles) keeps its "volume" wire names.
@@ -194,7 +194,7 @@ export class DiskService {
 
 	/**
 	 * *Use this disk*: register a mounted filesystem at once, or ask the node to mount an unmounted
-	 * one by UUID at /mnt/skiff-disks/<name> (the disk is `pending` until the node reports it there).
+	 * one by UUID at /mnt/yoal-disks/<name> (the disk is `pending` until the node reports it there).
 	 */
 	add(principal: Principal, raw: DiskAdd): DiskView {
 		this.assertWrite(principal, 'storage:create');
@@ -348,7 +348,7 @@ export class DiskService {
 	}
 
 	/**
-	 * Stop using a disk. Refused while anything is stored on it. A disk Skiff mounted is unmounted
+	 * Stop using a disk. Refused while anything is stored on it. A disk Yoal mounted is unmounted
 	 * by its node first (the row is `removing` until the node confirms); its files stay.
 	 */
 	remove(principal: Principal, id: string, opts: { viaShare?: boolean } = {}): { ok: true; unmounting: boolean } {
@@ -578,7 +578,7 @@ export class DiskService {
 		const target = this.defaultTarget(kind);
 		if (!target || target === 'system') return null;
 		const disk = this.bestDisk(target, nodeId, 0, true);
-		return disk ? `${disk.mountPath}/skiff/node/${nodeId}/${kind === 'builds' ? 'builds' : 'agent'}` : null;
+		return disk ? `${disk.mountPath}/yoal/node/${nodeId}/${kind === 'builds' ? 'builds' : 'agent'}` : null;
 	}
 
 	/** Facts for workload placement constraints (`volumeClass`, `volumeId`): tiers plus `remote`. */
@@ -637,7 +637,7 @@ export class DiskService {
 			.sort((a, b) => a.id.localeCompare(b.id));
 	}
 
-	/** Disks Skiff mounts on this node (`diskMounts`): the directory name, UUID and filesystem. */
+	/** Disks Yoal mounts on this node (`diskMounts`): the directory name, UUID and filesystem. */
 	mountsForNode(nodeId: string): DiskMountDesired[] {
 		return this.rowsForNode(nodeId)
 			.filter((row) => row.mountUuid && row.status !== 'removing' && (mountableFsTypes as readonly string[]).includes(row.fsType))
@@ -650,7 +650,7 @@ export class DiskService {
 			.sort((a, b) => a.name.localeCompare(b.name));
 	}
 
-	/** Disks Skiff mounted that are being removed (`diskUnmounts`). */
+	/** Disks Yoal mounted that are being removed (`diskUnmounts`). */
 	unmountsForNode(nodeId: string): DiskUnmountDesired[] {
 		return this.rowsForNode(nodeId)
 			.filter((row) => row.mountUuid && row.status === 'removing')
@@ -670,7 +670,7 @@ export class DiskService {
 	}
 
 	/**
-	 * Reconcile the heartbeat inventory: refresh capacity and the derived tier, turn a pending Skiff
+	 * Reconcile the heartbeat inventory: refresh capacity and the derived tier, turn a pending Yoal
 	 * mount `ready` once its UUID shows at its path, and mark a ready disk `missing` when its mount
 	 * disappears or moves (D80). A missing disk fails the next workload start (D76).
 	 */
@@ -689,13 +689,13 @@ export class DiskService {
 				if (row.status === 'removing') continue;
 				let mount = bySource.get(row.sourceKey);
 				if (!mount && row.mountUuid) {
-					// A Skiff mount: the key is final only once findmnt reports it (btrfs adds `#<subvol>`).
+					// A Yoal mount: the key is final only once findmnt reports it (btrfs adds `#<subvol>`).
 					const atPath = byPath.get(row.mountPath);
 					if (atPath && (atPath.sourceKey === `fs:${row.mountUuid}` || atPath.sourceKey.startsWith(`fs:${row.mountUuid}#`)))
 						mount = atPath;
 				}
 				if (!mount) {
-					// Pending and failed Skiff mounts wait for the node's mount report instead.
+					// Pending and failed Yoal mounts wait for the node's mount report instead.
 					if (row.status === 'pending' || row.status === 'failed') continue;
 					if (row.status !== 'missing')
 						this.setStatus(row.id, 'missing', 'The node no longer reports this filesystem as mounted.', now);
@@ -725,7 +725,7 @@ export class DiskService {
 		});
 	}
 
-	/** Heartbeat: mount results for disks Skiff mounts, and unmounts the node finished. */
+	/** Heartbeat: mount results for disks Yoal mounts, and unmounts the node finished. */
 	applyMountReport(nodeId: string, reports: DiskMountReport[] | undefined, unmounted: string[] | undefined): void {
 		const now = this.ctx.now();
 		const rows = new Map(this.rowsForNode(nodeId).map((row) => [row.id, row]));
@@ -884,7 +884,7 @@ export class DiskService {
 			remote: row.remote,
 			tier: row.tier,
 			tierSet: row.tierSet,
-			mountedBySkiff: row.mountUuid !== null,
+			mountedByYoal: row.mountUuid !== null,
 			share: this.shareOf(row.id),
 			status: row.status,
 			message: row.message,
@@ -1101,7 +1101,7 @@ export function diskCandidates(input: {
 		});
 	}
 
-	// Block devices: unmounted filesystems Skiff can mount, and everything it cannot use.
+	// Block devices: unmounted filesystems Yoal can mount, and everything it cannot use.
 	const seen = new Set<string>();
 	for (const device of inventory.devices) {
 		if (seen.has(device.name)) continue;
@@ -1122,10 +1122,10 @@ export function diskCandidates(input: {
 			reason =
 				SYSTEM_PATHS.includes(device.mountPath) || device.mountPath.startsWith('/boot')
 					? `Mounted at ${device.mountPath}; part of the operating system.`
-					: `Mounted at ${device.mountPath}, which cannot hold managed data. Mount it under /mnt instead, or unmount it and Skiff will mount it.`;
+					: `Mounted at ${device.mountPath}, which cannot hold managed data. Mount it under /mnt instead, or unmount it and Yoal will mount it.`;
 		else if (fs && MEMBER_FS[fs]) reason = MEMBER_FS[fs]!;
 		else if (device.holders.length > 0) reason = `Holds ${device.holders.join(', ')}.`;
-		else if (!fs) reason = 'No filesystem. Skiff does not format disks; create one on the node (e.g. mkfs.ext4) and it appears here.';
+		else if (!fs) reason = 'No filesystem. Yoal does not format disks; create one on the node (e.g. mkfs.ext4) and it appears here.';
 		else if (!isMountableFsType(fs)) reason = `${device.fsType} has no Unix ownership and permissions; managed data needs ${mountableFsTypes.join(', ')}.`;
 		else if (!device.uuid) reason = 'The filesystem has no UUID, so it cannot be found reliably after a reboot.';
 		else if (!input.canMount) reason = "This node's agent cannot mount disks yet. Update the node, or mount it yourself under /mnt.";

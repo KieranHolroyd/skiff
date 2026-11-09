@@ -7,9 +7,9 @@ import {
 	containerPathSchema,
 	type ContainerConsoleScope,
 	type Principal
-} from '@skiff/contracts';
-import type { ContainerConsoleActivity, ContainerConsoleEndpoint } from '@skiff/core';
-import { ForbiddenError } from '@skiff/contracts';
+} from '@yoal/contracts';
+import type { ContainerConsoleActivity, ContainerConsoleEndpoint } from '@yoal/core';
+import { ForbiddenError } from '@yoal/contracts';
 
 /**
  * The control-plane hop of the container console (D127): browser → here → internal gateway →
@@ -31,7 +31,7 @@ export interface ContainerConsoleDeps {
 		record(principal: Principal, slug: string, activity: ContainerConsoleActivity): void;
 		restart(principal: Principal, slug: string): { generation: number };
 	};
-	/** Loopback port of the edge's internal gateway (`SKIFF_DATABASE_GATEWAY_PORT`). */
+	/** Loopback port of the edge's internal gateway (`YOAL_DATABASE_GATEWAY_PORT`). */
 	gatewayPort: () => number;
 	fetch?: typeof fetch;
 	now?: () => number;
@@ -145,7 +145,7 @@ export async function handleContainerConsole(
 				replica
 			});
 			const name = safeFileName(
-				decodeHeader(upstream.headers.get('x-skiff-file-name')) ?? 'download'
+				decodeHeader(upstream.headers.get('x-yoal-file-name')) ?? 'download'
 			);
 			return new Response(upstream.body, {
 				headers: {

@@ -1,10 +1,10 @@
-import type { DesiredState, DiskMountDesired, DiskMountReport } from '@skiff/contracts';
+import type { DesiredState, DiskMountDesired, DiskMountReport } from '@yoal/contracts';
 
 /**
  * Keeps `diskMounts` mounted and `diskUnmounts` unmounted (docs/STORAGE.md §3.1).
  *
- * Every round asks the helper which disks are mounted at `/mnt/skiff-disks/<name>`, mounts the
- * missing ones (after a reboot too: Skiff writes no fstab entry) and unmounts the ones the control
+ * Every round asks the helper which disks are mounted at `/mnt/yoal-disks/<name>`, mounts the
+ * missing ones (after a reboot too: Yoal writes no fstab entry) and unmounts the ones the control
  * plane removed. The helper re-checks the UUID against its own `lsblk` before each mount. Failures
  * back off 5 s, 15 s, 45 s, then every 5 minutes.
  */

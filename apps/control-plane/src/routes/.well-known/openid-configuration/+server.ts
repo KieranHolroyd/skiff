@@ -1,5 +1,5 @@
 import type { RequestHandler } from './$types';
-import { ACCESS_TOKEN_TYPE, JWT_TOKEN_TYPE, ID_TOKEN_TYPE, TOKEN_EXCHANGE_GRANT } from '@skiff/core';
+import { ACCESS_TOKEN_TYPE, JWT_TOKEN_TYPE, ID_TOKEN_TYPE, TOKEN_EXCHANGE_GRANT } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 
 /** OIDC discovery for the platform issuer (docs/IAM.md §7.3, I15–I17). */

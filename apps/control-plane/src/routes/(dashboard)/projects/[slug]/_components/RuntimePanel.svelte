@@ -1,7 +1,7 @@
 <script lang="ts">
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
-	import type { ProjectView } from '@skiff/core';
-	import type { NodeCapacityView, WorkloadSpec, WorkloadView } from '@skiff/contracts';
+	import DetailList from '#lib/components/yoal/DetailList.svelte';
+	import type { ProjectView } from '@yoal/core';
+	import type { NodeCapacityView, WorkloadSpec, WorkloadView } from '@yoal/contracts';
 	import BoxesIcon from '@lucide/svelte/icons/boxes';
 	import CpuIcon from '@lucide/svelte/icons/cpu';
 	import LayersIcon from '@lucide/svelte/icons/layers';
@@ -9,8 +9,8 @@
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import ServerIcon from '@lucide/svelte/icons/server';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
@@ -143,7 +143,7 @@
 						</Card.Title>
 						<Card.Description>
 							A docker-compose file rendered as one rootless container per service on the workload
-							network. Deploy it with <code>skif deploy</code> from the project directory, or
+							network. Deploy it with <code>yoal deploy</code> from the project directory, or
 							<code>POST /api/v1/projects/{project.slug}/deploy-compose</code>. Services, volumes and
 							routes are edited in the file, not here.
 						</Card.Description>
@@ -338,7 +338,7 @@
 					</Card.Title>
 					<Card.Description>
 						Admission reserves memory from each node's <code class="font-mono text-xs"
-							>skiff-workloads.slice</code
+							>yoal-workloads.slice</code
 						>.
 					</Card.Description>
 				</Card.Header>
@@ -435,7 +435,7 @@
 							<code class="font-mono">server.listen()</code> is moved onto the passed socket, so
 							Express, Fastify, Next.js and the like work unchanged and can scale to zero.
 						{:else}
-							Runs on Skiff's Bun. Bun cannot adopt the passed socket yet, so turn socket activation
+							Runs on Yoal's Bun. Bun cannot adopt the passed socket yet, so turn socket activation
 							off and listen on <code class="font-mono">PORT</code>.
 						{/if}
 					</Field.Description>

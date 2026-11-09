@@ -8,9 +8,9 @@ import { authenticatedClient } from './common.ts';
 
 /** Config import (docs/OPERATIONS.md §14): recreate an export's configuration on this instance. */
 
-const usage = `Usage: skif import <file> [options]
+const usage = `Usage: yoal import <file> [options]
 
-Recreate the configuration in a \`skif export\` file (YAML or JSON) on the platform
+Recreate the configuration in a \`yoal export\` file (YAML or JSON) on the platform
 you are signed in to, for example when moving to a new instance.
 
 Import only creates. A resource that already exists under the same name (project
@@ -38,8 +38,8 @@ Options:
   -h, --help                 Show this help
 
 Examples:
-  skif import skiff-config-acme-2026-11-09.yaml
-  skif import skiff-config-acme-2026-11-09.yaml --secrets secrets.env --apply`;
+  yoal import yoal-config-acme-2026-11-09.yaml
+  yoal import yoal-config-acme-2026-11-09.yaml --secrets secrets.env --apply`;
 
 const flags: FlagSpec = {
 	apply: { type: 'boolean' },
@@ -63,7 +63,7 @@ export async function importCommand(argv: string[]): Promise<void> {
 		return;
 	}
 	const [file, ...extra] = args.positionals;
-	if (!file || extra.length) throw new UsageError('Usage: skif import <file> [--apply] [--secrets <file>]');
+	if (!file || extra.length) throw new UsageError('Usage: yoal import <file> [--apply] [--secrets <file>]');
 
 	let document: string;
 	try {

@@ -14,7 +14,7 @@ set -eu
 
 MODE=run
 ENGINE=podman
-SKIP_OS_CHECK="${SKIFF_E2E_SKIP_OS_CHECK:-0}"
+SKIP_OS_CHECK="${YOAL_E2E_SKIP_OS_CHECK:-0}"
 
 usage() {
 	cat <<'EOF'
@@ -28,8 +28,8 @@ Options:
   -h, --help          Show this help.
 
 Environment:
-  SKIFF_E2E_SKIP_OS_CHECK=1   Allow the host check to pass off Debian 13.
-  SKIFF_E2E_PODMAN_SUDO=1     Prefix podman with sudo (rootful podman).
+  YOAL_E2E_SKIP_OS_CHECK=1   Allow the host check to pass off Debian 13.
+  YOAL_E2E_PODMAN_SUDO=1     Prefix podman with sudo (rootful podman).
 EOF
 }
 
@@ -52,7 +52,7 @@ fail() { printf 'FAIL  %s\n' "$*" >&2; exit 1; }
 check_os() {
 	if [ ! -r /etc/os-release ]; then
 		if [ "$SKIP_OS_CHECK" = "1" ]; then
-			warn "no /etc/os-release (SKIFF_E2E_SKIP_OS_CHECK=1)"
+			warn "no /etc/os-release (YOAL_E2E_SKIP_OS_CHECK=1)"
 			return
 		fi
 		fail "no /etc/os-release; this is not a Linux host"
@@ -61,7 +61,7 @@ check_os() {
 	. /etc/os-release
 	if [ "${ID:-}" != "debian" ] || [ "${VERSION_ID:-}" != "13" ]; then
 		if [ "$SKIP_OS_CHECK" = "1" ]; then
-			warn "expected Debian 13, found ${ID:-unknown} ${VERSION_ID:-unknown} (SKIFF_E2E_SKIP_OS_CHECK=1)"
+			warn "expected Debian 13, found ${ID:-unknown} ${VERSION_ID:-unknown} (YOAL_E2E_SKIP_OS_CHECK=1)"
 		else
 			fail "expected Debian 13 (trixie), found ${ID:-unknown} ${VERSION_ID:-unknown}"
 		fi
@@ -130,39 +130,39 @@ a disposable Debian 13 node after the container lane is green:
 1. Host packages and user session
    apt-get update
    apt-get install -y podman uidmap passt netavark aardvark-dns dbus-user-session
-   loginctl enable-linger skiff
-   systemctl --user status >/dev/null   # must work for the skiff user
+   loginctl enable-linger yoal
+   systemctl --user status >/dev/null   # must work for the yoal user
 
 2. Build the two binaries from this checkout
    bun install --frozen-lockfile
-   (cd apps/helper && bun run build)    # dist/skiff-helper
-   (cd apps/agent && bun run build)     # dist/skiff-agent
+   (cd apps/helper && bun run build)    # dist/yoal-helper
+   (cd apps/agent && bun run build)     # dist/yoal-agent
 
 3. Install and start the helper (root, unix socket only)
-   install -d -m 0755 /opt/skiff/helper /opt/skiff/agent
-   install -m 0755 apps/helper/dist/skiff-helper /opt/skiff/helper/skiff-helper
-   install -m 0755 apps/agent/dist/skiff-agent /opt/skiff/agent/skiff-agent
-   # Run /opt/skiff/helper/skiff-helper as root with:
-   #   SKIFF_HELPER_SOCKET=/run/skiff-helper/helper.sock
-   #   SKIFF_HELPER_QUADLET_DIR=/etc/containers/systemd
-   #   SKIFF_HELPER_STATE_DIR=/var/lib/skiff-workloads
-   #   SKIFF_HELPER_CONTROL_SOCKET_GROUP=skiff
+   install -d -m 0755 /opt/yoal/helper /opt/yoal/agent
+   install -m 0755 apps/helper/dist/yoal-helper /opt/yoal/helper/yoal-helper
+   install -m 0755 apps/agent/dist/yoal-agent /opt/yoal/agent/yoal-agent
+   # Run /opt/yoal/helper/yoal-helper as root with:
+   #   YOAL_HELPER_SOCKET=/run/yoal-helper/helper.sock
+   #   YOAL_HELPER_QUADLET_DIR=/etc/containers/systemd
+   #   YOAL_HELPER_STATE_DIR=/var/lib/yoal-workloads
+   #   YOAL_HELPER_CONTROL_SOCKET_GROUP=yoal
    # and /usr/bin/systemctl + /usr/bin/podman present.
-   # The binary creates /run/skiff-helper/helper.sock 0660 root:skiff and exits if uid != 0.
+   # The binary creates /run/yoal-helper/helper.sock 0660 root:yoal and exits if uid != 0.
 
 4. Enrol the agent and point it at the helper
-   bun run scripts/dev/enroll-agent.ts --node <id>   # writes SKIFF_HELPER_SOCKET and agent.env
-   # Add the node to the control plane, start skiff-agent as the skiff user, then verify:
-   systemctl status skiff-helper skiff-agent
-   ls -l /run/skiff-helper/helper.sock
+   bun run scripts/dev/enroll-agent.ts --node <id>   # writes YOAL_HELPER_SOCKET and agent.env
+   # Add the node to the control plane, start yoal-agent as the yoal user, then verify:
+   systemctl status yoal-helper yoal-agent
+   ls -l /run/yoal-helper/helper.sock
    crontab-less smoke: create a database in the dashboard/CLI and watch
-   journalctl -u skiff-helper -u skiff-agent -f
-   podman ps --filter label=skiff
-   systemctl list-units 'skiff-workload-*'
+   journalctl -u yoal-helper -u yoal-agent -f
+   podman ps --filter label=yoal
+   systemctl list-units 'yoal-workload-*'
    ls /etc/containers/systemd
 
 5. What this is meant to catch (and the container lane cannot)
-   - Quadlet generation, `systemctl daemon-reload`, and the skiff-workloads.slice.
+   - Quadlet generation, `systemctl daemon-reload`, and the yoal-workloads.slice.
    - Rootless uid mapping and ownership of the database/storage data dirs.
    - netavark alias resolution between apps and db-<id>/s3-<id>.
    - The helper's fixed pg_dump/pg_restore verbs and the agent's presigned streaming.
@@ -178,11 +178,11 @@ check_tools() {
 	ok "bun $(bun --version)"
 
 	root="$(CDPATH="" cd -- "$(dirname -- "$0")/../.." && pwd)"
-	[ -f "$root/tests/e2e/managed-data.e2e.ts" ] || fail "run this from the Skiff checkout"
+	[ -f "$root/tests/e2e/managed-data.e2e.ts" ] || fail "run this from the Yoal checkout"
 	ok "checkout: $root"
 }
 
-printf '\nSkiff managed-data e2e — Debian 13 / Podman\n\n'
+printf '\nYoal managed-data e2e — Debian 13 / Podman\n\n'
 if [ "$MODE" = "checklist" ]; then
 	print_checklist
 	exit 0
@@ -204,4 +204,4 @@ print_checklist
 
 printf '\nRunning the container-level lane with %s...\n\n' "$ENGINE"
 cd "$(CDPATH="" cd -- "$(dirname -- "$0")/../.." && pwd)"
-SKIFF_E2E_ENGINE="$ENGINE" exec bun tests/e2e/managed-data.e2e.ts
+YOAL_E2E_ENGINE="$ENGINE" exec bun tests/e2e/managed-data.e2e.ts

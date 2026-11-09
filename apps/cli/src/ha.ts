@@ -1,6 +1,6 @@
 /**
  * The failover controller's status (docs/CLUSTERING.md §8.3, §12.3): wire types and the text
- * `skif ha status` prints. Types mirror `FailoverStatusView` in packages/contracts/src/failover.ts;
+ * `yoal ha status` prints. Types mirror `FailoverStatusView` in packages/contracts/src/failover.ts;
  * the CLI bundle stays free of runtime dependencies (D40), so keep them in sync.
  */
 import { formatTime, renderTable, truncate } from './output.ts';

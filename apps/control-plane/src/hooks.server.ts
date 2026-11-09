@@ -5,8 +5,8 @@ import type { RequestEvent } from '@sveltejs/kit';
 import type { Handle, HandleServerError, ServerInit } from '@sveltejs/kit/hooks';
 import { auth, backfillApiKeyRateLimits, ensurePlatformAdmin } from '#lib/server/auth.js';
 import { contentDomain, platformOrigin } from '#lib/server/config.js';
-import { featureEnabled, reconcilePlatformDomains, startFailoverLoop } from '@skiff/core';
-import { ipInCidr } from '@skiff/contracts';
+import { featureEnabled, reconcilePlatformDomains, startFailoverLoop } from '@yoal/core';
+import { ipInCidr } from '@yoal/contracts';
 import { checkCsrf } from '#lib/server/csrf.js';
 import { sqlite } from '#lib/server/db.js';
 import { needsSetup, setupUrl } from '#lib/server/setup.js';
@@ -45,7 +45,7 @@ export const init: ServerInit = async () => {
 	const promoted = ensurePlatformAdmin();
 	if (promoted) console.info(`[auth] made the bootstrap user ${promoted} the platform admin`);
 	// A fresh install: say where to finish setup on every boot until an owner exists, so the link
-	// is always one `journalctl -u skiff-control-plane | grep setup` away (D102).
+	// is always one `journalctl -u yoal-control-plane | grep setup` away (D102).
 	if (needsSetup(sqlite)) {
 		const { token, file } = currentSetupToken();
 		console.info(`[setup] No owner account yet. Finish setup at ${setupUrl(platformOrigin, token)} (token: ${file})`);
@@ -67,18 +67,18 @@ export const init: ServerInit = async () => {
 
 	// A standby (zero-downtime update slot, or the updater's canary) serves requests only. The
 	// primary keeps owning background work, so nothing runs twice while both are up.
-	if (process.env.SKIFF_STANDBY === '1') {
+	if (process.env.YOAL_STANDBY === '1') {
 		console.info('[standby] serving requests only; background work stays with the primary');
 		return;
 	}
 
 	// One maintenance loop per process (HMR can call init more than once).
-	const global = globalThis as typeof globalThis & { __skiffMaintenance?: ReturnType<typeof setInterval> };
-	if (!global.__skiffMaintenance) {
-		global.__skiffMaintenance = setInterval(() => {
+	const global = globalThis as typeof globalThis & { __yoalMaintenance?: ReturnType<typeof setInterval> };
+	if (!global.__yoalMaintenance) {
+		global.__yoalMaintenance = setInterval(() => {
 			void core.maintenance.run().catch((error) => reportBackgroundError('maintenance', error));
 		}, 60_000);
-		global.__skiffMaintenance.unref?.();
+		global.__yoalMaintenance.unref?.();
 		// The failover controller (docs/CLUSTERING.md §8.3): ticks every `controlPlane.renewSeconds`
 		// under its lease, so only one primary ever moves copies or starts a database failover.
 		// A standby returned above and never takes the lease. Errors are logged at most once a minute.
@@ -348,7 +348,7 @@ function isAuthenticatedApi(pathname: string): boolean {
 		pathname !== '/api/v1/cli/token' &&
 		// Public user-pool OIDC discovery and code flow (IAM.md §11.2).
 		!USER_POOL_PUBLIC_API.test(pathname) &&
-		// Skiff Access sign-in: the agent sends an unauthenticated browser here, and the handler
+		// Yoal Access sign-in: the agent sends an unauthenticated browser here, and the handler
 		// redirects to `/login` (IAM.md I25, §11.1).
 		pathname !== '/api/v1/access/authorize' &&
 		// `/login` asks this before a session exists (email → IdP routing).

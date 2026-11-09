@@ -11,7 +11,7 @@
 		QueryResult,
 		QueryVariables,
 		VizType
-	} from '@skiff/contracts';
+	} from '@yoal/contracts';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import { Button } from '#lib/components/ui/button/index.js';

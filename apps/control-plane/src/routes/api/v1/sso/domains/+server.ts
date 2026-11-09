@@ -5,7 +5,7 @@ import { sso } from '#lib/server/sso.js';
 import { domainCreateSchema } from '../_schema.js';
 
 /**
- * Verified SSO email domains (IAM.md §8.3). Adding a domain publishes `skiff-verify=<token>` as a
+ * Verified SSO email domains (IAM.md §8.3). Adding a domain publishes `yoal-verify=<token>` as a
  * TXT record and checks it at once; `GET` also re-checks any domain whose last check is a day old,
  * so no scheduler work is needed for the daily check.
  */

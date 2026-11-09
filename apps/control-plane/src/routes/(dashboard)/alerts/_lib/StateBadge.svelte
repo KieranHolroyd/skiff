@@ -1,6 +1,6 @@
 <script lang="ts">
 	/** A series or rule state: firing is destructive, pending a warning, no data neutral. */
-	import type { AlertState } from '@skiff/contracts';
+	import type { AlertState } from '@yoal/contracts';
 	import { Badge, type BadgeVariant } from '#lib/components/ui/badge/index.js';
 
 	let {

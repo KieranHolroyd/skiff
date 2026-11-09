@@ -6,7 +6,7 @@ import kvWorkerSource from '../../../../packages/function-bindings/src/kv.js' wi
 export const KV_BINDING_FILE = 'binding-kv';
 
 /**
- * Phase-2 KV: one Skiff-supplied Worker service per binding, backed by a Durable Object namespace
+ * Phase-2 KV: one Yoal-supplied Worker service per binding, backed by a Durable Object namespace
  * that the service owns (docs/FUNCTIONS.md §4.5, FN10).
  *
  * The main Worker only gets the `kvNamespace` capability binding; its own `durableObjectNamespaces`

@@ -1,4 +1,4 @@
-import type { FunctionRuntimeBinding } from '@skiff/contracts';
+import type { FunctionRuntimeBinding } from '@yoal/contracts';
 import { renderDurableObject } from './durable-object.ts';
 import { renderHyperdrive } from './hyperdrive.ts';
 import { renderKvBinding } from './kv.ts';

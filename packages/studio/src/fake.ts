@@ -13,7 +13,7 @@
  * `alter` supports `create-table`, `rename` and `drop` for extra (empty) tables in `public`, and
  * `truncate` of `items`; its statements are pseudo-SQL for review.
  */
-import { databaseEngines, type DatabaseEngine } from '@skiff/contracts';
+import { databaseEngines, type DatabaseEngine } from '@yoal/contracts';
 import { bigintCell, cellToParam, datetimeCell, decimalCell, jsonCell } from './cells.ts';
 import type { RunOptions, SessionOptions, StudioPlugin, StudioSession, StudioTarget } from './driver.ts';
 import {

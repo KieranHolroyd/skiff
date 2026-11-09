@@ -74,10 +74,10 @@ interface ObjectStore {
 
 ### Config and installer
 
-- `SKIFF_BACKUP_TARGET=local|s3` and `SKIFF_BACKUP_S3_*` env vars; secrets via the existing
+- `YOAL_BACKUP_TARGET=local|s3` and `YOAL_BACKUP_S3_*` env vars; secrets via the existing
   platform config pattern, not the repo.
-- Installer prompts for local vs S3; local defaults to `/var/lib/skiff/backups` (same disk warning).
-- `skif backup target add|test|list|remove`; dashboard Settings → Backups.
+- Installer prompts for local vs S3; local defaults to `/var/lib/yoal/backups` (same disk warning).
+- `yoal backup target add|test|list|remove`; dashboard Settings → Backups.
 - Platform target is used for SQLite Litestream and managed-data backups; an org can override for
   its own data.
 
@@ -85,7 +85,7 @@ interface ObjectStore {
 
 - Seal access keys with the org key; never return the secret after create (one-time reveal only).
 - Presigned URLs are short-lived and scoped to a key prefix.
-- Local target files are `0600`, owner `skiff`; no world read.
+- Local target files are `0600`, owner `yoal`; no world read.
 - Path traversal guard: keys must not escape the prefix.
 - Audit target create/update/delete/test and every restore/download.
 

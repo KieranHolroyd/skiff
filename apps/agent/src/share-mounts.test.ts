@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { DesiredState } from '@skiff/contracts';
+import type { DesiredState } from '@yoal/contracts';
 import { ShareMountRunner, type HelperShareApi } from './share-mounts.ts';
 
 type MountCall = Parameters<HelperShareApi['mountShare']>[0];
@@ -56,13 +56,13 @@ describe('ShareMountRunner', () => {
 			helper,
 			fetch: (async (url: string, init?: RequestInit) => {
 				requested.push(`${url} ${(init?.headers as Record<string, string>).authorization}`);
-				return Response.json({ id: 'shm_1', username: 'skiff', password: 'secret', domain: null });
+				return Response.json({ id: 'shm_1', username: 'yoal', password: 'secret', domain: null });
 			}) as typeof fetch,
 		});
 		expect(await runner.runOnce(state({ shareMounts: [smb] }))).toBe(true);
 		expect(requested).toEqual(['https://control.test/api/agent/share-mounts/shm_1/credentials Bearer node-token']);
 		expect(mounts).toEqual([
-			{ id: 'vault', protocol: 'smb', server: 'nas.home', exportPath: '/vault', readOnly: false, username: 'skiff', password: 'secret' },
+			{ id: 'vault', protocol: 'smb', server: 'nas.home', exportPath: '/vault', readOnly: false, username: 'yoal', password: 'secret' },
 		]);
 		expect(runner.report()).toEqual({ shareMounts: [{ id: 'shm_1', mounted: true, error: null }], unmountedShares: [] });
 

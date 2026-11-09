@@ -2,8 +2,8 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import { brokerAlias, DEFAULT_FEATURES, observabilityQueryRequestSchema, workloadDesiredSchema } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import { brokerAlias, DEFAULT_FEATURES, observabilityQueryRequestSchema, workloadDesiredSchema } from '@yoal/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore, MetricsExporter } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
@@ -11,7 +11,7 @@ import type { Core } from './index.ts';
 import { disposeTelemetryStore, hasClickHouse, testTelemetryStore } from './test-clickhouse.ts';
 
 /** Managed queue brokers (docs/BROKERS.md, D111). */
-const dir = mkdtempSync(join(tmpdir(), 'skiff-brokers-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-brokers-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 let clock = Date.parse('2026-11-07T10:00:00Z');
@@ -115,9 +115,9 @@ describe('queue brokers', () => {
 		});
 		// The password never rides desired state; only the activation carries it.
 		const activation = core.workloads.activation(edgeId, broker.id);
-		expect(Object.keys(activation.env).sort()).toEqual(['SKIFF_BROKER_PASSWORD', 'SKIFF_BROKER_USER']);
-		expect(activation.env.SKIFF_BROKER_PASSWORD).toMatch(/^[A-Za-z0-9_-]{32}$/);
-		expect(JSON.stringify(state)).not.toContain(activation.env.SKIFF_BROKER_PASSWORD!);
+		expect(Object.keys(activation.env).sort()).toEqual(['YOAL_BROKER_PASSWORD', 'YOAL_BROKER_USER']);
+		expect(activation.env.YOAL_BROKER_PASSWORD).toMatch(/^[A-Za-z0-9_-]{32}$/);
+		expect(JSON.stringify(state)).not.toContain(activation.env.YOAL_BROKER_PASSWORD!);
 		expect(() => core.workloads.activation('nod_other', broker.id)).toThrow(/another node/);
 	});
 
@@ -168,9 +168,9 @@ describe('queue brokers', () => {
 			truncated: false,
 			streams: [
 				{
-					stream: 'SKIFF_Q_jobs',
+					stream: 'YOAL_Q_jobs',
 					queue: 'jobs',
-					subjects: ['skiff.q.jobs'],
+					subjects: ['yoal.q.jobs'],
 					storage: 'file' as const,
 					retention: 'workqueue',
 					messages: 42,
@@ -182,7 +182,7 @@ describe('queue brokers', () => {
 					pending: 30,
 					ackPending: 2,
 					redelivered: 1,
-					consumers: [{ name: 'skiff-consumer', pending: 30, ackPending: 2, redelivered: 1, waiting: 1, lastDeliveredAt: null }],
+					consumers: [{ name: 'yoal-consumer', pending: 30, ackPending: 2, redelivered: 1, waiting: 1, lastDeliveredAt: null }],
 				},
 			],
 		};
@@ -217,21 +217,21 @@ describe('queue brokers', () => {
 
 		const text = await core.metricsExport.render(owner, MetricsExporter.scopeFromPath(['brokers', 'jobs']));
 		const labels = `broker="jobs",broker_id="${jobs.id}"`;
-		expect(text).toContain(`skiff_broker_info{${labels},engine="nats",version="2.12"} 1`);
-		expect(text).toContain(`skiff_broker_storage_limit_bytes{${labels}} ${GIB2}`);
-		expect(text).toContain(`skiff_broker_messages{${labels}} 42`);
-		expect(text).toContain(`skiff_broker_stream_pending{${labels},stream="SKIFF_Q_jobs",queue="jobs"} 30`);
-		expect(text).toContain(`skiff_broker_stream_oldest_message_age_seconds{${labels},stream="SKIFF_Q_jobs",queue="jobs"} 120`);
+		expect(text).toContain(`yoal_broker_info{${labels},engine="nats",version="2.12"} 1`);
+		expect(text).toContain(`yoal_broker_storage_limit_bytes{${labels}} ${GIB2}`);
+		expect(text).toContain(`yoal_broker_messages{${labels}} 42`);
+		expect(text).toContain(`yoal_broker_stream_pending{${labels},stream="YOAL_Q_jobs",queue="jobs"} 30`);
+		expect(text).toContain(`yoal_broker_stream_oldest_message_age_seconds{${labels},stream="YOAL_Q_jobs",queue="jobs"} 120`);
 		expect(() => MetricsExporter.scopeFromPath(['brokers', 'jobs', 'extra'])).toThrow();
 		await expect(core.metricsExport.render(owner, MetricsExporter.scopeFromPath(['brokers', 'nope']))).rejects.toThrow(/not found/i);
 		// The broker section needs broker:read on top of metrics:read.
 		const appsOnly = buildPrincipal({ kind: 'apiKey', userId: 'user_1', orgId: 'org_1', role: 'owner', granted: ['metrics:read', 'project:read'] });
-		expect(await core.metricsExport.render(appsOnly, MetricsExporter.scopeFromPath([]))).not.toContain('skiff_broker_');
+		expect(await core.metricsExport.render(appsOnly, MetricsExporter.scopeFromPath([]))).not.toContain('yoal_broker_');
 
 		if (!hasClickHouse) return;
-		expect(text).toContain(`skiff_broker_up{${labels}} 0`); // the newest sample was down
-		expect(text).toContain(`skiff_broker_published_1h{${labels}} 30`);
-		expect(text).toContain(`skiff_broker_messages_1h{${labels},direction="in"} 36`);
+		expect(text).toContain(`yoal_broker_up{${labels}} 0`); // the newest sample was down
+		expect(text).toContain(`yoal_broker_published_1h{${labels}} 30`);
+		expect(text).toContain(`yoal_broker_messages_1h{${labels},direction="in"} 36`);
 
 		const points = await core.brokers.metrics(owner, 'jobs', { from: clock - 3_600_000, to: clock, interval: '1m' });
 		expect(points).toHaveLength(3);
@@ -280,7 +280,7 @@ describe('queue brokers', () => {
 		expect(() => core.brokers.attach(owner, project, { broker: 'jobs' })).toThrow(/already attached/);
 
 		const broker = core.brokers.get(owner, 'jobs');
-		const password = core.workloads.activation(edgeId, broker.id).env.SKIFF_BROKER_PASSWORD!;
+		const password = core.workloads.activation(edgeId, broker.id).env.YOAL_BROKER_PASSWORD!;
 		const container = core.brokers.consumerEnv(project.id, edgeId, 'container');
 		expect(container).toEqual({
 			NATS_URL: `nats://jobs:${encodeURIComponent(password)}@${brokerAlias(broker.id)}:4222`,

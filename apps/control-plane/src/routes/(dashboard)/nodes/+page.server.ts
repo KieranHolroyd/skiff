@@ -1,6 +1,6 @@
 import { fail } from '@sveltejs/kit';
-import type { NodeView } from '@skiff/core';
-import type { DiskView, NodeCapacityView, NodeRole } from '@skiff/contracts';
+import type { NodeView } from '@yoal/core';
+import type { DiskView, NodeCapacityView, NodeRole } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import {
 	failStatus,
@@ -57,8 +57,8 @@ export const actions: Actions = {
 			const command = hasEdge
 				? managed
 					? `curl -fsSL ${core.ctx.config.platformOrigin}/install/node.sh | sudo sh -s -- --token ${token.token} --name <name>`
-					: `sudo skiff-agent join ${core.ctx.config.platformOrigin} --token ${token.token} --name <name> --public-address <tunnel-ip>:<port>`
-				: `sudo skiff-agent join ${core.ctx.config.platformOrigin} --token ${token.token} --name edge`;
+					: `sudo yoal-agent join ${core.ctx.config.platformOrigin} --token ${token.token} --name <name> --public-address <tunnel-ip>:<port>`
+				: `sudo yoal-agent join ${core.ctx.config.platformOrigin} --token ${token.token} --name edge`;
 			return {
 				success: 'Join token created. It is single-use and expires in one hour.',
 				token: token.token,
@@ -220,7 +220,7 @@ export const actions: Actions = {
 			const rotated = core.nodes.rotateToken(principal, nodeId);
 			return {
 				success:
-					'Node token rotated. Update /etc/skiff/agent.env on the node and restart the agent.',
+					'Node token rotated. Update /etc/yoal/agent.env on the node and restart the agent.',
 				rotatedToken: rotated.token,
 				nodeId
 			};

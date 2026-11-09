@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { quotaFieldNames } from '@skiff/contracts';
+import { quotaFieldNames } from '@yoal/contracts';
 import { readProjectTab } from '../../projects/[slug]/_components/project-nav.js';
 import { inputValue, QUOTA_FIELD_SCALE, QUOTA_GROUPS } from './quota-fields.js';
 

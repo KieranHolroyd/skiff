@@ -1,6 +1,6 @@
 import { hostname } from 'node:os';
 import { and, desc, eq, gte, inArray, isNull } from 'drizzle-orm';
-import { databaseReplicas, databases, failoverEvents, nodes } from '@skiff/db';
+import { databaseReplicas, databases, failoverEvents, nodes } from '@yoal/db';
 import {
 	failoverEventKinds,
 	type ClusterConfig,
@@ -16,7 +16,7 @@ import {
 	type LeasePolicy,
 	type NodeRole,
 	type Principal,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { chooseReplicaForPromotion } from './database-replicas.ts';
 import { CoreError } from './errors.ts';

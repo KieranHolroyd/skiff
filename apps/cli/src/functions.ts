@@ -1,6 +1,6 @@
 /**
- * Function test tools (D124): pure parsing and formatting for `skif function invoke` and
- * `skif function cron`. The requests run on the function's node, so they bypass Caddy and domains.
+ * Function test tools (D124): pure parsing and formatting for `yoal function invoke` and
+ * `yoal function cron`. The requests run on the function's node, so they bypass Caddy and domains.
  */
 import { formatMs } from './brokers.ts';
 import { UsageError } from './errors.ts';
@@ -70,7 +70,7 @@ export function responseBodyBytes(result: FunctionInvokeResult): Uint8Array {
 	return result.encoding === 'base64' ? Buffer.from(result.body, 'base64') : Buffer.from(result.body, 'utf8');
 }
 
-/** `skif function cron`: one line, failure first. */
+/** `yoal function cron`: one line, failure first. */
 export function scheduledSummary(cron: string, result: FunctionScheduledResult): string {
 	const timing = `${formatMs(result.durationMs)}${result.coldStart ? ', cold start' : ''}`;
 	if (scheduledFailed(result))

@@ -1,7 +1,7 @@
 import type { RequestHandler } from './$types';
 import { core } from '#lib/server/core.js';
 import { errorResponse } from '#lib/server/api.js';
-import { isFlowId } from '@skiff/contracts';
+import { isFlowId } from '@yoal/contracts';
 
 const HEARTBEAT_MS = 15_000;
 

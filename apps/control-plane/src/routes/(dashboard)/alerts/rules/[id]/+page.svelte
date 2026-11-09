@@ -4,7 +4,7 @@
 	 * series (with acknowledge and silence), the rule's settings and its history. `?edit=1` swaps
 	 * the body for the rule editor.
 	 */
-	import type { AlertInstanceView, AlertRuleSpec, AlertRuleView } from '@skiff/contracts';
+	import type { AlertInstanceView, AlertRuleSpec, AlertRuleView } from '@yoal/contracts';
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
@@ -13,7 +13,7 @@
 	import BellOffIcon from '@lucide/svelte/icons/bell-off';
 	import LayoutDashboardIcon from '@lucide/svelte/icons/layout-dashboard';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
@@ -142,7 +142,7 @@
 	const isUrl = (text: string) => /^https?:\/\/\S+$/.test(text.trim());
 </script>
 
-<svelte:head><title>{rule?.name ?? 'Alert rule'} · Alerts · Skiff</title></svelte:head>
+<svelte:head><title>{rule?.name ?? 'Alert rule'} · Alerts · Yoal</title></svelte:head>
 
 {#if ruleQuery.isPending}
 	<div class="space-y-6">

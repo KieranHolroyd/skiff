@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { workloadDesiredSchema, type WorkloadDesired } from '@skiff/contracts';
+import { workloadDesiredSchema, type WorkloadDesired } from '@yoal/contracts';
 import { renderWorkerdConfigParts } from './function-config.ts';
 import { renderPythonFunctionShim } from './function-shim-python.ts';
 
@@ -21,11 +21,11 @@ function pythonWorkload(): WorkloadDesired {
 		runtime: 'function',
 		status: 'running',
 		release: SHA,
-		upstream: 'unix//run/skiff-workloads/wld_py.sock',
+		upstream: 'unix//run/yoal-workloads/wld_py.sock',
 		memoryMb: 384,
 		cpus: 1,
 		port: 3000,
-		healthPath: '/__skiff/health',
+		healthPath: '/__yoal/health',
 		socketActivation: true,
 		activationVersion: 'b'.repeat(64),
 		dataSizeMb: null,
@@ -52,7 +52,7 @@ describe('Python function config', () => {
 	const config = renderWorkerdConfigParts({ workload: pythonWorkload(), releaseDir: '/r', env: {} }).config;
 
 	test('the user Worker is `main`, entry module first, embeds keep manifest indexes, no shim inside', () => {
-		const main = config.slice(config.indexOf('( name = "main",'), config.indexOf('( name = "skiff-shim",'));
+		const main = config.slice(config.indexOf('( name = "main",'), config.indexOf('( name = "yoal-shim",'));
 		const modules = [...main.matchAll(/\( name = "([^"]+)", (\w+) = embed "([^"]+)" \)/g)].map((match) => match.slice(1));
 		expect(modules).toEqual([
 			['entry.py', 'pythonModule', 'module-1'],
@@ -64,8 +64,8 @@ describe('Python function config', () => {
 	});
 
 	test('the socket serves the shim Worker, bound to the user Worker with the extra-handlers flag', () => {
-		expect(config).toContain('sockets = [ ( name = "http", http = (), service = "skiff-shim" ) ]');
-		const shim = config.slice(config.indexOf('( name = "skiff-shim",'));
+		expect(config).toContain('sockets = [ ( name = "http", http = (), service = "yoal-shim" ) ]');
+		const shim = config.slice(config.indexOf('( name = "yoal-shim",'));
 		expect(shim).toContain('esModule = embed "function-shim"');
 		expect(shim).toContain('compatibilityFlags = [ "service_binding_extra_handlers" ]');
 		expect(shim).toContain('bindings = [ ( name = "USER", service = "main" ) ]');
@@ -77,7 +77,7 @@ describe('Python function shim', () => {
 	async function load(user: Record<string, unknown>) {
 		// Write the generated module to disk once and import it, as the JavaScript shim tests do.
 		shimModule ??= (async () => {
-			const dir = await mkdtemp(join(tmpdir(), 'skiff-py-shim-'));
+			const dir = await mkdtemp(join(tmpdir(), 'yoal-py-shim-'));
 			const path = join(dir, 'shim.mjs');
 			await writeFile(path, renderPythonFunctionShim());
 			return import(path);
@@ -85,7 +85,7 @@ describe('Python function shim', () => {
 		const module = await shimModule;
 		return (request: Request) => module.default.fetch(request, { USER: user });
 	}
-	const internal = { 'x-skiff-internal': '1' };
+	const internal = { 'x-yoal-internal': '1' };
 
 	test('health answers without waking the user Worker; public requests are forwarded', async () => {
 		const seen: string[] = [];
@@ -95,9 +95,9 @@ describe('Python function shim', () => {
 				return new Response('from python');
 			},
 		});
-		expect(await (await fetch(new Request('http://x/__skiff/health'))).json()).toEqual({ ok: true });
+		expect(await (await fetch(new Request('http://x/__yoal/health'))).json()).toEqual({ ok: true });
 		expect(await (await fetch(new Request('http://x/hello'))).text()).toBe('from python');
-		expect((await fetch(new Request('http://x/__skiff/scheduled', { method: 'POST' }))).status).toBe(404);
+		expect((await fetch(new Request('http://x/__yoal/scheduled', { method: 'POST' }))).status).toBe(404);
 		expect(seen).toEqual(['/hello']);
 	});
 
@@ -111,9 +111,9 @@ describe('Python function shim', () => {
 			},
 		});
 		const request = () =>
-			new Request('http://x/__skiff/scheduled', {
+			new Request('http://x/__yoal/scheduled', {
 				method: 'POST',
-				headers: { ...internal, 'x-skiff-cron': '0 * * * *', 'x-skiff-scheduled-time': '1794027000000' },
+				headers: { ...internal, 'x-yoal-cron': '0 * * * *', 'x-yoal-scheduled-time': '1794027000000' },
 			});
 		expect((await fetch(request())).status).toBe(204);
 		expect(calls).toEqual([{ cron: '0 * * * *', scheduledTime: new Date(1794027000000) }]);
@@ -133,9 +133,9 @@ describe('Python function shim', () => {
 		const send = async () =>
 			(await (
 				await fetch(
-					new Request('http://x/__skiff/queue', {
+					new Request('http://x/__yoal/queue', {
 						method: 'POST',
-						headers: { ...internal, 'x-skiff-queue': 'jobs' },
+						headers: { ...internal, 'x-yoal-queue': 'jobs' },
 						body: JSON.stringify([
 							{ id: 'm1', timestamp: 1, body: { n: 1 }, attempts: 1 },
 							{ id: 'm2', timestamp: 1, body: { n: 2 }, attempts: 2 },

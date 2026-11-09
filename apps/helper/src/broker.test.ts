@@ -52,7 +52,7 @@ function activation(env: Record<string, string> = {}): WorkloadActivation {
 	return {
 		workloadId: MQ_ID,
 		activationVersion: 'b'.repeat(64),
-		env: { SKIFF_BROKER_USER: 'jobs', SKIFF_BROKER_PASSWORD: PASSWORD, ...env },
+		env: { YOAL_BROKER_USER: 'jobs', YOAL_BROKER_PASSWORD: PASSWORD, ...env },
 		files: {},
 	};
 }
@@ -101,26 +101,26 @@ describe('broker unit and config', () => {
 			workload: broker(),
 			image: 'ignored',
 			envFile: '/run/env',
-			dataDir: '/var/lib/skiff/mq',
+			dataDir: '/var/lib/yoal/mq',
 			secretsDir: null,
-			serverConfigPath: `/run/skiff-workloads/${MQ_ID}/broker.conf`,
+			serverConfigPath: `/run/yoal-workloads/${MQ_ID}/broker.conf`,
 		});
 		expect(unit).toBe(
 			renderBrokerUnit({
 				workload: broker(),
 				envFile: '/run/env',
-				dataDir: '/var/lib/skiff/mq',
-				serverConfigPath: `/run/skiff-workloads/${MQ_ID}/broker.conf`,
+				dataDir: '/var/lib/yoal/mq',
+				serverConfigPath: `/run/yoal-workloads/${MQ_ID}/broker.conf`,
 				apparmorProfile: null,
 			}),
 		);
 		expect(unit).toContain('Image=docker.io/library/nats:2.12-alpine');
-		expect(unit).toContain('Exec="nats-server" "--config" "/etc/skiff/broker.conf"');
+		expect(unit).toContain('Exec="nats-server" "--config" "/etc/yoal/broker.conf"');
 		expect(unit).toContain('User=4222:4222');
 		expect(unit).toContain('PublishPort=127.0.0.1:14222:4222');
 		expect(unit).toContain('NetworkAlias=mq-0123456789abcdef0123456789abcdef');
-		expect(unit).toContain(`Volume=/run/skiff-workloads/${MQ_ID}/broker.conf:/etc/skiff/broker.conf:ro,Z`);
-		expect(unit).toContain('Volume=/var/lib/skiff/mq:/data:Z');
+		expect(unit).toContain(`Volume=/run/yoal-workloads/${MQ_ID}/broker.conf:/etc/yoal/broker.conf:ro,Z`);
+		expect(unit).toContain('Volume=/var/lib/yoal/mq:/data:Z');
 		for (const line of ['DropCapability=all', 'NoNewPrivileges=true', 'ReadOnly=true', 'MemoryMax=256M', 'CPUQuota=50%'])
 			expect(unit).toContain(line);
 		expect(() =>
@@ -145,7 +145,7 @@ describe('broker unit and config', () => {
 	});
 
 	test('credentials leave the env; Go gets a soft memory limit', () => {
-		const env: Record<string, string> = { SKIFF_BROKER_USER: 'jobs', SKIFF_BROKER_PASSWORD: PASSWORD, OTHER: '1' };
+		const env: Record<string, string> = { YOAL_BROKER_USER: 'jobs', YOAL_BROKER_PASSWORD: PASSWORD, OTHER: '1' };
 		expect(takeBrokerAuth(env)).toEqual({ user: 'jobs', password: PASSWORD });
 		expect(env).toEqual({ OTHER: '1' });
 		expect(() => takeBrokerAuth({})).toThrow(/user and password/);
@@ -155,7 +155,7 @@ describe('broker unit and config', () => {
 
 describe('broker apply', () => {
 	async function fixture() {
-		const root = await fs.mkdtemp(join(tmpdir(), 'skiff-helper-broker-'));
+		const root = await fs.mkdtemp(join(tmpdir(), 'yoal-helper-broker-'));
 		directories.push(root);
 		const runner = new FakeRunner();
 		const chowns: Array<[string, number, number]> = [];
@@ -192,16 +192,16 @@ describe('broker apply', () => {
 		expect(env).toBe('GOMEMLIMIT=204MiB\n');
 		expect(env).not.toContain(PASSWORD);
 
-		const quadlet = await fs.readFile(join(f.root, 'quadlet', `skiff-workload-${MQ_ID}.container`), 'utf8');
-		expect(quadlet).toContain('Exec="nats-server" "--config" "/etc/skiff/broker.conf"');
+		const quadlet = await fs.readFile(join(f.root, 'quadlet', `yoal-workload-${MQ_ID}.container`), 'utf8');
+		expect(quadlet).toContain('Exec="nats-server" "--config" "/etc/yoal/broker.conf"');
 		// The first start pulls the image, so the restart is queued like any managed service.
-		expect(f.runner.calls).toContainEqual(['/usr/bin/systemctl', 'restart', '--no-block', `skiff-workload-${MQ_ID}.service`]);
+		expect(f.runner.calls).toContainEqual(['/usr/bin/systemctl', 'restart', '--no-block', `yoal-workload-${MQ_ID}.service`]);
 	});
 
 	test('refuses an activation without the broker credentials before writing a unit', async () => {
 		const f = await fixture();
 		await expect(f.driver.apply(broker(), { ...activation(), env: {} })).rejects.toThrow(/user and password/);
-		await expect(fs.stat(join(f.root, 'quadlet', `skiff-workload-${MQ_ID}.container`))).rejects.toThrow();
+		await expect(fs.stat(join(f.root, 'quadlet', `yoal-workload-${MQ_ID}.container`))).rejects.toThrow();
 	});
 
 	test('purge removes the unit and only <stateDir>/<mq id>', async () => {
@@ -212,6 +212,6 @@ describe('broker apply', () => {
 		await f.driver.purge(MQ_ID);
 		await expect(fs.stat(join(f.root, 'state', MQ_ID))).rejects.toThrow();
 		await fs.stat(join(f.root, 'state', 'mq_other'));
-		await expect(fs.stat(join(f.root, 'quadlet', `skiff-workload-${MQ_ID}.container`))).rejects.toThrow();
+		await expect(fs.stat(join(f.root, 'quadlet', `yoal-workload-${MQ_ID}.container`))).rejects.toThrow();
 	});
 });

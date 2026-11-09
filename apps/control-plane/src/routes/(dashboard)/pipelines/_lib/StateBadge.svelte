@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { PipelineConclusion } from '@skiff/contracts';
+	import type { PipelineConclusion } from '@yoal/contracts';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import StateIcon from './StateIcon.svelte';
 	import { pipelineState, STATE_BADGE, STATE_LABEL } from './status.js';

@@ -3,13 +3,13 @@ import { principalStub } from './principal-stub.test-support';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { PipelineClaimRequestInput, PipelineJobClaim, PipelineResolveClaim } from '@skiff/contracts';
-import { LocalObjectStore, buildPrincipal, createCore, type Core } from '@skiff/core';
-import { createDb } from '@skiff/db';
+import type { PipelineClaimRequestInput, PipelineJobClaim, PipelineResolveClaim } from '@yoal/contracts';
+import { LocalObjectStore, buildPrincipal, createCore, type Core } from '@yoal/core';
+import { createDb } from '@yoal/db';
 
 /** The Pipelines MCP tools (docs/PIPELINES.md §8) against a real core; the build node is played by the test. */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-mcp-pipelines-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-mcp-pipelines-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 const realCore: Core = createCore({
@@ -32,7 +32,7 @@ mock.module('./core', () => ({ core: realCore }));
 mock.module('./config', () => ({ platformOrigin: 'https://control.test', authSecret: 'test-secret' }));
 mock.module('./principal', () => principalStub({ principalFromMcp: () => null }));
 
-const { skiffToolDefinitions } = await import('./mcp');
+const { yoalToolDefinitions } = await import('./mcp');
 const { assistantTools } = await import('./assistant/tools');
 const { pipelineTools, PIPELINE_LOG_TAIL } = await import('./mcp-pipelines');
 
@@ -104,7 +104,7 @@ describe('pipeline MCP tools', () => {
 	});
 
 	test('are registered; no tool sets secrets or approves environments; viewers only read', () => {
-		const names = new Set(skiffToolDefinitions(owner).map((entry) => entry.name));
+		const names = new Set(yoalToolDefinitions(owner).map((entry) => entry.name));
 		for (const name of TOOLS) expect(names.has(name)).toBe(true);
 		for (const spec of pipelineTools(owner)) expect(spec.name).not.toMatch(/secret|variable|approve/);
 		const tools = new Map(assistantTools(owner).map((entry) => [entry.name, entry]));
@@ -190,7 +190,7 @@ describe('pipeline MCP tools', () => {
 		const missing = await call(owner, 'get_pipeline_run', { repo: 'shop', run: '99' });
 		expect(missing.ok).toBe(false);
 		expect(missing.text).toMatch(/not found/i);
-		const forbidden = await skiffToolDefinitions(viewer)
+		const forbidden = await yoalToolDefinitions(viewer)
 			.find((entry) => entry.name === 'dispatch_workflow')!
 			.handler({ repo: 'shop', workflow: 'ci.yml', inputs: {}, wait_seconds: 0 });
 		expect((forbidden as { isError?: boolean }).isError).toBe(true);

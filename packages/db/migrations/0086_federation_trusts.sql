@@ -1,6 +1,6 @@
 -- Federation trusts for RFC 8693 token exchange (docs/IAM.md I16–I17, §4, §7.3). Additive only.
 --
--- A trust maps an external (or another Skiff) OIDC issuer to one org-owned service account. A
+-- A trust maps an external (or another Yoal) OIDC issuer to one org-owned service account. A
 -- subject token is accepted when its `iss` equals `issuer`, its `aud` is one of `audiences`, its
 -- `sub` matches `subject_pattern` (glob: `*` within a segment, `**` across segments), and every
 -- entry in `claim_conditions_json` matches the token's claims. The exchange then mints a token for

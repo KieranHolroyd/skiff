@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createDecipheriv, createECDH, createHmac, createPublicKey, randomBytes, verify } from 'node:crypto';
-import { migrations } from '@skiff/db';
-import { generateVapidKeys, validVapidKeys, ensureVapidKeys, vapidSubject } from '@skiff/contracts/vapid';
+import { migrations } from '@yoal/db';
+import { generateVapidKeys, validVapidKeys, ensureVapidKeys, vapidSubject } from '@yoal/contracts/vapid';
 import {
 	PushNotifier,
 	PushSubscriptionStore,
@@ -93,10 +93,10 @@ describe('VAPID', () => {
 		expect(validVapidKeys(keys.publicKey, generateVapidKeys().privateKey)).toBe(false);
 		const env = new Map<string, string>();
 		expect(ensureVapidKeys(env)).toBe(true);
-		const first = env.get('SKIFF_VAPID_PUBLIC_KEY');
+		const first = env.get('YOAL_VAPID_PUBLIC_KEY');
 		expect(ensureVapidKeys(env)).toBe(false);
-		expect(env.get('SKIFF_VAPID_PUBLIC_KEY')).toBe(first);
-		env.set('SKIFF_VAPID_PRIVATE_KEY', 'broken');
+		expect(env.get('YOAL_VAPID_PUBLIC_KEY')).toBe(first);
+		env.set('YOAL_VAPID_PRIVATE_KEY', 'broken');
 		expect(ensureVapidKeys(env)).toBe(true);
 	});
 
@@ -117,9 +117,9 @@ describe('VAPID', () => {
 	});
 
 	test('subject prefers the configured contact, then an https origin', () => {
-		expect(vapidSubject({ SKIFF_VAPID_SUBJECT: 'mailto:ops@example.com' })).toBe('mailto:ops@example.com');
-		expect(vapidSubject({ SKIFF_PLATFORM_ORIGIN: 'https://control.example.com/' })).toBe('https://control.example.com');
-		expect(vapidSubject({ SKIFF_PLATFORM_ORIGIN: 'http://10.0.0.1', SKIFF_CONTENT_DOMAIN: '10-0-0-1.sslip.io' })).toBe('mailto:skiff@10-0-0-1.sslip.io');
+		expect(vapidSubject({ YOAL_VAPID_SUBJECT: 'mailto:ops@example.com' })).toBe('mailto:ops@example.com');
+		expect(vapidSubject({ YOAL_PLATFORM_ORIGIN: 'https://control.example.com/' })).toBe('https://control.example.com');
+		expect(vapidSubject({ YOAL_PLATFORM_ORIGIN: 'http://10.0.0.1', YOAL_CONTENT_DOMAIN: '10-0-0-1.sslip.io' })).toBe('mailto:yoal@10-0-0-1.sslip.io');
 	});
 
 	test('only https endpoints are accepted', () => {
@@ -155,7 +155,7 @@ describe('PushNotifier', () => {
 		expect(toPhone.headers.urgency).toBe('high');
 		expect(toPhone.headers.topic).toHaveLength(32);
 		const payload = JSON.parse(decrypt(toPhone.body, phone.privateKey, phone.auth));
-		expect(payload).toMatchObject({ title: 'Skiff critical: Node offline', body: 'edge-1 stopped sending heartbeats.', tag: 'node:n1:offline' });
+		expect(payload).toMatchObject({ title: 'Yoal critical: Node offline', body: 'edge-1 stopped sending heartbeats.', tag: 'node:n1:offline' });
 		expect(store.all().map((d) => d.device).sort()).toEqual(['Mac', 'iPhone']);
 		expect(store.byEndpoint(phone.subscription.endpoint)?.lastSuccessAt).not.toBeNull();
 	});

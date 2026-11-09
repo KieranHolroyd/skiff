@@ -28,7 +28,7 @@ export interface DatabaseEngineCapabilities {
 	pooler: boolean;
 	/** The extension allowlist (D84). */
 	extensions: boolean;
-	/** Helper-generated server certificate under `SKIFF_FEATURE_DB_TLS` (D85). */
+	/** Helper-generated server certificate under `YOAL_FEATURE_DB_TLS` (D85). */
 	tls: boolean;
 	/** WAL archiving and restore-to-time (docs/PITR.md). */
 	pitr: boolean;
@@ -42,7 +42,7 @@ export interface DatabaseEngineCapabilities {
 	namedCredentials: boolean;
 	/** The native database studio (D96). */
 	console: boolean;
-	/** The major-version upgrade planner (`skif db upgrade`). */
+	/** The major-version upgrade planner (`yoal db upgrade`). */
 	upgradePlan: boolean;
 	/** C7 replication mode; absent means none. */
 	replication?: 'streaming' | 'native-cluster';
@@ -140,7 +140,7 @@ export const databaseEngineRegistry: Record<DatabaseEngine, DatabaseEngineInfo> 
 		minMemoryMb: 128,
 		defaultMemoryMb: 256,
 		maxNameLength: 40,
-		reservedNames: ['postgres', 'template0', 'template1', 'skiff-studio-ro'],
+		reservedNames: ['postgres', 'template0', 'template1', 'yoal-studio-ro'],
 		containerEnv: { user: 'POSTGRES_USER', password: 'POSTGRES_PASSWORD', database: 'POSTGRES_DB' },
 		inPlaceUpgrade: 'never',
 		capabilities: ALL_CAPABILITIES,
@@ -161,7 +161,7 @@ export const databaseEngineRegistry: Record<DatabaseEngine, DatabaseEngineInfo> 
 		defaultMemoryMb: 512,
 		// MySQL user names are at most 32 characters.
 		maxNameLength: 32,
-		reservedNames: ['root', 'mysql', 'sys', 'information-schema', 'performance-schema', 'skiff-studio-ro'],
+		reservedNames: ['root', 'mysql', 'sys', 'information-schema', 'performance-schema', 'yoal-studio-ro'],
 		containerEnv: { user: 'MYSQL_USER', password: 'MYSQL_PASSWORD', database: 'MYSQL_DATABASE' },
 		inPlaceUpgrade: 'forward',
 		capabilities: { ...CORE_CAPABILITIES, backups: true, replication: 'streaming' },
@@ -181,7 +181,7 @@ export const databaseEngineRegistry: Record<DatabaseEngine, DatabaseEngineInfo> 
 		minMemoryMb: 192,
 		defaultMemoryMb: 256,
 		maxNameLength: 40,
-		reservedNames: ['root', 'mysql', 'sys', 'healthcheck', 'information-schema', 'performance-schema', 'skiff-studio-ro'],
+		reservedNames: ['root', 'mysql', 'sys', 'healthcheck', 'information-schema', 'performance-schema', 'yoal-studio-ro'],
 		containerEnv: { user: 'MARIADB_USER', password: 'MARIADB_PASSWORD', database: 'MARIADB_DATABASE' },
 		inPlaceUpgrade: 'forward',
 		capabilities: { ...CORE_CAPABILITIES, backups: true, replication: 'streaming' },
@@ -202,7 +202,7 @@ export const databaseEngineRegistry: Record<DatabaseEngine, DatabaseEngineInfo> 
 		minMemoryMb: 256,
 		defaultMemoryMb: 512,
 		maxNameLength: 40,
-		reservedNames: ['admin', 'local', 'config', 'skiff-studio-ro'],
+		reservedNames: ['admin', 'local', 'config', 'yoal-studio-ro'],
 		containerEnv: {
 			user: 'MONGO_INITDB_ROOT_USERNAME',
 			password: 'MONGO_INITDB_ROOT_PASSWORD',
@@ -226,7 +226,7 @@ export const databaseEngineRegistry: Record<DatabaseEngine, DatabaseEngineInfo> 
 		minMemoryMb: 128,
 		defaultMemoryMb: 256,
 		maxNameLength: 40,
-		reservedNames: ['default', 'skiff-studio-ro'],
+		reservedNames: ['default', 'yoal-studio-ro'],
 		containerEnv: { user: 'VALKEY_USER', password: 'VALKEY_PASSWORD', database: null },
 		inPlaceUpgrade: 'forward',
 		capabilities: { ...CORE_CAPABILITIES, backups: true, replication: 'streaming' },
@@ -246,7 +246,7 @@ export const databaseEngineRegistry: Record<DatabaseEngine, DatabaseEngineInfo> 
 		minMemoryMb: 128,
 		defaultMemoryMb: 256,
 		maxNameLength: 40,
-		reservedNames: ['default', 'skiff-studio-ro'],
+		reservedNames: ['default', 'yoal-studio-ro'],
 		containerEnv: { user: 'REDIS_USER', password: 'REDIS_PASSWORD', database: null },
 		inPlaceUpgrade: 'forward',
 		capabilities: { ...CORE_CAPABILITIES, backups: true, replication: 'streaming' },
@@ -269,7 +269,7 @@ export const databaseEngineRegistry: Record<DatabaseEngine, DatabaseEngineInfo> 
 		minMemoryMb: 1024,
 		defaultMemoryMb: 2048,
 		maxNameLength: 40,
-		reservedNames: ['default', 'system', 'information-schema', 'skiff-studio-ro'],
+		reservedNames: ['default', 'system', 'information-schema', 'yoal-studio-ro'],
 		containerEnv: { user: 'CLICKHOUSE_USER', password: 'CLICKHOUSE_PASSWORD', database: 'CLICKHOUSE_DB' },
 		// A newer LTS reads the previous LTS's data dir in place; downgrades are refused.
 		inPlaceUpgrade: 'forward',
@@ -286,7 +286,7 @@ export function databaseCapabilities(engine: string): DatabaseEngineCapabilities
 
 /**
  * The image variant a database is created on (D126). `standard` is the engine's own image for
- * the version. `postgis` and `pg_cron` are Skiff-built Postgres images layered on the pinned
+ * the version. `postgis` and `pg_cron` are Yoal-built Postgres images layered on the pinned
  * pgvector image, so each keeps pgvector and adds one extension. Variants do not combine, and a
  * database keeps its variant for life: restores copy it and there is no in-place switch.
  */
@@ -353,7 +353,7 @@ export function databaseVariantExtensionError(variant: DatabaseVariant, extensio
 }
 
 /**
- * Extensions Skiff can enable on a managed Postgres database (D84). The helper preloads
+ * Extensions Yoal can enable on a managed Postgres database (D84). The helper preloads
  * `pg_stat_statements`; the rest are created idempotently by the agent after the monitor role is
  * bootstrapped. Extensions that are not shipped by the pinned official image fail softly (they
  * are reported in the log, not treated as a database failure).
@@ -820,7 +820,7 @@ export const databaseUpdateSchema = z
 		storageMb: z.number().int().min(256).max(1_048_576).optional(),
 		/**
 		 * Target major version. Same-major changes are accepted; crossing a major is refused here
-		 * and must go through the explicit `skif db upgrade` plan/apply flow.
+		 * and must go through the explicit `yoal db upgrade` plan/apply flow.
 		 */
 		version: z.string().max(16).optional(),
 		/** Adding installs on the next activation. Removing never drops an extension automatically. */
@@ -1112,7 +1112,7 @@ export interface DatabaseView {
 /**
  * A public connection URL for a database (for example, the address of an operator-managed TCP
  * proxy or tunnel in front of the node). It is a secret: sealed with the org key and only
- * decrypted by an explicit reveal. Skiff itself keeps Postgres loopback-only (D56).
+ * decrypted by an explicit reveal. Yoal itself keeps Postgres loopback-only (D56).
  */
 /** Schemes a stored public URL may use; the service also checks it matches the engine. */
 export const DATABASE_PUBLIC_URL_PATTERN = /^(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?|https?|clickhouse):\/\/[^\s]+$/i;
@@ -1187,11 +1187,11 @@ export const workloadDatabaseSchema = z.object({
 	engine: z.enum(databaseEngines),
 	version: z.string().min(1).max(16),
 	/**
-	 * Skiff-built Postgres image variant (D126); absent means `standard`, so older helpers keep
+	 * Yoal-built Postgres image variant (D126); absent means `standard`, so older helpers keep
 	 * accepting every database that does not use one.
 	 */
 	variant: z.enum(['postgis', 'pg_cron']).optional(),
-	/** Render Postgres with a helper-generated server certificate (SKIFF_FEATURE_DB_TLS). */
+	/** Render Postgres with a helper-generated server certificate (YOAL_FEATURE_DB_TLS). */
 	tls: z.boolean().optional(),
 	/**
 	 * WAL archiving for PITR (docs/PITR.md). Present only while the `PITR` flag is on and the
@@ -1210,7 +1210,7 @@ export const workloadDatabaseSchema = z.object({
 	 */
 	replica: z
 		.object({
-			slot: z.string().regex(/^skiff_[a-z0-9_]{1,56}$/),
+			slot: z.string().regex(/^yoal_[a-z0-9_]{1,56}$/),
 		})
 		.optional(),
 });
@@ -1417,7 +1417,7 @@ export function databaseConnectionSnippets(input: DatabaseSnippetInput): Record<
 		nodePostgres: `import fs from 'node:fs';\nimport { Pool } from 'pg';\n\nconst pool = new Pool({\n  connectionString: process.env.${prefix}_URL,\n${input.caPem ? `  ssl: { ca: fs.readFileSync(process.env.${prefix}_CA_CERT || 'ca.pem') },\n` : ''}});${ca}`,
 		verifyFull: input.caPem
 			? `# Verify the server certificate against the per-database CA (host must be in the SAN):\npsql "${direct.replace(ssl, '?sslmode=verify-full')}"  # also set sslrootcert=ca.pem${caEnv}`
-			: '# TLS is disabled; enable SKIFF_FEATURE_DB_TLS to encrypt connections.',
+			: '# TLS is disabled; enable YOAL_FEATURE_DB_TLS to encrypt connections.',
 	};
 }
 
@@ -1484,24 +1484,24 @@ function engineSnippets(engine: Exclude<DatabaseEngine, 'postgres'>, input: Data
 export const POSTGRES_PGVECTOR_IMAGE_TAG = '0.8.7-pg18-trixie';
 
 /**
- * Skiff-built Postgres variant images (D126), built from `docker/postgres/Dockerfile` on the pinned
+ * Yoal-built Postgres variant images (D126), built from `docker/postgres/Dockerfile` on the pinned
  * pgvector image and published by CI. Bump the revision whenever the Dockerfile or its base
  * changes, so a published tag never moves. The helper has its own copy.
  */
-export const SKIFF_POSTGRES_IMAGE = 'ghcr.io/kieranholroyd/skiff-postgres';
-export const SKIFF_POSTGRES_IMAGE_REVISION = '1';
+export const YOAL_POSTGRES_IMAGE = 'ghcr.io/kieranholroyd/yoal-postgres';
+export const YOAL_POSTGRES_IMAGE_REVISION = '1';
 
 /**
  * The Postgres image a PITR-enabled database runs (docs/PITR.md): the pinned pgvector image plus
  * pgBackRest, built from `docker/postgres-pitr/Dockerfile` and published by
- * `.github/workflows/postgres-pitr-image.yml` as `skiff-postgres-pitr:<major>-<revision>`.
+ * `.github/workflows/postgres-pitr-image.yml` as `yoal-postgres-pitr:<major>-<revision>`.
  * Postgres runs `archive_command` in its own container, so only this image can archive WAL. Only
  * the standard 18 image has a build; 16/17 (alpine) and the D126 variants do not. A published tag
  * is never overwritten: bump the revision (here, in the helper's copy in
  * `apps/helper/src/validate.ts` and in the workflow) and pin the new digest in all three.
  */
 export const POSTGRES_PITR_VERSIONS = ['18'] as const;
-export const POSTGRES_PITR_IMAGE = 'ghcr.io/kieranholroyd/skiff-postgres-pitr';
+export const POSTGRES_PITR_IMAGE = 'ghcr.io/kieranholroyd/yoal-postgres-pitr';
 export const POSTGRES_PITR_IMAGE_REVISION = '1';
 /** `sha256:…` once the tag is published; the helper's copy must match. */
 export const POSTGRES_PITR_IMAGE_DIGEST: string | null = null;
@@ -1526,10 +1526,10 @@ export function postgresPitrImage(version: string): string {
 
 /**
  * Postgres image for a major version and variant: alpine for 16/17, the pgvector (Debian) image
- * from 18, and a Skiff-built image for the `postgis` and `pg_cron` variants (D126).
+ * from 18, and a Yoal-built image for the `postgis` and `pg_cron` variants (D126).
  */
 export function postgresImage(version: string, variant: DatabaseVariant = 'standard'): string {
-	if (variant !== 'standard') return `${SKIFF_POSTGRES_IMAGE}:${version}-${variant}-${SKIFF_POSTGRES_IMAGE_REVISION}`;
+	if (variant !== 'standard') return `${YOAL_POSTGRES_IMAGE}:${version}-${variant}-${YOAL_POSTGRES_IMAGE_REVISION}`;
 	return Number(version) >= 18
 		? `docker.io/pgvector/pgvector:${POSTGRES_PGVECTOR_IMAGE_TAG}`
 		: `docker.io/library/postgres:${version}-alpine`;
@@ -1556,4 +1556,4 @@ export function databaseImage(engine: DatabaseEngine, version: string, variant: 
 }
 
 /** Role the agent's stats sampler uses (`pg_monitor` only, D57). */
-export const DATABASE_MONITOR_USER = 'skiff_monitor';
+export const DATABASE_MONITOR_USER = 'yoal_monitor';

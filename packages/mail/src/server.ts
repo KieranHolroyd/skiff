@@ -8,7 +8,7 @@ import {
 	type MailHealth,
 	type MailInject,
 	type MailState,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { SystemResolver, type MailResolver } from './dns.ts';
 import { prepareHeaders, signMessage } from './message.ts';
 import { MailPolicy } from './policy.ts';
@@ -18,7 +18,7 @@ import { createInboundServer, createSubmissionServer, type SmtpTls } from './smt
 import { Spool, type EventInput } from './spool.ts';
 
 /**
- * `skiff-mail`: Skiff's MTA (EMAIL.md §3.2, D115). It holds no credentials and never dials the
+ * `yoal-mail`: Yoal's MTA (EMAIL.md §3.2, D115). It holds no credentials and never dials the
  * control plane; the node agent pushes state, injects outbox mail and pulls events over the
  * control socket.
  */
@@ -64,7 +64,7 @@ export class MailServer {
 
 	constructor(private readonly config: MailServerConfig) {
 		this.now = config.now ?? Date.now;
-		this.log = config.log ?? ((message) => console.log(`[skiff-mail] ${message}`));
+		this.log = config.log ?? ((message) => console.log(`[yoal-mail] ${message}`));
 		this.spool = new Spool(config.dataDir);
 		this.policy = new MailPolicy(this.now);
 		this.shaper = new Shaper(this.now);
@@ -215,7 +215,7 @@ export class MailServer {
 		this.spool.emit(event);
 	}
 
-	/** The control API (EMAIL.md §3.2). Only the agent can reach the socket (0660 skiff:skiff). */
+	/** The control API (EMAIL.md §3.2). Only the agent can reach the socket (0660 yoal:yoal). */
 	async handle(request: Request): Promise<Response> {
 		const url = new URL(request.url);
 		const json = (body: unknown, status = 200) =>

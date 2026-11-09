@@ -1,5 +1,5 @@
 import { fail } from '@sveltejs/kit';
-import { PLATFORM_CONFIG_SECTIONS, type PlatformConfigKey } from '@skiff/contracts';
+import { PLATFORM_CONFIG_SECTIONS, type PlatformConfigKey } from '@yoal/contracts';
 import {
 	agentDetail,
 	resetAgentDetail,
@@ -48,28 +48,28 @@ function fields(data: FormData) {
 	return collect([
 		{
 			field: 'provider',
-			key: 'SKIFF_ASSISTANT_PROVIDER',
+			key: 'YOAL_ASSISTANT_PROVIDER',
 			value: formString(data, 'provider') || 'openai-compatible',
 			required: true,
 			label: 'Provider'
 		},
 		{
 			field: 'baseUrl',
-			key: 'SKIFF_ASSISTANT_BASE_URL',
+			key: 'YOAL_ASSISTANT_BASE_URL',
 			value: formString(data, 'baseUrl'),
 			required: true,
 			label: 'Base URL'
 		},
 		{
 			field: 'model',
-			key: 'SKIFF_ASSISTANT_MODEL',
+			key: 'YOAL_ASSISTANT_MODEL',
 			value: formString(data, 'model'),
 			required: true,
 			label: 'Model'
 		},
 		{
 			field: 'apiKey',
-			key: 'SKIFF_ASSISTANT_API_KEY',
+			key: 'YOAL_ASSISTANT_API_KEY',
 			value: formRawString(data, 'apiKey'),
 			secret: true,
 			label: 'API key'
@@ -112,10 +112,10 @@ export const actions: Actions = {
 		const { set, unset, fieldErrors } = fields(data);
 		if (Object.keys(fieldErrors).length) return fieldFailure(fieldErrors);
 
-		const baseUrl = set.SKIFF_ASSISTANT_BASE_URL;
-		const apiKey = set.SKIFF_ASSISTANT_API_KEY || process.env.SKIFF_ASSISTANT_API_KEY;
+		const baseUrl = set.YOAL_ASSISTANT_BASE_URL;
+		const apiKey = set.YOAL_ASSISTANT_API_KEY || process.env.YOAL_ASSISTANT_API_KEY;
 		const result = await testProvider(
-			{ baseUrl: baseUrl!, apiKey, model: set.SKIFF_ASSISTANT_MODEL },
+			{ baseUrl: baseUrl!, apiKey, model: set.YOAL_ASSISTANT_MODEL },
 			AbortSignal.timeout(15_000)
 		);
 		if (!result.ok)
@@ -124,7 +124,7 @@ export const actions: Actions = {
 				fieldErrors: { baseUrl: 'The provider did not answer with a model list.' }
 			});
 
-		const model = set.SKIFF_ASSISTANT_MODEL!;
+		const model = set.YOAL_ASSISTANT_MODEL!;
 		const known = result.models.length > 0 && result.models.includes(model);
 		return queueConfig(
 			locals,
@@ -152,13 +152,13 @@ export const actions: Actions = {
 
 	test: async ({ locals }) => {
 		requireOwnerPage(locals);
-		const baseUrl = process.env.SKIFF_ASSISTANT_BASE_URL;
+		const baseUrl = process.env.YOAL_ASSISTANT_BASE_URL;
 		if (!baseUrl) return fail(409, { message: 'The assistant is not configured yet.' });
 		const result = await testProvider(
 			{
 				baseUrl,
-				apiKey: process.env.SKIFF_ASSISTANT_API_KEY,
-				model: process.env.SKIFF_ASSISTANT_MODEL
+				apiKey: process.env.YOAL_ASSISTANT_API_KEY,
+				model: process.env.YOAL_ASSISTANT_MODEL
 			},
 			AbortSignal.timeout(15_000)
 		);

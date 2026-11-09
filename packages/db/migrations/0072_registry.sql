@@ -1,6 +1,6 @@
 -- The platform container registry (docs/REGISTRY.md G1). Additive only.
 -- Repositories are `<org slug>/<name>`, created on the first push an org member is allowed to make.
--- Tags and manifests live in the registry (zot); Skiff keeps ownership, the project link and the
+-- Tags and manifests live in the registry (zot); Yoal keeps ownership, the project link and the
 -- last push it was told about. Settings and the token signing key live in `settings`.
 
 CREATE TABLE IF NOT EXISTS registry_repositories (

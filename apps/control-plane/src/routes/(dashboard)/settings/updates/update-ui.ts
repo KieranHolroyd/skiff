@@ -2,7 +2,7 @@ import type { Component } from 'svelte';
 import CloudDownloadIcon from '@lucide/svelte/icons/cloud-download';
 import HammerIcon from '@lucide/svelte/icons/hammer';
 import SparklesIcon from '@lucide/svelte/icons/sparkles';
-import type { SelfUpdateMethod, SelfUpdateOutcome, SelfUpdatePhase } from '@skiff/contracts';
+import type { SelfUpdateMethod, SelfUpdateOutcome, SelfUpdatePhase } from '@yoal/contracts';
 import type { Tone } from '#lib/status.js';
 
 /** Presentation for the updates page, shared by the install form, progress and history. */

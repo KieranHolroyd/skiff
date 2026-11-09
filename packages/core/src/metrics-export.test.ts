@@ -2,13 +2,13 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
+import { createDb } from '@yoal/db';
 import { buildPrincipal } from './orgs.ts';
 import { createCore, MetricsExporter } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import type { Core } from './index.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-metrics-export-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-metrics-export-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 let clock = Date.parse('2026-11-06T10:00:00Z');
@@ -91,12 +91,12 @@ describe('metrics export', () => {
 	test('the bare /metrics without a key is the fleet summary plus nodes and volumes', async () => {
 		const text = await render(undefined);
 		assertValidExposition(text);
-		expect(text).toContain('skiff_projects_total 3');
-		expect(text).toContain('skiff_node_up{node="edge-1",mode="edge"} 1');
-		expect(text).toContain('skiff_node_cpu_percent{node="edge-1"} 12.5');
-		expect(text).toContain('skiff_node_cert_expiry_timestamp_seconds{node="edge-1",host="*.sites.test"} 1798761600');
-		expect(text).toContain('skiff_volume_free_bytes{node="edge-1",volume="data",kind="filesystem",tier="bulk"} 250');
-		expect(text).not.toContain('skiff_project_info');
+		expect(text).toContain('yoal_projects_total 3');
+		expect(text).toContain('yoal_node_up{node="edge-1",mode="edge"} 1');
+		expect(text).toContain('yoal_node_cpu_percent{node="edge-1"} 12.5');
+		expect(text).toContain('yoal_node_cert_expiry_timestamp_seconds{node="edge-1",host="*.sites.test"} 1798761600');
+		expect(text).toContain('yoal_volume_free_bytes{node="edge-1",volume="data",kind="filesystem",tier="bulk"} 250');
+		expect(text).not.toContain('yoal_project_info');
 	});
 
 	test('scoped paths and unauthenticated access to them', async () => {
@@ -105,8 +105,8 @@ describe('metrics export', () => {
 		await expect(render(appsOnly, ['databases'])).rejects.toThrow('database:read');
 		// A key without database:read still gets the sections it can read.
 		const partial = await render(appsOnly);
-		expect(partial).toContain('skiff_project_info');
-		expect(partial).not.toContain('skiff_database_info');
+		expect(partial).toContain('yoal_project_info');
+		expect(partial).not.toContain('yoal_database_info');
 		await expect(render(owner, ['platform'])).rejects.toMatchObject({ status: 403 });
 		expect(() => MetricsExporter.scopeFromPath(['nope'])).toThrow();
 		expect(() => MetricsExporter.scopeFromPath(['usage', 'x'])).toThrow();
@@ -116,18 +116,18 @@ describe('metrics export', () => {
 	test('an org scrape covers every section, and only that org', async () => {
 		const text = await render(owner);
 		assertValidExposition(text);
-		expect(text).toContain('skiff_project_info{project="blog",name="blog"');
-		expect(text).toContain('skiff_project_info{project="shop"');
-		expect(text).toContain('skiff_quota_used{metric="projects",unit="count"} 2');
-		expect(text).toContain('skiff_database_info{database="main",database_id="dbs_1",engine="postgres",version="17"} 1');
-		expect(text).toContain('skiff_database_size_bytes{database="main",database_id="dbs_1"} 4096');
-		expect(text).toContain('skiff_database_memory_limit_bytes{database="main",database_id="dbs_1"} 268435456');
-		expect(text).toContain('skiff_scrape_truncated{section="apps"} 0');
+		expect(text).toContain('yoal_project_info{project="blog",name="blog"');
+		expect(text).toContain('yoal_project_info{project="shop"');
+		expect(text).toContain('yoal_quota_used{metric="projects",unit="count"} 2');
+		expect(text).toContain('yoal_database_info{database="main",database_id="dbs_1",engine="postgres",version="17"} 1');
+		expect(text).toContain('yoal_database_size_bytes{database="main",database_id="dbs_1"} 4096');
+		expect(text).toContain('yoal_database_memory_limit_bytes{database="main",database_id="dbs_1"} 268435456');
+		expect(text).toContain('yoal_scrape_truncated{section="apps"} 0');
 		expect(text).not.toContain('secret-app');
 		expect(text).not.toContain('theirs');
-		expect(text).not.toContain('skiff_node_up');
+		expect(text).not.toContain('yoal_node_up');
 		// No ClickHouse in this test: the scrape still answers and says so.
-		expect(text).toContain('skiff_telemetry_up 0');
+		expect(text).toContain('yoal_telemetry_up 0');
 	});
 
 	test('a per-app scrape renders one app; an unknown or foreign app is a 404', async () => {
@@ -135,23 +135,23 @@ describe('metrics export', () => {
 		assertValidExposition(text);
 		expect(text).toContain('project="blog"');
 		expect(text).not.toContain('project="shop"');
-		expect(text).not.toContain('skiff_database_info');
-		expect(text).not.toContain('skiff_quota_used');
+		expect(text).not.toContain('yoal_database_info');
+		expect(text).not.toContain('yoal_quota_used');
 		await expect(render(owner, ['apps', 'secret-app'])).rejects.toMatchObject({ status: 404 });
 		const db = await render(owner, ['databases', 'main']);
-		expect(db).toContain('skiff_database_running{database="main",database_id="dbs_1"} 1');
+		expect(db).toContain('yoal_database_running{database="main",database_id="dbs_1"} 1');
 		await expect(render(owner, ['databases', 'theirs'])).rejects.toMatchObject({ status: 404 });
 	});
 
 	test('a platform admin key can scrape the fleet section', async () => {
 		const text = await render(admin, ['platform']);
-		expect(text).toContain('skiff_volume_up{node="edge-1",volume="data",kind="filesystem",tier="bulk"} 1');
+		expect(text).toContain('yoal_volume_up{node="edge-1",volume="data",kind="filesystem",tier="bulk"} 1');
 	});
 
 	test('settings: cache, app cap, disabled sections and private /metrics', async () => {
 		core.metricsExport.updateSettings(admin, { maxApps: 1, cacheSeconds: 30 });
 		const capped = await render(owner, ['apps']);
-		expect(capped).toContain('skiff_scrape_truncated{section="apps"} 1');
+		expect(capped).toContain('yoal_scrape_truncated{section="apps"} 1');
 		expect(capped).toContain('project="blog"');
 		expect(capped).not.toContain('project="shop"');
 		// The named path is never capped.
@@ -165,7 +165,7 @@ describe('metrics export', () => {
 
 		core.metricsExport.updateSettings(admin, { sections: { databases: false }, publicPlatform: false });
 		expect(core.metricsExport.settings().sections.apps).toBe(true);
-		expect(await render(owner)).not.toContain('skiff_database_info');
+		expect(await render(owner)).not.toContain('yoal_database_info');
 		await expect(render(owner, ['databases'])).rejects.toMatchObject({ status: 404 });
 		await expect(render(undefined)).rejects.toMatchObject({ status: 401 });
 

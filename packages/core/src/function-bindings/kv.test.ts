@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { FunctionBinding, FunctionRuntimeBinding } from '@skiff/contracts';
+import type { FunctionBinding, FunctionRuntimeBinding } from '@yoal/contracts';
 import type { CoreContext } from '../context.ts';
 import type { ProjectRow } from '../projects.ts';
 import { resolveKvBinding } from './kv.ts';

@@ -2,7 +2,7 @@ import * as z from 'zod';
 
 /**
  * Where a node keeps its data (D48). A platform admin picks the paths in the dashboard; the
- * agent asks the root `skiff-storage.service` on the node to apply them, and that service
+ * agent asks the root `yoal-storage.service` on the node to apply them, and that service
  * re-reads the paths from the control plane and checks them with these same rules before it
  * moves anything. A compromised agent therefore cannot choose a path itself.
  */
@@ -10,15 +10,15 @@ import * as z from 'zod';
 /** What a fresh install uses. `null` in the node settings means "use this". */
 export const NODE_STORAGE_DEFAULTS = {
 	/** Agent state and release cache (`releases/`, `sites/`, desired-state cache). Caddy serves from here. */
-	dataDir: '/var/lib/skiff/agent',
+	dataDir: '/var/lib/yoal/agent',
 	/** Builder scratch: one checkout per running build. */
-	buildDir: '/var/lib/skiff-builder',
+	buildDir: '/var/lib/yoal-builder',
 } as const;
 
 export type NodeStorageKey = keyof typeof NODE_STORAGE_DEFAULTS;
 
 /**
- * Paths that must never hold node data, nor contain it: system trees, other Skiff state,
+ * Paths that must never hold node data, nor contain it: system trees, other Yoal state,
  * volatile mounts, and home directories (hidden from the sandboxed services).
  */
 const FORBIDDEN_PREFIXES = [
@@ -31,7 +31,7 @@ const FORBIDDEN_PREFIXES = [
 	'/lib32',
 	'/lib64',
 	'/libx32',
-	'/opt/skiff',
+	'/opt/yoal',
 	'/proc',
 	'/root',
 	'/run',
@@ -40,15 +40,15 @@ const FORBIDDEN_PREFIXES = [
 	'/sys',
 	'/tmp',
 	'/usr',
-	'/var/lib/skiff/data',
-	'/var/lib/skiff/backups',
-	'/var/lib/skiff/caddy',
+	'/var/lib/yoal/data',
+	'/var/lib/yoal/backups',
+	'/var/lib/yoal/caddy',
 	'/var/log',
 	'/var/tmp',
 ];
 
 /** Too broad to own: a move would chown or delete everything beside the data. */
-const FORBIDDEN_EXACT = ['/', '/data', '/media', '/mnt', '/opt', '/srv', '/var', '/var/lib', '/var/lib/skiff', '/srv/skiff'];
+const FORBIDDEN_EXACT = ['/', '/data', '/media', '/mnt', '/opt', '/srv', '/var', '/var/lib', '/var/lib/yoal', '/srv/yoal'];
 
 function within(path: string, prefix: string): boolean {
 	return path === prefix || path.startsWith(`${prefix}/`);
@@ -56,13 +56,13 @@ function within(path: string, prefix: string): boolean {
 
 /** Why `path` is not an acceptable storage directory, or null when it is. */
 export function storagePathProblem(path: string): string | null {
-	if (!path.startsWith('/')) return 'Use an absolute path, such as /mnt/data/skiff.';
+	if (!path.startsWith('/')) return 'Use an absolute path, such as /mnt/data/yoal.';
 	if (path.length > 200) return 'Keep the path under 200 characters.';
 	if (!/^[A-Za-z0-9._/-]+$/.test(path)) return 'Use only letters, digits, ".", "_", "-" and "/".';
 	if (path !== '/' && path.endsWith('/')) return 'Drop the trailing slash.';
 	if (path.split('/').some((part, index) => (index > 0 && part === '') || part === '.' || part === '..'))
 		return 'Use a normalized path, without "//", "." or "..".';
-	if (FORBIDDEN_EXACT.includes(path)) return `${path} is too broad; use a directory inside it, such as ${path === '/' ? '/mnt/data' : path}/skiff.`;
+	if (FORBIDDEN_EXACT.includes(path)) return `${path} is too broad; use a directory inside it, such as ${path === '/' ? '/mnt/data' : path}/yoal.`;
 	const prefix = FORBIDDEN_PREFIXES.find((candidate) => within(path, candidate));
 	if (prefix) return `${path} is inside ${prefix}, which cannot hold node data.`;
 	return null;
@@ -87,7 +87,7 @@ export const nodeStorageStates = ['applied', 'pending', 'failed'] as const;
 export type NodeStorageState = (typeof nodeStorageStates)[number];
 
 /**
- * What `skiff-storage.service` last did, written to `/etc/skiff/storage.json` on the node and
+ * What `yoal-storage.service` last did, written to `/etc/yoal/storage.json` on the node and
  * relayed by the agent's heartbeat. `requested` is the setting it acted on; the paths are what is
  * in effect now.
  */

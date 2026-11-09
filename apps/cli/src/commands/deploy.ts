@@ -39,7 +39,7 @@ export type DeployClient = Pick<
 	| 'deployCompose'
 >;
 
-/** Compose file names Skiff looks for, in order, when `--compose` is not given. */
+/** Compose file names Yoal looks for, in order, when `--compose` is not given. */
 const COMPOSE_FILE_NAMES = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'] as const;
 
 async function findComposeFile(dir: string): Promise<string | null> {
@@ -76,12 +76,12 @@ const flags: FlagSpec = {
 	help: { type: 'boolean', short: 'h' },
 };
 
-const usage = `Usage: skif deploy [dir] [options]
+const usage = `Usage: yoal deploy [dir] [options]
 
-Zip a directory and deploy it to Skiff.
+Zip a directory and deploy it to Yoal.
 
-If the directory contains wrangler.jsonc (or wrangler.json), Skiff treats it as a Functions
-project (docs/FUNCTIONS.md): the Worker named by "main" is bundled with Skiff's own bundler
+If the directory contains wrangler.jsonc (or wrangler.json), Yoal treats it as a Functions
+project (docs/FUNCTIONS.md): the Worker named by "main" is bundled with Yoal's own bundler
 (esbuild, pinned in this CLI; Wrangler is not needed), and the generated bundle is deployed.
 Otherwise the directory is deployed as a static site, exactly as before.
 
@@ -90,7 +90,7 @@ Options:
   -n, --name <name>      Project name, used when creating a missing project
       --no-promote       Create a preview only, do not move production
   -m, --message <text>   Deployment message
-      --spa              Set "spa": true in the deployed skiff.json (static sites)
+      --spa              Set "spa": true in the deployed yoal.json (static sites)
       --no-create        Fail if the project does not exist
       --wrangler <path>  Use this wrangler config instead of auto-detecting one
       --no-wrangler      Deploy the plain directory even if a wrangler config exists
@@ -99,8 +99,8 @@ Options:
       --json             Print the finalize response as JSON
   -h, --help             Show this help
 
-Sign in first with \`skif login\` (opens the browser), or set SKIFF_URL and SKIFF_TOKEN in CI.
-Run the Worker locally with \`skif wrangler dev\` (installs Wrangler for local development only).`;
+Sign in first with \`yoal login\` (opens the browser), or set YOAL_URL and YOAL_TOKEN in CI.
+Run the Worker locally with \`yoal wrangler dev\` (installs Wrangler for local development only).`;
 
 export async function deployCommand(
 	argv: string[],
@@ -132,7 +132,7 @@ export async function deployCommand(
 	if (noWrangler && wranglerFlag)
 		throw new CliError('--no-wrangler cannot be combined with --wrangler.', { code: 'usage' });
 	if (wranglerBin)
-		log('Note: --wrangler-bin is ignored; skif deploy bundles with its own pinned bundler, not Wrangler.');
+		log('Note: --wrangler-bin is ignored; yoal deploy bundles with its own pinned bundler, not Wrangler.');
 
 	let wranglerConfig: WranglerConfig | null = null;
 	if (wranglerFlag) {
@@ -273,7 +273,7 @@ export async function deployCommand(
 			const hasModule = entries.some((entry) => /\.(?:js|mjs|cjs|wasm)$/i.test(entry.path));
 			if (!hasModule)
 				throw new CliError(
-					'This is a function project, but no wrangler.jsonc was found and the directory has no built Worker module. Run skif deploy from the project root (or pass --wrangler <path>).',
+					'This is a function project, but no wrangler.jsonc was found and the directory has no built Worker module. Run yoal deploy from the project root (or pass --wrangler <path>).',
 					{ code: 'function_bundle_missing' },
 				);
 			log('No wrangler config found; uploading the directory as a prebuilt function bundle.');
@@ -321,7 +321,7 @@ async function findProject(client: DeployClient, slug: string): Promise<ProjectV
 /**
  * Names of secrets scoped to this project. Organisation-scoped secrets are deliberately never
  * auto-bound: they are not this project's to expose. The manifest can still reference them with
- * an explicit `skiff.secrets` entry.
+ * an explicit `yoal.secrets` entry.
  */
 async function projectSecretNames(
 	client: DeployClient,
@@ -330,7 +330,7 @@ async function projectSecretNames(
 ): Promise<string[]> {
 	if (!project.id) {
 		log(
-			'Note: the platform did not return a project id, so project secrets were not bound automatically. Declare them with skiff.secrets if needed.',
+			'Note: the platform did not return a project id, so project secrets were not bound automatically. Declare them with yoal.secrets if needed.',
 		);
 		return [];
 	}
@@ -339,7 +339,7 @@ async function projectSecretNames(
 		secrets = (await client.listSecrets()).secrets;
 	} catch (error) {
 		log(
-			`Note: could not list project secrets (${messageOf(error)}); declare them with skiff.secrets if needed.`,
+			`Note: could not list project secrets (${messageOf(error)}); declare them with yoal.secrets if needed.`,
 		);
 		return [];
 	}

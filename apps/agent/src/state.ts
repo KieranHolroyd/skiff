@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { desiredStateSchema, type DesiredState } from '@skiff/contracts';
+import { desiredStateSchema, type DesiredState } from '@yoal/contracts';
 
 /**
  * On-disk cache of the last desired state (D23). If the control plane is down the agent still

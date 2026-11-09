@@ -1,16 +1,16 @@
 /**
  * Where the master key (D18, the KEK that wraps every org data key) lives on a control-plane host,
- * and how it gets there. Shared by the installer, `skiff-recovery-kit`, `skiff-rotate-master-key`,
+ * and how it gets there. Shared by the installer, `yoal-recovery-kit`, `yoal-rotate-master-key`,
  * the update canary and the control-plane unit drop-ins.
  *
  * Two stores, the sealed one preferred:
  *
- *   /etc/skiff/master.key.cred  `systemd-creds encrypt --name=master-key` output, bound to the
+ *   /etc/yoal/master.key.cred  `systemd-creds encrypt --name=master-key` output, bound to the
  *                               TPM2 chip (no PCR policy) plus the host key when the machine has a
  *                               TPM2, the host key (/var/lib/systemd/credential.secret) otherwise.
  *                               The control plane gets it via `LoadCredentialEncrypted=` (a unit
  *                               drop-in, see systemd/control-plane.ts).
- *   /etc/skiff/master.key       root 0400 plaintext, loaded with `LoadCredential=`. Only used when
+ *   /etc/yoal/master.key       root 0400 plaintext, loaded with `LoadCredential=`. Only used when
  *                               systemd-creds is unavailable (systemd < 250).
  *
  * Either way the service reads the plaintext from `%d/master-key`; nothing else changes for it.
@@ -52,7 +52,7 @@ export function credentialDirective(store: MasterKeyStore): string {
 
 /**
  * Directive for a caller that only knows the plain path (old stage-0 updaters pass
- * `/etc/skiff/master.key` to the canary hook): a `.cred` path, or a sealed file beside the plain
+ * `/etc/yoal/master.key` to the canary hook): a `.cred` path, or a sealed file beside the plain
  * one, means `LoadCredentialEncrypted=`.
  */
 export function credentialDirectiveFor(path: string, exists: (path: string) => boolean = existsSync): string {
@@ -74,7 +74,7 @@ export type CredsRunner = (cmd: string[], stdin?: string) => CommandResult;
 
 /** Tests point this at a fake; production uses the system binary. */
 export function systemdCredsBin(env: Record<string, string | undefined> = process.env): string {
-	return env.SKIFF_SYSTEMD_CREDS || 'systemd-creds';
+	return env.YOAL_SYSTEMD_CREDS || 'systemd-creds';
 }
 
 export const defaultCredsRunner: CredsRunner = (cmd, stdin) => {
@@ -238,7 +238,7 @@ export function planMasterKey(input: { sealed: boolean; plain: boolean; credsAva
 }
 
 export interface EnsureMasterKeyInput {
-	/** `/etc/skiff/master.key`. */
+	/** `/etc/yoal/master.key`. */
 	plainPath: string;
 	run?: CredsRunner;
 	bin?: string;
@@ -285,7 +285,7 @@ export function ensureMasterKey(input: EnsureMasterKeyInput): EnsureMasterKeyRes
 			} catch (error) {
 				throw new Error(
 					`${(error as Error).message}. The sealed master key only opens on the machine that sealed it; ` +
-						'if this host was rebuilt or its TPM was reset, import the recovery kit (skiff-recovery-kit import <kit> --force).',
+						'if this host was rebuilt or its TPM was reset, import the recovery kit (yoal-recovery-kit import <kit> --force).',
 				);
 			}
 			if (plainExists) log(`warning: ${input.plainPath} exists beside ${sealedPath}; the sealed key is in use`);

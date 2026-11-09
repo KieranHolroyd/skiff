@@ -1,11 +1,11 @@
 /**
- * `/etc/skiff/skiff.env` reader/writer shared by the installer and `skiff-update-self`.
+ * `/etc/yoal/yoal.env` reader/writer shared by the installer and `yoal-update-self`.
  *
  * The file is a systemd `EnvironmentFile=`. Values made only of shell-safe characters are written
  * bare; anything else (spaces, `<`, `$`, quotes, backslashes, …) is double-quoted with systemd's
- * escapes (`\"`, `\\`, `` \` ``, `\$`), so e.g. `SKIFF_SMTP_FROM=Skiff <noreply@…>` or an SMTP
+ * escapes (`\"`, `\\`, `` \` ``, `\$`), so e.g. `YOAL_SMTP_FROM=Yoal <noreply@…>` or an SMTP
  * password with `;` round-trips through systemd and through the shell parsers in
- * `scripts/restore.sh` / `scripts/skiff-restore-drill.sh` (which never `.`-source the file).
+ * `scripts/restore.sh` / `scripts/yoal-restore-drill.sh` (which never `.`-source the file).
  */
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 

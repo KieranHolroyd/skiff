@@ -81,7 +81,7 @@ Extend `orgQuotas` (nullable = unlimited):
 
 - MCP: `get_usage` (org/project), `get_quotas`; no write by default. Platform admin can set quotas via
   REST/CLI.
-- CLI: `skif usage`, `skif quota set`.
+- CLI: `yoal usage`, `yoal quota set`.
 - Never expose another org's usage.
 
 ## Implementation order
@@ -125,7 +125,7 @@ Extend `orgQuotas` (nullable = unlimited):
 
 Counts and hard limits first (databases, storage, volumes, previews), then memory/egress showback.
 Default quotas unlimited for existing orgs; new installs get sensible defaults. Feature flag
-`SKIFF_FEATURE_QUOTAS` for enforcement.
+`YOAL_FEATURE_QUOTAS` for enforcement.
 
 ## Open questions
 

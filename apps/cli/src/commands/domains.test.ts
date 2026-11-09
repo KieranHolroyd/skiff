@@ -14,7 +14,7 @@ interface Seen {
 }
 
 beforeEach(async () => {
-	dir = await mkdtemp(join(tmpdir(), 'skiff-cli-domains-'));
+	dir = await mkdtemp(join(tmpdir(), 'yoal-cli-domains-'));
 });
 
 afterEach(async () => {
@@ -30,7 +30,7 @@ const domain = (overrides: Record<string, unknown> = {}) => ({
 	hostname: 'shop.example.com',
 	kind: 'custom',
 	status: 'pending',
-	verification: { recordName: '_skiff.shop.example.com', recordValue: 'skiff-verify=abc' },
+	verification: { recordName: '_yoal.shop.example.com', recordValue: 'yoal-verify=abc' },
 	redirectWww: false,
 	wwwHostname: null,
 	lastCheckedAt: null,
@@ -66,11 +66,11 @@ async function cli(...args: string[]) {
 		cwd: join(import.meta.dir, '../..'),
 		env: {
 			...process.env,
-			SKIFF_CONFIG_DIR: dir,
-			SKIFF_URL: `http://127.0.0.1:${server!.port}`,
-			SKIFF_TOKEN: 'skif_test',
-			SKIFF_CONTENT_DOMAIN: 'sites.example.com',
-			SKIFF_PROFILE: '',
+			YOAL_CONFIG_DIR: dir,
+			YOAL_URL: `http://127.0.0.1:${server!.port}`,
+			YOAL_TOKEN: 'yoal_test',
+			YOAL_CONTENT_DOMAIN: 'sites.example.com',
+			YOAL_PROFILE: '',
 		},
 		stdin: 'ignore',
 		stdout: 'pipe',
@@ -80,7 +80,7 @@ async function cli(...args: string[]) {
 	return { code, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
 }
 
-describe('skif domains', () => {
+describe('yoal domains', () => {
 	test('list filters by project and prints status', async () => {
 		const seen = serve({
 			'GET /api/v1/domains': { domains: [domain(), domain({ id: 'dmn_2', hostname: 'example.com', kind: 'apex', status: 'active' })] },
@@ -102,7 +102,7 @@ describe('skif domains', () => {
 		});
 		expect(result.stdout).toContain('Added shop.example.com to shop (pending).');
 		expect(result.stdout).toContain('CNAME  shop.example.com  →  shop.sites.example.com');
-		expect(result.stdout).toContain('TXT    _skiff.shop.example.com  →  skiff-verify=abc');
+		expect(result.stdout).toContain('TXT    _yoal.shop.example.com  →  yoal-verify=abc');
 	});
 
 	test('add requires a project', async () => {

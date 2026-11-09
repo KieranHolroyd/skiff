@@ -117,7 +117,7 @@ export const functionInvokeInputSchema = z
 			.max(4096)
 			.default('/')
 			.refine((value) => value.startsWith('/'), 'The path starts with /.')
-			.refine((value) => !/^\/__skiff(\/|$)/i.test(value.split('?')[0] ?? ''), 'Paths under /__skiff/ are internal to Skiff.'),
+			.refine((value) => !/^\/__yoal(\/|$)/i.test(value.split('?')[0] ?? ''), 'Paths under /__yoal/ are internal to Yoal.'),
 		headers: headerMapSchema.default({}),
 		body: z.string().max(nodeTaskLimits.requestBodyBytes).optional(),
 	})

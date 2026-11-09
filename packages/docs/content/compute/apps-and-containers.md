@@ -3,7 +3,7 @@ title: Apps and containers
 description: Run long-lived apps as sandboxed systemd processes or Podman containers, with memory, secrets, health checks and placement.
 ---
 
-Use an app when you need something that stays running: a web server, an API, a queue consumer or a bot. Skiff runs it on one of your nodes, gives it a route when it listens for HTTP, and keeps it running. Two runtimes cover this. A **process app** runs a command from your release inside a sandboxed systemd unit. A **container** runs an OCI image under Podman Quadlet. Static sites and [functions](/compute/functions) use other runtimes.
+Use an app when you need something that stays running: a web server, an API, a queue consumer or a bot. Yoal runs it on one of your nodes, gives it a route when it listens for HTTP, and keeps it running. Two runtimes cover this. A **process app** runs a command from your release inside a sandboxed systemd unit. A **container** runs an OCI image under Podman Quadlet. Static sites and [functions](/compute/functions) use other runtimes.
 
 > [!NOTE]
 > Preview. Process apps and containers are implemented, but the end-to-end checks on a real Debian 13 node are still open. Test a new app on a non-critical node before you depend on it.
@@ -24,16 +24,16 @@ The runtime is set when you create the project. Create it as a process or contai
 Create the project with `runtime` set to `process`, either from the dashboard, with `POST /api/v1/projects`, or with the `create_project` MCP tool. Then describe how it runs and deploy the release:
 
 ```sh
-skif deploy ./my-api --project my-api
+yoal deploy ./my-api --project my-api
 ```
 
 The release directory is what the unit runs from. The release is mounted read-only, so the app writes only to its state directory, described below.
 
-Set the command with the workload spec. Skiff runs `command` as an argument list, not through a shell, from inside the release directory. If you leave `command` out, it defaults to `bun run start`.
+Set the command with the workload spec. Yoal runs `command` as an argument list, not through a shell, from inside the release directory. If you leave `command` out, it defaults to `bun run start`.
 
 ```sh
 curl -X PUT "https://control.example.com/api/v1/projects/my-api/workload" \
-  -H "Authorization: Bearer $SKIFF_TOKEN" -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $YOAL_TOKEN" -H 'Content-Type: application/json' \
   --data @workload.json
 ```
 
@@ -49,12 +49,12 @@ A Bun server that listens on `PORT` looks like this:
 }
 ```
 
-Socket activation is on by default, and it changes how your app must listen. With it on, Skiff holds the listening socket and passes it to the app as file descriptor 3. Your app must adopt that socket. Bun cannot do this yet, so a Bun app needs `"socketActivation": false`. Then Skiff sets `PORT` and `HOST=127.0.0.1` for the app, and the app listens there.
+Socket activation is on by default, and it changes how your app must listen. With it on, Yoal holds the listening socket and passes it to the app as file descriptor 3. Your app must adopt that socket. Bun cannot do this yet, so a Bun app needs `"socketActivation": false`. Then Yoal sets `PORT` and `HOST=127.0.0.1` for the app, and the app listens there.
 
 A PHP app that adopts the socket is in `examples/php-frankenphp` in the repository. It can scale to zero, as described under [scale to zero](#scale-to-zero).
 
 > [!NOTE]
-> Skiff does not install Node or Python. Process apps run whatever is on the node's `PATH` or inside the release. FrankenPHP is an opt-in install on the node, and the process unit cannot find it until it is installed.
+> Yoal does not install Node or Python. Process apps run whatever is on the node's `PATH` or inside the release. FrankenPHP is an opt-in install on the node, and the process unit cannot find it until it is installed.
 
 ## Create a container
 
@@ -73,28 +73,28 @@ A container needs an image. You can name a tag: each deploy resolves it to the i
 }
 ```
 
-Containers cannot set a `command`. Use the entrypoint the image defines. Skiff publishes the container's `port` only on the node's loopback interface, and Caddy on the same node proxies to it.
+Containers cannot set a `command`. Use the entrypoint the image defines. Yoal publishes the container's `port` only on the node's loopback interface, and Caddy on the same node proxies to it.
 
-To change only the image and deploy it, run `skif registry deploy <project> <image>` (or `POST /api/v1/projects/<slug>/deploy-image`).
+To change only the image and deploy it, run `yoal registry deploy <project> <image>` (or `POST /api/v1/projects/<slug>/deploy-image`).
 
 ### Private images
 
 Add a login for the image's registry under **Settings → Container registries**, or with the CLI:
 
 ```sh
-echo "$GHCR_TOKEN" | skif registry credentials add ghcr ghcr.io -u my-org --password-stdin
+echo "$GHCR_TOKEN" | yoal registry credentials add ghcr ghcr.io -u my-org --password-stdin
 ```
 
-There is one credential per registry host per organisation; use `docker.io` for Docker Hub. Skiff uses it to resolve the digest when you deploy, and the node gets it only when it pulls, as a root-only auth file next to the container. Changing a credential doesn't restart anything: a container that failed to pull retries with the new login.
+There is one credential per registry host per organisation; use `docker.io` for Docker Hub. Yoal uses it to resolve the digest when you deploy, and the node gets it only when it pulls, as a root-only auth file next to the container. Changing a credential doesn't restart anything: a container that failed to pull retries with the new login.
 
 ### The platform registry
 
-A platform admin can run a registry for the whole install (Settings → Container registries → **Turn on**). Its host is `registry.<your content domain>` by default. Push to it with your Skiff API key:
+A platform admin can run a registry for the whole install (Settings → Container registries → **Turn on**). Its host is `registry.<your content domain>` by default. Push to it with your Yoal API key:
 
 ```sh
-skif registry login                      # docker login with this profile's API key
+yoal registry login                      # docker login with this profile's API key
 docker push registry.example.com/my-org/my-api:1.0
-skif registry deploy my-api registry.example.com/my-org/my-api:1.0
+yoal registry deploy my-api registry.example.com/my-org/my-api:1.0
 ```
 
 The first path segment is your organisation's slug: you can push only to your own organisation, and only with `image:push` (deployers and above). Viewers can pull.
@@ -105,7 +105,7 @@ Nodes delete images that no container or unit needs any more, once an hour. `loc
 
 #### Deploy on push
 
-`skif registry autodeploy my-org/web web --tag latest` (or **Deploy on push** on the repository's page) deploys every push of `my-org/web:latest` to the `web` container project, pinned to the pushed digest. Each deployment keeps its digest in the registry for as long as the deployment exists, so retention never deletes what you might roll back to.
+`yoal registry autodeploy my-org/web web --tag latest` (or **Deploy on push** on the repository's page) deploys every push of `my-org/web:latest` to the `web` container project, pinned to the pushed digest. Each deployment keeps its digest in the registry for as long as the deployment exists, so retention never deletes what you might roll back to.
 
 #### Build in a pipeline
 
@@ -116,12 +116,12 @@ jobs:
   image:
     runs-on: self-hosted
     steps:
-      - uses: skiff/checkout
+      - uses: yoal/checkout
       - id: build
-        uses: skiff/build-image
+        uses: yoal/build-image
         with:
-          tags: registry/web:${{ skiff.sha }}
-      - uses: skiff/deploy
+          tags: registry/web:${{ yoal.sha }}
+      - uses: yoal/deploy
         with:
           project: web
           image: ${{ steps.build.outputs.image }}
@@ -131,7 +131,7 @@ Pull requests from forks can pull but never push.
 
 #### Push from GitHub Actions
 
-Let a GitHub repository push without storing a secret: `skif registry trust add my-gh-org/web my-org/web --ref refs/heads/main`, or **Add trust** on the Registry page. In the workflow:
+Let a GitHub repository push without storing a secret: `yoal registry trust add my-gh-org/web my-org/web --ref refs/heads/main`, or **Add trust** on the Registry page. In the workflow:
 
 ```yaml
 permissions: { id-token: write, contents: read }
@@ -150,7 +150,7 @@ A platform admin can also turn on, under Settings → Container registries:
 
 - **Mirrors** for Docker Hub, GHCR and Quay. Nodes then pull those images through the registry (and straight from upstream if it is down), which avoids Docker Hub's pull limits.
 - **Signatures.** Add your cosign public key. With `enforce`, a deploy of an image from the platform registry is refused unless its digest is signed by a trusted key; `warn` only logs.
-- **CVE scanning.** `skif registry scan my-org/web:1.0` lists the image's vulnerabilities.
+- **CVE scanning.** `yoal registry scan my-org/web:1.0` lists the image's vulnerabilities.
 - **S3 storage** for the registry's blobs, with a Valkey cache, so the registry can move to another node without copying anything.
 - A **registry quota** (`registryBytes`) per organisation or project. Over it, pushes are refused; pulls never are.
 
@@ -179,11 +179,11 @@ These fields make up the workload spec. Send them as the JSON body of `PUT /api/
 
 Set `idleStopSeconds` to stop a process app after it has gone that many seconds without a request. The socket stays open, and the next request starts the app again. The first request after a stop pays the cold start.
 
-Skiff accepts this only for a process app with HTTP ingress, socket activation on, and one replica. Any other combination is refused with an error that names the field. Containers are always on.
+Yoal accepts this only for a process app with HTTP ingress, socket activation on, and one replica. Any other combination is refused with an error that names the field. Containers are always on.
 
 ### Health checks
 
-Skiff probes `healthPath` on the app. Until the path answers, the workload reports `starting`. When it answers, the workload reports `running`. A worker has no path to probe. It reports `running` while its unit is active.
+Yoal probes `healthPath` on the app. Until the path answers, the workload reports `starting`. When it answers, the workload reports `running`. A worker has no path to probe. It reports `running` while its unit is active.
 
 Workloads report one of these statuses: `pending`, `starting`, `running`, `failed` or `stopped`. A running workload that reports five or more restarts is marked `failed` with the message "Restart loop". The diagram shows the transitions:
 
@@ -208,7 +208,7 @@ Create a secret with the REST API. Omit `projectId`, or set it to `null`, to sha
 
 ```sh
 curl -X POST "https://control.example.com/api/v1/secrets" \
-  -H "Authorization: Bearer $SKIFF_TOKEN" -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $YOAL_TOKEN" -H 'Content-Type: application/json' \
   --data '{"name":"DATABASE_URL","value":"postgres://…","projectId":"<project-id>"}'
 ```
 
@@ -223,13 +223,13 @@ Then reference it from the spec. The name is required and must be upper-snake-ca
 
 With `env` delivery, the app reads the value from `NAME`. With `file` delivery, the app reads the path in `NAME_FILE`. A reference resolves to the project's own secret first, then to the organisation's. It can also pin a `version`. A reference that names no secret, or a pinned version that does not exist, is refused when you save the spec.
 
-A name cannot be set both as a plain variable and by a secret. Skiff refuses the save, because one value would silently hide the other.
+A name cannot be set both as a plain variable and by a secret. Yoal refuses the save, because one value would silently hide the other.
 
 ## Placement and capacity
 
-Each project has a `placement` that Skiff resolves once, when you deploy:
+Each project has a `placement` that Yoal resolves once, when you deploy:
 
-- `edge` (the default for new projects) runs the app on the edge node. Skiff refuses the deploy if that node has no room.
+- `edge` (the default for new projects) runs the app on the edge node. Yoal refuses the deploy if that node has no room.
 - `auto` picks a node with enough free budget.
 - A node id pins the app to that node.
 
@@ -237,7 +237,7 @@ For finer control, a project can also carry a `placementSpec`. It can pin a node
 
 Placement is decided at deploy time, and a running app does not move between nodes by itself. Redeploy to move it.
 
-Admission checks the node's workload slice before a deploy starts. Skiff reserves `memoryMb` multiplied by `replicas`, and it checks CPU and disk when the node reports them. Copies are spread across nodes, one per node, so a deploy with more replicas than eligible nodes is refused. Process apps are not spread while the `SERVICE_ENDPOINTS` flag is on. Your organisation's memory quota also applies. See [quotas and limits](/self-hosting/quotas-and-limits).
+Admission checks the node's workload slice before a deploy starts. Yoal reserves `memoryMb` multiplied by `replicas`, and it checks CPU and disk when the node reports them. Copies are spread across nodes, one per node, so a deploy with more replicas than eligible nodes is refused. Process apps are not spread while the `SERVICE_ENDPOINTS` flag is on. Your organisation's memory quota also applies. See [quotas and limits](/self-hosting/quotas-and-limits).
 
 The diagram shows the path from a deploy to a running app:
 
@@ -257,28 +257,28 @@ flowchart TD
 
 ## Workers
 
-Set `ingress` to `none` for a process that does not serve HTTP, such as a queue consumer or a bot. A worker gets no route and no published port. Skiff does not probe it, and it counts as healthy while its unit is active. A worker can run several replicas.
+Set `ingress` to `none` for a process that does not serve HTTP, such as a queue consumer or a bot. A worker gets no route and no published port. Yoal does not probe it, and it counts as healthy while its unit is active. A worker can run several replicas.
 
-For work on a schedule, or a one-off command such as a migration (`skif run my-api -- bun run migrate`), see [app jobs](/compute/scheduled-jobs#app-jobs).
+For work on a schedule, or a one-off command such as a migration (`yoal run my-api -- bun run migrate`), see [app jobs](/compute/scheduled-jobs#app-jobs).
 
 ## Logs and restarts
 
 Read recent runtime logs from the CLI:
 
 ```sh
-skif logs my-api --lines 500
+yoal logs my-api --lines 500
 ```
 
 The `--json` flag prints the raw response. Over REST, use `GET /api/v1/projects/:slug/logs?limit=500`. The `get_logs` MCP tool takes `level`, a search term `q` and an `after` cursor for tailing. See [dashboards and logs](/observe/dashboards-and-logs) for the dashboard view.
 
-A failed process restarts after two seconds. A process that exits cleanly stays stopped. Systemd gives up after ten failures in 60 seconds. A container restarts on failure in the same way. Saved spec or variable changes make the node re-apply the workload, which restarts it with the new settings. A container project can also be restarted from its **Overview** console section; `skif container restart`, `POST /api/v1/projects/:slug/container/restart` and the `restart_container` MCP tool do the same for a container.
+A failed process restarts after two seconds. A process that exits cleanly stays stopped. Systemd gives up after ten failures in 60 seconds. A container restarts on failure in the same way. Saved spec or variable changes make the node re-apply the workload, which restarts it with the new settings. A container project can also be restarted from its **Overview** console section; `yoal container restart`, `POST /api/v1/projects/:slug/container/restart` and the `restart_container` MCP tool do the same for a container.
 
 ## Container console
 
 A container project gets a **Container** group in its sidebar with **Overview**, **Logs**, **Shell** and **Files** (Logs moves there from Monitor). They read and work inside the running container rather than at a release. **Shell** and **Files** need the container to be running; **Overview** also shows why it is not. When a project runs several replicas, a picker at the top of each section chooses which replica to look at.
 
 > [!NOTE]
-> The console is on by default. An operator can turn it off with `SKIFF_FEATURE_CONTAINER_CONSOLE=0`; the sections and their routes then disappear and the nodes stop the console listener. See [feature flags](/self-hosting/configuration).
+> The console is on by default. An operator can turn it off with `YOAL_FEATURE_CONTAINER_CONSOLE=0`; the sections and their routes then disappear and the nodes stop the console listener. See [feature flags](/self-hosting/configuration).
 
 The console only works on nodes whose agent supports it. A node running an older agent reports that it needs an update the first time you open a section; updating the node fixes it.
 
@@ -306,7 +306,7 @@ A browsable mount opens in **Files** at that path. Secret mounts and `tmpfs` mou
 
 `root` inside the container is not root on the node: every capability stays dropped, privilege escalation stays blocked, and the root filesystem stays read-only. Writes go to the container's `/data` volume and its `tmpfs` `/tmp`.
 
-The terminal survives switching to another section and back, and a page reload, until the session ends. Skiff closes a shell after 15 minutes with no attached viewer and no input, after 8 hours whatever happens, or when the container restarts. The **End** button ends it immediately, and **New** replaces it with a fresh shell using the current choices.
+The terminal survives switching to another section and back, and a page reload, until the session ends. Yoal closes a shell after 15 minutes with no attached viewer and no input, after 8 hours whatever happens, or when the container restarts. The **End** button ends it immediately, and **New** replaces it with a fresh shell using the current choices.
 
 ### Files
 
@@ -323,7 +323,7 @@ The terminal survives switching to another section and back, and a page reload, 
 | --- | --- | --- |
 | See Overview and the console sections | `container:inspect` | Dashboard, REST, CLI, MCP |
 | Browse files and download | `container:files` | Dashboard, REST, CLI, MCP (list and read only) |
-| Open a shell | `container:exec` | Dashboard, REST, CLI (`skif shell`); never MCP |
+| Open a shell | `container:exec` | Dashboard, REST, CLI (`yoal shell`); never MCP |
 | Restart the container | `project:update` | Dashboard, REST, CLI, MCP |
 
 The deployer role has all four. A viewer has only `container:inspect`. Default agent scopes leave out `container:files` and `container:exec`, so an API key or MCP client holds them only when you grant them explicitly. MCP clients never get a shell, even with `container:exec`: an agent reads untrusted text, so running commands in production stays with people. Opening or closing a shell and reading or downloading a file are audited; the keystrokes, file contents and secret values never are.
@@ -332,7 +332,7 @@ The same calls are on the REST API under `/api/v1/projects/:slug/container/` (se
 
 ## Security properties
 
-Skiff generates the units. You do not write them, and the settings below apply to every unit it creates.
+Yoal generates the units. You do not write them, and the settings below apply to every unit it creates.
 
 For every process app:
 
@@ -340,7 +340,7 @@ For every process app:
 - The release directory is read-only. The app has a private, writable state directory that survives restarts, exposed as `$STATE_DIRECTORY`.
 - It gets a private `/tmp`, no device access and no access to home directories.
 - It cannot change the system clock, hostname, kernel settings or control groups, and it cannot gain privileges through setuid or setgid.
-- Its memory and CPU are capped, and it runs in the shared `skiff-workloads.slice`.
+- Its memory and CPU are capped, and it runs in the shared `yoal-workloads.slice`.
 - Its file mode mask is `0077`, so files it creates are private to it.
 
 For containers:
@@ -352,7 +352,7 @@ For containers:
 - All Linux capabilities are dropped, and privilege escalation is blocked.
 - The root filesystem is read-only. `/tmp` is a 64 MB tmpfs, and `/data` is a persistent volume.
 - Writable volumes (`/data` and read-write app volumes) are owned by the container's mapped uid
-  each time it starts. A restart can map a different id range, so Skiff re-owns them then.
+  each time it starts. A restart can map a different id range, so Yoal re-owns them then.
   Read-only mounts are never re-owned, so a reader with a different id range may not be able to
   read files the writer made private to itself.
 - Secret files are mounted read-only and owned by the container's user.
@@ -360,7 +360,7 @@ For containers:
 - Its memory and CPU are capped in the same slice.
 
 Managed databases, object storage and brokers are the exception: their images expect a fixed
-non-root user, so they run as that user without a user namespace. Skiff owns their data directory
+non-root user, so they run as that user without a user namespace. Yoal owns their data directory
 with that uid instead.
 
 > [!WARNING]
@@ -371,10 +371,10 @@ with that uid instead.
 A blueprint declares a whole stack in one file: projects with their environments, domains and workload settings, plus the databases, storage buckets and brokers they use and how they attach. **Plan** compares the file with what exists and changes nothing. **Apply** runs that plan through the same services as the dashboard, so permissions, quotas and audit entries are exactly what the same clicks would produce. Applying the same file again changes nothing.
 
 > [!NOTE]
-> Blueprints are on by default. An operator can turn them off with `SKIFF_FEATURE_BLUEPRINTS=0` (see [configuration](/self-hosting/configuration#feature-flags)).
+> Blueprints are on by default. An operator can turn them off with `YOAL_FEATURE_BLUEPRINTS=0` (see [configuration](/self-hosting/configuration#feature-flags)).
 
 ```yaml
-apiVersion: skiff/v1
+apiVersion: yoal/v1
 name: shop
 projects:
   shop-web:
@@ -421,24 +421,24 @@ Some rules follow from what the services allow:
 
 - `env` and `secrets` replace the whole set when present. `secrets` lists secret **names**; create their values first (see [environment variables and secrets](#environment-variables-and-secrets)). A name that does not resolve for the project or the organisation fails the plan.
 - `extensions` only adds. Removing one from the file never drops it from the database.
-- A project's `runtime`, a database's `engine` and `variant`, and a broker's `engine` are fixed. Changing them fails the plan. So does a PostgreSQL major version change (use `skif db upgrade`) and any downgrade.
+- A project's `runtime`, a database's `engine` and `variant`, and a broker's `engine` are fixed. Changing them fails the plan. So does a PostgreSQL major version change (use `yoal db upgrade`) and any downgrade.
 - A resource that already exists in your organisation is adopted: the plan shows `exists; this stack adopts it` and updates only the fields the file sets. A project slug held by another organisation fails the plan.
 - A new database, private storage instance or broker is placed next to the first project the file attaches it to, so everything an app uses shares one node.
 - Password access cannot be set from a file, because passwords never go in one.
 
 ### Plan and apply
 
-From the CLI, with `skiff.blueprint.yaml`, `skiff.blueprint.yml` or `skiff.blueprint.json` in the current directory (or a path, or `-` for stdin):
+From the CLI, with `yoal.blueprint.yaml`, `yoal.blueprint.yml` or `yoal.blueprint.json` in the current directory (or a path, or `-` for stdin):
 
 ```sh
-skif blueprint validate
-skif blueprint plan
-skif blueprint apply
+yoal blueprint validate
+yoal blueprint plan
+yoal blueprint apply
 ```
 
 `plan` lists every resource as `create`, `update`, `delete` or up to date, with each changed field. `apply` plans, shows the plan, asks, then applies it and follows the progress; `--yes` skips the question. In the dashboard, open **Projects → From template → Apply a blueprint**, paste or open the file, choose **Plan**, review the diff and choose **Apply**.
 
-The steps run in order: projects, environments, databases, storage, buckets, brokers, workload settings, domains, then attachments. Each step re-reads live state and changes only what still differs. The first step that fails stops the run, the later steps are skipped, and nothing is rolled back, so fix the cause and plan again: the new plan lists only what is left. `skif blueprint apply` exits 0 when everything applied, 3 when the run stopped partway, and 1 when it failed or you declined.
+The steps run in order: projects, environments, databases, storage, buckets, brokers, workload settings, domains, then attachments. Each step re-reads live state and changes only what still differs. The first step that fails stops the run, the later steps are skipped, and nothing is rolled back, so fix the cause and plan again: the new plan lists only what is left. `yoal blueprint apply` exits 0 when everything applied, 3 when the run stopped partway, and 1 when it failed or you declined.
 
 A plan lasts one hour and only the person who made it can apply it. Apply re-reads live state first, and if anything the plan covers has changed since, it refuses and asks you to plan again, so what runs is always what you reviewed.
 
@@ -449,7 +449,7 @@ Workload settings are saved, not deployed: deploy the app as usual, and a runnin
 Removing a resource from the file does not delete it. The plan warns that it is kept. To delete the resources this stack created or adopted that the file no longer lists, plan with prune:
 
 ```sh
-skif blueprint apply --prune
+yoal blueprint apply --prune
 ```
 
 A pruning plan asks you to type the stack name before it applies (`--yes` confirms it for you). Projects, databases, storage and brokers move to the trash and can be restored; buckets are deleted only when empty; attachments are detached. Prune never touches anything the stack does not manage, and AI agents cannot prune.

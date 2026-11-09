@@ -1,9 +1,9 @@
 ---
 title: Quotas, usage and limits
-description: Set per-organisation quotas, read usage and showback reports, tune platform policies, and check the fixed limits built into Skiff.
+description: Set per-organisation quotas, read usage and showback reports, tune platform policies, and check the fixed limits built into Yoal.
 ---
 
-Quotas cap what one organisation, or one project inside it, can create. Usage shows what is in use against those caps and gives you a CSV for showback, which means reporting what each project consumes. Skiff does not bill: there are no prices or invoices. Platform policies control retention, defaults for new resources and assistant cost caps. The last section lists the limits that are fixed in code.
+Quotas cap what one organisation, or one project inside it, can create. Usage shows what is in use against those caps and gives you a CSV for showback, which means reporting what each project consumes. Yoal does not bill: there are no prices or invoices. Platform policies control retention, defaults for new resources and assistant cost caps. The last section lists the limits that are fixed in code.
 
 ## Organisation quotas
 
@@ -51,7 +51,7 @@ The window is rolling, so deploys work again once older traffic leaves the 30 da
 
 ### Jobs
 
-`jobs` limits how many [jobs](/compute/scheduled-jobs#app-jobs) an organisation has, and `jobRunsPerDay` limits job runs in the last 24 hours: scheduled, manual, one-off commands and retries. A scheduled run (or retry) over the limit is not started; it appears in the job's history as **skipped** with the quota message, and skipped runs don't count. A manual run or `skif run` over the limit is refused with `quota_exceeded`. Function cron triggers are not jobs, and running one by hand from the function's test panel doesn't count either.
+`jobs` limits how many [jobs](/compute/scheduled-jobs#app-jobs) an organisation has, and `jobRunsPerDay` limits job runs in the last 24 hours: scheduled, manual, one-off commands and retries. A scheduled run (or retry) over the limit is not started; it appears in the job's history as **skipped** with the quota message, and skipped runs don't count. A manual run or `yoal run` over the limit is refused with `quota_exceeded`. Function cron triggers are not jobs, and running one by hand from the function's test panel doesn't count either.
 
 ### Change a quota
 
@@ -61,7 +61,7 @@ The same change is available over REST. Send an org update with `PUT` or `PATCH`
 
 ```sh
 curl -X PUT https://control.example.com/api/v1/quotas \
-  -H "Authorization: Bearer $SKIFF_KEY" \
+  -H "Authorization: Bearer $YOAL_KEY" \
   -H "Content-Type: application/json" \
   -d '{"projects": 10, "maxUploadBytes": 104857600, "databases": -1}'
 ```
@@ -93,7 +93,7 @@ Usage reports current counts, measured sizes and a 30-day egress estimate. Some 
 You can see it in four places:
 
 - **Settings → Usage & limits** shows a card and table for each metric, a 30-day trend and an **Export CSV** button. The export covers the whole organisation.
-- **`skif usage [project] [--json]`** prints the same numbers as a table. Give a project slug to scope it to one project. The `--json` flag prints the raw response.
+- **`yoal usage [project] [--json]`** prints the same numbers as a table. Give a project slug to scope it to one project. The `--json` flag prints the raw response.
 - **REST** exposes `GET /api/v1/usage`. Add `?project=<slug>` to scope it, `?format=csv` for a CSV, or `?history=1` for up to 30 daily points.
 - **MCP** exposes the read-only `get_usage` and `get_quotas` tools.
 
@@ -143,13 +143,13 @@ These limits are fixed in code. The only one you can change is the single-upload
 
 See [static sites](/deploying/static-sites) for how deploys are uploaded.
 
-### Redirects, headers and `skiff.json`
+### Redirects, headers and `yoal.json`
 
 | Limit | Value |
 |---|---|
 | Rules in `_redirects` | 1,000 |
 | Path rules in `_headers` | 500 |
-| `notFound` path in `skiff.json` | Up to 1,024 characters, must start with `/`, may not contain `..` |
+| `notFound` path in `yoal.json` | Up to 1,024 characters, must start with `/`, may not contain `..` |
 | Statuses allowed in `_redirects` | 200, 301, 302, 303, 307, 308, 404, 410, 451 (default 301) |
 
 See [site configuration](/deploying/site-config) for the file formats.
@@ -180,7 +180,7 @@ See [functions](/compute/functions) and [apps and containers](/compute/apps-and-
 
 | Limit | Value | Notes |
 |---|---|---|
-| Single object upload through the control plane | 100 MiB by default | Set with `SKIFF_STORAGE_OBJECT_MAX_BYTES` |
+| Single object upload through the control plane | 100 MiB by default | Set with `YOAL_STORAGE_OBJECT_MAX_BYTES` |
 | Share link expiry | 60 seconds to 7 days, default 1 hour | |
 | Recipients per email (to, cc and bcc combined) | 50 | |
 | Email message size | 10 MiB | |

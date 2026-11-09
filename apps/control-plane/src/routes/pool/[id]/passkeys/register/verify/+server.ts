@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import type { UserPoolPasskeyRegistrationResponse } from '@skiff/core';
+import type { UserPoolPasskeyRegistrationResponse } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import { allowAttempt, clientKey, poolSessionToken, validCsrf } from '../../../../_lib/hosted.js';
 import { apiError, bodyString, NO_STORE, readBody } from '../../_shared.js';

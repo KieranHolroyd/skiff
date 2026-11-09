@@ -8,7 +8,7 @@ import { verifyMount as defaultVerifyMount, type VerifyResult, type VolumeRegist
  * App-volume data verbs for the privileged helper (docs/VOLUMES.md): usage, purge, snapshot
  * and restore. The wire carries ids and the backing only; the host directory is derived here
  * exactly as for mounts (`<state dir>/apps/<project>/<volume>` or
- * `<disk mount>/skiff/apps/<project>/<volume>`), and a disk backing is verified with
+ * `<disk mount>/yoal/apps/<project>/<volume>`), and a disk backing is verified with
  * `findmnt` before anything is read, written or deleted: an unmounted backing never falls through
  * to the root disk.
  *
@@ -255,7 +255,7 @@ export class AppVolumeData {
 
 	/**
 	 * The project directory that holds `ref`, or null when its disk is not registered here
-	 * (removed from Skiff: nothing on this node is Skiff's to touch). A registered but unmounted
+	 * (removed from Yoal: nothing on this node is Yoal's to touch). A registered but unmounted
 	 * backing throws `BackingUnavailableError`.
 	 */
 	async base(ref: AppVolumeRef, verified = new Map<string, string | null>()): Promise<string | null> {
@@ -263,7 +263,7 @@ export class AppVolumeData {
 		const nodeVolumeId = ref.nodeVolumeId!;
 		if (verified.has(nodeVolumeId)) {
 			const mountPath = verified.get(nodeVolumeId)!;
-			return mountPath === null ? null : join(mountPath, 'skiff', 'apps', ref.projectId);
+			return mountPath === null ? null : join(mountPath, 'yoal', 'apps', ref.projectId);
 		}
 		const entry = (await this.registry())[nodeVolumeId];
 		if (!entry) {
@@ -276,7 +276,7 @@ export class AppVolumeData {
 				`App volume ${ref.id}: node volume ${nodeVolumeId} is not mounted (${mounted.message ?? 'unknown error'}); the root disk is never used instead.`,
 			);
 		verified.set(nodeVolumeId, entry.mountPath);
-		return join(entry.mountPath, 'skiff', 'apps', ref.projectId);
+		return join(entry.mountPath, 'yoal', 'apps', ref.projectId);
 	}
 
 	/** The volume directory; created (0700) when `create`, otherwise null when it does not exist. */
@@ -331,7 +331,7 @@ export class AppVolumeData {
 	/** Delete a trashed volume's directory (and any staging clone). Idempotent. */
 	async purge(ref: AppVolumeRef): Promise<void> {
 		const base = await this.base(ref);
-		// The disk was removed from Skiff: it is the operator's, nothing to delete.
+		// The disk was removed from Yoal: it is the operator's, nothing to delete.
 		if (base === null) return;
 		await fs.rm(childOf(base, ref.id), { recursive: true, force: true });
 		await fs.rm(childOf(join(base, STAGE_DIR), ref.id), { recursive: true, force: true });

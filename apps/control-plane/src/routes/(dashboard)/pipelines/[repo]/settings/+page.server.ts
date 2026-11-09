@@ -1,12 +1,12 @@
 import { error, fail, redirect } from '@sveltejs/kit';
-import { CoreError } from '@skiff/core';
+import { CoreError } from '@yoal/core';
 import type {
 	PipelineEnvironmentView,
 	PipelineProjectLinkView,
 	PipelineRepositoryView,
 	PipelineSecretView,
 	PipelineVariableView
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { platformOrigin } from '#lib/server/config.js';
 import { formBoolean, formRawString, formString } from '../../../_lib/errors.js';

@@ -7,7 +7,7 @@ const flags: FlagSpec = {
 	help: { type: 'boolean', short: 'h' },
 };
 
-const usage = 'Usage: skif deployments <project> [--json]\n\nList a project\'s deployments, newest first.';
+const usage = 'Usage: yoal deployments <project> [--json]\n\nList a project\'s deployments, newest first.';
 
 export async function deploymentsCommand(argv: string[]): Promise<void> {
 	const args = parseArgs(argv, flags);

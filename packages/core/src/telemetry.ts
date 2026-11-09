@@ -8,7 +8,7 @@ import type {
 	MetricBucket,
 	StorageMetricBucket,
 	StorageMetricPoint,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { mkdir, readFile, readdir, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
 import {
@@ -720,7 +720,7 @@ export class TelemetryStore {
 		this.#onError = options.onError;
 		this.#now = options.now ?? Date.now;
 		this.#openRetryMs = options.openRetryMs ?? 30_000;
-		this.database = options.clickhouse?.database ?? 'skiff';
+		this.database = options.clickhouse?.database ?? 'yoal';
 		if (!IDENTIFIER.test(this.database)) throw new Error(`Invalid ClickHouse database name: ${this.database}`);
 		this.#disabledReason = options.disabledReason ?? (options.clickhouse ? undefined : TELEMETRY_NOT_INSTALLED);
 		if (options.clickhouse) {
@@ -1360,36 +1360,36 @@ export class TelemetryStore {
 			);
 
 			const lines: string[] = [
-				'# HELP skiff_http_requests_total HTTP requests observed in the last hour.',
-				'# TYPE skiff_http_requests_total gauge',
+				'# HELP yoal_http_requests_total HTTP requests observed in the last hour.',
+				'# TYPE yoal_http_requests_total gauge',
 			];
 			let errors = 0;
 			let bytes = 0;
 			for (const row of rows) {
 				const name = escapePrometheusLabel(readString(row['host']));
-				lines.push(`skiff_http_requests_total{host="${name}"} ${prometheusNumber(readNumber(row['requests']))}`);
+				lines.push(`yoal_http_requests_total{host="${name}"} ${prometheusNumber(readNumber(row['requests']))}`);
 				errors += readNumber(row['errors']);
 				bytes += readNumber(row['bytes']);
 			}
-			lines.push('# HELP skiff_http_errors_total 5xx responses observed in the last hour.', '# TYPE skiff_http_errors_total gauge');
-			if (rows.length > 0) lines.push(`skiff_http_errors_total{class="5xx"} ${prometheusNumber(errors)}`);
-			lines.push('# HELP skiff_bytes_total Response bytes served in the last hour.', '# TYPE skiff_bytes_total gauge');
-			if (rows.length > 0) lines.push(`skiff_bytes_total ${prometheusNumber(bytes)}`);
+			lines.push('# HELP yoal_http_errors_total 5xx responses observed in the last hour.', '# TYPE yoal_http_errors_total gauge');
+			if (rows.length > 0) lines.push(`yoal_http_errors_total{class="5xx"} ${prometheusNumber(errors)}`);
+			lines.push('# HELP yoal_bytes_total Response bytes served in the last hour.', '# TYPE yoal_bytes_total gauge');
+			if (rows.length > 0) lines.push(`yoal_bytes_total ${prometheusNumber(bytes)}`);
 
 			if (host === undefined) {
 				// Managed databases: the newest sample from the last five minutes (D57).
 				const dbSamples = await this.#read(dbLatestSql(this.database), { since: chDateTime(toMs - 5 * MINUTE_MS) });
 				const dbSeries: Array<[string, string, string]> = [
-					['skiff_database_up', 'up', 'Whether the database answered its last sample (1 = up).'],
-					['skiff_database_size_bytes', 'size_bytes', 'Database size on disk.'],
-					['skiff_database_connections', 'connections_total', 'Open connections.'],
-					['skiff_database_max_connections', 'max_connections', 'Configured max_connections.'],
-					['skiff_database_pooler_up', 'pooler_up', 'Whether the PgBouncer admin console answered (1 = up).'],
-					['skiff_database_pool_active', 'pool_active', 'PgBouncer client/server connections in use.'],
-					['skiff_database_pool_idle', 'pool_idle', 'Idle PgBouncer server connections.'],
-					['skiff_database_pool_waiting', 'pool_waiting', 'Clients waiting for a PgBouncer server connection.'],
-					['skiff_database_pool_saturation', 'pool_saturation', 'Share of max_client_conn in use (0–1).'],
-					['skiff_database_pool_avg_wait_ms', 'pool_avg_wait_ms', 'Average PgBouncer wait, milliseconds.'],
+					['yoal_database_up', 'up', 'Whether the database answered its last sample (1 = up).'],
+					['yoal_database_size_bytes', 'size_bytes', 'Database size on disk.'],
+					['yoal_database_connections', 'connections_total', 'Open connections.'],
+					['yoal_database_max_connections', 'max_connections', 'Configured max_connections.'],
+					['yoal_database_pooler_up', 'pooler_up', 'Whether the PgBouncer admin console answered (1 = up).'],
+					['yoal_database_pool_active', 'pool_active', 'PgBouncer client/server connections in use.'],
+					['yoal_database_pool_idle', 'pool_idle', 'Idle PgBouncer server connections.'],
+					['yoal_database_pool_waiting', 'pool_waiting', 'Clients waiting for a PgBouncer server connection.'],
+					['yoal_database_pool_saturation', 'pool_saturation', 'Share of max_client_conn in use (0–1).'],
+					['yoal_database_pool_avg_wait_ms', 'pool_avg_wait_ms', 'Average PgBouncer wait, milliseconds.'],
 				];
 				for (const [name, column, help] of dbSeries) {
 					lines.push(`# HELP ${name} ${help}`, `# TYPE ${name} gauge`);
@@ -1402,10 +1402,10 @@ export class TelemetryStore {
 				// Managed object storage: the newest sample from the last five minutes (S7).
 				const stSamples = await this.#read(storageLatestSql(this.database), { since: chDateTime(toMs - 5 * MINUTE_MS) });
 				const stSeries: Array<[string, string, string]> = [
-					['skiff_storage_up', 'up', 'Whether the storage instance answered its last sample (1 = up).'],
-					['skiff_storage_used_bytes', 'used_bytes', 'Bytes stored across buckets.'],
-					['skiff_storage_objects', 'objects', 'Objects stored across buckets.'],
-					['skiff_storage_buckets', 'bucket_count', 'Buckets on the instance.'],
+					['yoal_storage_up', 'up', 'Whether the storage instance answered its last sample (1 = up).'],
+					['yoal_storage_used_bytes', 'used_bytes', 'Bytes stored across buckets.'],
+					['yoal_storage_objects', 'objects', 'Objects stored across buckets.'],
+					['yoal_storage_buckets', 'bucket_count', 'Buckets on the instance.'],
 				];
 				for (const [name, column, help] of stSeries) {
 					lines.push(`# HELP ${name} ${help}`, `# TYPE ${name} gauge`);
@@ -1747,16 +1747,16 @@ export function clickhouseFromEnv(env: Record<string, string | undefined> = proc
 	clickhouse?: ClickHouseConfig;
 	reader?: { user: string; password: string };
 } {
-	const url = env.SKIFF_CLICKHOUSE_URL?.trim();
+	const url = env.YOAL_CLICKHOUSE_URL?.trim();
 	if (!url) return {};
-	const readerUser = env.SKIFF_CLICKHOUSE_READER_USER?.trim();
+	const readerUser = env.YOAL_CLICKHOUSE_READER_USER?.trim();
 	return {
 		clickhouse: {
 			url,
-			user: env.SKIFF_CLICKHOUSE_USER?.trim() || 'skiff',
-			password: env.SKIFF_CLICKHOUSE_PASSWORD ?? '',
-			database: env.SKIFF_CLICKHOUSE_DATABASE?.trim() || 'skiff',
+			user: env.YOAL_CLICKHOUSE_USER?.trim() || 'yoal',
+			password: env.YOAL_CLICKHOUSE_PASSWORD ?? '',
+			database: env.YOAL_CLICKHOUSE_DATABASE?.trim() || 'yoal',
 		},
-		reader: readerUser ? { user: readerUser, password: env.SKIFF_CLICKHOUSE_READER_PASSWORD ?? '' } : undefined,
+		reader: readerUser ? { user: readerUser, password: env.YOAL_CLICKHOUSE_READER_PASSWORD ?? '' } : undefined,
 	};
 }

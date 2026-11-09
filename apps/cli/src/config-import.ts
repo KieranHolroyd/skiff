@@ -1,5 +1,5 @@
 /**
- * Helpers for `skif import` (docs/OPERATIONS.md §14): read a secrets file and render the plan or
+ * Helpers for `yoal import` (docs/OPERATIONS.md §14): read a secrets file and render the plan or
  * result the server returns. The server parses the export (YAML or JSON) and does all the work.
  */
 import { renderTable, truncate } from './output.ts';

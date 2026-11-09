@@ -1,4 +1,4 @@
--- Skiff Access: identity-aware proxy policies (IAM.md I25, §11.1). Additive only.
+-- Yoal Access: identity-aware proxy policies (IAM.md I25, §11.1). Additive only.
 --
 -- A policy is an ordered list of allow/deny rules. `scope_type` names where it may be attached:
 -- an organisation (`id`/`parent` NULL), a project, or one named environment. A project or
@@ -9,7 +9,7 @@
 -- scope stores `platform` there: an older control plane still fails closed rather than making a
 -- site public, and disabling the policy leaves the site on platform login instead of exposing it.
 --
--- Each rule's `matcher_json` is the typed matcher from `@skiff/contracts` (an org group, any
+-- Each rule's `matcher_json` is the typed matcher from `@yoal/contracts` (an org group, any
 -- member, email/domain, SSO provider, user pool and groups, CIDR, or a service-token header hash).
 -- Rules are ordered by `idx`; a matching deny beats every allow.
 

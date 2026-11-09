@@ -1,19 +1,19 @@
 /**
- * Email, Skiff's self-hosted SES (docs/EMAIL.md, D114–D120): the wire types the CLI reads, and
- * pure parsing and formatting for `skif email`. Types mirror `packages/contracts/src/email.ts`
+ * Email, Yoal's self-hosted SES (docs/EMAIL.md, D114–D120): the wire types the CLI reads, and
+ * pure parsing and formatting for `yoal email`. Types mirror `packages/contracts/src/email.ts`
  * under the same names; the CLI bundle stays free of runtime dependencies (D40), so keep them in
  * sync.
  */
 import { UsageError } from './errors.ts';
 import { formatTime, renderTable, truncate } from './output.ts';
 
-// --- mirrored from @skiff/contracts -----------------------------------------------------------
+// --- mirrored from @yoal/contracts -----------------------------------------------------------
 
-/** Mirrors `EMAIL_MAX_RECIPIENTS` in @skiff/contracts. The server validates. */
+/** Mirrors `EMAIL_MAX_RECIPIENTS` in @yoal/contracts. The server validates. */
 export const EMAIL_MAX_RECIPIENTS = 50;
-/** Mirrors `EMAIL_MAX_TAGS` in @skiff/contracts. */
+/** Mirrors `EMAIL_MAX_TAGS` in @yoal/contracts. */
 export const EMAIL_MAX_TAGS = 10;
-/** Mirrors `EMAIL_REPUTATION` in @skiff/contracts (rates are fractions). */
+/** Mirrors `EMAIL_REPUTATION` in @yoal/contracts (rates are fractions). */
 export const EMAIL_REPUTATION = {
 	minMessages: 200,
 	bounceWarn: 0.04,
@@ -203,14 +203,14 @@ export interface EmailAccessRequestView {
 	createdAt: string;
 }
 
-/** Mirrors `emailAccessRequestCreateSchema` in @skiff/contracts. The server validates. */
+/** Mirrors `emailAccessRequestCreateSchema` in @yoal/contracts. The server validates. */
 export interface EmailAccessRequestInput {
 	useCase: string;
 	expectedDailyVolume: number;
 	website?: string;
 }
 
-/** Mirrors `emailEnvNames` in @skiff/contracts (EMAIL.md §5.4). */
+/** Mirrors `emailEnvNames` in @yoal/contracts (EMAIL.md §5.4). */
 export function emailEnvNames(prefix: string): string[] {
 	return ['HOST', 'PORT', 'SECURE', 'USER', 'PASSWORD', 'URL'].map((suffix) => `${prefix}_${suffix}`);
 }
@@ -300,7 +300,7 @@ export function emailRecordsTable(records: EmailRecordCheck[]): string {
 		record.name,
 		record.required ? 'required' : 'recommended',
 		check(record.ok),
-		[record.managed ? 'managed by Skiff' : null, record.note].filter(Boolean).join('; ') || '-',
+		[record.managed ? 'managed by Yoal' : null, record.note].filter(Boolean).join('; ') || '-',
 		record.value,
 	]);
 	return renderTable(['PURPOSE', 'TYPE', 'NAME', 'REQUIRED', 'OK', 'NOTE', 'VALUE'], rows);
@@ -316,7 +316,7 @@ export function failingRecords(records: EmailRecordCheck[]): string[] {
 		);
 }
 
-/** The `skif email domains info|check` report. */
+/** The `yoal email domains info|check` report. */
 export function emailDomainDetails(domain: EmailDomainView): string {
 	const lines: string[] = [];
 	const field = (label: string, value: string) => lines.push(`${label.padEnd(10)}  ${value}`);
@@ -354,7 +354,7 @@ export function emailMessageTable(messages: EmailMessageView[]): string {
 	return renderTable(['ID', 'STATUS', 'FROM', 'TO', 'SUBJECT', 'CREATED'], rows);
 }
 
-/** One line per message for `skif email log --follow`. */
+/** One line per message for `yoal email log --follow`. */
 export function emailMessageLine(message: EmailMessageView): string {
 	return [
 		formatTime(message.createdAt),
@@ -365,7 +365,7 @@ export function emailMessageLine(message: EmailMessageView): string {
 	].join('  ');
 }
 
-/** The `skif email log <id>` report: the message, then each recipient's state and events. */
+/** The `yoal email log <id>` report: the message, then each recipient's state and events. */
 export function emailMessageDetails(message: EmailMessageView, events: EmailMessageEvent[] = []): string {
 	const lines: string[] = [];
 	const field = (label: string, value: string) => lines.push(`${label.padEnd(8)}  ${value}`);
@@ -432,7 +432,7 @@ export function emailCredentialTable(credentials: EmailCredentialView[]): string
 	);
 }
 
-/** The once-only credential printout for `skif email credentials create`. */
+/** The once-only credential printout for `yoal email credentials create`. */
 export function emailCredentialSecretDetails(secret: EmailCredentialSecret): string {
 	const lines: string[] = [];
 	const field = (label: string, value: string) => lines.push(`${label.padEnd(9)}  ${value}`);
@@ -456,7 +456,7 @@ function rateLine(rate: number | null, warn: number, pause: number, digits: numb
 }
 
 const stateNotes: Record<EmailOrgState, string> = {
-	sandbox: 'only to your own verified domains and sandbox recipients; `skif email request-access` to leave it',
+	sandbox: 'only to your own verified domains and sandbox recipients; `yoal email request-access` to leave it',
 	active: 'sending to anyone',
 	paused: 'every send is refused until a platform admin resumes the org',
 };
@@ -479,7 +479,7 @@ export function emailAddressTable(addresses: EmailSandboxAddressView[], now = Da
 	);
 }
 
-/** The `skif email request-access` report for the org's latest request. */
+/** The `yoal email request-access` report for the org's latest request. */
 export function emailAccessRequestDetails(request: EmailAccessRequestView): string {
 	const lines: string[] = [];
 	const field = (label: string, value: string) => lines.push(`${label.padEnd(9)}  ${value}`);
@@ -507,7 +507,7 @@ export function parseDailyVolume(value: string | undefined): number {
 	return volume;
 }
 
-/** The `skif email status` report. */
+/** The `yoal email status` report. */
 export function emailStatusReport(org: EmailOrgView, settings: EmailSettingsView | null): string {
 	const lines: string[] = [];
 	const field = (label: string, value: string) => lines.push(`${label.padEnd(10)}  ${value}`);

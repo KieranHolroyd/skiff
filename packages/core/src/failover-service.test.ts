@@ -2,8 +2,8 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb, databaseReplicas, databases } from '@skiff/db';
-import { DEFAULT_FEATURES, type FailoverPlan } from '@skiff/contracts';
+import { createDb, databaseReplicas, databases } from '@yoal/db';
+import { DEFAULT_FEATURES, type FailoverPlan } from '@yoal/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore, type Core } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
@@ -39,7 +39,7 @@ interface Harness {
 }
 
 function harness(workers = ['w1', 'w2', 'w3', 'w4'], failover: Record<string, unknown> = { enabled: true }): Harness {
-	const dir = mkdtempSync(join(tmpdir(), 'skiff-failover-'));
+	const dir = mkdtempSync(join(tmpdir(), 'yoal-failover-'));
 	dirs.push(dir);
 	const opened = createDb({ path: ':memory:' });
 	const clock = { now: T0 };

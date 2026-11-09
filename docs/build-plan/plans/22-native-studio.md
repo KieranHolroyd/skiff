@@ -6,19 +6,19 @@ registry, the shipped DBGate studio (06-database-studio.md) for its session mode
 **Blocks:** 20 `query_database` (shares the Postgres plugin and the read-only path)
 **Supersedes:** D60's choice of DBGate (D96 below)
 **Primary files:** `packages/studio/**` (new), `apps/agent/src/studio/**` (new),
-`scripts/systemd/skiff-studio.service` (new), `apps/helper/src/{server,validate}.ts` (studio verbs),
+`scripts/systemd/yoal-studio.service` (new), `apps/helper/src/{server,validate}.ts` (studio verbs),
 `apps/control-plane/src/routes/(dashboard)/databases/[name]/studio/**`,
 `apps/control-plane/src/lib/studio/**` (new), `packages/core/src/databases.ts` (console section)
 
 > **Status (6 Nov 2026):** Phases 1 and 2 (plugins and UI) are built, and the **Phase 3 cutover is
-> done**: `SKIFF_FEATURE_DB_STUDIO` defaults on (kept as a kill switch), D96 is recorded, and
+> done**: `YOAL_FEATURE_DB_STUDIO` defaults on (kept as a kill switch), D96 is recorded, and
 > DBGate is deleted outright rather than kept behind its flag for a release (the user's call).
 > Every plugin passes the conformance suite against real containers. Still open: a live end-to-end
 > run on a node (S5) and plan 20's `query_database` (Phase 3 step 5).
 
 ## Goal
 
-Replace the DBGate sidecar with Skiff's own database studio, built into the dashboard. It must
+Replace the DBGate sidecar with Yoal's own database studio, built into the dashboard. It must
 be:
 
 - **Lightweight.** No container, image pull or extra daemon per database. Nothing runs or uses
@@ -37,7 +37,7 @@ It covers all six D95 engines: Postgres, MySQL, MariaDB, MongoDB, Valkey and Red
   later as structure editing, see "Structure editing as built".)
 - Bulk import, and dump/restore. Plan 17 covers portability.
 - Transactions held open across several editor runs. Each run is one implicit transaction.
-- Redis/Valkey Cluster or Sentinel. Skiff runs single nodes, and Bun's client has no cluster
+- Redis/Valkey Cluster or Sentinel. Yoal runs single nodes, and Bun's client has no cluster
   support.
 - Running JavaScript from the Mongo shell on the server. Mongo commands are EJSON documents only.
 - Saved queries shared across the org. v1 keeps query history in the browser only.
@@ -110,7 +110,7 @@ MongoDB 8.0 and Valkey 9.1 each got 1–2M-row fixtures. Compiled binaries were 
   SvelteKit proxy.
 - **Reusable:** the session model and its `console_*` columns (open, touch, TTL 60 min, idle
   15 min, `tickConsoles`), the `database:console` and `database:update` permissions, the
-  `database.console.*` audit names, `SKIFF_FEATURE_DB_CONSOLE`, the `console` capability, the
+  `database.console.*` audit names, `YOAL_FEATURE_DB_CONSOLE`, the `console` capability, the
   Studio tab, and the gateway pattern.
 - **DBGate-specific (to delete at cutover):** the image pin and unit/env renderers, the helper
   `console/start|stop` verbs, the agent readiness probe, per-database port allocation, the
@@ -131,37 +131,37 @@ MongoDB 8.0 and Valkey 9.1 each got 1–2M-row fixtures. Compiled binaries were 
 
 ```
 browser ──fetch NDJSON──▶ SvelteKit /databases/<name>/studio/api/*   (session, permission, audit)
-         ◀──stream──────        │ fetch, Host: studio.<node>.internal, X-Skiff-Studio: <token>
+         ◀──stream──────        │ fetch, Host: studio.<node>.internal, X-Yoal-Studio: <token>
                                 ▼
                          edge Caddy internal gateway (D82)  ──WireGuard──▶ worker Caddy
                                                                               │
-                              skiff-agent (front)  127.0.0.1:<SKIFF_STUDIO_PORT>
+                              yoal-agent (front)  127.0.0.1:<YOAL_STUDIO_PORT>
                               token check · activation fetch · start studio · byte pump
-                                                                              │ unix /run/skiff/studio.sock
-                              skiff-studio.service  (`skiff-agent studio`, own cgroup, MemoryMax)
+                                                                              │ unix /run/yoal/studio.sock
+                              yoal-studio.service  (`yoal-agent studio`, own cgroup, MemoryMax)
                                                                               │ lazy import(plugin)
                                                                               ▼
                                                               127.0.0.1:<db hostPort>  (TLS: helper CA)
 ```
 
-- **The drivers run in their own process.** `skiff-studio.service` is a static systemd unit
-  shipped next to `skiff-agent.service`. It runs the **same binary** with a different entrypoint
-  (`skiff-agent studio`), so release artifacts don't change. It has:
-  - `User=skiff`, and the same sandbox as the agent (`ProtectSystem=strict`, no capabilities,
+- **The drivers run in their own process.** `yoal-studio.service` is a static systemd unit
+  shipped next to `yoal-agent.service`. It runs the **same binary** with a different entrypoint
+  (`yoal-agent studio`), so release artifacts don't change. It has:
+  - `User=yoal`, and the same sandbox as the agent (`ProtectSystem=strict`, no capabilities,
     `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6`);
   - **its own cgroup with `MemoryMax=256M`** and `TasksMax=64`. The agent's `MemoryMax=192M`
     cgroup would otherwise also hold a child process, and an out-of-memory kill could pick the
     agent;
   - `Restart=on-failure`, and it is never enabled at boot.
-  - It listens only on `/run/skiff/studio.sock` (mode 0660). It has no TCP listener and no
+  - It listens only on `/run/yoal/studio.sock` (mode 0660). It has no TCP listener and no
     node token, and it never talks to the control plane.
 - **Started on demand, stopped when idle.** On the first studio request, with no studio running,
   the agent calls a new fixed helper verb, `POST /v1/studio/start`. That verb runs
-  `systemctl start skiff-studio.service` and takes no arguments. The agent then waits for the
+  `systemctl start yoal-studio.service` and takes no arguments. The agent then waits for the
   socket to answer `/healthz`. The studio process exits cleanly after 5 minutes with no
   sessions; that is a clean exit, so systemd leaves it stopped. A node that never opens a
   studio never runs it, so there is still no always-on daemon (README invariant 7).
-- **The agent is a thin front.** It binds `127.0.0.1:<SKIFF_STUDIO_PORT>`: one fixed port per
+- **The agent is a thin front.** It binds `127.0.0.1:<YOAL_STUDIO_PORT>`: one fixed port per
   node, with **one gateway route per node** (`studio.<nodeId>.internal`). It does four things:
   1. checks the session token;
   2. fetches and caches the activation;
@@ -190,7 +190,7 @@ browser ──fetch NDJSON──▶ SvelteKit /databases/<name>/studio/api/*   (
 - **Authentication between the hops.** The token is checked twice: the agent checks it against
   its cached activation, and the control plane checks it again on activation fetch. The gateway
   listener is loopback on the edge and WireGuard-only on workers, as it is today. The unix
-  socket is reachable only by the `skiff` user and group.
+  socket is reachable only by the `yoal` user and group.
 - **Why not inside the agent.** It would be lighter (no unit and no hop), but a driver bug or
   out-of-memory kill would take the agent down. **Why not a container sidecar like DBGate.**
   That needs an image, a pull and a port per database, and opening waits on the heartbeat.
@@ -283,7 +283,7 @@ export type StudioEvent =
 ### Safety and limits (enforced in the studio process, not the browser)
 
 - **Read-only is the credential, not a flag.** Read-only sessions connect as a per-database
-  `skiff_studio_ro` principal created by a new helper verb, `credentials/studio-readonly`:
+  `yoal_studio_ro` principal created by a new helper verb, `credentials/studio-readonly`:
 
   | Engine | Read-only principal |
   |---|---|
@@ -380,10 +380,10 @@ for Redis commands. Completion providers are fed from `tree`/`describe`.
 ## Decision (recorded as D96 at the cutover)
 
 > **D96: The database studio is native: per-engine plugins in an on-demand
-> `skiff-studio` process, fronted by the agent.** Supersedes D60's DBGate choice. Each engine is
-> a `@skiff/studio` plugin implementing a small session interface (`tree`, `describe`, `browse`,
+> `yoal-studio` process, fronted by the agent.** Supersedes D60's DBGate choice. Each engine is
+> a `@yoal/studio` plugin implementing a small session interface (`tree`, `describe`, `browse`,
 > `run`, `explain?`, `apply`), with declared capabilities. Plugins run in
-> `skiff-studio.service`: the agent binary's `studio` entrypoint, with its own cgroup
+> `yoal-studio.service`: the agent binary's `studio` entrypoint, with its own cgroup
 > (`MemoryMax=256M`), a unix socket only, and no node token. The helper starts it on demand,
 > and it exits when idle. It reaches only loopback databases (D56/D57). The agent fronts it on
 > one loopback port per node. The control plane reaches that port only through the D82 internal
@@ -403,8 +403,8 @@ for Redis commands. Completion providers are fed from `tree`/`describe`.
 | Contracts: activation, open schema, desired `studio`, headers, `DB_STUDIO` flag | `packages/contracts/src/database-studio.ts`, `agent.ts`, `features.ts` |
 | Sessions, activation, desired state, gateway routes, tick, audit, `studioFingerprint` | `packages/core/src/database-studio.ts` (`core.databaseStudio`), migration 0029 |
 | Activation route `GET /api/agent/database-studio/:id` | `apps/control-plane/src/routes/api/agent/[...path]/+server.ts` |
-| Studio process (`skiff-agent studio`) and agent front | `apps/agent/src/studio/{process,front}.ts`, `main.ts` |
-| Unit and helper verbs `POST /v1/studio/start|stop` | `scripts/systemd/skiff-studio.service` (no `[Install]`), `apps/helper/src/*` |
+| Studio process (`yoal-agent studio`) and agent front | `apps/agent/src/studio/{process,front}.ts`, `main.ts` |
+| Unit and helper verbs `POST /v1/studio/start|stop` | `scripts/systemd/yoal-studio.service` (no `[Install]`), `apps/helper/src/*` |
 | Install and update of the unit | `scripts/install/main.ts`, `scripts/update-self/*`, `scripts/uninstall.sh` |
 | Streaming proxy, session API, skeleton workspace | `apps/control-plane/src/lib/studio/*`, `databases/[name]/studio/**`, `api/v1/databases/[name]/studio` |
 | Bun 1.4.0 → 1.4.4 | workflows, `docker/node/Dockerfile`, `docs/OPS.md` |
@@ -422,15 +422,15 @@ Deviations from the plan text, all deliberate:
   long query isn't cut.
 - **A newly fetched session gets 30 s of grace before eviction,** because the heartbeat that
   lists it may lag behind the user's first click.
-- **Rollback stops `skiff-studio.service`** rather than restarting it, because an older binary
+- **Rollback stops `yoal-studio.service`** rather than restarting it, because an older binary
   has no `studio` subcommand.
-- **The unit uses `SupplementaryGroups=caddy`,** because `/run/skiff` is `root:caddy 2770`.
-  The static `skiff-agent.service` says `skiff-caddy`; the installer uses `caddy`.
+- **The unit uses `SupplementaryGroups=caddy`,** because `/run/yoal` is `root:caddy 2770`.
+  The static `yoal-agent.service` says `yoal-caddy`; the installer uses `caddy`.
 
 Open items at the time (6 Nov 2026), since resolved or still pending:
 
 - **Interim credential, resolved by track G:** read-only sessions now connect as
-  `skiff_studio_ro` and never fall back to the owner. See "Read-only principal as built".
+  `yoal_studio_ro` and never fall back to the owner. See "Read-only principal as built".
 - **S5 not yet run:** cold start on Debian 13, plus a live end-to-end check through the gateway
   on a node.
 - **Worker unit snippet:** the node unit printed by `nodes/vpn/+page.svelte` doesn't include the
@@ -438,7 +438,7 @@ Open items at the time (6 Nov 2026), since resolved or still pending:
 
 ## Phase 2 plugins as built (6 Nov 2026)
 
-| Plugin | Engines tested | Client | E2E (`SKIFF_E2E_STUDIO=1`) |
+| Plugin | Engines tested | Client | E2E (`YOAL_E2E_STUDIO=1`) |
 |---|---|---|---|
 | `postgres` | PG 17, 16 | Bun.SQL (needs Bun ≥ 1.4.4) | 68 pass |
 | `mysql` | MySQL 8.4, 9.7; MariaDB 11.8, 11.4 | mysql2 | 140 pass |
@@ -447,7 +447,7 @@ Open items at the time (6 Nov 2026), since resolved or still pending:
 
 Each engine runs the conformance suite twice: with the owner credential and read-only sessions
 (the interim setup), and with the Phase 3 read-only principal. The suites live in
-`tests/e2e/studio/*.e2e.test.ts` and skip unless `SKIFF_E2E_STUDIO=1`. A compiled `skiff-agent`
+`tests/e2e/studio/*.e2e.test.ts` and skip unless `YOAL_E2E_STUDIO=1`. A compiled `yoal-agent`
 (Bun 1.4.4, 88 MB) served all four engines from one studio process at about 81 MB RSS with 4
 sessions open, which is above the 60 MB target and inside the 256 MB cap.
 
@@ -497,7 +497,7 @@ one session.
   only counts rows, so DDL escapes are caught only by the plugins' extras.
   `postgresHealthProbe` in `tests/e2e/lib/containers.ts` can hang without a timeout.
 - **Unix socket paths over about 104 bytes fail on macOS.** Production uses
-  `/run/skiff/studio.sock`.
+  `/run/yoal/studio.sock`.
 
 ## Phase 2 UI as built (6 Nov 2026)
 
@@ -508,7 +508,7 @@ are in `ui-types.ts`.
 | Track | What | Where |
 |---|---|---|
 | E | The route page is thin. Shell: session header (badge, expiry, enable writes, close), lazy filterable object tree with keyboard navigation, tab strip saved per database. `StudioGrid`: virtualised on both axes, resizable columns, cell editors by kind that keep `$t` tags, cell inspector, pending-changes tray building `RowChange`s with originals, conflict marking. Relational workspace: filter builder, multi-column sort, cursor paging, editing, structure (columns, indexes, FK links, DDL) | `shell/`, `grid/`, `workspaces/RelationalWorkspace.svelte` |
-| F | `StudioEditor` (Monaco: `pgsql`/`mysql`, `json` with a Mongo command schema, a Monarch `skiff-redis`), lazy completion from `tree`/`describe` with alias resolution, run-selection, error markers. `QueryTab`: one result tab per statement, Stop, Explain plan tree, CSV/JSON export, max-rows; IndexedDB history (last 200, no results stored) | `editor/`, `query/`, `completion.ts`, `history.ts` |
+| F | `StudioEditor` (Monaco: `pgsql`/`mysql`, `json` with a Mongo command schema, a Monarch `yoal-redis`), lazy completion from `tree`/`describe` with alias resolution, run-selection, error markers. `QueryTab`: one result tab per statement, Stop, Explain plan tree, CSV/JSON export, max-rows; IndexedDB history (last 200, no results stored) | `editor/`, `query/`, `completion.ts`, `history.ts` |
 | G | Document workspace: EJSON filter, sort, table/JSON views, top-level `$set` edits with originals, insert, delete, indexes, sampled schema with type shares, "Partially applied" notice. Key-value workspace: MATCH/TYPE key list with "Load more", inline string/TTL edits, add key, per-type key detail (string/hash/list/set/zset/stream) with in-key edits, full-value load, console | `workspaces/DocumentWorkspace.svelte`, `workspaces/KeyValueWorkspace.svelte`, `document/`, `keyvalue/` |
 
 Integration changes:
@@ -523,12 +523,12 @@ abort against a real query, IndexedDB in a browser, and the light/dark editor th
 
 ## Read-only principal as built (track G, 6 Nov 2026)
 
-Read-only sessions now connect as a per-database `skiff_studio_ro` account and never fall back to
+Read-only sessions now connect as a per-database `yoal_studio_ro` account and never fall back to
 the owner. Write sessions still use the owner.
 
 - **Storage:** migration 0032 adds `databases.studio_ro_secret` (sealed with the org key, minted
   once and kept), `studio_ro_generation`, `studio_ro_ready_generation` and `studio_ro_error`.
-  `skiff-studio-ro` is in every engine's `reservedNames`.
+  `yoal-studio-ro` is in every engine's `reservedNames`.
 - **Flow (the plan 04b credential pattern):** desired state lists `databaseStudioPrincipals:
   [{ databaseId, generation }]` for running databases that aren't restoring and whose principal
   is behind (behind the `DB_STUDIO` flag). The agent fetches `GET
@@ -546,13 +546,13 @@ the owner. Write sessions still use the owner.
   +command|docs +client|setname +info +dbsize`.
 - **Valkey/Redis persistence:** the verb runs `ACL SETUSER … reset` live and writes the user line
   into the helper-generated `server.conf` (no restart). The workload activation carries
-  `SKIFF_STUDIO_RO_PASSWORD`, which isn't in the activation version. `apply` renders the line from
+  `YOAL_STUDIO_RO_PASSWORD`, which isn't in the activation version. `apply` renders the line from
   it (and keeps an existing line when it's absent) and strips it from the container env file.
 - **UI:** `DatabaseStudioView` gains `principal: ready | preparing | failed` and `principalError`.
   `endpoint()` refuses with "Preparing read-only access…" until ready. The shell shows a spinner and
   polls, or shows the error with a retry.
 - **Proof:** `tests/e2e/studio/principal.e2e.test.ts` runs the helper's own statements through
-  `docker exec` on all six engines (`SKIFF_E2E_STUDIO_RO_MATRIX=1` covers all 12 versions). The
+  `docker exec` on all six engines (`YOAL_E2E_STUDIO_RO_MATRIX=1` covers all 12 versions). The
   plugin, connected as the principal with no session flags, reads and has every write refused, and
   Valkey/Redis keep the user across a restart only through the config line. It needs Bun 1.4.4.
 
@@ -591,7 +591,7 @@ files. Phase 3 is serial.
 | S2 | Does `mysql2` `.stream()` work under compiled Bun against MySQL 8.4 and MariaDB 11.8? |
 | S3 | Does Caddy's gateway stream NDJSON through without buffering (`flush_interval -1`, unknown length) on edge-local and edge-to-worker paths? |
 | S4 | Postgres `DECLARE`/`FETCH` through Bun.SQL `reserve()` on Bun 1.4.4, and `cancel()` latency. |
-| S5 (Phase 1, on Debian 13) | Cold start of `skiff-studio.service`: from the helper verb to `/healthz` on the socket (target < 500 ms). Also streaming plus abort through `fetch({unix})`. |
+| S5 (Phase 1, on Debian 13) | Cold start of `yoal-studio.service`: from the helper verb to `/healthz` on the socket (target < 500 ms). Also streaming plus abort through `fetch({unix})`. |
 
 **Phase 1: foundation (serial, one agent).**
 
@@ -603,17 +603,17 @@ files. Phase 3 is serial.
    - `studioSessions` added to desired state;
    - the session token replaces `console_secret`, and the port is no longer used;
    - `GET /api/agent/database-studio/:id`;
-   - `gatewayForNode` emits one `studio.<nodeId>.internal` route to `SKIFF_STUDIO_PORT`;
-   - feature flag `SKIFF_FEATURE_DB_STUDIO`, **off by default**, alongside the DBGate flag.
+   - `gatewayForNode` emits one `studio.<nodeId>.internal` route to `YOAL_STUDIO_PORT`;
+   - feature flag `YOAL_FEATURE_DB_STUDIO`, **off by default**, alongside the DBGate flag.
    - Migration 0029 adds a `database_studio_sessions` table: one session per user and
      database, with a sealed token. The DBGate `console_*` columns are untouched until cutover.
-3. Studio process: the `skiff-agent studio` entrypoint (`apps/agent/src/studio/process.ts`).
+3. Studio process: the `yoal-agent studio` entrypoint (`apps/agent/src/studio/process.ts`).
    It runs `Bun.serve` on the unix socket, holds the session table, applies limits, writes
    NDJSON, loads plugins, and exits when idle. It runs on the fake plugin only at this stage.
 4. Agent front: `apps/agent/src/studio/front.ts`. It handles the loopback listener, token
    cache, activation fetch, "ensure started" through the helper, socket forwarding with abort,
    and re-activation after a restart.
-5. Runtime: `scripts/systemd/skiff-studio.service`, installed by `scripts/install` and the
+5. Runtime: `scripts/systemd/yoal-studio.service`, installed by `scripts/install` and the
    updater like the agent unit (installed but never enabled). Add the helper verb
    `POST /v1/studio/start` and a matching stop verb (no arguments, fixed unit name), with
    tests. Then run S5.
@@ -639,8 +639,8 @@ Phase 3.
 
 1. Wire read-only sessions to the G principal, and run a security pass over the conformance
    read-only cases. *(Track G, migration 0032, built in parallel with the cutover.)*
-2. **Done.** Turn `SKIFF_FEATURE_DB_STUDIO` on by default, kept as a kill switch. The DBGate flag is
-   removed rather than turned off; a leftover `SKIFF_FEATURE_DB_CONSOLE` is ignored with a startup
+2. **Done.** Turn `YOAL_FEATURE_DB_STUDIO` on by default, kept as a kill switch. The DBGate flag is
+   removed rather than turned off; a leftover `YOAL_FEATURE_DB_CONSOLE` is ignored with a startup
    warning. There was no prod release with both studios.
 3. **Done.** Delete DBGate: the image pin, renderers, helper console verbs and their validation, the
    agent console runner, port allocator, `databaseConsoles` desired state, iframe, framing
@@ -666,7 +666,7 @@ Phase 3.
 - Stop cancels a running `pg_sleep(60)` / `SLEEP(60)` / `$where`-sleep within 2 s. For Redis,
   the client timeout fires.
 - A read-only session cannot write through any trick in the conformance list, on any engine.
-- With no studio open, `skiff-studio.service` is inactive and the agent loads no plugin code.
+- With no studio open, `yoal-studio.service` is inactive and the agent loads no plugin code.
   It stops by itself 5 minutes after the last session closes.
 - `kill -9` of the studio process mid-query: the agent keeps heartbeating, the UI shows
   `studio_restarted`, and the next request restarts the process and re-activates the session.
@@ -675,7 +675,7 @@ Phase 3.
 - The audit shows lifecycle, `studio.write` counts and `studio.run` fingerprints, and never raw
   SQL, values or credentials. Credentials never appear in desired state, logs, MCP or the
   browser.
-- With `SKIFF_FEATURE_DB_STUDIO=0`, the studio route, API, agent front listener and helper
+- With `YOAL_FEATURE_DB_STUDIO=0`, the studio route, API, agent front listener and helper
   start verb are all unavailable.
 
 ## Tests
@@ -695,9 +695,9 @@ Phase 3.
 
 | Risk | Mitigation |
 |---|---|
-| Driver bug or out-of-memory kill | Contained in `skiff-studio.service` (own cgroup, `MemoryMax=256M`); the agent is untouched. Hard `maxRows`/`maxBytes` caps, streaming only, one run per session, session cap per node |
+| Driver bug or out-of-memory kill | Contained in `yoal-studio.service` (own cgroup, `MemoryMax=256M`); the agent is untouched. Hard `maxRows`/`maxBytes` caps, streaming only, one run per session, session cap per node |
 | Cold-start latency of the unit | S5 measures it. If it is over 500 ms, the agent starts the studio when the heartbeat first lists a `studioSessions` id, which usually arrives before the user's first click |
-| Credential exposure across the extra hop | Credentials go over a 0660 unix socket owned by `skiff`, never touch disk or argv, and are dropped on session close. The studio process holds no node token |
+| Credential exposure across the extra hop | Credentials go over a 0660 unix socket owned by `yoal`, never touch disk or argv, and are dropped on session close. The studio process holds no node token |
 | `mongodb` on Bun regresses | Pin the Bun version (already done for releases); conformance on every Bun bump; spike S1 gates the plugin |
 | Caddy buffers NDJSON | Spike S3; set `flush_interval: -1` on the studio route |
 | Bun.SQL Postgres behaviour changes (cancel and columns are recent) | Conformance cases for cancel and type metadata; pin Bun |
@@ -714,7 +714,7 @@ is a normal versioned release, with no special canary.
 ## Resolved questions (6 Nov 2026)
 
 1. **Separate process** (changed from agent-hosted, 6 Nov 2026). Plugins run in the on-demand
-   `skiff-studio.service`, using the same binary's `studio` entrypoint and its own cgroup, so a
+   `yoal-studio.service`, using the same binary's `studio` entrypoint and its own cgroup, so a
    driver crash or out-of-memory kill can never take the agent down. The agent is only a thin
    front for authentication and forwarding.
 2. **Read-only covers the whole database, and writes are a per-session RW option.** The
@@ -732,10 +732,10 @@ is a normal versioned release, with no special canary.
   `packages/contracts/src/{database,agent}.ts` (studio section),
   `packages/core/src/databases.ts` (console section), `packages/db` (0029),
   `apps/agent/src/studio/{front,process}.ts`, `apps/agent/src/main.ts` (entrypoint switch),
-  `scripts/systemd/skiff-studio.service`, `scripts/install/**` (unit install),
+  `scripts/systemd/yoal-studio.service`, `scripts/install/**` (unit install),
   `apps/helper/src/{server,validate}.ts` (studio verbs),
   `apps/control-plane/src/routes/(dashboard)/databases/[name]/studio/**`.
 - Phase 2: as in the track table. Plugins never import from each other. The UI imports only
-  `@skiff/studio` types and the fake plugin.
+  `@yoal/studio` types and the fake plugin.
 - Phase 3: deletions across the DBGate files listed in Current state, plus migration 0030 and
   docs.

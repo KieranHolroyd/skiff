@@ -112,7 +112,7 @@
 									card.status === 'done'
 										? `I confirmed "${card.title}". Check it worked and tell me what changed.`
 										: `"${card.title}" failed. What went wrong and what should I do?`
-								)}>Ask Skiff to follow up</button
+								)}>Ask Yoal to follow up</button
 						>
 					{/if}
 				</div>

@@ -13,19 +13,19 @@ const base: PodmanJobInput = {
 	jobId: 'job_abc123',
 	image: 'docker.io/library/node:24-bookworm',
 	dirs: {
-		workspace: '/var/lib/skiff-builder/pipelines/job_abc123/workspace',
-		meta: '/var/lib/skiff-builder/pipelines/job_abc123/meta',
-		home: '/var/lib/skiff-builder/pipelines/job_abc123/home',
-		tmp: '/var/lib/skiff-builder/pipelines/job_abc123/tmp',
+		workspace: '/var/lib/yoal-builder/pipelines/job_abc123/workspace',
+		meta: '/var/lib/yoal-builder/pipelines/job_abc123/meta',
+		home: '/var/lib/yoal-builder/pipelines/job_abc123/home',
+		tmp: '/var/lib/yoal-builder/pipelines/job_abc123/tmp',
 	},
-	stepBinary: '/opt/skiff/current/bin/skiff-agent',
+	stepBinary: '/opt/yoal/current/bin/yoal-agent',
 	memoryMb: 2048,
 	cpus: 2,
 	network: null,
 	ociBuild: false,
 	fuse: false,
-	env: { SKIFF_CONTROL_URL: 'https://control.test' },
-	inheritEnv: ['SKIFF_JOB_TOKEN'],
+	env: { YOAL_CONTROL_URL: 'https://control.test' },
+	inheritEnv: ['YOAL_JOB_TOKEN'],
 };
 
 describe('podmanJobArgs', () => {
@@ -35,7 +35,7 @@ describe('podmanJobArgs', () => {
 			'run',
 			'--rm',
 			'--init',
-			'--name=skiff-job-job_abc123',
+			'--name=yoal-job-job_abc123',
 			'--userns=auto',
 			'--cap-drop=all',
 			'--security-opt=no-new-privileges',
@@ -43,38 +43,38 @@ describe('podmanJobArgs', () => {
 			'--memory=2048m',
 			'--cpus=2',
 			'-v',
-			'/var/lib/skiff-builder/pipelines/job_abc123/workspace:/workspace:U',
+			'/var/lib/yoal-builder/pipelines/job_abc123/workspace:/workspace:U',
 			'-v',
-			'/var/lib/skiff-builder/pipelines/job_abc123/meta:/skiff/meta:U,ro',
+			'/var/lib/yoal-builder/pipelines/job_abc123/meta:/yoal/meta:U,ro',
 			'-v',
-			'/var/lib/skiff-builder/pipelines/job_abc123/home:/skiff/home:U',
+			'/var/lib/yoal-builder/pipelines/job_abc123/home:/yoal/home:U',
 			'-v',
-			'/var/lib/skiff-builder/pipelines/job_abc123/tmp:/skiff/tmp:U',
+			'/var/lib/yoal-builder/pipelines/job_abc123/tmp:/yoal/tmp:U',
 			'-v',
-			'/opt/skiff/current/bin/skiff-agent:/skiff/bin/skiff-step:ro',
+			'/opt/yoal/current/bin/yoal-agent:/yoal/bin/yoal-step:ro',
 			'-w',
 			'/workspace',
 			'-e',
-			'HOME=/skiff/home',
+			'HOME=/yoal/home',
 			'-e',
-			'SKIFF_CONTROL_URL=https://control.test',
+			'YOAL_CONTROL_URL=https://control.test',
 			'-e',
-			'SKIFF_JOB_TOKEN',
+			'YOAL_JOB_TOKEN',
 			'--entrypoint',
-			'/skiff/bin/skiff-step',
+			'/yoal/bin/yoal-step',
 			'docker.io/library/node:24-bookworm',
 			'pipeline-step',
-			'/skiff/meta/job.json',
+			'/yoal/meta/job.json',
 		]);
 	});
 
 	test('the job token is passed by name only, never as a value in argv', () => {
 		const argv = podmanJobArgs(base);
-		expect(argv.some((arg) => arg.startsWith('SKIFF_JOB_TOKEN='))).toBe(false);
+		expect(argv.some((arg) => arg.startsWith('YOAL_JOB_TOKEN='))).toBe(false);
 	});
 
 	test('joins the per-job network when there are services', () => {
-		expect(podmanJobArgs({ ...base, network: 'skiff-job-job_abc123' })).toContain('--network=skiff-job-job_abc123');
+		expect(podmanJobArgs({ ...base, network: 'yoal-job-job_abc123' })).toContain('--network=yoal-job-job_abc123');
 	});
 
 	test('oci-build keeps default caps (pending WS2) and adds /dev/fuse when present', () => {
@@ -106,7 +106,7 @@ describe('image references', () => {
 			'postgres',
 			'postgres:17',
 			'acme/api:v1.2.3',
-			'ghcr.io/kieranholroyd/skiff-postgres:18-1',
+			'ghcr.io/kieranholroyd/yoal-postgres:18-1',
 			'localhost:5000/x/y:latest',
 			`registry.example.com/a/b@sha256:${'a'.repeat(64)}`,
 			`node:24@sha256:${'0'.repeat(64)}`,
@@ -133,15 +133,15 @@ describe('podmanServiceArgs', () => {
 			name: 'postgres',
 			spec: { image: 'postgres:17', env: {}, ports: [], healthCmd: 'pg_isready -U postgres' },
 			env: { POSTGRES_PASSWORD: 'hunter2' },
-			network: 'skiff-job-job1',
+			network: 'yoal-job-job1',
 			memoryMb: 1024,
 		});
 		expect(argv).toEqual([
 			'podman',
 			'run',
 			'-d',
-			'--name=skiff-job-job1-svc-postgres',
-			'--network=skiff-job-job1',
+			'--name=yoal-job-job1-svc-postgres',
+			'--network=yoal-job-job1',
 			'--network-alias=postgres',
 			'--userns=auto',
 			'--security-opt=no-new-privileges',

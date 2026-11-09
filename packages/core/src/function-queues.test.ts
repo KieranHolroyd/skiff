@@ -2,15 +2,15 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_FEATURES, type InlineFile } from '@skiff/contracts';
-import { createDb } from '@skiff/db';
+import { DEFAULT_FEATURES, type InlineFile } from '@yoal/contracts';
+import { createDb } from '@yoal/db';
 import { buildPrincipal } from './orgs.ts';
 import { createCore, type Core } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import { sha256Hex } from './util.ts';
 
 /** Function queues on managed brokers (docs/FUNCTIONS.md §4.10, D112). */
-const dir = mkdtempSync(join(tmpdir(), 'skiff-fn-queues-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-fn-queues-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 const clock = Date.parse('2026-11-07T10:00:00Z');
@@ -37,7 +37,7 @@ const SOURCE = 'export default { async fetch() { return new Response("ok"); }, a
 const file = (path: string, content: string): InlineFile => ({ path, content, encoding: 'utf8' });
 const bundle = (overrides: Record<string, unknown>): InlineFile[] => [
 	file(
-		'skiff-function.json',
+		'yoal-function.json',
 		JSON.stringify({
 			version: 1,
 			main: 'index.js',

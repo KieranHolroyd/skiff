@@ -10,7 +10,7 @@ import { ValidationError } from './validate.ts';
  */
 
 /** Staging directory name under the data dir (host) and under `/data` (container). */
-export const DUMP_STAGING_DIRNAME = 'skiff-dumps';
+export const DUMP_STAGING_DIRNAME = 'yoal-dumps';
 /** The same directory as the container sees it; ClickHouse's `backups.allowed_path`. */
 export const DUMP_STAGING_CONTAINER_DIR = `/data/${DUMP_STAGING_DIRNAME}/`;
 /** Leftover dump/restore files older than this are removed before the next run. */
@@ -31,7 +31,7 @@ export function keyValueAofManifest(): string {
 }
 
 /** The name ClickHouse backups store the database under, so a restore can rename it. */
-export const CLICKHOUSE_BACKUP_DATABASE = 'skiff_backup';
+export const CLICKHOUSE_BACKUP_DATABASE = 'yoal_backup';
 /** Long dumps must not trip clickhouse-client's default 300 s receive timeout. */
 const CLICKHOUSE_CLIENT_TIMEOUT_SECONDS = 6 * 60 * 60;
 
@@ -55,7 +55,7 @@ function assertIdentifier(value: string, label: string): string {
 
 interface ExecTarget {
 	podmanPath: string;
-	/** `skiff-workload-<id>`. */
+	/** `yoal-workload-<id>`. */
 	container: string;
 }
 
@@ -112,7 +112,7 @@ export function keyValueReplyFailed(stdout: string): boolean {
 }
 
 /**
- * `BACKUP DATABASE <db> AS skiff_backup TO File(...)`: ClickHouse's native backup (schema, parts and
+ * `BACKUP DATABASE <db> AS yoal_backup TO File(...)`: ClickHouse's native backup (schema, parts and
  * checksums) as one zip archive. Storing it under a fixed name lets any target database restore it.
  */
 export function clickhouseBackupQuery(database: string, file: string): string {

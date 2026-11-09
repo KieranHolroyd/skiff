@@ -9,9 +9,9 @@
 	import MailIcon from '@lucide/svelte/icons/mail';
 	import SmartphoneIcon from '@lucide/svelte/icons/smartphone';
 	import { authClient } from '#lib/auth-client.js';
-	import AuthSplitShell from '#lib/components/skiff/AuthSplitShell.svelte';
-	import GitHubMark from '#lib/components/skiff/GitHubMark.svelte';
-	import ForgeMark from '#lib/components/skiff/ForgeMark.svelte';
+	import AuthSplitShell from '#lib/components/yoal/AuthSplitShell.svelte';
+	import GitHubMark from '#lib/components/yoal/GitHubMark.svelte';
+	import ForgeMark from '#lib/components/yoal/ForgeMark.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
@@ -59,7 +59,7 @@
 
 	/**
 	 * Email first (IAM.md §8.3): a verified domain sends the browser to its organisation's IdP.
-	 * Resolution uses Skiff's own `sso_domains` check (exact hostname, verified only), then the
+	 * Resolution uses Yoal's own `sso_domains` check (exact hostname, verified only), then the
 	 * Better Auth plugin starts the flow for that provider id. No provider means the address falls
 	 * through to the methods below, and the server-side policy still refuses a method the
 	 * organisation does not allow.

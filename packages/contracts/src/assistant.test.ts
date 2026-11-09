@@ -18,7 +18,7 @@ describe("assistant chat contract", () => {
       history: [{ role: "user", content: "hi" }],
       context: {
         path: "/projects/foo",
-        title: "foo · Skiff · Skiff",
+        title: "foo · Yoal · Yoal",
         project: "foo",
         targets: [
           {
@@ -66,10 +66,10 @@ describe("assistant chat contract", () => {
 describe("assistant platform settings", () => {
   test("requires a base URL and model, and keeps the key secret", () => {
     expect(PLATFORM_CONFIG_REQUIRED.assistant).toEqual([
-      "SKIFF_ASSISTANT_BASE_URL",
-      "SKIFF_ASSISTANT_MODEL",
+      "YOAL_ASSISTANT_BASE_URL",
+      "YOAL_ASSISTANT_MODEL",
     ]);
-    expect(PLATFORM_CONFIG_SECRET_KEYS.has("SKIFF_ASSISTANT_API_KEY")).toBe(
+    expect(PLATFORM_CONFIG_SECRET_KEYS.has("YOAL_ASSISTANT_API_KEY")).toBe(
       true,
     );
   });
@@ -77,27 +77,27 @@ describe("assistant platform settings", () => {
   test("validates the provider, URL and model", () => {
     expect(
       validatePlatformConfigValue(
-        "SKIFF_ASSISTANT_BASE_URL",
+        "YOAL_ASSISTANT_BASE_URL",
         "http://127.0.0.1:11434/v1",
       ),
     ).toBe(null);
     expect(
       validatePlatformConfigValue(
-        "SKIFF_ASSISTANT_BASE_URL",
+        "YOAL_ASSISTANT_BASE_URL",
         "https://api.openai.com/v1/",
       ),
     ).toBe("must not end with a slash");
     expect(
       validatePlatformConfigValue(
-        "SKIFF_ASSISTANT_BASE_URL",
+        "YOAL_ASSISTANT_BASE_URL",
         "file:///etc/passwd",
       ),
     ).toContain("http(s)");
     expect(
-      validatePlatformConfigValue("SKIFF_ASSISTANT_MODEL", "gpt-4.1-mini"),
+      validatePlatformConfigValue("YOAL_ASSISTANT_MODEL", "gpt-4.1-mini"),
     ).toBe(null);
     expect(
-      validatePlatformConfigValue("SKIFF_ASSISTANT_MODEL", "bad model!"),
+      validatePlatformConfigValue("YOAL_ASSISTANT_MODEL", "bad model!"),
     ).toContain("model id");
   });
 
@@ -108,7 +108,7 @@ describe("assistant platform settings", () => {
       by: "user_1",
       action: "configure",
       section: "assistant",
-      set: { SKIFF_SMTP_HOST: "smtp.example.com" },
+      set: { YOAL_SMTP_HOST: "smtp.example.com" },
       unset: [],
     });
     expect(parsed.ok).toBe(false);

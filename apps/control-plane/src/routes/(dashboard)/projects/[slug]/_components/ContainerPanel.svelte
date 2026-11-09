@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { browser } from '$app/env';
 	import { createQuery } from '@tanstack/svelte-query';
-	import type { ContainerInspect, ContainerStats, ContainerTarget } from '@skiff/contracts';
+	import type { ContainerInspect, ContainerStats, ContainerTarget } from '@yoal/contracts';
 	import ActivityIcon from '@lucide/svelte/icons/activity';
 	import BoxIcon from '@lucide/svelte/icons/box';
 	import CpuIcon from '@lucide/svelte/icons/cpu';
@@ -16,9 +16,9 @@
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
+	import DetailList from '#lib/components/yoal/DetailList.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';

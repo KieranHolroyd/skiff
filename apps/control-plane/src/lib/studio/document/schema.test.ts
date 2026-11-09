@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { Cell, Column } from '@skiff/studio/protocol';
+import type { Cell, Column } from '@yoal/studio/protocol';
 import { formatShare, schemaCommand, summarizeSchema } from './schema.ts';
 import { firstPage, nextPage, pageLabel, pageNumber, pageRange, previousPage } from './pager.ts';
 import { studioErrorMessage, summarizeApply } from './apply.ts';

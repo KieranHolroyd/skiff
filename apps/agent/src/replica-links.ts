@@ -2,14 +2,14 @@ import { promises as fs } from 'node:fs';
 import { createServer, connect, type Server, type Socket } from 'node:net';
 import { connect as connectTls } from 'node:tls';
 import { join } from 'node:path';
-import { isDatabaseReplicaWorkloadId, type DatabaseReplicaLink } from '@skiff/contracts';
+import { isDatabaseReplicaWorkloadId, type DatabaseReplicaLink } from '@yoal/contracts';
 
 /**
  * Replica upstream links (docs/CLUSTERING.md §9.2, C7).
  *
  * A replica container has no route to the overlay, so its walreceiver (and the first-start
  * `pg_basebackup`) connects to a unix socket instead: `<root>/<replica id>/.s.PGSQL.5432`, which
- * the helper bind-mounts read-only at `/run/skiff-upstream`. This class serves that socket and pipes
+ * the helper bind-mounts read-only at `/run/yoal-upstream`. This class serves that socket and pipes
  * each connection to the primary: its loopback port when it runs on this node, or the primary
  * node's provider listener over the overlay, with this node's certificate and the primary node's
  * certificate pinned, exactly like a C2 consumer endpoint.
@@ -29,7 +29,7 @@ interface Link {
 }
 
 export interface ReplicaLinkOptions {
-	/** `<agent data dir>/replication`; must match the helper's `SKIFF_HELPER_REPLICATION_DIR`. */
+	/** `<agent data dir>/replication`; must match the helper's `YOAL_HELPER_REPLICATION_DIR`. */
 	root: string;
 	certificate?: { certPem: string; keyPem: string };
 	log?: (level: 'info' | 'warn', message: string) => void;

@@ -1,7 +1,7 @@
 -- Metric alert rules over the ClickHouse telemetry store (docs/ALERTS.md, D109). Additive only.
 --
 -- A rule is an org resource: a JSON spec (query, condition, timing, routing) validated by
--- `alertRuleInputSchema` in @skiff/contracts. Each series a rule's query returns has one row in
+-- `alertRuleInputSchema` in @yoal/contracts. Each series a rule's query returns has one row in
 -- `alert_instances` holding its state machine (normal → pending → firing, or nodata).
 -- `alert_events` is the history: state changes, notifications and their per-channel outcome,
 -- rule errors, and the platform's built-in system alerts. Silences mute notifications only.

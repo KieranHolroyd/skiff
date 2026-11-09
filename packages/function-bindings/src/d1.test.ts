@@ -236,7 +236,7 @@ describe('D1DatabaseObject /query', () => {
 			params: [1],
 		});
 
-		expect(inserted.meta.served_by).toBe('skiff.d1');
+		expect(inserted.meta.served_by).toBe('yoal.d1');
 		expect(inserted.meta.served_by_primary).toBe(true);
 		expect(inserted.meta.total_attempts).toBe(1);
 		expect(inserted.meta.changes).toBe(1);

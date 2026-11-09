@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { readFileSync } from 'node:fs';
-import type { Principal } from '@skiff/contracts';
+import type { Principal } from '@yoal/contracts';
 
 /**
  * `SsoService` provider writes with presets (IAM.md §8.3, D180), against a fake `core` holding a

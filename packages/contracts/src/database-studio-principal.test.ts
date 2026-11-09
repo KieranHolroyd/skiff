@@ -21,10 +21,10 @@ describe('read-only studio principal contract', () => {
 
 	test('the activation only carries the fixed user and a generated password', () => {
 		const base = { databaseId: 'db_1', generation: 1, engine: 'postgres', database: 'app', password: 'A'.repeat(32) };
-		expect(databaseStudioPrincipalActivationSchema.parse({ ...base, user: 'skiff_studio_ro' }).user).toBe('skiff_studio_ro');
+		expect(databaseStudioPrincipalActivationSchema.parse({ ...base, user: 'yoal_studio_ro' }).user).toBe('yoal_studio_ro');
 		expect(databaseStudioPrincipalActivationSchema.safeParse({ ...base, user: 'app' }).success).toBe(false);
-		expect(databaseStudioPrincipalActivationSchema.safeParse({ ...base, user: 'skiff_studio_ro', password: "x';--" }).success).toBe(false);
-		expect(databaseStudioPrincipalActivationSchema.safeParse({ ...base, user: 'skiff_studio_ro', password: 'short' }).success).toBe(false);
+		expect(databaseStudioPrincipalActivationSchema.safeParse({ ...base, user: 'yoal_studio_ro', password: "x';--" }).success).toBe(false);
+		expect(databaseStudioPrincipalActivationSchema.safeParse({ ...base, user: 'yoal_studio_ro', password: 'short' }).success).toBe(false);
 	});
 
 	test('desired state and heartbeat default and accept the new fields', () => {

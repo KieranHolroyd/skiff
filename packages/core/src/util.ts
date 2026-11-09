@@ -89,7 +89,7 @@ export interface AccessTokenClaims {
 	/** Subject: user id or share redemption id. */
 	sub: string;
 	kind: 'platform' | 'share' | 'password' | 'access';
-	/** The verified address, so the agent can hand `Skiff-Access-Email` upstream. */
+	/** The verified address, so the agent can hand `Yoal-Access-Email` upstream. */
 	email?: string;
 	/** Session/redemption id, used for revocation. */
 	sid?: string;

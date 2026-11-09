@@ -2,9 +2,9 @@ import { beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb, deployments, workloads } from '@skiff/db';
-import type { Principal } from '@skiff/contracts';
-import { workloadSpecSchema } from '@skiff/contracts';
+import { createDb, deployments, workloads } from '@yoal/db';
+import type { Principal } from '@yoal/contracts';
+import { workloadSpecSchema } from '@yoal/contracts';
 import { createCore, type Core } from '../index.ts';
 import { LocalObjectStore } from '../object-store.ts';
 import { buildPrincipal } from '../orgs.ts';
@@ -17,7 +17,7 @@ import {
  * Workload identity (docs/IAM.md I18, §7.4). The migration suite is applied by `createDb`; this
  * test exercises the service directly, with a project/deployment/workload row per case.
  */
-const dir = mkdtempSync(join(tmpdir(), 'skiff-workload-identity-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-workload-identity-'));
 const opened = createDb({ path: ':memory:' });
 let now = Date.parse('2026-11-08T12:00:00Z');
 let core: Core;
@@ -186,7 +186,7 @@ describe('workload identity service accounts', () => {
 				identity: { serviceAccount: 'deployer-bot' },
 			}),
 		);
-		const minted = await service().mint(workload, 'skiff');
+		const minted = await service().mint(workload, 'yoal');
 		expect(minted.serviceAccount).toBe('deployer-bot');
 		expect(claims(minted.token).sub).toBe(existing.id);
 	});
@@ -205,7 +205,7 @@ describe('workload tokens', () => {
 	test('mints an ES256 token with the platform issuer, subject, org, project, environment and audience', async () => {
 		const row = await project('app');
 		const workload = workloadFor(row);
-		const minted = await service().mint(workload, 'skiff');
+		const minted = await service().mint(workload, 'yoal');
 		const payload = claims(minted.token);
 		const accountId = service().ensure(row.orgId, row.id, 'production').id;
 
@@ -213,7 +213,7 @@ describe('workload tokens', () => {
 		expect(payload).toMatchObject({
 			iss: 'https://control.test',
 			sub: accountId,
-			aud: 'skiff',
+			aud: 'yoal',
 			org_id: 'org_1',
 			project_id: row.id,
 			environment: 'production',
@@ -222,11 +222,11 @@ describe('workload tokens', () => {
 		expect(Number(payload.exp) - Number(payload.iat)).toBe(60 * 60);
 		expect(payload.iat).toBe(Math.floor(now / 1000));
 		await expect(
-			core.ctx.signingKeys.verify('workload', minted.token, { audience: 'skiff' }),
+			core.ctx.signingKeys.verify('workload', minted.token, { audience: 'yoal' }),
 		).resolves.toMatchObject({ sub: accountId });
 	});
 
-	test('passes any non-Skiff audience through unchanged', async () => {
+	test('passes any non-Yoal audience through unchanged', async () => {
 		const row = await project('app');
 		const workload = workloadFor(row);
 		const minted = await service().mint(workload, 'sts.amazonaws.com');
@@ -236,7 +236,7 @@ describe('workload tokens', () => {
 			core.ctx.signingKeys.verify('workload', minted.token, { audience: 'sts.amazonaws.com' }),
 		).resolves.toBeDefined();
 		await expect(
-			core.ctx.signingKeys.verify('workload', minted.token, { audience: 'skiff' }),
+			core.ctx.signingKeys.verify('workload', minted.token, { audience: 'yoal' }),
 		).rejects.toThrow(/audience/);
 	});
 
@@ -245,13 +245,13 @@ describe('workload tokens', () => {
 		const workload = workloadFor(row);
 		const accountId = service().ensure(row.orgId, row.id, 'production').id;
 		opened.sqlite.run('UPDATE service_accounts SET disabled_at = ? WHERE id = ?', [now, accountId]);
-		await expect(service().mint(workload, 'skiff')).rejects.toThrow(/disabled/);
+		await expect(service().mint(workload, 'yoal')).rejects.toThrow(/disabled/);
 	});
 
 	test('rotation moves new tokens to the next key and still verifies the old one', async () => {
 		const row = await project('app');
 		const workload = workloadFor(row);
-		const first = await service().mint(workload, 'skiff');
+		const first = await service().mint(workload, 'yoal');
 		const firstKid = header(first.token).kid!;
 
 		// `ensure` created the active key, so the first rotation publishes `next`; the second
@@ -263,7 +263,7 @@ describe('workload tokens', () => {
 		expect(rotation.active.kid).toBe(published.next!.kid);
 		expect(rotation.active.kid).not.toBe(firstKid);
 
-		const second = await service().mint(workload, 'skiff');
+		const second = await service().mint(workload, 'yoal');
 		expect(header(second.token).kid).toBe(rotation.active.kid);
 		expect(header(second.token).kid).not.toBe(firstKid);
 

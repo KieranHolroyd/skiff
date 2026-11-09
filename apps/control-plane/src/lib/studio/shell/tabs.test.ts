@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { TreeNode } from '@skiff/studio/protocol';
+import type { TreeNode } from '@yoal/studio/protocol';
 import {
 	closeObjectTabs,
 	closeTab,

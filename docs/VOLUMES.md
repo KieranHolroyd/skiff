@@ -1,9 +1,9 @@
-# Skiff — App volumes
+# Yoal — App volumes
 
 Status: **MVP built (plan 07)**. An app volume is a project-owned directory with a size quota that a
 process or container workload mounts at an absolute path. Where its data lives is chosen like any
 other service's storage: the system disk or a disk ([STORAGE.md](./STORAGE.md), D169).
-Enabled by `SKIFF_FEATURE_APP_VOLUMES` (off by default); it never replaces the legacy `/data`
+Enabled by `YOAL_FEATURE_APP_VOLUMES` (off by default); it never replaces the legacy `/data`
 mount.
 
 ## Model and backing
@@ -17,7 +17,7 @@ mount.
 A volume pins its project to one node. Create takes `storage` like every other service
 (`system`, `fast`, `bulk` or a disk name; default from Settings → Storage). On a disk the row
 stores `backing: node_volume` (the stored and wire value) with the disk id, and the helper
-resolves `<disk mount>/skiff/apps/<projectId>/<volumeId>`.
+resolves `<disk mount>/yoal/apps/<projectId>/<volumeId>`.
 With `backing: state_dir` it uses `<helper state dir>/apps/<projectId>/<volumeId>`. Only that
 subtree is created; the host path is derived on the node and is never stored or returned by the
 API. A project-facing view contains the volume name, size, usage, status, attachments and — for a
@@ -37,7 +37,7 @@ carries a host path or device. Before writing a unit the helper:
 Process units render `BindPaths=<host>:<mountPath>` (or `BindReadOnlyPaths`) plus
 `ReadWritePaths`; container units render `Volume=<host>:<mountPath>[:ro]:Z`. Mount points are
 validated by the same rules as the contract: absolute, normalized, no traversal, not a system
-tree, not `/data`, not `/var/lib/skiff`.
+tree, not `/data`, not `/var/lib/yoal`.
 
 ## Size quota, disk admission and single writer
 
@@ -62,7 +62,7 @@ per environment.
 |---|---|
 | REST | `GET/POST /api/v1/projects/:slug/volumes`, `GET/PATCH/DELETE /…/volumes/:name`, `POST/DELETE /…/volumes/:name/attach`, `GET/POST /…/volumes/:name/snapshots`, `GET/DELETE /…/snapshots/:id`, `POST /…/snapshots/:id/restore`. |
 | MCP | `list_volumes`, `create_volume`, `attach_volume`, `detach_volume`, `list_volume_snapshots`, `snapshot_volume`, `restore_volume` (snapshot delete is not exposed). |
-| CLI | `skif volume list|show|create|attach|detach|delete|snapshot|snapshots|restore|snapshot-delete`. |
+| CLI | `yoal volume list|show|create|attach|detach|delete|snapshot|snapshots|restore|snapshot-delete`. |
 | Dashboard | Project **Volumes** card: create, attach/detach, usage with a near-quota flag, snapshot now, latest five snapshots with restore/delete, delete. |
 
 Deleting a volume is refused while it is attached or being restored. The soft delete keeps the
@@ -87,7 +87,7 @@ per volume once. A disk backing that is not mounted yields no sample. Views carr
 `usedBytes`, `usedAt` and `nearQuota` (at or above `APP_VOLUME_USAGE_WARN_PERCENT`, 90 %). The
 maintenance sweep raises the `storage_usage:<volume id>` system alert at the platform's
 `storageAlertPercent` (critical at 95 %), routed with object-storage usage; the
-`skiff_project_volume_used_bytes` / `_size_bytes` gauges export the same numbers.
+`yoal_project_volume_used_bytes` / `_size_bytes` gauges export the same numbers.
 
 ## Snapshots
 
@@ -136,7 +136,7 @@ trashed volume can still be listed and restored until it is purged.
 Deleting a single snapshot deletes the archive first and is refused while it runs, while a volume
 is restored from it, or on a write-only target.
 
-On demand, `skif volume prune` (or `skif prune --only volume_snapshots`) removes unpinned finished
+On demand, `yoal volume prune` (or `yoal prune --only volume_snapshots`) removes unpinned finished
 snapshots older than `volumeSnapshotRetentionDays` (default 30, Settings → Retention & defaults)
 and snapshots whose volume is gone. Pinned snapshots and one a restore is reading are always
 kept. It uses the same plan-then-apply flow as every prune, so nothing is deleted unseen.

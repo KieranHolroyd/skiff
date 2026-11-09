@@ -50,7 +50,7 @@ tKASeAAfUfs7pMzsSTc=
 `;
 
 	test('decrypts a file written by the reference implementation', () => {
-		expect(Buffer.from(ageDecrypt(TYPAGE_FIXTURE, 'skiff fixture passphrase')).toString()).toBe('{"hello":"from typage"}\n');
+		expect(Buffer.from(ageDecrypt(TYPAGE_FIXTURE, 'yoal fixture passphrase')).toString()).toBe('{"hello":"from typage"}\n');
 		expect(() => ageDecrypt(TYPAGE_FIXTURE, 'wrong passphrase')).toThrow(/wrong passphrase/);
 	});
 
@@ -86,7 +86,7 @@ tKASeAAfUfs7pMzsSTc=
 });
 
 describe('kit format', () => {
-	const env = 'SKIFF_PLATFORM_ORIGIN=https://control.example.com\nR2_BUCKET=b\nSKIFF_SMTP_FROM="Skiff <noreply@example.com>"\n';
+	const env = 'YOAL_PLATFORM_ORIGIN=https://control.example.com\nR2_BUCKET=b\nYOAL_SMTP_FROM="Yoal <noreply@example.com>"\n';
 
 	test('build, encrypt and decrypt with env', () => {
 		const kit = buildKit({ masterKey: 'bWFzdGVy\n', env, host: 'edge', now: new Date('2026-11-03T00:00:00Z') });
@@ -101,7 +101,7 @@ describe('kit format', () => {
 	});
 
 	test('rejects a decrypted file that is not a kit, or whose fingerprint was edited', () => {
-		expect(() => decryptKit(armor(ageEncrypt(new TextEncoder().encode('{}'), 'pw-pw-pw-pw-pw', WF)), 'pw-pw-pw-pw-pw')).toThrow(/not a Skiff recovery kit/);
+		expect(() => decryptKit(armor(ageEncrypt(new TextEncoder().encode('{}'), 'pw-pw-pw-pw-pw', WF)), 'pw-pw-pw-pw-pw')).toThrow(/not a Yoal recovery kit/);
 		const kit = { ...buildKit({ masterKey: 'k1' }), fingerprint: '0000000000000000' };
 		expect(() => decryptKit(armor(ageEncrypt(Buffer.from(JSON.stringify(kit)), 'pw-pw-pw-pw-pw', WF)), 'pw-pw-pw-pw-pw')).toThrow(/fingerprint/);
 	});
@@ -115,13 +115,13 @@ describe('kit format', () => {
 
 describe('CLI', () => {
 	function setup() {
-		const dir = mkdtempSync(join(tmpdir(), 'skiff-kit-'));
+		const dir = mkdtempSync(join(tmpdir(), 'yoal-kit-'));
 		writeFileSync(join(dir, 'master.key'), 'b3JpZ2luYWwta2V5\n', { mode: 0o400 });
-		writeFileSync(join(dir, 'skiff.env'), 'SKIFF_PLATFORM_ORIGIN=https://control.example.com\nR2_BUCKET=bucket\n');
+		writeFileSync(join(dir, 'yoal.env'), 'YOAL_PLATFORM_ORIGIN=https://control.example.com\nR2_BUCKET=bucket\n');
 		writeFileSync(join(dir, 'pass'), 'correct horse battery staple\n');
 		const run = (...args: string[]) =>
 			spawnSync(process.execPath, [join(import.meta.dir, 'recovery-kit.ts'), ...args, '--passphrase-file', join(dir, 'pass'), '--work-factor', String(WF)], {
-				env: { ...process.env, SKIFF_ETC_DIR: dir, SKIFF_RECOVERY_PASSPHRASE_FILE: '' },
+				env: { ...process.env, YOAL_ETC_DIR: dir, YOAL_RECOVERY_PASSPHRASE_FILE: '' },
 				encoding: 'utf8',
 			});
 		return { dir, run };
@@ -142,7 +142,7 @@ describe('CLI', () => {
 		// A fresh install generated a different key: import must refuse without --force.
 		rmSync(join(dir, 'master.key'));
 		writeFileSync(join(dir, 'master.key'), 'ZnJlc2gta2V5\n', { mode: 0o400 });
-		writeFileSync(join(dir, 'skiff.env'), 'R2_BUCKET=other\n');
+		writeFileSync(join(dir, 'yoal.env'), 'R2_BUCKET=other\n');
 		const mismatch = run('verify', kitPath);
 		expect(mismatch.status).toBe(1);
 		expect(mismatch.stderr).toContain('fingerprint is');
@@ -154,10 +154,10 @@ describe('CLI', () => {
 		expect(imported.status).toBe(0);
 		expect(readFileSync(join(dir, 'master.key'), 'utf8')).toBe('b3JpZ2luYWwta2V5\n');
 		expect(statSync(join(dir, 'master.key')).mode & 0o777).toBe(0o400);
-		expect(readFileSync(join(dir, 'skiff.env'), 'utf8')).toContain('R2_BUCKET=bucket');
+		expect(readFileSync(join(dir, 'yoal.env'), 'utf8')).toContain('R2_BUCKET=bucket');
 		const backups = readdirSync(dir).filter((name) => name.includes('.pre-recovery-'));
 		expect(backups.some((name) => name.startsWith('master.key.'))).toBe(true);
-		expect(backups.some((name) => name.startsWith('skiff.env.'))).toBe(true);
+		expect(backups.some((name) => name.startsWith('yoal.env.'))).toBe(true);
 		expect(run('verify', kitPath).status).toBe(0);
 	});
 
@@ -186,15 +186,15 @@ describe('CLI', () => {
 describe('CLI with a key sealed by systemd-creds', () => {
 	const ORIGINAL = 'b3JpZ2luYWwta2V5';
 	function setup() {
-		const dir = mkdtempSync(join(tmpdir(), 'skiff-kit-sealed-'));
-		const hostA = fakeCredsBinary(mkdtempSync(join(tmpdir(), 'skiff-creds-a-')));
-		const hostB = fakeCredsBinary(mkdtempSync(join(tmpdir(), 'skiff-creds-b-')), { FAKE_CREDS_HOST: 'host-b' });
+		const dir = mkdtempSync(join(tmpdir(), 'yoal-kit-sealed-'));
+		const hostA = fakeCredsBinary(mkdtempSync(join(tmpdir(), 'yoal-creds-a-')));
+		const hostB = fakeCredsBinary(mkdtempSync(join(tmpdir(), 'yoal-creds-b-')), { FAKE_CREDS_HOST: 'host-b' });
 		const sealed = join(dir, 'master.key.cred');
 		sealMasterKey(ORIGINAL, sealed, { tpm2: false, bin: hostA });
 		writeFileSync(join(dir, 'pass'), 'correct horse battery staple\n');
 		const run = (bin: string, ...args: string[]) =>
 			spawnSync(process.execPath, [join(import.meta.dir, 'recovery-kit.ts'), ...args, '--passphrase-file', join(dir, 'pass'), '--work-factor', String(WF)], {
-				env: { ...process.env, SKIFF_ETC_DIR: dir, SKIFF_SYSTEMD_CREDS: bin, SKIFF_RECOVERY_PASSPHRASE_FILE: '' },
+				env: { ...process.env, YOAL_ETC_DIR: dir, YOAL_SYSTEMD_CREDS: bin, YOAL_RECOVERY_PASSPHRASE_FILE: '' },
 				encoding: 'utf8',
 			});
 		return { dir, sealed, hostA, hostB, run };

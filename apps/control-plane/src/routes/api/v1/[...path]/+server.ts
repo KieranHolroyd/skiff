@@ -1,6 +1,6 @@
 import type { RequestHandler } from './$types';
 import * as z from 'zod';
-import { MetricsExporter, PROMETHEUS_CONTENT_TYPE, ValidationError, parseAuditTime } from '@skiff/core';
+import { MetricsExporter, PROMETHEUS_CONTENT_TYPE, ValidationError, parseAuditTime } from '@yoal/core';
 import {
 	projectCreateSchema,
 	projectUpdateSchema,
@@ -39,7 +39,7 @@ import {
 	type OperationStatus,
 	type LogLevel,
 	type LogSource,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { json, readJson, route } from '#lib/server/api.js';
 import { requirePrincipal } from '#lib/server/principal.js';
@@ -50,7 +50,7 @@ const finalizeByIdSchema = finalizeUploadSchema.partial({ uploadId: true });
 const pinSchema = z.object({ pinned: z.boolean().default(true) });
 
 /**
- * Skiff REST API v1. Every endpoint calls the same service layer as the dashboard, MCP and CLI
+ * Yoal REST API v1. Every endpoint calls the same service layer as the dashboard, MCP and CLI
  * (DESIGN §3.2), so permission checks cannot drift between surfaces.
  */
 const api: RequestHandler = async (event) => {

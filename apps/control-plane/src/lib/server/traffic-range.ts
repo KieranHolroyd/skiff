@@ -1,4 +1,4 @@
-import type { TelemetryInterval } from '@skiff/core';
+import type { TelemetryInterval } from '@yoal/core';
 
 /**
  * Dashboard traffic ranges. Minute buckets for the last day, hourly buckets for longer

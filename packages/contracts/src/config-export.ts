@@ -12,7 +12,7 @@
  * an export never fails for one missing permission.
  */
 
-export const CONFIG_EXPORT_VERSION = 'skiff.export/v1';
+export const CONFIG_EXPORT_VERSION = 'yoal.export/v1';
 
 /** Top-level sections, in the order they appear in the document. */
 export const configExportSections = [

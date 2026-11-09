@@ -12,8 +12,8 @@
 		ObjectDescription,
 		ObjectRef,
 		RowChange
-	} from '@skiff/studio/protocol';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	} from '@yoal/studio/protocol';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Dialog from '#lib/components/ui/dialog/index.js';
@@ -22,7 +22,7 @@
 	import { Spinner } from '#lib/components/ui/spinner/index.js';
 	import { StudioCallError, studioCall, studioStream } from '../client.js';
 	import StudioGrid from '../grid/StudioGrid.svelte';
-	import type { StudioInfo } from '@skiff/studio/protocol';
+	import type { StudioInfo } from '@yoal/studio/protocol';
 	import { studioErrorMessage, summarizeApply, type ApplySummary } from '../document/apply.js';
 	import type { Confirmer } from '../document/confirm.svelte.js';
 	import ResultNotice from '../document/ResultNotice.svelte';

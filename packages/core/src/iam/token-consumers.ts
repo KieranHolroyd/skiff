@@ -1,5 +1,5 @@
 /**
- * Skiff token consumers (docs/IAM.md I16–I18, §7.3–§7.4).
+ * Yoal token consumers (docs/IAM.md I16–I18, §7.3–§7.4).
  *
  * A workload token and an STS access token both name a service account (`sub`), its org
  * (`org_id`) and, optionally, a ceiling (`scope` = space-separated permissions, `resources` =
@@ -18,16 +18,16 @@ import {
 	type Permission,
 	type Principal,
 	type Restriction,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from '../context.ts';
 import type { JwtClaims } from './keys.ts';
 
 /** The two ring purposes a surface accepts as a bearer credential. */
-export type SkiffTokenKind = 'workload' | 'sts';
+export type YoalTokenKind = 'workload' | 'sts';
 
 /** A verified workload or STS token, reduced to what a principal needs. */
-export interface SkiffTokenIdentity {
-	kind: SkiffTokenKind;
+export interface YoalTokenIdentity {
+	kind: YoalTokenKind;
 	/** The service account the token names (`sub`). */
 	serviceAccountId: string;
 	/** The org the token was minted for (`org_id`). */
@@ -37,10 +37,10 @@ export interface SkiffTokenIdentity {
 	claims: JwtClaims;
 }
 
-export interface SkiffTokenAudiences {
-	/** Audiences accepted for a workload token. Defaults to `skiff`. */
+export interface YoalTokenAudiences {
+	/** Audiences accepted for a workload token. Defaults to `yoal`. */
 	workloadAudiences?: readonly string[];
-	/** Audiences accepted for an STS token. Defaults to `skiff` and the platform origin. */
+	/** Audiences accepted for an STS token. Defaults to `yoal` and the platform origin. */
 	stsAudiences?: readonly string[];
 }
 
@@ -67,12 +67,12 @@ export function restrictionFromClaims(claims: Record<string, unknown>): Restrict
 
 /**
  * The identity a verified token names. Pure: audience, issuer, signature and expiry were already
- * checked, so this only insists on the claims every Skiff token carries.
+ * checked, so this only insists on the claims every Yoal token carries.
  */
-export function skiffTokenIdentity(
-	kind: SkiffTokenKind,
+export function yoalTokenIdentity(
+	kind: YoalTokenKind,
 	claims: JwtClaims,
-): SkiffTokenIdentity | null {
+): YoalTokenIdentity | null {
 	const serviceAccountId = typeof claims.sub === 'string' ? claims.sub : '';
 	const orgId = typeof claims.org_id === 'string' ? claims.org_id : '';
 	if (!serviceAccountId || !orgId) return null;
@@ -89,12 +89,12 @@ export function skiffTokenIdentity(
  * Verify a bearer token as a workload or STS token and return the identity it names, or null when
  * it is not one of ours. Both purposes are tried in turn: a `kid` belongs to exactly one purpose.
  */
-export async function verifySkiffToken(
+export async function verifyYoalToken(
 	ctx: CoreContext,
 	token: string,
-	audiences: SkiffTokenAudiences = {},
-): Promise<SkiffTokenIdentity | null> {
-	const attempts: Array<[SkiffTokenKind, readonly string[]]> = [
+	audiences: YoalTokenAudiences = {},
+): Promise<YoalTokenIdentity | null> {
+	const attempts: Array<[YoalTokenKind, readonly string[]]> = [
 		['workload', audiences.workloadAudiences ?? [WORKLOAD_IDENTITY_AUDIENCE]],
 		[
 			'sts',
@@ -105,7 +105,7 @@ export async function verifySkiffToken(
 		for (const audience of accepted) {
 			try {
 				const claims = await ctx.signingKeys.verify(kind, token, { audience });
-				const identity = skiffTokenIdentity(kind, claims);
+				const identity = yoalTokenIdentity(kind, claims);
 				if (identity && serviceAccountUsable(ctx, identity)) return identity;
 			} catch {
 				// Wrong purpose, audience, signature, issuer or expiry: try the next attempt.
@@ -119,8 +119,8 @@ export async function verifySkiffToken(
  * Build the service-account shell a token stands for. Its bindings are compiled separately, so a
  * caller that does not need permissions (e.g. a pure claims test) can use this on its own.
  */
-export function principalFromSkiffToken(
-	identity: SkiffTokenIdentity,
+export function principalFromYoalToken(
+	identity: YoalTokenIdentity,
 	permissions: Iterable<Permission> = [],
 ): Principal {
 	return {
@@ -140,11 +140,11 @@ export function principalFromSkiffToken(
  * see the token's ceiling. Resource restrictions are enforced by `IamService` through the
  * principal's `restriction`.
  */
-export function serviceAccountPrincipalFromSkiffToken(
+export function serviceAccountPrincipalFromYoalToken(
 	ctx: CoreContext,
-	identity: SkiffTokenIdentity,
+	identity: YoalTokenIdentity,
 ): Principal {
-	const shell = principalFromSkiffToken(identity);
+	const shell = principalFromYoalToken(identity);
 	const bound = [...ctx.iam.compiledFor(shell).index.keys()];
 	const ceiling = identity.restriction?.permissions;
 	return {
@@ -196,7 +196,7 @@ function permissionCovered(permissions: readonly Permission[], permission: Permi
 }
 
 /** A token is only as good as its service account: same org, not disabled. */
-function serviceAccountUsable(ctx: CoreContext, identity: SkiffTokenIdentity): boolean {
+function serviceAccountUsable(ctx: CoreContext, identity: YoalTokenIdentity): boolean {
 	const row = ctx.sqlite
 		.query<{ org_id: string; disabled_at: number | null }, [string]>(
 			'SELECT org_id, disabled_at FROM service_accounts WHERE id = ?',

@@ -1,0 +1,15 @@
+[Unit]
+Description=Run the Yoal restore drill monthly
+Documentation=https://github.com/kieranholroyd/private-cloud-deploys/blob/main/docs/OPS.md
+
+[Timer]
+# First of the month at 04:17 local time, with jitter so every install does not hit R2
+# at the same moment. Persistent=true catches up after a reboot or suspend.
+OnCalendar=*-*-01 04:17:00
+RandomizedDelaySec=30m
+AccuracySec=1m
+Persistent=true
+Unit=yoal-restore-drill.service
+
+[Install]
+WantedBy=timers.target

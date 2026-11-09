@@ -7,8 +7,8 @@
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
 	import SlidersHorizontalIcon from '@lucide/svelte/icons/sliders-horizontal';
 	import { notify } from '#lib/actions.js';
-	import Notice from '#lib/components/skiff/Notice.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
@@ -100,15 +100,15 @@ curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \\
   | sudo tee /etc/apt/sources.list.d/caddy-stable.list
 sudo apt-get update && sudo apt-get install -y caddy`;
 
-	const layout = `sudo groupadd --system skiff
-sudo useradd --system --gid skiff --home-dir /var/lib/skiff --shell /usr/sbin/nologin skiff
-sudo usermod -aG caddy skiff
-sudo install -d -m 0755 /opt/skiff/current/agent
-sudo install -d -m 0750 -o root -g skiff /etc/skiff
-sudo install -d -m 0751 -o skiff -g skiff /var/lib/skiff
-sudo install -d -m 0750 -o skiff -g skiff /var/lib/skiff/agent
-echo 'd /run/skiff 2770 root caddy -' | sudo tee /etc/tmpfiles.d/skiff.conf
-sudo systemd-tmpfiles --create /etc/tmpfiles.d/skiff.conf`;
+	const layout = `sudo groupadd --system yoal
+sudo useradd --system --gid yoal --home-dir /var/lib/yoal --shell /usr/sbin/nologin yoal
+sudo usermod -aG caddy yoal
+sudo install -d -m 0755 /opt/yoal/current/agent
+sudo install -d -m 0750 -o root -g yoal /etc/yoal
+sudo install -d -m 0751 -o yoal -g yoal /var/lib/yoal
+sudo install -d -m 0750 -o yoal -g yoal /var/lib/yoal/agent
+echo 'd /run/yoal 2770 root caddy -' | sudo tee /etc/tmpfiles.d/yoal.conf
+sudo systemd-tmpfiles --create /etc/tmpfiles.d/yoal.conf`;
 
 	const caddyConfig = `# The agent replaces the whole Caddy config over this socket; it is never exposed on TCP.
 sudo tee /etc/caddy/Caddyfile >/dev/null <<'EOF'
@@ -117,55 +117,55 @@ sudo tee /etc/caddy/Caddyfile >/dev/null <<'EOF'
 }
 EOF
 
-# Caddy serves release files from the agent cache, so it needs the skiff group.
+# Caddy serves release files from the agent cache, so it needs the yoal group.
 sudo mkdir -p /etc/systemd/system/caddy.service.d
-printf '[Service]\\nSupplementaryGroups=skiff\\n' \\
-  | sudo tee /etc/systemd/system/caddy.service.d/skiff.conf >/dev/null
+printf '[Service]\\nSupplementaryGroups=yoal\\n' \\
+  | sudo tee /etc/systemd/system/caddy.service.d/yoal.conf >/dev/null
 sudo systemctl daemon-reload && sudo systemctl restart caddy
 ls -l /var/lib/caddy/admin.sock   # srw-rw---- caddy caddy`;
 
 	const binaryFromEdge = $derived(`# Both machines must print the same architecture.
 uname -m && ssh root@${edgeIp} uname -m
-scp root@${edgeIp}:/opt/skiff/current/agent/skiff-agent /tmp/skiff-agent
-sudo install -m 0755 /tmp/skiff-agent /opt/skiff/current/agent/skiff-agent && rm /tmp/skiff-agent`);
+scp root@${edgeIp}:/opt/yoal/current/agent/yoal-agent /tmp/yoal-agent
+sudo install -m 0755 /tmp/yoal-agent /opt/yoal/current/agent/yoal-agent && rm /tmp/yoal-agent`);
 
 	const binaryFromSource = $derived(`curl -fsSL https://bun.sh/install | bash
-git clone https://github.com/${data.sourceRepo}.git && cd skiff
+git clone https://github.com/${data.sourceRepo}.git && cd yoal
 ~/.bun/bin/bun install --frozen-lockfile
 ~/.bun/bin/bun run --cwd apps/agent build
-sudo install -m 0755 apps/agent/dist/skiff-agent /opt/skiff/current/agent/skiff-agent`);
+sudo install -m 0755 apps/agent/dist/yoal-agent /opt/yoal/current/agent/yoal-agent`);
 
-	const agentEnv = $derived(`sudo tee /etc/skiff/skiff.env >/dev/null <<'EOF'
+	const agentEnv = $derived(`sudo tee /etc/yoal/yoal.env >/dev/null <<'EOF'
 NODE_ENV=production
-SKIFF_DATA_DIR=/var/lib/skiff/agent
+YOAL_DATA_DIR=/var/lib/yoal/agent
 # Plain HTTP on the tunnel address only: the edge terminates TLS and WireGuard encrypts the hop.
-SKIFF_TLS=0
-SKIFF_CADDY_LISTEN=${tunnelAddress}
-SKIFF_CERT_PROBE_ADDR=off
-SKIFF_CADDY_ADMIN_SOCKET=/var/lib/caddy/admin.sock
-SKIFF_AGENT_SOCKET=/run/skiff/agent.sock
+YOAL_TLS=0
+YOAL_CADDY_LISTEN=${tunnelAddress}
+YOAL_CERT_PROBE_ADDR=off
+YOAL_CADDY_ADMIN_SOCKET=/var/lib/caddy/admin.sock
+YOAL_AGENT_SOCKET=/run/yoal/agent.sock
 EOF
-sudo chown root:skiff /etc/skiff/skiff.env && sudo chmod 0640 /etc/skiff/skiff.env`);
+sudo chown root:yoal /etc/yoal/yoal.env && sudo chmod 0640 /etc/yoal/yoal.env`);
 
-	const agentUnit = `sudo tee /etc/systemd/system/skiff-agent.service >/dev/null <<'EOF'
+	const agentUnit = `sudo tee /etc/systemd/system/yoal-agent.service >/dev/null <<'EOF'
 [Unit]
-Description=Skiff node agent
+Description=Yoal node agent
 After=network-online.target caddy.service wg-quick@wg0.service
 Wants=network-online.target wg-quick@wg0.service
-ConditionPathExists=/etc/skiff/agent.env
+ConditionPathExists=/etc/yoal/agent.env
 StartLimitIntervalSec=60
 StartLimitBurst=5
 
 [Service]
 Type=simple
-User=skiff
-Group=skiff
+User=yoal
+Group=yoal
 SupplementaryGroups=caddy
 UMask=0007
-WorkingDirectory=/opt/skiff/current/agent
-EnvironmentFile=/etc/skiff/skiff.env
-EnvironmentFile=-/etc/skiff/agent.env
-ExecStart=/opt/skiff/current/agent/skiff-agent
+WorkingDirectory=/opt/yoal/current/agent
+EnvironmentFile=/etc/yoal/yoal.env
+EnvironmentFile=-/etc/yoal/agent.env
+ExecStart=/opt/yoal/current/agent/yoal-agent
 Restart=on-failure
 RestartSec=2
 TimeoutStopSec=20
@@ -193,7 +193,7 @@ SystemCallFilter=@system-service io_uring_setup io_uring_enter io_uring_register
 SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=
 AmbientCapabilities=
-ReadWritePaths=/var/lib/skiff /run/skiff
+ReadWritePaths=/var/lib/yoal /run/yoal
 
 [Install]
 WantedBy=multi-user.target
@@ -201,31 +201,31 @@ EOF`;
 
 	// Same unit the installer writes on the edge (scripts/systemd/builder.ts). It idles until the
 	// node has the Builder role, so it is safe to install on every worker.
-	const builderUnit = `sudo useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin skiff-build
+	const builderUnit = `sudo useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin yoal-build
 # Marks an agent binary with the builder subcommand; the unit only starts when it exists.
-sudo ln -sf skiff-agent /opt/skiff/current/agent/skiff-builder
-sudo tee /etc/systemd/system/skiff-builder.service >/dev/null <<'EOF'
+sudo ln -sf yoal-agent /opt/yoal/current/agent/yoal-builder
+sudo tee /etc/systemd/system/yoal-builder.service >/dev/null <<'EOF'
 [Unit]
-Description=Skiff git Builder (idle unless this node has the Builder role)
-After=network-online.target skiff-agent.service
+Description=Yoal git Builder (idle unless this node has the Builder role)
+After=network-online.target yoal-agent.service
 Wants=network-online.target
-ConditionPathExists=/etc/skiff/agent.env
-ConditionPathExists=/opt/skiff/current/agent/skiff-builder
-PartOf=skiff-agent.service
+ConditionPathExists=/etc/yoal/agent.env
+ConditionPathExists=/opt/yoal/current/agent/yoal-builder
+PartOf=yoal-agent.service
 StartLimitIntervalSec=60
 StartLimitBurst=5
 
 [Service]
 Type=simple
 User=root
-EnvironmentFile=/etc/skiff/agent.env
-Environment=SKIFF_BUILD_DIR=/var/lib/skiff-builder
-Environment=SKIFF_BUILDER_USER=skiff-build
-Environment=HOME=/var/lib/skiff-builder
-StateDirectory=skiff-builder
+EnvironmentFile=/etc/yoal/agent.env
+Environment=YOAL_BUILD_DIR=/var/lib/yoal-builder
+Environment=YOAL_BUILDER_USER=yoal-build
+Environment=HOME=/var/lib/yoal-builder
+StateDirectory=yoal-builder
 StateDirectoryMode=0711
-WorkingDirectory=/var/lib/skiff-builder
-ExecStart=/opt/skiff/current/agent/skiff-builder builder
+WorkingDirectory=/var/lib/yoal-builder
+ExecStart=/opt/yoal/current/agent/yoal-builder builder
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=60
@@ -251,30 +251,30 @@ WantedBy=multi-user.target
 EOF`;
 
 	// Same units as scripts/systemd/storage.ts: lets the dashboard move this node's data (D48).
-	const storageUnits = `sudo ln -sf skiff-agent /opt/skiff/current/agent/skiff-storage
-sudo tee /etc/systemd/system/skiff-storage.path >/dev/null <<'EOF'
+	const storageUnits = `sudo ln -sf yoal-agent /opt/yoal/current/agent/yoal-storage
+sudo tee /etc/systemd/system/yoal-storage.path >/dev/null <<'EOF'
 [Unit]
-Description=Move Skiff node storage when the agent requests it
-ConditionPathExists=/etc/skiff/agent.env
-ConditionPathExists=/opt/skiff/current/agent/skiff-storage
+Description=Move Yoal node storage when the agent requests it
+ConditionPathExists=/etc/yoal/agent.env
+ConditionPathExists=/opt/yoal/current/agent/yoal-storage
 
 [Path]
-PathExists=/run/skiff/storage.request
-Unit=skiff-storage.service
+PathExists=/run/yoal/storage.request
+Unit=yoal-storage.service
 
 [Install]
 WantedBy=paths.target
 EOF
-sudo tee /etc/systemd/system/skiff-storage.service >/dev/null <<'EOF'
+sudo tee /etc/systemd/system/yoal-storage.service >/dev/null <<'EOF'
 [Unit]
-Description=Skiff node storage move (requested from the dashboard)
-ConditionPathExists=/etc/skiff/agent.env
-ConditionPathExists=/opt/skiff/current/agent/skiff-storage
+Description=Yoal node storage move (requested from the dashboard)
+ConditionPathExists=/etc/yoal/agent.env
+ConditionPathExists=/opt/yoal/current/agent/yoal-storage
 
 [Service]
 Type=oneshot
-ExecStartPre=/bin/rm -f /run/skiff/storage.request
-ExecStart=/opt/skiff/current/agent/skiff-storage storage apply
+ExecStartPre=/bin/rm -f /run/yoal/storage.request
+ExecStart=/opt/yoal/current/agent/yoal-storage storage apply
 SuccessExitStatus=1
 TimeoutStartSec=6h
 Nice=10
@@ -282,8 +282,8 @@ IOSchedulingClass=idle
 EOF`;
 
 	const startAgent = `sudo systemctl daemon-reload
-sudo systemctl enable --now skiff-agent skiff-builder skiff-storage.path
-journalctl -u skiff-agent -u skiff-builder -f`;
+sudo systemctl enable --now yoal-agent yoal-builder yoal-storage.path
+journalctl -u yoal-agent -u yoal-builder -f`;
 
 	const workerFirewall =
 		$derived(`# Optional nftables rule on the worker: only the edge may reach Caddy.
@@ -305,7 +305,7 @@ curl -sS -o /dev/null -w '%{http_code}\\n' -H 'Host: ${probeHost}' http://${tunn
 </script>
 
 <svelte:head>
-	<title>Worker over WireGuard · Nodes · Skiff</title>
+	<title>Worker over WireGuard · Nodes · Yoal</title>
 </svelte:head>
 
 {#snippet stepTitle(index: number)}
@@ -377,7 +377,7 @@ curl -sS -o /dev/null -w '%{http_code}\\n' -H 'Host: ${probeHost}' http://${tunn
 					</li>
 					<li>
 						Static sites only need the agent and Caddy. App workloads (tier 2/3) on the worker also
-						need the privileged <code class="font-mono">skiff-helper</code> service.
+						need the privileged <code class="font-mono">yoal-helper</code> service.
 					</li>
 				</ul>
 			</Card.Content>
@@ -546,21 +546,21 @@ curl -sS -o /dev/null -w '%{http_code}\\n' -H 'Host: ${probeHost}' http://${tunn
 				</div>
 				<div class="space-y-2">
 					<h3 class="text-sm font-medium">Agent environment</h3>
-					<CodeBlock label="worker · /etc/skiff/skiff.env" code={agentEnv} />
+					<CodeBlock label="worker · /etc/yoal/yoal.env" code={agentEnv} />
 				</div>
 				<div class="space-y-2">
 					<h3 class="text-sm font-medium">systemd unit</h3>
-					<CodeBlock label="worker · /etc/systemd/system/skiff-agent.service" code={agentUnit} />
+					<CodeBlock label="worker · /etc/systemd/system/yoal-agent.service" code={agentUnit} />
 				</div>
 				<div class="space-y-2">
 					<h3 class="text-sm font-medium">Builder unit</h3>
 					<p class="text-sm text-muted-foreground">
 						Lets this node run git builds once you give it the Builder role on the Nodes page. Until
-						then it idles. Builds run as <code class="font-mono">skiff-build</code> in a sandboxed
+						then it idles. Builds run as <code class="font-mono">yoal-build</code> in a sandboxed
 						transient unit (2 GB, 200% CPU, 10 minutes), so install the toolchains they need, such as
 						Node or Bun, on the worker.
 					</p>
-					<CodeBlock label="worker · /etc/systemd/system/skiff-builder.service" code={builderUnit} />
+					<CodeBlock label="worker · /etc/systemd/system/yoal-builder.service" code={builderUnit} />
 				</div>
 				<div class="space-y-2">
 					<h3 class="text-sm font-medium">Storage units</h3>
@@ -568,7 +568,7 @@ curl -sS -o /dev/null -w '%{http_code}\\n' -H 'Host: ${probeHost}' http://${tunn
 						Let you move this node's release cache and build directory to another disk later from
 						<span class="font-medium">Edit node</span>. The move itself runs as root on the worker.
 					</p>
-					<CodeBlock label="worker · skiff-storage.path + skiff-storage.service" code={storageUnits} />
+					<CodeBlock label="worker · yoal-storage.path + yoal-storage.service" code={storageUnits} />
 				</div>
 			</Card.Content>
 		</Card.Root>
@@ -679,7 +679,7 @@ curl -sS -o /dev/null -w '%{http_code}\\n' -H 'Host: ${probeHost}' http://${tunn
 				<div class="space-y-2">
 					<h3 class="text-sm font-medium">If something is wrong</h3>
 					<dl class="divide-y rounded-md border text-sm">
-						{#each [{ symptom: 'Join fails with “Could not reach”', fix: `Check the tunnel (sudo wg show), the /etc/hosts pin, and that the edge allows TCP 443 on wg0 from ${workerIp}.` }, { symptom: 'Node shows offline', fix: 'A handshake older than about 2 minutes means the tunnel dropped: check Endpoint and PersistentKeepalive. Otherwise read journalctl -u skiff-agent.' }, { symptom: 'Sites on the worker return 503', fix: `The edge can't dial ${tunnelAddress}. Run the probe above from the edge, and check Caddy on the worker with ss -ltn | grep ${caddyPort}. A wrong address on the node card needs a fresh join.` }, { symptom: 'Agent logs “Caddy admin … failed”', fix: 'ls -l /var/lib/caddy/admin.sock must show group rw, and id skiff must list the caddy group.' }, { symptom: 'Release downloads fail', fix: 'With the R2 object store the worker downloads artifacts from Cloudflare directly, so it needs outbound HTTPS to the internet.' }] as row (row.symptom)}
+						{#each [{ symptom: 'Join fails with “Could not reach”', fix: `Check the tunnel (sudo wg show), the /etc/hosts pin, and that the edge allows TCP 443 on wg0 from ${workerIp}.` }, { symptom: 'Node shows offline', fix: 'A handshake older than about 2 minutes means the tunnel dropped: check Endpoint and PersistentKeepalive. Otherwise read journalctl -u yoal-agent.' }, { symptom: 'Sites on the worker return 503', fix: `The edge can't dial ${tunnelAddress}. Run the probe above from the edge, and check Caddy on the worker with ss -ltn | grep ${caddyPort}. A wrong address on the node card needs a fresh join.` }, { symptom: 'Agent logs “Caddy admin … failed”', fix: 'ls -l /var/lib/caddy/admin.sock must show group rw, and id yoal must list the caddy group.' }, { symptom: 'Release downloads fail', fix: 'With the R2 object store the worker downloads artifacts from Cloudflare directly, so it needs outbound HTTPS to the internet.' }] as row (row.symptom)}
 							<div class="grid gap-1 px-3 py-2 sm:grid-cols-[14rem_1fr] sm:gap-4">
 								<dt class="font-medium">{row.symptom}</dt>
 								<dd class="text-muted-foreground">{row.fix}</dd>

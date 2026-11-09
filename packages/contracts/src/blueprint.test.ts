@@ -13,7 +13,7 @@ import {
 
 /** A v1 stack: one app with a database, a bucket and a queue, plus a static marketing site. */
 const document = {
-	apiVersion: 'skiff/v1',
+	apiVersion: 'yoal/v1',
 	name: 'shop',
 	projects: {
 		'shop-web': {
@@ -72,8 +72,8 @@ describe('blueprint v1 document', () => {
 	});
 
 	test('the smallest document is a name and an apiVersion', () => {
-		expect(blueprintSchema.parse({ apiVersion: 'skiff/v1', name: 'empty' })).toEqual({
-			apiVersion: 'skiff/v1',
+		expect(blueprintSchema.parse({ apiVersion: 'yoal/v1', name: 'empty' })).toEqual({
+			apiVersion: 'yoal/v1',
 			name: 'empty',
 			projects: {},
 			databases: {},
@@ -81,7 +81,7 @@ describe('blueprint v1 document', () => {
 			brokers: {},
 			attachments: [],
 		});
-		expect(fails({ apiVersion: 'skiff/v2', name: 'empty' })).toBe(true);
+		expect(fails({ apiVersion: 'yoal/v2', name: 'empty' })).toBe(true);
 		expect(fails({ name: 'empty' })).toBe(true);
 	});
 
@@ -103,15 +103,15 @@ describe('blueprint v1 document', () => {
 	test('names are checked like the resources they create', () => {
 		expect(fails({ ...document, name: 'plan' })).toBe(true);
 		expect(fails({ ...document, name: 'Shop' })).toBe(true);
-		expect(fails({ apiVersion: 'skiff/v1', name: 'x', projects: {} })).toBe(true);
-		expect(fails({ apiVersion: 'skiff/v1', name: 'ok-name', projects: { 'a--b': {} } })).toBe(true);
-		expect(messages({ apiVersion: 'skiff/v1', name: 'pgs', databases: { 'pg-main': {} } })).toContain('cannot start with "pg-"');
-		expect(fails({ apiVersion: 'skiff/v1', name: 'envs', projects: { site: { environments: { production: {} } } } })).toBe(true);
-		expect(fails({ apiVersion: 'skiff/v1', name: 'envs', projects: { site: { environments: { s3: {} } } } })).toBe(true);
+		expect(fails({ apiVersion: 'yoal/v1', name: 'x', projects: {} })).toBe(true);
+		expect(fails({ apiVersion: 'yoal/v1', name: 'ok-name', projects: { 'a--b': {} } })).toBe(true);
+		expect(messages({ apiVersion: 'yoal/v1', name: 'pgs', databases: { 'pg-main': {} } })).toContain('cannot start with "pg-"');
+		expect(fails({ apiVersion: 'yoal/v1', name: 'envs', projects: { site: { environments: { production: {} } } } })).toBe(true);
+		expect(fails({ apiVersion: 'yoal/v1', name: 'envs', projects: { site: { environments: { s3: {} } } } })).toBe(true);
 	});
 
 	test('workload settings only fit process and container projects', () => {
-		const project = (value: Record<string, unknown>) => ({ apiVersion: 'skiff/v1', name: 'apps', projects: { app: value } });
+		const project = (value: Record<string, unknown>) => ({ apiVersion: 'yoal/v1', name: 'apps', projects: { app: value } });
 		expect(messages(project({ runtime: 'static', port: 3000 }))).toContain('Static projects have no workload settings');
 		expect(messages(project({ runtime: 'function', memoryMb: 128 }))).toContain('function bundle');
 		expect(messages(project({ runtime: 'process', image: 'nginx:1' }))).toContain('Only container projects take an image');
@@ -124,7 +124,7 @@ describe('blueprint v1 document', () => {
 
 	test('secret references are names, never values', () => {
 		const withSecrets = (secrets: unknown) => ({
-			apiVersion: 'skiff/v1',
+			apiVersion: 'yoal/v1',
 			name: 'apps',
 			projects: { app: { runtime: 'process', secrets } },
 		});
@@ -135,15 +135,15 @@ describe('blueprint v1 document', () => {
 	});
 
 	test('databases and brokers only accept their registered engine, version and features', () => {
-		const db = (value: Record<string, unknown>) => ({ apiVersion: 'skiff/v1', name: 'data', databases: { main: value } });
+		const db = (value: Record<string, unknown>) => ({ apiVersion: 'yoal/v1', name: 'data', databases: { main: value } });
 		expect(fails(db({ engine: 'postgres', version: '99' }))).toBe(true);
 		expect(fails(db({ engine: 'oracle' }))).toBe(true);
 		expect(fails(db({ engine: 'valkey', version: '18' }))).toBe(true);
 		expect(messages(db({ engine: 'mysql', extensions: ['pg_trgm'] }))).toContain('has no extensions');
 		expect(messages(db({ engine: 'valkey', pooler: true }))).toContain('no connection pooler');
 		expect(messages(db({ engine: 'postgres', memoryMb: 128 }))).toBe('');
-		expect(fails({ apiVersion: 'skiff/v1', name: 'data', brokers: { jobs: { version: '1.0' } } })).toBe(true);
-		expect(fails({ apiVersion: 'skiff/v1', name: 'data', brokers: { jobs: { engine: 'kafka' } } })).toBe(true);
+		expect(fails({ apiVersion: 'yoal/v1', name: 'data', brokers: { jobs: { version: '1.0' } } })).toBe(true);
+		expect(fails({ apiVersion: 'yoal/v1', name: 'data', brokers: { jobs: { engine: 'kafka' } } })).toBe(true);
 	});
 
 	test('cross references are checked before any live state is read', () => {
@@ -212,11 +212,11 @@ describe('blueprint plan and apply wire shapes', () => {
 	const hash = 'a'.repeat(64);
 
 	test('plan and apply requests', () => {
-		expect(blueprintPlanRequestSchema.parse({ document: 'apiVersion: skiff/v1\nname: shop\n' })).toEqual({
-			document: 'apiVersion: skiff/v1\nname: shop\n',
+		expect(blueprintPlanRequestSchema.parse({ document: 'apiVersion: yoal/v1\nname: shop\n' })).toEqual({
+			document: 'apiVersion: yoal/v1\nname: shop\n',
 			prune: false,
 		});
-		expect(blueprintPlanRequestSchema.parse({ document: { apiVersion: 'skiff/v1' }, prune: true }).prune).toBe(true);
+		expect(blueprintPlanRequestSchema.parse({ document: { apiVersion: 'yoal/v1' }, prune: true }).prune).toBe(true);
 		expect(blueprintPlanRequestSchema.safeParse({ document: '' }).success).toBe(false);
 		expect(blueprintPlanRequestSchema.safeParse({ document: 'x', extra: 1 }).success).toBe(false);
 		expect(blueprintApplyRequestSchema.parse({ planHash: hash })).toEqual({ planHash: hash });

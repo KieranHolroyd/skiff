@@ -1,5 +1,5 @@
 import type { RequestHandler } from './$types';
-import { emailSuppressionCreateSchema } from '@skiff/contracts';
+import { emailSuppressionCreateSchema } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { json, readJson, route } from '#lib/server/api.js';
 import { requirePrincipal } from '#lib/server/principal.js';

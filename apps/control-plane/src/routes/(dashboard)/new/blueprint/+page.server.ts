@@ -1,5 +1,5 @@
-import { hasPermission, type BlueprintStackView } from '@skiff/contracts';
-import { featureEnabled } from '@skiff/core';
+import { hasPermission, type BlueprintStackView } from '@yoal/contracts';
+import { featureEnabled } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import type { PageServerLoad } from './$types';
 

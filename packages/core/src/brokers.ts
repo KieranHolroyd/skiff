@@ -1,5 +1,5 @@
 import { and, eq, inArray, isNotNull, isNull, lte } from 'drizzle-orm';
-import { brokerAttachments, brokerLogEvents, brokers, nodes, projects, workloads } from '@skiff/db';
+import { brokerAttachments, brokerLogEvents, brokers, nodes, projects, workloads } from '@yoal/db';
 import {
 	BROKER_ID_PREFIX,
 	BROKER_PORT_MAX,
@@ -36,7 +36,7 @@ import {
 	type WorkloadDesired,
 	type WorkloadRuntime,
 	type WorkloadStatus,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
 import { requireCredentialReveal } from './credential-reveal.ts';
@@ -705,8 +705,8 @@ export class BrokerService {
 			workloadId: row.id,
 			activationVersion: brokerActivationVersion(row),
 			env: {
-				SKIFF_BROKER_USER: brokerIdentifier(row.name),
-				SKIFF_BROKER_PASSWORD: this.ctx.secrets.open(row.orgId, row.ownerSecret),
+				YOAL_BROKER_USER: brokerIdentifier(row.name),
+				YOAL_BROKER_PASSWORD: this.ctx.secrets.open(row.orgId, row.ownerSecret),
 			},
 			files: {},
 		};
@@ -841,7 +841,7 @@ export class BrokerService {
 
 	private requireFeature(): void {
 		if (!featureEnabled(this.ctx.config, 'BROKERS'))
-			throw new ValidationError('Queue brokers are not enabled on this platform (SKIFF_FEATURE_BROKERS).');
+			throw new ValidationError('Queue brokers are not enabled on this platform (YOAL_FEATURE_BROKERS).');
 	}
 
 	private assertConsumer(project: ProjectRow): void {

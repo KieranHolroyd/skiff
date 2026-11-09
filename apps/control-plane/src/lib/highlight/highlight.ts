@@ -86,7 +86,7 @@ function lookup(word: string): HighlightLang | null {
 
 /**
  * The grammar for a language name, fence tag or file label such as `src/index.ts`,
- * `worker · /etc/systemd/system/skiff-agent.service` or `skiff-function.json → bindings`.
+ * `worker · /etc/systemd/system/yoal-agent.service` or `yoal-function.json → bindings`.
  * Returns null when nothing matches, which renders as plain text.
  */
 export function resolveLang(hint: string | null | undefined): HighlightLang | null {

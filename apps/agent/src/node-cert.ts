@@ -66,7 +66,7 @@ export class NodeCertificateManager {
 				'-subj',
 				`/CN=${this.nodeId}`,
 				'-addext',
-				`subjectAltName=URI:skiff://node/${this.nodeId}`,
+				`subjectAltName=URI:yoal://node/${this.nodeId}`,
 				'-keyout',
 				keyPath,
 				'-out',

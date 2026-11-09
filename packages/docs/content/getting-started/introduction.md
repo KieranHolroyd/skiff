@@ -1,22 +1,22 @@
 ---
 title: Introduction
-description: What Skiff is, what you can run on it, how its pieces fit together, and what is stable today.
+description: What Yoal is, what you can run on it, how its pieces fit together, and what is stable today.
 ---
 
-Skiff is a self-hosted deploy platform for one server and, optionally, a few more nodes. You
+Yoal is a self-hosted deploy platform for one server and, optionally, a few more nodes. You
 point it at a folder of files, a Workers-style function, a process or a container, and it puts the
 result on your own domain with a preview URL for every deployment. You can promote a deployment to
-production, or roll back to the previous one, in a single step. Skiff also runs the supporting
+production, or roll back to the previous one, in a single step. Yoal also runs the supporting
 services an app needs: Postgres and other databases, S3-compatible object storage, message
 brokers and email.
 
-You drive Skiff from a dashboard, from the `skif` command-line tool, from the REST API, or from an
+You drive Yoal from a dashboard, from the `yoal` command-line tool, from the REST API, or from an
 AI agent over MCP. All of these call the same service layer, so each one can do exactly the same
 things.
 
 ## Who it is for
 
-Skiff is for a developer or a small team who wants their own cloud on a VPS, with no per-seat
+Yoal is for a developer or a small team who wants their own cloud on a VPS, with no per-seat
 pricing and no lock-in. There is no Kubernetes and no external database to run. The control plane
 is Bun, the state is SQLite, and Caddy handles TLS. If the control plane goes down, sites that are
 already deployed keep serving.
@@ -45,7 +45,7 @@ means.
 
 ## Five surfaces, one service layer
 
-Skiff has five ways in. They all go through the same code in the control plane, with the same
+Yoal has five ways in. They all go through the same code in the control plane, with the same
 permission checks and the same audit log, so none of them can do something another cannot.
 
 The diagram shows the five surfaces and the service layer they share. The CLI talks to the REST API,
@@ -57,17 +57,17 @@ flowchart LR
   AS["Assistant"] --> CORE
   REST["REST API (/api/v1)"] --> CORE
   MCP["MCP server (/mcp)"] --> CORE
-  CLI["skif CLI"] --> REST
+  CLI["yoal CLI"] --> REST
   CORE --> AU["RBAC checks and audit log"]
 ```
 
 | Surface | Use it for |
 |---|---|
 | Dashboard | Browsing the fleet, projects, deployments, traffic, logs and the audit log, and making changes by hand |
-| Assistant | An optional chat panel inside the dashboard. An owner turns it on in **Settings → Assistant** by pointing Skiff at an OpenAI-compatible model endpoint |
+| Assistant | An optional chat panel inside the dashboard. An owner turns it on in **Settings → Assistant** by pointing Yoal at an OpenAI-compatible model endpoint |
 | REST API | Scripts and integrations, under `/api/v1` on the control plane. See [REST API](/clients/rest-api) |
 | MCP server | AI agents, at `/mcp` on the control plane, with OAuth 2.1 sign-in and a consent screen. See [MCP](/clients/mcp) |
-| `skif` CLI | Deploys, status, rollbacks and logs from a terminal or CI. `skiff` is an alias. See [CLI](/clients/cli) |
+| `yoal` CLI | Deploys, status, rollbacks and logs from a terminal or CI. `yoal` is an alias. See [CLI](/clients/cli) |
 
 A token has the permissions of its scopes and of your current role, whichever is smaller. If you
 demote someone, every token they issued narrows straight away. Destructive actions, such as deleting
@@ -75,7 +75,7 @@ a project, need a human to confirm them.
 
 ## How it fits together
 
-A Skiff installation has one control plane and one or more nodes. The control plane holds the
+A Yoal installation has one control plane and one or more nodes. The control plane holds the
 desired state: which releases should exist, which routes Caddy should serve and which workloads
 should run. Each node runs a small agent that pulls that state, makes the node match it, and reports
 back with heartbeats. Caddy terminates TLS on the edge node, using a wildcard certificate.
@@ -96,10 +96,10 @@ flowchart LR
   AG -->|"drive Caddy over its admin socket"| C
 ```
 
-Skiff uses two domains. The **platform domain** (for example `control.example.com`) serves the
+Yoal uses two domains. The **platform domain** (for example `control.example.com`) serves the
 dashboard, the API, MCP and sign-in. The **content domain** (for example `example.com`) serves your
 deployed sites. Keeping them on separate registrable domains means deployed code never shares
-cookies with the dashboard. Skiff also supports running both on one domain, but then it shows a
+cookies with the dashboard. Yoal also supports running both on one domain, but then it shows a
 warning and applies extra hardening. The [installation](/self-hosting/installation) page covers how
 to set up both domains.
 
@@ -109,7 +109,7 @@ install it only if you want traffic, database and storage metrics and dashboards
 
 ## What is stable and what is early
 
-Skiff is newly open source and is in early development. Expect rough edges, and expect breaking
+Yoal is newly open source and is in early development. Expect rough edges, and expect breaking
 changes before 1.0. The table shows how far each area has got.
 
 | Area | Status |
@@ -132,6 +132,6 @@ changes before 1.0. The table shows how far each area has got.
 - [Static sites](/deploying/static-sites): deploy a folder, then promote or roll back.
 - [Functions](/compute/functions): deploy a Workers-style function.
 - [Databases](/data/databases): create a database and attach it to a project.
-- [CLI](/clients/cli): every `skif` command and how to use it in CI.
-- [MCP](/clients/mcp): connect an AI agent to your Skiff server.
-- [Installation](/self-hosting/installation): install Skiff on a Debian or Ubuntu server.
+- [CLI](/clients/cli): every `yoal` command and how to use it in CI.
+- [MCP](/clients/mcp): connect an AI agent to your Yoal server.
+- [Installation](/self-hosting/installation): install Yoal on a Debian or Ubuntu server.

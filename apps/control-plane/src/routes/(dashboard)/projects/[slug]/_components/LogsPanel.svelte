@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { createVirtualizer } from '@tanstack/svelte-virtual';
-	import type { DeploymentView, ProjectView } from '@skiff/core';
-	import type { BuildView, LogEventView, LogLevel } from '@skiff/contracts';
+	import type { DeploymentView, ProjectView } from '@yoal/core';
+	import type { BuildView, LogEventView, LogLevel } from '@yoal/contracts';
 	import ActivityIcon from '@lucide/svelte/icons/activity';
 	import ArrowDownToLineIcon from '@lucide/svelte/icons/arrow-down-to-line';
 	import CopyIcon from '@lucide/svelte/icons/copy';
@@ -27,7 +27,7 @@
 	import { Spinner } from '#lib/components/ui/spinner/index.js';
 	import { Toggle } from '#lib/components/ui/toggle/index.js';
 	import * as ToggleGroup from '#lib/components/ui/toggle-group/index.js';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { displayUrl, formatDuration, shortId, shortSha } from '../../../_lib/format.js';
 
 	type Source = 'runtime' | 'build';

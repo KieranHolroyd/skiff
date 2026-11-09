@@ -8,7 +8,7 @@
  * `{ error: { code, message } }` with a 4xx/5xx status, or an `error` event once streaming began.
  */
 import * as z from 'zod';
-import { STUDIO_PROTOCOL_VERSION } from '@skiff/contracts';
+import { STUDIO_PROTOCOL_VERSION } from '@yoal/contracts';
 
 export const NDJSON_CONTENT_TYPE = 'application/x-ndjson';
 export { STUDIO_PROTOCOL_VERSION };

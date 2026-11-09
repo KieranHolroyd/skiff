@@ -9,7 +9,7 @@ import {
 	type ReleaseSpec,
 	type WorkloadActivation,
 	type WorkloadDesired,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { HelperApi, HelperLogResult, HelperWorkloadStatus } from './helper-client.ts';
 import {
 	probeDatabasePort,
@@ -45,7 +45,7 @@ function workload(id: string, overrides: Record<string, unknown> = {}): Workload
 				runtime: 'process',
 				status: 'running',
 				release: SHA,
-				upstream: `unix//run/skiff-workloads/prj_${id}.sock`,
+				upstream: `unix//run/yoal-workloads/prj_${id}.sock`,
 				memoryMb: 256,
 				cpus: 1,
 				port: 3000,
@@ -381,7 +381,7 @@ describe('WorkloadRuntime.converge', () => {
 	});
 
 	test('persists only the diff cache, so removals survive an agent restart', async () => {
-		const dir = await fs.mkdtemp(join(tmpdir(), 'skiff-agent-runtime-'));
+		const dir = await fs.mkdtemp(join(tmpdir(), 'yoal-agent-runtime-'));
 		directories.push(dir);
 		const statePath = join(dir, 'workloads-state.json');
 
@@ -436,7 +436,7 @@ function functionSpec(overrides: Record<string, unknown> = {}): Record<string, u
 function functionWorkload(overrides: Record<string, unknown> = {}): WorkloadDesired {
 	return workload('fn', {
 		runtime: 'function',
-		upstream: 'unix//run/skiff-workloads/fn.sock',
+		upstream: 'unix//run/yoal-workloads/fn.sock',
 		function: functionSpec(),
 		...overrides,
 	});
@@ -552,12 +552,12 @@ describe('functions (phase 1)', () => {
 		}) as unknown as typeof fetch;
 
 		expect(
-			await probeWorkloadHealth(functionWorkload(), '/run/skiff-workloads', new AbortController().signal, fakeFetch),
+			await probeWorkloadHealth(functionWorkload(), '/run/yoal-workloads', new AbortController().signal, fakeFetch),
 		).toBe(true);
 		expect(calls).toHaveLength(1);
 		expect(calls[0]!.url).toBe('http://localhost/health');
 		// Phase 4: the socket is named after the desired-state id (the workload id), not projectId.
-		expect((calls[0]!.init as { unix?: string }).unix).toBe('/run/skiff-workloads/fn.sock');
+		expect((calls[0]!.init as { unix?: string }).unix).toBe('/run/yoal-workloads/fn.sock');
 	});
 
 	test('a function replica is probed over its own socket', async () => {
@@ -568,12 +568,12 @@ describe('functions (phase 1)', () => {
 		}) as unknown as typeof fetch;
 
 		const replica = functionWorkload({ id: 'fn-r1', replica: { index: 1 } });
-		expect(await probeWorkloadHealth(replica, '/run/skiff-workloads', new AbortController().signal, fakeFetch)).toBe(
+		expect(await probeWorkloadHealth(replica, '/run/yoal-workloads', new AbortController().signal, fakeFetch)).toBe(
 			true,
 		);
 		expect(calls).toHaveLength(1);
 		expect(calls[0]!.url).toBe('http://localhost/health');
-		expect((calls[0]!.init as { unix?: string }).unix).toBe('/run/skiff-workloads/fn-r1.sock');
+		expect((calls[0]!.init as { unix?: string }).unix).toBe('/run/yoal-workloads/fn-r1.sock');
 	});
 });
 
@@ -649,7 +649,7 @@ function databaseActivation(version = ACTIVATION): WorkloadActivation {
 			databaseName: 'orders',
 			ownerUser: 'orders',
 			ownerPassword: OWNER_PASSWORD,
-			monitorUser: 'skiff_monitor',
+			monitorUser: 'yoal_monitor',
 			monitorPassword: MONITOR_PASSWORD,
 			port: 15432,
 		},
@@ -679,7 +679,7 @@ describe('managed databases', () => {
 			port: 15432,
 			status: 'running',
 			activationVersion: ACTIVATION,
-			monitor: { monitorUser: 'skiff_monitor', monitorPassword: MONITOR_PASSWORD, ownerPassword: OWNER_PASSWORD },
+			monitor: { monitorUser: 'yoal_monitor', monitorPassword: MONITOR_PASSWORD, ownerPassword: OWNER_PASSWORD },
 		});
 
 		f.runtime.forgetOwnerPassword(DB_ID, 'c'.repeat(64));
@@ -712,7 +712,7 @@ describe('managed databases', () => {
 	});
 
 	test('credentials never reach the diff cache, and a restart re-fetches them without re-applying', async () => {
-		const dir = await fs.mkdtemp(join(tmpdir(), 'skiff-agent-runtime-db-'));
+		const dir = await fs.mkdtemp(join(tmpdir(), 'yoal-agent-runtime-db-'));
 		directories.push(dir);
 		const statePath = join(dir, 'workloads-state.json');
 		const helper = new FakeHelper();
@@ -1092,7 +1092,7 @@ describe('compose workloads (level 4)', () => {
 		const urls: string[] = [];
 		const healthy = await probeWorkloadHealth(
 			composeWorkload(),
-			'/run/skiff-workloads',
+			'/run/yoal-workloads',
 			AbortSignal.timeout(1000),
 			(async (input: string | URL | Request) => {
 				urls.push(String(input));

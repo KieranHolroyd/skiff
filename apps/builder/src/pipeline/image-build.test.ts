@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { PipelineJobClaim } from '@skiff/contracts';
+import type { PipelineJobClaim } from '@yoal/contracts';
 import { builderEnv, runAction } from './actions.ts';
 import { attestationInputs, buildctlArgs, buildkitCacheScope, checkBuildArgs, parseSecretInputs, platformInput, sanitizeCacheScope } from './image-build.ts';
 import { testHost } from './image-test-fixtures.ts';
@@ -48,11 +48,11 @@ describe('input parsing', () => {
 		const claim = { trust: 'trusted' as const, checkout: { ref: 'refs/heads/main', sha: 'a' }, buildkitCacheScope: null };
 		expect(buildkitCacheScope(claim, {})).toBe('trusted');
 		expect(buildkitCacheScope({ ...claim, buildkitCacheScope: 'repo_1/trusted/main' }, {})).toBe('repo_1-trusted-main');
-		expect(buildkitCacheScope(claim, { SKIFF_CACHE_SCOPE: 'custom' })).toBe('custom');
+		expect(buildkitCacheScope(claim, { YOAL_CACHE_SCOPE: 'custom' })).toBe('custom');
 		const untrusted = { ...claim, trust: 'untrusted' as const, checkout: { ref: 'refs/pull/7/merge', sha: 'a' } };
 		expect(buildkitCacheScope(untrusted, {})).toBe('untrusted-refs-pull-7-merge');
 		// An untrusted run cannot name its way into the trusted scope.
-		expect(buildkitCacheScope(untrusted, { SKIFF_CACHE_SCOPE: 'trusted' })).toBe('untrusted-trusted');
+		expect(buildkitCacheScope(untrusted, { YOAL_CACHE_SCOPE: 'trusted' })).toBe('untrusted-trusted');
 	});
 
 	test('buildctl argv', () => {
@@ -132,7 +132,7 @@ case "$1" in image) echo '["ghcr.io/acme/api@${DIGEST}"]' ;; *) echo "building..
 }
 
 function setup(claimPatch: Partial<PipelineJobClaim> = {}, tool: 'buildctl' | 'docker' = 'buildctl') {
-	const dir = mkdtempSync(join(tmpdir(), 'skiff-build-image-'));
+	const dir = mkdtempSync(join(tmpdir(), 'yoal-build-image-'));
 	dirs.push(dir);
 	const workspace = join(dir, 'workspace');
 	const bin = join(dir, 'bin');
@@ -152,11 +152,11 @@ function setup(claimPatch: Partial<PipelineJobClaim> = {}, tool: 'buildctl' | 'd
 	return { host, calls, args, temp: join(dir, 'tmp') };
 }
 
-describe('skiff/build-image with BuildKit', () => {
+describe('yoal/build-image with BuildKit', () => {
 	test('pushes to the platform registry as the job, with cache, attestations and secret mounts', async () => {
 		const { host, calls, args, temp } = setup();
 		const result = await runAction(
-			'skiff/build-image',
+			'yoal/build-image',
 			{ tags: 'registry/api:abc', secrets: 'npmrc=s3cr3t-npm', 'build-args': 'MODE=prod', platforms: 'native', target: 'runtime' },
 			host,
 		);
@@ -186,11 +186,11 @@ describe('skiff/build-image with BuildKit', () => {
 	test('untrusted runs never export cache and cannot push to the platform registry', async () => {
 		const pr = { trust: 'untrusted' as const, checkout: { ref: 'refs/pull/7/merge', sha: 'a'.repeat(40) }, registry: { host: 'registry.test', namespace: 'registry.test/acme', push: false } };
 		const refused = setup(pr);
-		expect((await runAction('skiff/build-image', { tags: 'registry/api:pr' }, refused.host)).outcome).toBe('failure');
+		expect((await runAction('yoal/build-image', { tags: 'registry/api:pr' }, refused.host)).outcome).toBe('failure');
 		expect(refused.host.lines.join('\n')).toContain('cannot push');
 
 		const { host, args } = setup(pr);
-		const result = await runAction('skiff/build-image', { tags: 'registry/api:pr', push: 'false' }, host);
+		const result = await runAction('yoal/build-image', { tags: 'registry/api:pr', push: 'false' }, host);
 		expect(result.outcome).toBe('success');
 		expect(result.outputs.digest).toBe('');
 		const argv = args();
@@ -202,7 +202,7 @@ describe('skiff/build-image with BuildKit', () => {
 
 	test('refuses a build arg that carries a secret value', async () => {
 		const { host } = setup();
-		const result = await runAction('skiff/build-image', { tags: 'registry/api:abc', secrets: 'token=hunter2-long', 'build-args': 'TOKEN=hunter2-long' }, host);
+		const result = await runAction('yoal/build-image', { tags: 'registry/api:abc', secrets: 'token=hunter2-long', 'build-args': 'TOKEN=hunter2-long' }, host);
 		expect(result.outcome).toBe('failure');
 		expect(host.lines.join('\n')).toContain('must not contain secrets');
 		expect(host.lines.join('\n')).not.toContain('hunter2-long');
@@ -210,16 +210,16 @@ describe('skiff/build-image with BuildKit', () => {
 
 	test('BUILDKIT_HOST comes from the sidecar when the step env lacks it', () => {
 		const env = builderEnv({ env: { PATH: '/usr/bin' }, claim: { ...jobClaim({ steps: [] }), buildkit: true } }, {});
-		expect(env.BUILDKIT_HOST).toBe('unix:///skiff/buildkit/buildkitd.sock');
-		expect(env.PATH).toBe('/usr/bin:/skiff/bin');
+		expect(env.BUILDKIT_HOST).toBe('unix:///yoal/buildkit/buildkitd.sock');
+		expect(env.PATH).toBe('/usr/bin:/yoal/bin');
 		expect(builderEnv({ env: { PATH: '/usr/bin' }, claim: jobClaim({ steps: [] }) }, {}).BUILDKIT_HOST).toBeUndefined();
 	});
 });
 
-describe('skiff/build-image with docker (fallback)', () => {
+describe('yoal/build-image with docker (fallback)', () => {
 	test('passes secrets as mounts and leaves attestations to the driver unless asked', async () => {
 		const { host, args, calls } = setup({ buildkit: false }, 'docker');
-		const result = await runAction('skiff/build-image', { tags: 'ghcr.io/acme/api:1', builder: 'docker', secrets: 'npmrc=abc123secret', username: 'me', password: 'ghp_x' }, host);
+		const result = await runAction('yoal/build-image', { tags: 'ghcr.io/acme/api:1', builder: 'docker', secrets: 'npmrc=abc123secret', username: 'me', password: 'ghp_x' }, host);
 		expect(result.outcome).toBe('success');
 		expect(result.outputs.image).toBe(`ghcr.io/acme/api@${DIGEST}`);
 		const argv = args();

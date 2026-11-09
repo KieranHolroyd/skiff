@@ -9,7 +9,7 @@ import { join } from 'node:path';
  * were installed before, or that only ever update through the signed node-update verb, get them
  * here: when a newly started helper finds one missing it runs `apt-get install` once, in the
  * background, and records the attempt per helper version so an unavailable package never turns
- * every restart into an apt run. Debian/Ubuntu only; `SKIFF_HELPER_STORAGE_TOOLS=0` turns it off
+ * every restart into an apt run. Debian/Ubuntu only; `YOAL_HELPER_STORAGE_TOOLS=0` turns it off
  * (the installer writes that for `--skip-deps` installs).
  */
 

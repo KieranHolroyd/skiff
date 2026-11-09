@@ -2,8 +2,8 @@
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import CloudIcon from '@lucide/svelte/icons/cloud';
 	import XIcon from '@lucide/svelte/icons/x';
-	import type { EmailRecordCheck } from '@skiff/contracts';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
+	import type { EmailRecordCheck } from '@yoal/contracts';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import * as Table from '#lib/components/ui/table/index.js';
 	import { recordState } from './email-ui.js';

@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb, migrations } from '@skiff/db';
+import { createDb, migrations } from '@yoal/db';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { siteKeyFor } from './config.ts';
@@ -12,7 +12,7 @@ import type { Core } from './index.ts';
 
 /** Per-scope site passwords and visitor-session revocation (DESIGN §6.4). */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-site-access-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-site-access-'));
 const opened = createDb({ path: ':memory:' });
 let clock = Date.now();
 const core: Core = createCore({
@@ -181,7 +181,7 @@ describe('visitor sessions', () => {
 	test('lists live share sessions and revokes one', async () => {
 		const { row } = await project('sessions-one', 'platform', 'platform');
 		const link = await core.access.createShareLink(owner, row, { note: 'review', sessionTtlSeconds: 600 });
-		const raw = new URL(link.url!).searchParams.get('_skiff_share')!;
+		const raw = new URL(link.url!).searchParams.get('_yoal_share')!;
 		const first = core.access.shareAccess(raw, { ip: '1.1.1.1', userAgent: 'a' });
 		core.access.shareAccess(raw, { ip: '2.2.2.2', userAgent: 'b' });
 
@@ -207,7 +207,7 @@ describe('visitor sessions', () => {
 		const { row, previewHost } = await project('sessions-all', 'password', 'platform', 'all-pass');
 		const other = await project('sessions-other', 'platform', 'platform');
 		const link = await core.access.createShareLink(owner, row, {});
-		const raw = new URL(link.url!).searchParams.get('_skiff_share')!;
+		const raw = new URL(link.url!).searchParams.get('_yoal_share')!;
 		core.access.shareAccess(raw, { ip: '3.3.3.3', userAgent: 'c' });
 		const before = core.access.passwordAccess('sessions-all.sites.test', 'all-pass');
 		expect(core.access.verifySiteToken(row.id, before.token)).not.toBeNull();

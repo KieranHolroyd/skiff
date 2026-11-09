@@ -6,18 +6,18 @@ import { authenticatedClient } from './common.ts';
 import { confirmOrRefuse } from './run-operation.ts';
 
 /**
- * Point-in-time recovery (docs/PITR.md): `skif db pitr`, `skif db pitr-backup` and
- * `skif db restore-to`. Behind the control plane's SKIFF_FEATURE_PITR; every check is on the server.
+ * Point-in-time recovery (docs/PITR.md): `yoal db pitr`, `yoal db pitr-backup` and
+ * `yoal db restore-to`. Behind the control plane's YOAL_FEATURE_PITR; every check is on the server.
  */
 
 export const pitrUsage = `Usage:
-  skif db pitr <name>                       Show WAL archiving, base backups and the recoverable window
-  skif db pitr <name> --enable              Turn PITR on (PostgreSQL 18, standard image); restarts the
+  yoal db pitr <name>                       Show WAL archiving, base backups and the recoverable window
+  yoal db pitr <name> --enable              Turn PITR on (PostgreSQL 18, standard image); restarts the
                                             database on the PITR image and takes the first full backup
-  skif db pitr <name> --disable [--yes]     Stop archiving WAL; existing backups stay in the repository
-  skif db pitr-backup <name> [--type full|diff|incr]
+  yoal db pitr <name> --disable [--yes]     Stop archiving WAL; existing backups stay in the repository
+  yoal db pitr-backup <name> [--type full|diff|incr]
                                             Take a base backup now (default full)
-  skif db restore-to <name> --time <ISO 8601> --as <new-name>
+  yoal db restore-to <name> --time <ISO 8601> --as <new-name>
                                             Restore to a moment into a NEW database on the same node
 
 Options:
@@ -25,9 +25,9 @@ Options:
       --json                   JSON output
   -h, --help                   Show this help
 
-The control plane must run with SKIFF_FEATURE_PITR=on and a pgBackRest repository
-(SKIFF_PITR_REPO_BUCKET, …). --time needs an offset or Z, e.g. 2026-11-05T09:30:00Z, and must be
-inside the recoverable window \`skif db pitr <name>\` shows.`;
+The control plane must run with YOAL_FEATURE_PITR=on and a pgBackRest repository
+(YOAL_PITR_REPO_BUCKET, …). --time needs an offset or Z, e.g. 2026-11-05T09:30:00Z, and must be
+inside the recoverable window \`yoal db pitr <name>\` shows.`;
 
 const base: FlagSpec = { json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' } };
 const pitrFlags: FlagSpec = {
@@ -45,7 +45,7 @@ function named(argv: string[], spec: FlagSpec, command: string) {
 		console.log(pitrUsage);
 		return null;
 	}
-	rejectExtraPositionals(args, 1, `Usage: skif db ${command} <name>`);
+	rejectExtraPositionals(args, 1, `Usage: yoal db ${command} <name>`);
 	return { args, name: requirePositional(args, 0, `database name.\n\n${pitrUsage}`) };
 }
 
@@ -113,7 +113,7 @@ export async function pitrBackupCommand(argv: string[]): Promise<void> {
 		printJson(raw);
 		return;
 	}
-	console.log(`Queued a ${type} base backup (${task.id}) for "${name}". Follow it with \`skif db pitr ${name}\`.`);
+	console.log(`Queued a ${type} base backup (${task.id}) for "${name}". Follow it with \`yoal db pitr ${name}\`.`);
 }
 
 export async function restoreToCommand(argv: string[]): Promise<void> {
@@ -122,7 +122,7 @@ export async function restoreToCommand(argv: string[]): Promise<void> {
 		console.log(pitrUsage);
 		return;
 	}
-	const line = 'Usage: skif db restore-to <name> --time <ISO 8601> --as <new-name>';
+	const line = 'Usage: yoal db restore-to <name> --time <ISO 8601> --as <new-name>';
 	rejectExtraPositionals(args, 1, line);
 	const name = requirePositional(args, 0, `source database name.\n\n${line}`);
 	const time = args.string('time');
@@ -141,5 +141,5 @@ export async function restoreToCommand(argv: string[]): Promise<void> {
 		return;
 	}
 	console.log(`Restoring "${name}" to ${new Date(time).toISOString()} into "${database.name}" on node ${nodeLabel(database)}.`);
-	console.log(`It stays pending until the node verifies it; follow it with \`skif db info ${database.name}\`.`);
+	console.log(`It stays pending until the node verifies it; follow it with \`yoal db info ${database.name}\`.`);
 }

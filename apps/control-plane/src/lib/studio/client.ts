@@ -7,7 +7,7 @@ import {
 	type StudioOp,
 	type StudioResponses,
 	studioRequestSchemas
-} from '@skiff/studio/protocol';
+} from '@yoal/studio/protocol';
 
 /**
  * Browser client for the native studio (plan 22). Every call goes to the dashboard's same-origin

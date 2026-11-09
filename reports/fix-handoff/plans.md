@@ -8,7 +8,7 @@ starting point, not gospel: verify against the code as it is now.
 Done: `packages/contracts/src/database-replica.ts` (DatabaseReplicaView, `databaseReplicaReadable`,
 workload id helpers `db_<replicaId>`, prefix `db_dbr_`), `database-replica-input.ts`
 (`databaseReplicaPromoteSchema`), new `database-replication.ts` (NOT yet exported from contracts
-index): `DATABASE_REPLICATION_USER='skiff_repl'`, slot-name pattern, max 8 slots, lag thresholds
+index): `DATABASE_REPLICATION_USER='yoal_repl'`, slot-name pattern, max 8 slots, lag thresholds
 30 s / 256 MB, promotion limits 64 MB / 60 s, task/activation/slot-status/report/link/promotion
 schemas.
 
@@ -33,15 +33,15 @@ Plan:
   service-endpoints.ts include replicas. service-moves.ts refuse move while replicas exist. New
   agent route `database-replication/:id`.
 - Helper: validate.ts accept `replica`; units.ts replica variant of the db unit (helper-written start
-  script: pg_basebackup retry loop over `/run/skiff-upstream`, touch standby.signal, exec image
+  script: pg_basebackup retry loop over `/run/yoal-upstream`, touch standby.signal, exec image
   entrypoint; command-line primary_conninfo/primary_slot_name/hot_standby; bind-mount agent link dir
   read-only); systemd.ts verbs configure (role, pg_hba line, create/drop slots,
   wal_keep_size/max_slot_wal_keep_size), status (one JSON query), promote (pg_ctl promote, rename data
-  dir); server.ts routes; `SKIFF_HELPER_REPLICATION_DIR` (default /var/lib/skiff/agent/replication).
+  dir); server.ts routes; `YOAL_HELPER_REPLICATION_DIR` (default /var/lib/yoal/agent/replication).
 - Agent: unix-socket forwarder for the link (to local port, or to primary's node over overlay with
   mTLS), replication runner (configure, sample every 30 s, promote), wire main.ts, forward `replica`
   in withOptionalSpec, helper-client methods.
-- Surfaces: REST promote route; CLI `skif db replica list|add|remove|promote`; MCP list/create/delete
+- Surfaces: REST promote route; CLI `yoal db replica list|add|remove|promote`; MCP list/create/delete
   (no promote); dashboard; docs (DATABASES.md, CLUSTERING.md, data/databases.md,
   self-hosting/clustering.md).
 - Decisions: walreceiver reaches primary via agent-served unix socket bind-mounted by helper (not
@@ -58,7 +58,7 @@ Done: `docker/postgres-pitr/Dockerfile` (pgvector PG18 by digest
 `sha256:5895949dfcdf308eb0cd31c950c93c14895c77f33fbedfecf1fa511ab1d4bcd2` + pgBackRest
 `2.60.0-1.pgdg13+1`, `/usr/local/bin/pgbackrest` symlink; built and smoke-tested locally on arm64).
 Saved, not applied: `reports/fix-handoff/pitr/pitr.new.ts` (full rewrite of apps/helper/src/pitr.ts)
-and `validate-pitr-image.snippet.ts` (image `ghcr.io/kieranholroyd/skiff-postgres-pitr:18-1`, digest
+and `validate-pitr-image.snippet.ts` (image `ghcr.io/kieranholroyd/yoal-postgres-pitr:18-1`, digest
 null until published).
 
 Fixes in pitr.new.ts: `pg1-socket-path`+`pg1-user` instead of `pg1-host`; bare host +
@@ -77,7 +77,7 @@ full backup on enable, status every ~15 min (rewrites config after reboot), stor
 (migration: recoverable_from_at, recoverable_to_at, window_checked_at), validate restore time,
 heartbeat must not mark restore target running early; agent runs a task only when source (and
 target) running; MCP/CLI/dashboard; drill + docs. Keep flag off until a Linux drill passes.
-Decisions: separate image repo `skiff-postgres-pitr`, tags `<major>-<rev>`; backups/status via podman
+Decisions: separate image repo `yoal-postgres-pitr`, tags `<major>-<rev>`; backups/status via podman
 exec in the db container, restores via one-shot containers of the same image; mount dir not files;
 recover with `promote` then rename; window = oldest retained backup stop → last archived WAL.
 Bug: shared config mounted `:Z` should be `z`.
@@ -109,10 +109,10 @@ Plan for `packages/core/src/failover-service.ts`:
 - `status(principal)`, `history()` with canViewPlatform; register `ctx.failover`.
 - Add `applied_at INTEGER` to 0060 (uncommitted, may still change; regenerate); remove
   `rebalanceReplicas()` call from maintenance.ts (~68) and update replicas-multinode.test.ts.
-- Loop in hooks.server.ts (setTimeout chain every renewSeconds, skipped when SKIFF_STANDBY=1).
+- Loop in hooks.server.ts (setTimeout chain every renewSeconds, skipped when YOAL_STANDBY=1).
 - `replicas.healthIntervalSeconds`: optional `healthIntervalSeconds` on RouteSpec (nodes.ts ~1182) →
   apps/agent/src/caddy-config.ts → packages/site-config/src/compile.ts (hard-coded '5s').
-- Surfaces: REST `GET /api/v1/ha/status`, MCP `get_ha_status`, CLI `skif ha status`, Settings → HA /
+- Surfaces: REST `GET /api/v1/ha/status`, MCP `get_ha_status`, CLI `yoal ha status`, Settings → HA /
   Clustering panels + history. Tests (loop, lease timing, fencing, flapping). Docs CLUSTERING.md C8 /
   §8.3, self-hosting/clustering.md.
 - Unread keys left alone: overlay.maxHubs, endpoints.requireMtls, endpoints.forwarder,
@@ -136,7 +136,7 @@ Plan:
   `core.quota.registerCounter`, call `assertCanCreateJob` before insert and `assertCanRunJob` before
   every run; a refused scheduled run is recorded `skipped`.
 - Helper `jobs.ts`: POST /v1/jobs {run, workload, activation} (process/container apps only), GET
-  /v1/jobs/:id, GET logs, POST stop, DELETE. `systemd-run --unit=skiff-job-<id> --no-block`
+  /v1/jobs/:id, GET logs, POST stop, DELETE. `systemd-run --unit=yoal-job-<id> --no-block`
   Type=exec, RemainAfterExit=yes, Restart=no, RuntimeMaxSec + the app's sandbox properties; process
   apps: env file, LoadCredential secrets, volume binds, argv[0] inside release dir; containers:
   `podman run --rm --cgroups=split --log-driver=passthrough`; status from `systemctl show`
@@ -146,14 +146,14 @@ Plan:
   helper-client methods, main.ts.
 - Control-plane agent routes jobs/lease, jobs/heartbeat, jobs/result.
 - REST `api/v1/projects/[slug]/jobs/**`, MCP tools (+ assistant WRITE_PERMISSION/CONFIRM_TOOLS), CLI
-  `skif jobs …` + `skif run`, dashboard Jobs tab (TanStack Query). Tests; docs SCHEDULER.md,
+  `yoal jobs …` + `yoal run`, dashboard Jobs tab (TanStack Query). Tests; docs SCHEDULER.md,
   compute/scheduled-jobs.md, client pages.
 - Decisions: own run table + lease; UTC only; current release only; app's limits; logs in log_events
   source='runtime' + job_run_id; transient units; no feature flag (capability gate).
 
 ## A14 — Blueprints
 
-Done: contracts blueprint.ts v1 (`apiVersion: skiff/v1`, name, maps projects/databases/storage
+Done: contracts blueprint.ts v1 (`apiVersion: yoal/v1`, name, maps projects/databases/storage
 (with buckets)/brokers, attachments list; project fields; strict + superRefine cross-checks;
 helpers; plan/apply request + view schemas). mcp-data.ts import aliased.
 
@@ -161,7 +161,7 @@ Plan: rewrite blueprint.test.ts; mcp-data.ts `planStackInputSchema {blueprint: s
 `applyStackInputSchema {planHash}`, get_task unchanged; operations: action `blueprint.apply` (kind
 `bulk`, targets [stackName]), internal params stripped from OperationView, optional
 `beforeApply(principal, params, input)` hook in OperationService.apply (flag check
-SKIFF_FEATURE_BLUEPRINTS, recompute plan hash → conflict if changed, prune needs confirm ===
+YOAL_FEATURE_BLUEPRINTS, recompute plan hash → conflict if changed, prune needs confirm ===
 stack name), authorize requires blueprint params; core `blueprints.ts` (JSON or Bun.YAML.parse;
 diff via services; step order projects → environments → databases → storage → buckets → brokers →
 workload settings → domains → attachments, prune reverse; plan fails on missing permission, missing
@@ -171,7 +171,7 @@ stops at first failure, rest skipped, no rollback; co-locate attached db/broker 
 finish hook writes stack record); migration `blueprints` table (id, org_id, name unique per org,
 document_json, document_hash, managed_json, last_operation_id, last_status, applied_plan_hash,
 applied_at, applied_by, timestamps); REST `api/v1/blueprints/` (GET list, plan, apply, validate,
-[name]); CLI `skif blueprint validate|plan|apply [--yes] [--prune]` reusing run-operation helpers;
+[name]); CLI `yoal blueprint validate|plan|apply [--yes] [--prune]` reusing run-operation helpers;
 MCP plan_stack (read-only), apply_stack (destructive, signed confirmation bound to
 `stack:<name>:<planHash>`, prune refused), get_task; assistant WRITE_PERMISSION `apply_stack:
 'project:update'`; dashboard `(dashboard)/new/blueprint`; docs; tests (parsing, diffs, re-apply
@@ -192,10 +192,10 @@ Plan: core `app-volume-lifecycle.ts` (`core.appVolumes.lifecycle`): snapshot cre
 target, refuse without capability, one pending per volume), list, delete (object too), restore into
 new volume via `create()` (quotas apply); node side: tasks for node (presigned PUT/GET), apply usage,
 task results, purge reports; `tick()` in maintenance (purge after trash window, fail tasks no node ran
-in 6 h); usage alert (storageAlertPercent), gauges `skiff_app_volume_used_bytes` /
-`skiff_app_volume_size_bytes` in metrics-export.ts; attach refuses a volume being restored. nodes.ts
+in 6 h); usage alert (storageAlertPercent), gauges `yoal_app_volume_used_bytes` /
+`yoal_app_volume_size_bytes` in metrics-export.ts; attach refuses a volume being restored. nodes.ts
 real values + heartbeat handling. Agent runner `apps/agent/src/app-volumes.ts`, helper-client, main.ts
-loop. REST, MCP, CLI (`skif volume snapshot|snapshots|restore|show`, near-quota warning, drop "not
+loop. REST, MCP, CLI (`yoal volume snapshot|snapshots|restore|show`, near-quota warning, drop "not
 implemented yet"), dashboard VolumesCard.svelte; docs VOLUMES.md §14, compute/volumes.md. Object key
 `app-volumes/<org>/<volume>/<snapshot>.tar.gz`. Purging a volume deletes its snapshots.
 
@@ -223,16 +223,16 @@ buckets, totals; hide Remove on target page), fix `addReplica` success text; doc
 ## A15 — Log drains and audit (remaining)
 
 Done: webhook signing (`webhook-signature.ts`, notify.ts payload with status/url/labels,
-`SKIFF_ALERT_WEBHOOK_SECRET`, settings UI); audit.ts `page()` with cursor + `parseAuditTime`;
+`YOAL_ALERT_WEBHOOK_SECRET`, settings UI); audit.ts `page()` with cursor + `parseAuditTime`;
 contracts log-drain.ts; core log-drains.ts `LogDrainService` (written, untested, unregistered);
 migration 0063 (raw SQL table, no Drizzle schema).
 
 Remaining: register `logDrains: new LogDrainService(ctx, options.version)` in createCore/Core; tests
 (cursors, retry/dead-letter, signature, OTLP shape, egress block, permissions); core check; delivery
 loop in hooks.server.ts (`setInterval(… deliverDue, 5000)`, primary only); REST
-`/api/v1/log-drains`, `[id]`, `[id]/test`; CLI `skif log-drain`; MCP list/create (CONFIRM_TOOLS)/
+`/api/v1/log-drains`, `[id]`, `[id]/test`; CLI `yoal log-drain`; MCP list/create (CONFIRM_TOOLS)/
 test/delete (destructive, confirmation); `settings/log-drains` page + sections.ts entry
 (organisation, `logs:read`); audit: REST `/api/v1/audit` branch in `routes/api/v1/[...path]` with
-from/to/cursor → nextCursor, MCP `get_audit_log` params, dashboard date inputs + paging; `skif audit`
+from/to/cursor → nextCursor, MCP `get_audit_log` params, dashboard date inputs + paging; `yoal audit`
 if it fits; docs (ALERTS.md §3, observe/alerts.md — still says unsigned —,
 observe/dashboards-and-logs.md, DESIGN §8, client pages).

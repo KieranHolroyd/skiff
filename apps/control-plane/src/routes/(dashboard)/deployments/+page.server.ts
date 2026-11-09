@@ -1,4 +1,4 @@
-import type { DeploymentView } from '@skiff/core';
+import type { DeploymentView } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import type { PageServerLoad } from './$types';
 

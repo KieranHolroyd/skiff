@@ -10,7 +10,7 @@ import {
 	type Permission,
 	type Principal,
 	type ResourceRef,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from '../context.ts';
 import { ConflictError, NotFoundError, ValidationError } from '../errors.ts';
 import { newId, parseJson } from '../util.ts';

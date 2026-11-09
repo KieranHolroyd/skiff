@@ -13,11 +13,11 @@ function cert(subjectaltname: string, commonName = 'example.com'): PeerCertifica
 
 describe('installer TLS check', () => {
 	test('probes the wildcard through a fresh unused label', () => {
-		expect(wildcardProbeHost('ExampleCloud.com.', 'abcd')).toBe('skiff-tls-check-abcd.examplecloud.com');
+		expect(wildcardProbeHost('ExampleCloud.com.', 'abcd')).toBe('yoal-tls-check-abcd.examplecloud.com');
 		expect(wildcardProbeHost('examplecloud.com', 'a')).not.toBe(wildcardProbeHost('examplecloud.com', 'b'));
 	});
 
-	test('reads the TLS port from SKIFF_CADDY_LISTEN', () => {
+	test('reads the TLS port from YOAL_CADDY_LISTEN', () => {
 		expect(tlsPortFromListen(':443,:80')).toBe(443);
 		expect(tlsPortFromListen(':8443,:80')).toBe(8443);
 		expect(tlsPortFromListen(':80')).toBe(443);
@@ -26,35 +26,35 @@ describe('installer TLS check', () => {
 	});
 
 	test('the wildcard certificate covers the probe label', () => {
-		expect(certificateCovers('skiff-tls-check-abcd.example.com', cert('DNS:*.example.com, DNS:example.com'))).toBe(true);
+		expect(certificateCovers('yoal-tls-check-abcd.example.com', cert('DNS:*.example.com, DNS:example.com'))).toBe(true);
 	});
 
 	test('an apex-only certificate does not cover the probe label', () => {
-		expect(certificateCovers('skiff-tls-check-abcd.example.com', cert('DNS:example.com'))).toBe(false);
+		expect(certificateCovers('yoal-tls-check-abcd.example.com', cert('DNS:example.com'))).toBe(false);
 	});
 
 	test('a wildcard covers exactly one label', () => {
-		expect(certificateCovers('a.skiff-tls-check.example.com', cert('DNS:*.example.com'))).toBe(false);
+		expect(certificateCovers('a.yoal-tls-check.example.com', cert('DNS:*.example.com'))).toBe(false);
 	});
 
 	test('an exact certificate for the probe label is accepted', () => {
-		expect(certificateCovers('skiff-tls-check-abcd.example.com', cert('DNS:skiff-tls-check-abcd.example.com'))).toBe(true);
+		expect(certificateCovers('yoal-tls-check-abcd.example.com', cert('DNS:yoal-tls-check-abcd.example.com'))).toBe(true);
 	});
 
 	test('a certificate for another domain is rejected', () => {
-		expect(certificateCovers('skiff-tls-check-abcd.example.com', cert('DNS:*.other.test'))).toBe(false);
+		expect(certificateCovers('yoal-tls-check-abcd.example.com', cert('DNS:*.other.test'))).toBe(false);
 	});
 
 	test('no certificate (handshake failure) is not coverage', () => {
-		expect(certificateCovers('skiff-tls-check-abcd.example.com', null)).toBe(false);
-		expect(certificateCovers('skiff-tls-check-abcd.example.com', {} as PeerCertificate)).toBe(false);
+		expect(certificateCovers('yoal-tls-check-abcd.example.com', null)).toBe(false);
+		expect(certificateCovers('yoal-tls-check-abcd.example.com', {} as PeerCertificate)).toBe(false);
 	});
 
 	test('a closed port reports no certificate instead of throwing', async () => {
 		const result = await probeServedCertificate({
 			host: '127.0.0.1',
 			port: 9,
-			servername: 'skiff-tls-check-abcd.example.com',
+			servername: 'yoal-tls-check-abcd.example.com',
 			timeoutMs: 1_000,
 		});
 		expect(result).toEqual({ covers: false, notAfter: null });

@@ -3,23 +3,23 @@ title: Static sites
 description: Deploy a folder of files, get a preview URL, then promote or roll back instantly.
 ---
 
-A static site is a folder of files (HTML, CSS, JavaScript, images and so on) that Skiff serves from the edge. You can deploy one from the command line, from the dashboard or through an AI agent. Every deploy creates an immutable deployment with its own preview URL. Promoting a deployment moves your production address to it without rebuilding anything, and rolling back moves it again.
+A static site is a folder of files (HTML, CSS, JavaScript, images and so on) that Yoal serves from the edge. You can deploy one from the command line, from the dashboard or through an AI agent. Every deploy creates an immutable deployment with its own preview URL. Promoting a deployment moves your production address to it without rebuilding anything, and rolling back moves it again.
 
-Each deployment stores the files (a release) and the site configuration in those files (`skiff.json`, `_redirects` and `_headers`). For what those files do, see [site configuration](/deploying/site-config).
+Each deployment stores the files (a release) and the site configuration in those files (`yoal.json`, `_redirects` and `_headers`). For what those files do, see [site configuration](/deploying/site-config).
 
 ## Deploy from the CLI
 
-Sign in once with `skif login --url https://control.example.com`, then deploy a build directory:
+Sign in once with `yoal login --url https://control.example.com`, then deploy a build directory:
 
 ```sh
-skif deploy ./dist --project my-site
+yoal deploy ./dist --project my-site
 ```
 
-`skif deploy` zips the directory, uploads it and finalises the deployment. It also promotes the deployment to production unless you pass `--no-promote`. The zip goes straight to object storage, and the node agent then fetches the new release from its desired state:
+`yoal deploy` zips the directory, uploads it and finalises the deployment. It also promotes the deployment to production unless you pass `--no-promote`. The zip goes straight to object storage, and the node agent then fetches the new release from its desired state:
 
 ```mermaid
 sequenceDiagram
-  participant CLI as skif CLI
+  participant CLI as yoal CLI
   participant CP as Control plane
   participant Store as Object store
   participant Agent as Node agent
@@ -42,7 +42,7 @@ sequenceDiagram
 | `--no-create` | Fail instead of creating a project that does not exist. |
 | `--no-promote` | Create a preview only. Production stays where it is. |
 | `-m, --message <text>` | A note stored with the deployment (500 characters at most). |
-| `--spa` | Add `"spa": true` to `skiff.json` in the upload. See [single-page apps](#single-page-apps). |
+| `--spa` | Add `"spa": true` to `yoal.json` in the upload. See [single-page apps](#single-page-apps). |
 | `--json` | Print the finalise response as JSON. |
 
 A few things to know:
@@ -50,10 +50,10 @@ A few things to know:
 - The directory's own files are zipped. `.git`, `node_modules` and `.DS_Store` are always skipped, and rules in `.gitignore` files in the directory and its subdirectories are honoured. Symlinks are skipped with a warning.
 - A project created by the CLI gets production access `public` and preview access `platform`.
 - The CLI deploys to production or to a preview only. Named environments are available through the REST API, MCP and the dashboard.
-- Without `--project`, the slug comes from the directory name, so `skif deploy ./dist` creates a project called `dist`. Pass `--project` in scripts.
+- Without `--project`, the slug comes from the directory name, so `yoal deploy ./dist` creates a project called `dist`. Pass `--project` in scripts.
 - A folder that contains a `wrangler.jsonc` deploys as a function instead. See [functions](/compute/functions).
 
-On CI or any headless machine, skip `skif login` and set `SKIFF_URL` and `SKIFF_TOKEN` to an API key from the dashboard. See [CLI](/clients/cli) and [API keys and tokens](/accounts/api-keys-and-tokens).
+On CI or any headless machine, skip `yoal login` and set `YOAL_URL` and `YOAL_TOKEN` to an API key from the dashboard. See [CLI](/clients/cli) and [API keys and tokens](/accounts/api-keys-and-tokens).
 
 ## Deploy from the dashboard
 
@@ -106,11 +106,11 @@ Organisation quotas, such as the maximum upload size and total storage, can also
 
 ## What a deploy does
 
-When a deploy is finalised, Skiff:
+When a deploy is finalised, Yoal:
 
 1. **Checks the files.** Paths must be relative and cannot contain `..`. `.DS_Store` files are dropped. The limits above are enforced here.
-2. **Reads the site configuration.** `skiff.json`, `_redirects` and `_headers` are parsed and validated. An invalid file fails the whole deploy, and the error names the file.
-3. **Precompresses text.** For HTML, CSS, JavaScript, JSON, SVG, plain text and similar files up to 5 MiB each, Skiff stores Brotli (`.br`) and gzip (`.gz`) copies beside the original. It stops once the source text reaches 100 MiB in a release. Images, fonts, video and other formats that are already compressed are stored unchanged.
+2. **Reads the site configuration.** `yoal.json`, `_redirects` and `_headers` are parsed and validated. An invalid file fails the whole deploy, and the error names the file.
+3. **Precompresses text.** For HTML, CSS, JavaScript, JSON, SVG, plain text and similar files up to 5 MiB each, Yoal stores Brotli (`.br`) and gzip (`.gz`) copies beside the original. It stops once the source text reaches 100 MiB in a release. Images, fonts, video and other formats that are already compressed are stored unchanged.
 4. **Hashes the release.** Every file gets a SHA-256 hash, and the release is identified by a hash of that file list. Deploying the same files again reuses the stored release instead of storing a second copy.
 5. **Snapshots the configuration.** Each deployment records the configuration it was built with, so changing `_redirects` affects only later deployments.
 6. **Creates the deployment.** It gets a short ID and a preview URL, and is promoted if you asked for that.
@@ -125,13 +125,13 @@ Production access defaults to `public`. Previews default to `platform`, which me
 
 ## Single-page apps
 
-A single-page app serves one `index.html` and handles every other path in JavaScript. To send unknown paths to `index.html`, turn on SPA mode in `skiff.json`:
+A single-page app serves one `index.html` and handles every other path in JavaScript. To send unknown paths to `index.html`, turn on SPA mode in `yoal.json`:
 
 ```json
 { "spa": true }
 ```
 
-Skiff never turns this on by itself. When a deploy contains `index.html` and no other HTML file, `deploy_site` returns a hint suggesting SPA mode. Pass `"spa": false` to suppress the hint. `skif deploy --spa` adds `"spa": true` to the copy of `skiff.json` in the upload, merging with any existing file, and leaves your folder untouched.
+Yoal never turns this on by itself. When a deploy contains `index.html` and no other HTML file, `deploy_site` returns a hint suggesting SPA mode. Pass `"spa": false` to suppress the hint. `yoal deploy --spa` adds `"spa": true` to the copy of `yoal.json` in the upload, merging with any existing file, and leaves your folder untouched.
 
 ## Promote and roll back
 
@@ -152,8 +152,8 @@ flowchart LR
 To promote an older deployment, list the project's deployments and pass the ID or short ID:
 
 ```sh
-skif deployments my-site
-skif promote my-site k3j9x2a7mq
+yoal deployments my-site
+yoal promote my-site k3j9x2a7mq
 ```
 
 In the dashboard, open the project, go to **Deployments** and choose **Promote** on the row. You can only promote an active deployment.
@@ -161,7 +161,7 @@ In the dashboard, open the project, go to **Deployments** and choose **Promote**
 To undo a promotion, roll back:
 
 ```sh
-skif rollback my-site
+yoal rollback my-site
 ```
 
 Rollback moves production to the deployment that was live before the current one. It follows promotion history, not upload order, so deployments that were never promoted are skipped. Each further rollback steps back again. If there is no earlier production deployment, rollback fails and you promote a specific deployment instead.
@@ -173,15 +173,15 @@ Environments can be promoted and rolled back too, but the CLI and REST rollback 
 
 ## Retention and clean-up
 
-Skiff keeps each project's ten most recent unpinned deployments by default. The platform sets this default (between 1 and 500), and organisation or project quotas can override it. After each deploy, promote or rollback, older deployments beyond the limit are removed.
+Yoal keeps each project's ten most recent unpinned deployments by default. The platform sets this default (between 1 and 500), and organisation or project quotas can override it. After each deploy, promote or rollback, older deployments beyond the limit are removed.
 
-Skiff never removes:
+Yoal never removes:
 
 - a **pinned** deployment, which you pin from its row in the dashboard or with `POST /api/v1/projects/:slug/deployments/:id/pin` and a body of `{ "pinned": true }`;
 - the **production** deployment; or
 - any deployment an environment is pointing at.
 
-You can also delete a deployment yourself with **Delete deployment** in the dashboard, or with `DELETE /api/v1/projects/:slug/deployments/:id`. If that deployment is in production, production falls back to the one promoted before it. Once no remaining deployment uses a release, Skiff deletes the stored files in the background.
+You can also delete a deployment yourself with **Delete deployment** in the dashboard, or with `DELETE /api/v1/projects/:slug/deployments/:id`. If that deployment is in production, production falls back to the one promoted before it. Once no remaining deployment uses a release, Yoal deletes the stored files in the background.
 
 ## Project slugs
 
@@ -190,10 +190,10 @@ A slug is a project's name on the platform and the first label of its hostname. 
 - is 3 to 40 characters long;
 - uses lowercase letters, digits and single hyphens, and starts and ends with a letter or digit;
 - contains no double hyphen, because `--` separates the parts of preview and environment hosts;
-- is not reserved. Reserved names include `api`, `www`, `admin`, `mail`, `static`, `status` and `skiff`; and
+- is not reserved. Reserved names include `api`, `www`, `admin`, `mail`, `static`, `status` and `yoal`; and
 - is unique across the whole platform, not just your organisation.
 
-A slug stays taken while its project is in the trash, and for 30 days after the project is renamed. If the slug you want is taken, Skiff suggests free alternatives built from it. When you do not give a slug, the dashboard suggests one. The CLI makes one from the name by lowercasing it, turning runs of other characters into hyphens, truncating it to 40 characters and prefixing `site-` if it is shorter than three.
+A slug stays taken while its project is in the trash, and for 30 days after the project is renamed. If the slug you want is taken, Yoal suggests free alternatives built from it. When you do not give a slug, the dashboard suggests one. The CLI makes one from the name by lowercasing it, turning runs of other characters into hyphens, truncating it to 40 characters and prefixing `site-` if it is shorter than three.
 
 ## Rename a project
 
@@ -201,18 +201,18 @@ Change the **Slug** field in the project's **Settings**, or send `PATCH /api/v1/
 
 ## Delete and restore projects
 
-Deleting a project moves it to the trash. Its site stops serving straight away, but Skiff keeps the project, its deployments and its production pointer, so a restore brings the site back as it was.
+Deleting a project moves it to the trash. Its site stops serving straight away, but Yoal keeps the project, its deployments and its production pointer, so a restore brings the site back as it was.
 
 ```sh
-skif projects delete my-site       # asks for confirmation; add --yes outside a terminal
-skif projects trash                # lists what is in the trash and when it is purged
-skif projects restore my-site
-skif projects purge my-site        # permanent, and only for projects already in the trash
+yoal projects delete my-site       # asks for confirmation; add --yes outside a terminal
+yoal projects trash                # lists what is in the trash and when it is purged
+yoal projects restore my-site
+yoal projects purge my-site        # permanent, and only for projects already in the trash
 ```
 
 The dashboard has the same actions on the trash view of **Projects**. Projects in the trash are purged automatically after 7 days by default; the platform can set this between 1 and 90 days. Purging removes the project and its deployments and frees the slug. Restoring counts the project against your project quota again, so it can fail if you are at the limit.
 
-Bulk deletes (for example `skif projects delete --match 'test-*' --not-deployed`) show a plan first and handle up to 100 projects per run.
+Bulk deletes (for example `yoal projects delete --match 'test-*' --not-deployed`) show a plan first and handle up to 100 projects per run.
 
 > [!WARNING]
-> `skif projects purge` cannot be undone. Use `skif projects delete` first if you might want the site back.
+> `yoal projects purge` cannot be undone. Use `yoal projects delete` first if you might want the site back.

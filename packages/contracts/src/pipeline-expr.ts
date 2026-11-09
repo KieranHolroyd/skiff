@@ -33,9 +33,9 @@ export interface PipelineEvalOptions {
 const MAX_EXPRESSION_LENGTH = 21_000;
 const MAX_DEPTH = 50;
 
-/** Named contexts (lowercase). `github` is accepted and evaluated as `skiff` (W1). */
+/** Named contexts (lowercase). `github` is accepted and evaluated as `yoal` (W1). */
 const CONTEXT_NAMES = new Set([
-	'skiff',
+	'yoal',
 	'github',
 	'env',
 	'vars',
@@ -369,7 +369,7 @@ class Parser {
 				if (Object.hasOwn(KEYWORDS, token.text)) return { k: 'lit', v: KEYWORDS[token.text]! };
 				const name = token.text.toLowerCase();
 				if (!CONTEXT_NAMES.has(name)) throw this.error(`Unrecognized named-value '${token.text}'`, token);
-				return { k: 'ctx', name: name === 'github' ? 'skiff' : name };
+				return { k: 'ctx', name: name === 'github' ? 'yoal' : name };
 			}
 			default:
 				throw this.error(`Unexpected '${token.text}'`, token);
@@ -925,7 +925,7 @@ export function containsStatusFunction(expr: string): boolean {
 	return hasStatusCall(parse(unwrapExpression(expr) ?? expr));
 }
 
-/** Top-level contexts an expression reads (lowercase, `github` reported as `skiff`), in order. */
+/** Top-level contexts an expression reads (lowercase, `github` reported as `yoal`), in order. */
 export function expressionReferences(expr: string): string[] {
 	const names = new Set<string>();
 	walk(parse(expr), (n) => {

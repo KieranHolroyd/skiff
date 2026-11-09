@@ -233,7 +233,7 @@ describe('parseLogLine', () => {
 		});
 
 		expect(
-			parse('[skiff-agent 2026-11-03T23:23:02.419Z] INFO Listening on unix:///tmp/agent.sock'),
+			parse('[yoal-agent 2026-11-03T23:23:02.419Z] INFO Listening on unix:///tmp/agent.sock'),
 		).toEqual({
 			message: 'Listening on unix:///tmp/agent.sock',
 			level: 'info',
@@ -318,7 +318,7 @@ describe('parseLogLine', () => {
 		// Prose that only looks similar stays unlevelled.
 		expect(level('at 10:00 the job ran: ok')).toBeUndefined();
 		expect(level('errors: 0, warnings: 0')).toBeUndefined();
-		expect(level('Started skiff-workload.service - Skiff workload')).toBeUndefined();
+		expect(level('Started yoal-workload.service - Yoal workload')).toBeUndefined();
 	});
 
 	test('leaves malformed JSON tagged as JSON without losing the line', () => {

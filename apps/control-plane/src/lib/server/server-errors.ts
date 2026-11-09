@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { RequestEvent } from '@sveltejs/kit';
-import type { ServerErrorSource } from '@skiff/contracts';
-import type { ServerErrorCapture } from '@skiff/core';
+import type { ServerErrorSource } from '@yoal/contracts';
+import type { ServerErrorCapture } from '@yoal/core';
 
 /**
  * The control plane's side of Settings → Server errors (docs/SERVER-ERRORS.md, D171).

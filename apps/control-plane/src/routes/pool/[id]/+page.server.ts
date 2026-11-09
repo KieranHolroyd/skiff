@@ -1,5 +1,5 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { CoreError } from '@skiff/core';
+import { CoreError } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import { clientKey, poolSessionToken, validCsrf } from '../_lib/hosted.js';
 import type { Actions, PageServerLoad } from './$types';

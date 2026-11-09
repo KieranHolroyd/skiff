@@ -1,5 +1,5 @@
 import { error, fail } from '@sveltejs/kit';
-import type { Principal } from '@skiff/contracts';
+import type { Principal } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import {
 	failStatus,

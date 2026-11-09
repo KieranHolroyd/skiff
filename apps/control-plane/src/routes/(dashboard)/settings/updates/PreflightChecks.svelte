@@ -4,7 +4,7 @@
 	import CircleXIcon from '@lucide/svelte/icons/circle-x';
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import Panel from '../../_lib/Panel.svelte';
 	import { plural } from '../../_lib/format.js';
 	import { checkLabel } from './update-ui.js';

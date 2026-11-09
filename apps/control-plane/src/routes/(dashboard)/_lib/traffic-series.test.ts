@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { TrafficSeriesPoint } from '@skiff/core';
+import type { TrafficSeriesPoint } from '@yoal/core';
 import { downsampleSeries, spanLabel } from './traffic-series.ts';
 
 const MINUTE = 60_000;

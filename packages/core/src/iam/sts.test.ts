@@ -3,7 +3,7 @@ import { generateKeyPairSync, sign as nodeSign } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
+import { createDb } from '@yoal/db';
 import { ACCESS_TOKEN_TYPE, StsError } from './sts.ts';
 import { createCore, type Core } from '../index.ts';
 import { LocalObjectStore } from '../object-store.ts';
@@ -13,7 +13,7 @@ import { LocalObjectStore } from '../object-store.ts';
  * in production; this test applies the same DDL for the two new tables because
  * `packages/db/src/migrations.ts` is generated at build time and is not regenerated here.
  */
-const dir = mkdtempSync(join(tmpdir(), 'skiff-sts-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-sts-'));
 const opened = createDb({ path: ':memory:' });
 opened.sqlite.exec(`
 	CREATE TABLE IF NOT EXISTS signing_keys (
@@ -284,9 +284,9 @@ describe('token exchange', () => {
 		expect((missing as StsError).code).toBe('invalid_grant');
 	});
 
-	test('accepts a Skiff-issued token through the ring, not an external JWKS', async () => {
+	test('accepts a Yoal-issued token through the ring, not an external JWKS', async () => {
 		insertTrust({
-			id: 'ft_skiff',
+			id: 'ft_yoal',
 			issuer: 'https://control.test',
 			audiences: ['https://control.test'],
 			subjectPattern: 'sa_previous',
@@ -302,7 +302,7 @@ describe('token exchange', () => {
 		const claims = await core.ctx.signingKeys.verify('sts', result.access_token);
 		expect(claims).toMatchObject({
 			sub: 'sa_deployer',
-			trust_id: 'ft_skiff',
+			trust_id: 'ft_yoal',
 			scope: 'project:read',
 			act: { iss: 'https://control.test', sub: 'sa_previous' },
 		});

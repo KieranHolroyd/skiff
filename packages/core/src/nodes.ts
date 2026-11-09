@@ -17,7 +17,7 @@ import {
 	workloadReplicas,
 	workloads,
 	type nodes as nodesTable,
-} from '@skiff/db';
+} from '@yoal/db';
 import {
 	compareSemver,
 	contentUrl,
@@ -55,7 +55,7 @@ import {
 	type WorkloadSpec,
 	IDENTITY_CAPABILITY,
 	selectIdentityNode,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, CoreError, NotFoundError, UnauthorizedError, ValidationError } from './errors.ts';
 import { effectiveRuntime } from './runtime-tier.ts';
@@ -64,18 +64,18 @@ import { allocateOverlayAddress, buildWireguardState, type OverlayNode } from '.
 import { effectiveAccessMode } from './access.ts';
 import { newId, randomToken, sha256Hex, parseJson } from './util.ts';
 import { IDENTITY_NODE_SETTING, identityDesiredForNode } from './identity-desired.ts';
-import type { ParsedConfig } from '@skiff/site-config';
+import type { ParsedConfig } from '@yoal/site-config';
 
 const JOIN_TTL_MS = 60 * 60 * 1000;
 
 /**
- * Where an unauthenticated visitor goes. Skiff Access has its own platform endpoint because it must
+ * Where an unauthenticated visitor goes. Yoal Access has its own platform endpoint because it must
  * evaluate a policy and may redirect to an IdP or user pool before handing back a host-bound code.
  */
 function loginUrlFor(platformOrigin: string, mode: string, projectId: string): string {
 	return mode === 'access'
 		? `${platformOrigin}/api/v1/access/authorize?project=${projectId}`
-		: `${platformOrigin}/_skiff/site-login?project=${projectId}`;
+		: `${platformOrigin}/_yoal/site-login?project=${projectId}`;
 }
 /**
  * An agent is offline after 30 s without a heartbeat (DESIGN §9). The alert delay is a platform
@@ -103,9 +103,9 @@ export interface NodeView {
 	stats: unknown;
 	/** True when this node's Builder may claim git-build jobs (D45, D47). */
 	canBuild: boolean;
-	/** `skiff-workloads.slice` memory budget, in MB (D42). */
+	/** `yoal-workloads.slice` memory budget, in MB (D42). */
 	sliceMemoryMb: number;
-	/** `skiff-workloads.slice` CPUWeight. */
+	/** `yoal-workloads.slice` CPUWeight. */
 	sliceCpuWeight: number;
 	/** Requested storage locations (`null` = install default) and what the node last reported (D48). */
 	storage: NodeStorage & { status: NodeStorageStatus | null };
@@ -115,7 +115,7 @@ export interface NodeView {
 	roles: NodeRole[];
 	/** Operator labels. */
 	labels: Record<string, string>;
-	/** Operator labels plus derived `skiff.io/*` facts. */
+	/** Operator labels plus derived `yoal.io/*` facts. */
 	derivedLabels: Record<string, string>;
 	/** Hardware facts plus the labels derived from them. */
 	hardware: NodeHardware | null;
@@ -271,7 +271,7 @@ export class NodeService {
 		return {
 			generation: node.updateGeneration,
 			version: node.updateVersion,
-			repo: this.ctx.config.releaseRepo ?? 'KieranHolroyd/skiff',
+			repo: this.ctx.config.releaseRepo ?? 'KieranHolroyd/yoal',
 		};
 	}
 
@@ -377,7 +377,7 @@ export class NodeService {
 	}
 
 	/**
-	 * `skif agent join` consumes a one-time token and receives the node's long-lived token.
+	 * `yoal agent join` consumes a one-time token and receives the node's long-lived token.
 	 * The first node becomes the edge; later nodes are workers.
 	 */
 	join(input: {
@@ -385,7 +385,7 @@ export class NodeService {
 		name: string;
 		publicAddress?: string;
 		version?: string;
-		networkMode?: 'skiff' | 'external';
+		networkMode?: 'yoal' | 'external';
 		wireguardPublicKey?: string;
 	}): {
 		nodeId: string;
@@ -407,7 +407,7 @@ export class NodeService {
 		const nodeId = newId('nod_');
 		const nodeToken = randomToken(32);
 		const now = this.ctx.now();
-		const managed = input.networkMode === 'skiff';
+		const managed = input.networkMode === 'yoal';
 		if (managed) {
 			const key = input.wireguardPublicKey;
 			if (!key || !wireguardPublicKeySchema.safeParse(key).success)
@@ -442,7 +442,7 @@ export class NodeService {
 					privateAddress,
 					managed ? this.ctx.cluster.get().overlay.cidr : null,
 					managed ? input.wireguardPublicKey ?? null : null,
-					managed ? 'skiff' : 'external',
+					managed ? 'yoal' : 'external',
 					managed ? input.publicAddress ?? null : null,
 					managed ? this.ctx.cluster.get().overlay.listenPort : null,
 				],
@@ -545,7 +545,7 @@ export class NodeService {
 		if (input.storageRootKeys?.length) this.ctx.storage.applyRootKeyReports(node.id, input.storageRootKeys);
 		if (input.storageReplication?.length)
 			this.ctx.storageReplication.applyReports(node.id, input.storageReplication);
-		// Disks first (capacity, missing mounts, Skiff mounts turning ready), then share mounts, which
+		// Disks first (capacity, missing mounts, Yoal mounts turning ready), then share mounts, which
 		// register a mounted share as a disk once the inventory shows it (docs/STORAGE.md §3).
 		if (input.volumes) this.ctx.disks.applyInventory(node.id, input.volumes);
 		this.ctx.disks.applyMountReport(node.id, input.diskMounts, input.unmountedDisks);
@@ -638,14 +638,14 @@ export class NodeService {
 	 * Hand the edge role to another node (D98). The roles swap: the target terminates ingress and
 	 * serves every static site, the old edge becomes a worker that keeps what was admitted to it.
 	 * Everything follows from desired state, so both agents converge on their next pull. Outside
-	 * Skiff the operator still points DNS at the new edge and gives it TLS settings; that is why the
+	 * Yoal the operator still points DNS at the new edge and gives it TLS settings; that is why the
 	 * dashboard asks for a typed confirmation.
 	 */
 	setEdge(principal: Principal, nodeId: string): NodeView {
 		this.assertPlatformAdmin(principal);
 		if (this.ctx.config.edgeNodeId)
 			throw new ConflictError(
-				'SKIFF_EDGE_NODE_ID pins the edge in the control plane environment. Change it there and restart the control plane.',
+				'YOAL_EDGE_NODE_ID pins the edge in the control plane environment. Change it there and restart the control plane.',
 			);
 		const target = this.ctx.db.select().from(nodes).where(eq(nodes.id, nodeId)).get();
 		if (!target) throw new NotFoundError('Node');
@@ -688,10 +688,10 @@ export class NodeService {
 	 */
 	update(principal: Principal, nodeId: string, input: NodeUpdate): NodeView {
 		this.assertPlatformAdmin(principal);
-		const reservedLabel = Object.keys(input.labels ?? {}).find((key) => key.startsWith('skiff.io/'));
+		const reservedLabel = Object.keys(input.labels ?? {}).find((key) => key.startsWith('yoal.io/'));
 		if (reservedLabel)
 			throw new ValidationError(
-				`Label "${reservedLabel}" uses skiff.io/, which is reserved for derived hardware facts.`,
+				`Label "${reservedLabel}" uses yoal.io/, which is reserved for derived hardware facts.`,
 			);
 		const parsed = nodeUpdateSchema.safeParse(input);
 		if (!parsed.success)
@@ -801,7 +801,7 @@ export class NodeService {
 	}
 
 	/**
-	 * Storage paths for the node's root `skiff-storage.service`. It asks the control plane rather
+	 * Storage paths for the node's root `yoal-storage.service`. It asks the control plane rather
 	 * than trusting the request file the agent drops, so only a platform admin picks paths (D48).
 	 */
 	storageFor(token: string): NodeStorage {
@@ -1161,7 +1161,7 @@ export class NodeService {
 		/** Route body per deployment, reused for that deployment's preview and environment routes. */
 		const baseByDeployment = new Map<string, Omit<RouteSpec, 'host' | 'access' | 'accessMode'>>();
 		/** Compose stacks per deployment: extra service hosts are emitted for the production pointer. */
-		const composeByDeployment = new Map<string, import('@skiff/contracts').ComposeSpec>();
+		const composeByDeployment = new Map<string, import('@yoal/contracts').ComposeSpec>();
 		const workloadByProject = new Map(
 			this.ctx.db
 				.select()
@@ -1608,7 +1608,7 @@ function capabilities(json: string | null): string[] {
 	return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === 'string') : [];
 }
 
-const RESERVED_LABEL_PREFIX = 'skiff.io/';
+const RESERVED_LABEL_PREFIX = 'yoal.io/';
 
 /** Operator-set roles, or the mode/can_build derivation older rows rely on. */
 function rolesFor(row: typeof nodesTable.$inferSelect): NodeRole[] {
@@ -1638,21 +1638,21 @@ function hardwareFor(raw: string | null): NodeHardware | null {
 	return parsed.success ? parsed.data : null;
 }
 
-/** `skiff.io/*` labels derived from the hardware report; never operator-written. */
+/** `yoal.io/*` labels derived from the hardware report; never operator-written. */
 export function derivedLabelsFor(hardware: NodeHardware | null): Record<string, string> {
 	if (!hardware) return {};
 	const labels: Record<string, string> = {};
-	if (hardware.arch) labels['skiff.io/arch'] = hardware.arch;
-	if (hardware.virtualization) labels['skiff.io/virt'] = hardware.virtualization;
+	if (hardware.arch) labels['yoal.io/arch'] = hardware.arch;
+	if (hardware.virtualization) labels['yoal.io/virt'] = hardware.virtualization;
 	if (hardware.gpus?.length) {
-		labels['skiff.io/gpu'] = hardware.gpus.some((gpu) => /nvidia/i.test(gpu.name ?? '') || /10de/i.test(gpu.pciId ?? ''))
+		labels['yoal.io/gpu'] = hardware.gpus.some((gpu) => /nvidia/i.test(gpu.name ?? '') || /10de/i.test(gpu.pciId ?? ''))
 			? 'nvidia'
 			: 'other';
-		labels['skiff.io/gpu-count'] = String(hardware.gpus.length);
+		labels['yoal.io/gpu-count'] = String(hardware.gpus.length);
 	}
 	if (hardware.memoryBytes !== undefined)
-		labels['skiff.io/memory-gb'] = String(Math.max(1, Math.round(hardware.memoryBytes / 1024 ** 3)));
-	if (hardware.cpuModel) labels['skiff.io/cpu-model'] = hardware.cpuModel.replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 63);
+		labels['yoal.io/memory-gb'] = String(Math.max(1, Math.round(hardware.memoryBytes / 1024 ** 3)));
+	if (hardware.cpuModel) labels['yoal.io/cpu-model'] = hardware.cpuModel.replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 63);
 	return labels;
 }
 

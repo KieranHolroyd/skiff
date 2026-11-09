@@ -137,7 +137,7 @@ describe('ApiClient', () => {
 							productionDeploymentId: 'dep_1',
 						},
 						promoted: true,
-						nextSteps: ['Roll back with skif rollback demo'],
+						nextSteps: ['Roll back with yoal rollback demo'],
 					});
 				}
 				return new Response('not found', { status: 404 });
@@ -162,7 +162,7 @@ describe('ApiClient', () => {
 				expect(outcome.previewUrl).toBe('https://demo--abc123.examplecloud.com');
 				expect(outcome.productionUrl).toBe('https://demo.examplecloud.com');
 				expect(outcome.promoted).toBe(true);
-				expect(outcome.nextSteps).toEqual(['Roll back with skif rollback demo']);
+				expect(outcome.nextSteps).toEqual(['Roll back with yoal rollback demo']);
 
 				expect(createBody).toEqual({ project: 'demo', fileCount: 2, totalBytes: bytes.byteLength });
 				expect(finalizeBody).toEqual({
@@ -463,7 +463,7 @@ describe('ApiClient node tasks (D124)', () => {
 		status: 'succeeded',
 		target: { type: 'broker', name: 'mq', nodeId: 'node_1' },
 		input: {},
-		result: { stream: 'SKIFF_Q_jobs', sent: 1, seqs: [4], durationMs: 2, state: null },
+		result: { stream: 'YOAL_Q_jobs', sent: 1, seqs: [4], durationMs: 2, state: null },
 		error: null,
 		createdAt: '2026-11-07T10:00:00.000Z',
 		startedAt: null,
@@ -498,8 +498,8 @@ describe('ApiClient node tasks (D124)', () => {
 				return Response.json({ task: task({ result: { stream: 'S', messages: [], total: 0, firstSeq: 0, lastSeq: 0, nextSeq: null } }) });
 			},
 			async (server) => {
-				await new ApiClient({ baseUrl: baseUrl(server), token }).brokerStreamPeek('mq', 'SKIFF_Q_jobs', { limit: 5, from: 10 });
-				expect(url).toBe(`${baseUrl(server)}/api/v1/brokers/mq/streams/SKIFF_Q_jobs/messages?limit=5&from=10&wait=20`);
+				await new ApiClient({ baseUrl: baseUrl(server), token }).brokerStreamPeek('mq', 'YOAL_Q_jobs', { limit: 5, from: 10 });
+				expect(url).toBe(`${baseUrl(server)}/api/v1/brokers/mq/streams/YOAL_Q_jobs/messages?limit=5&from=10&wait=20`);
 			},
 		);
 	});

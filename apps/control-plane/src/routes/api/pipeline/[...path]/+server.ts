@@ -10,7 +10,7 @@ import {
 	pipelineOidcTokenSchema,
 	pipelineResolveReportSchema,
 	pipelineStepReportSchema,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { json, readJson, route } from '#lib/server/api.js';
 

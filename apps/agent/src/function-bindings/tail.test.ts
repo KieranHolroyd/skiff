@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { workloadDesiredSchema, type WorkloadDesired } from '@skiff/contracts';
+import { workloadDesiredSchema, type WorkloadDesired } from '@yoal/contracts';
 import { renderTailWorker, TAIL_BINDING_FILE, TAIL_SERVICE_NAME, TAIL_SINK_SERVICE_NAME } from './tail.ts';
 
 const SHA = 'e'.repeat(64);
@@ -16,11 +16,11 @@ function functionWorkload(
 		runtime: 'function',
 		status: 'running',
 		release: SHA,
-		upstream: 'unix//run/skiff-workloads/wl_1.sock',
+		upstream: 'unix//run/yoal-workloads/wl_1.sock',
 		memoryMb: 128,
 		cpus: 1,
 		port: 3000,
-		healthPath: '/__skiff/health',
+		healthPath: '/__yoal/health',
 		socketActivation: true,
 		activationVersion: SHA,
 		function: {
@@ -107,7 +107,7 @@ describe('renderTailWorker', () => {
 			status: 'running',
 			release: SHA,
 			command: ['bun', 'run', 'start'],
-			upstream: 'unix//run/skiff-workloads/wl_2.sock',
+			upstream: 'unix//run/yoal-workloads/wl_2.sock',
 			memoryMb: 128,
 			cpus: 1,
 			port: 3000,

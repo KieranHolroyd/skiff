@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
-import { domains as domainsTable } from '@skiff/db';
-import type { Principal } from '@skiff/contracts';
+import { domains as domainsTable } from '@yoal/db';
+import type { Principal } from '@yoal/contracts';
 import { NotFoundError } from '../errors.ts';
 import type { Core } from '../index.ts';
 import type { ImportPlan } from './engine.ts';

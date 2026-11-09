@@ -63,8 +63,8 @@ The products with real automatic rollback all work the same way. They stage a co
 **Tailscale (single binary)** — see section 3 for signing.
 
 ### Inferences
-- Skiff's design (canary boot against a copy of the DB, then a symlink swap, keeping `previous`) is already closer to the ONCE/Kamal/HAOS pattern than to Coolify or Discourse. The weak point is the *build* phase on the host, not the swap.
-- ONCE is the closest analogue: one product, SQLite on a shared volume, new container started beside the old, a `/up` health gate with a 120 s timeout, old removed only after the switch. It does **not** snapshot the SQLite DB before the new container runs migrations, as far as the code read shows. A bad migration is therefore not rolled back. Skiff's "canary against a DB copy" goes beyond ONCE here.
+- Yoal's design (canary boot against a copy of the DB, then a symlink swap, keeping `previous`) is already closer to the ONCE/Kamal/HAOS pattern than to Coolify or Discourse. The weak point is the *build* phase on the host, not the swap.
+- ONCE is the closest analogue: one product, SQLite on a shared volume, new container started beside the old, a `/up` health gate with a 120 s timeout, old removed only after the switch. It does **not** snapshot the SQLite DB before the new container runs migrations, as far as the code read shows. A bad migration is therefore not rolled back. Yoal's "canary against a DB copy" goes beyond ONCE here.
 - The HAOS "mark good only after the Supervisor has started" design means the *new* code must positively confirm health, and silence means rollback. That is the inverse of "rollback only if a check explicitly fails", and it is more robust to hangs and crashes in the verifier itself.
 
 ### Gaps
@@ -91,9 +91,9 @@ Building on the host is a documented and recurring failure source. The causes ar
 - Bun's compiler supports cross-compilation, file embedding and bytecode caching, and "runs the same code as `bun run`". — [bun.com/docs/compiler](https://bun.com/docs/compiler)
 
 ### Inferences
-- Skiff's 3.2 GB peak build on the production host matches the Discourse failure pattern almost exactly. Discourse's own team says the in-app (web) upgrader is less reliable than a CLI rebuild for this reason. Moving `bun install` and `vite build` into CI removes the memory, network/registry, lockfile and toolchain-drift classes in one step.
-- `bun:sqlite` is built into the Bun runtime rather than being an npm native addon (inference from Bun's design, not verified in a fetched doc this session). A Skiff that uses only `bun:sqlite` and pure-JS deps is therefore a good candidate for `adapter-bun` `compile: true`. Any `.node` dependency (e.g. sharp, better-sqlite3) would need shipping beside the binary or replacing.
-- The artifact choice for Skiff is (a) a single Bun executable per OS/arch, (b) a tarball of `build/` plus `node_modules` produced by CI, paired with a pinned Bun version, or (c) an OCI image. (a) and (c) make "what runs" a single content-addressed thing that is easy to hash, sign and keep as `previous`.
+- Yoal's 3.2 GB peak build on the production host matches the Discourse failure pattern almost exactly. Discourse's own team says the in-app (web) upgrader is less reliable than a CLI rebuild for this reason. Moving `bun install` and `vite build` into CI removes the memory, network/registry, lockfile and toolchain-drift classes in one step.
+- `bun:sqlite` is built into the Bun runtime rather than being an npm native addon (inference from Bun's design, not verified in a fetched doc this session). A Yoal that uses only `bun:sqlite` and pure-JS deps is therefore a good candidate for `adapter-bun` `compile: true`. Any `.node` dependency (e.g. sharp, better-sqlite3) would need shipping beside the binary or replacing.
+- The artifact choice for Yoal is (a) a single Bun executable per OS/arch, (b) a tarball of `build/` plus `node_modules` produced by CI, paired with a pinned Bun version, or (c) an OCI image. (a) and (c) make "what runs" a single content-addressed thing that is easy to hash, sign and keep as `previous`.
 
 ### Gaps
 - Bun's own executables page (`bun.com/docs/bundler/executables`) returned 404, so I could not retrieve Bun's official caveat list (binary size, macOS codesigning, baseline vs modern x64 CPU targets, Windows). The canonical URL may have moved.
@@ -115,7 +115,7 @@ Tailscale's distsign is the most relevant production model for a small self-host
 - **Discourse launcher:** since July 2025 the launcher binary is downloaded *and checksummed*. — [discourse_docker mirror](https://gitea.cncfstack.com/discourse/discourse_docker/src/branch/update-launcher)
 
 ### Inferences
-- A good fit for Skiff is a distsign-style minimal scheme: an Ed25519 root key held offline, a CI-held signing key, and a signed `manifest.json` (version, channel, sha256 per artifact, monotonically increasing serial, expiry). That gives Tailscale's verification plus TUF's anti-rollback (reject a serial below the last seen) and anti-freeze (reject expired manifests) without running a full TUF repository. minisign/signify are a lighter alternative to raw Ed25519. GitHub attestations or cosign can be layered on for provenance, but they add a dependency on Sigstore and GitHub availability at verify time unless bundles are verified offline.
+- A good fit for Yoal is a distsign-style minimal scheme: an Ed25519 root key held offline, a CI-held signing key, and a signed `manifest.json` (version, channel, sha256 per artifact, monotonically increasing serial, expiry). That gives Tailscale's verification plus TUF's anti-rollback (reject a serial below the last seen) and anti-freeze (reject expired manifests) without running a full TUF repository. minisign/signify are a lighter alternative to raw Ed25519. GitHub attestations or cosign can be layered on for provenance, but they add a dependency on Sigstore and GitHub availability at verify time unless bundles are verified offline.
 - Signing the *manifest* (not only the artifact) is what lets the release side pull or block a version (section 4).
 
 ### Gaps
@@ -137,11 +137,11 @@ The products that ship to many unattended hosts gate releases through channels (
 - **Upgrade gating on the host:** Coolify refuses to start an update if the pre-update DB backup fails. — [coolify.io upgrade docs](https://coolify.io/docs/get-started/upgrade)
 
 ### Inferences
-- For Skiff, the cheapest and highest-value gates are:
-  1. CI builds the exact artifact the host will run, then runs the *same* canary/migration step the host runs against fixture DBs from N-1, N-2 and an older baseline. A canary-step bug like the one Skiff just hit would then fail in CI, not on hosts.
+- For Yoal, the cheapest and highest-value gates are:
+  1. CI builds the exact artifact the host will run, then runs the *same* canary/migration step the host runs against fixture DBs from N-1, N-2 and an older baseline. A canary-step bug like the one Yoal just hit would then fail in CI, not on hosts.
   2. A signed channel manifest (`stable`/`beta`) that the release side can repoint or pin to "hold at X", which acts as the kill switch.
   3. An optional staggered rollout: hosts hash their node ID into a 0–100 bucket and update only when the manifest's `rollout_percent` ≥ bucket, a common pattern I did not find documented by these products.
-- GitLab and Sentry upgrade stops exist because heavy migrations cannot be skipped. If Skiff's migrations ever become non-trivial, the manifest can encode `min_from_version` so a host far behind steps through an intermediate release.
+- GitLab and Sentry upgrade stops exist because heavy migrations cannot be skipped. If Yoal's migrations ever become non-trivial, the manifest can encode `min_from_version` so a host far behind steps through an intermediate release.
 
 ### Gaps
 - None of the self-hosted products retrieved document percentage-based staged rollout or CI "upgrade from N-1 on real data" suites. I found no source for whether HA, Coolify or ONCE run such tests. The best source on this is CrowdStrike's post-incident commitment.
@@ -162,7 +162,7 @@ The recurring incident shapes are: (a) the updater itself is broken and cannot f
 - **CrowdStrike, July 2024:** see section 4. — [RCA summary](https://crowdstrike.com/wp-content/uploads/2024/08/Executive-Summary_Root-Cause-Analysis_Channel-File-291.pdf)
 
 ### Inferences
-- Skiff's incident (a canary-step bug stalled updates, and failed commits were recorded and skipped) is the HA 2022 shape: the mechanism that applies fixes was the broken component. HA got out because it had an out-of-band path (a script on the version server, plus a fresh install that pulls stable) that did not depend on the broken Supervisor's update logic.
+- Yoal's incident (a canary-step bug stalled updates, and failed commits were recorded and skipped) is the HA 2022 shape: the mechanism that applies fixes was the broken component. HA got out because it had an out-of-band path (a script on the version server, plus a fresh install that pulls stable) that did not depend on the broken Supervisor's update logic.
 - "Record failed commit and skip it" is safe only if the *failure attribution* is correct. If the updater is at fault, every new release is recorded as failed and skipped. That is how a single updater bug becomes a permanent update block.
 
 ### Gaps
@@ -189,14 +189,14 @@ On top of these, bootloader-style "the new version must positively mark itself g
 - **Coolify:** the updater logic (upgrade.sh) is fetched fresh from the CDN on every run, so the release side can fix it without the instance's own code being correct. Downgrade or recovery is the same script with an explicit version from the terminal. — [Coolify downgrade docs](https://coolify.io/docs/core/instance-management/downgrade), [upgrade.sh](https://raw.githubusercontent.com/coollabsio/coolify/main/scripts/upgrade.sh)
 
 ### Inferences
-- A Skiff design that applies these patterns:
+- A Yoal design that applies these patterns:
   1. Split a **tiny, stable "stage-0" updater** (download → verify signature → unpack to `releases/<version>` → atomic symlink flip → start → wait for positive health → else flip back). It changes rarely and is version-pinned separately.
-  2. Move release-specific checks (canary boot, migration dry-run) **into the new release**, invoked by stage-0 as `new/bin/skiff self-check --db-copy …`. A bug in a release's own check then fails only that release. The next release ships a fixed check, and stage-0 is unaffected.
+  2. Move release-specific checks (canary boot, migration dry-run) **into the new release**, invoked by stage-0 as `new/bin/yoal self-check --db-copy …`. A bug in a release's own check then fails only that release. The next release ships a fixed check, and stage-0 is unaffected.
   3. Have the next release's manifest able to say `force_retry: [commits…]` or simply supersede skipped versions. Never let a skip list block versions newer than the failing one.
-  4. Keep an **out-of-band recovery** command, e.g. `curl …/recover.sh | sh -s <version>` or `skiffctl rollback`, that does not depend on the running control plane.
+  4. Keep an **out-of-band recovery** command, e.g. `curl …/recover.sh | sh -s <version>` or `yoalctl rollback`, that does not depend on the running control plane.
   5. Use the HAOS rule: the new version must positively report healthy within N seconds or N boots, and silence counts as failure.
 - When stage-0 itself must change, it can use Chromium's approach: install the new stage-0 side-by-side, have it qualify by performing a dry-run update of a no-op payload, then activate. A broken new stage-0 never takes over.
-- Blue/green at the service level (two Skiff instances behind the edge proxy, switch after health) is the same mechanism as ONCE/Kamal. It helps with zero-downtime and health-gated cutover, but it does not on its own fix updater-logic bugs or on-host build failures. Those need prebuilt artifacts and a stage-0/stage-1 split.
+- Blue/green at the service level (two Yoal instances behind the edge proxy, switch after health) is the same mechanism as ONCE/Kamal. It helps with zero-downtime and health-gated cutover, but it does not on its own fix updater-logic bugs or on-host build failures. Those need prebuilt artifacts and a stage-0/stage-1 split.
 
 ### Gaps
 - I found no documentation of Sparkle, Squirrel or Omaha-style "updater ships with the release" patterns beyond Chromium's design doc.

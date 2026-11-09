@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-import type { PipelineExpressionContext, PipelineJobClaim, PipelineStatusState, TemplateMap } from '@skiff/contracts';
-import { interpolate } from '@skiff/contracts';
+import type { PipelineExpressionContext, PipelineJobClaim, PipelineStatusState, TemplateMap } from '@yoal/contracts';
+import { interpolate } from '@yoal/contracts';
 
 /**
  * Pure helpers that turn a job claim into what a step sees: the `${{ }}` context, the layered
@@ -23,7 +23,7 @@ export interface EvalOptions {
 	hashFiles?: (patterns: string[]) => string;
 }
 
-/** The context plus `github`, GitHub's name for `skiff` (W1). */
+/** The context plus `github`, GitHub's name for `yoal` (W1). */
 export type JobContext = PipelineExpressionContext & { github: Record<string, unknown> };
 
 export interface RunnerInfo {
@@ -62,14 +62,14 @@ export function layerEnv(
 	return env;
 }
 
-/** Build the static job context: claim context + runner + secrets, `github` aliasing `skiff`. */
+/** Build the static job context: claim context + runner + secrets, `github` aliasing `yoal`. */
 export function buildJobContext(input: {
 	claim: PipelineJobClaim;
 	secrets: Record<string, string>;
 	runner: RunnerInfo;
 }): JobContext {
 	const { claim } = input;
-	const skiff: Record<string, unknown> = {
+	const yoal: Record<string, unknown> = {
 		sha: claim.checkout.sha,
 		ref: claim.checkout.ref,
 		ref_name: refName(claim.checkout.ref),
@@ -80,13 +80,13 @@ export function buildJobContext(input: {
 		run_attempt: claim.attempt,
 		job: claim.job.key,
 		workflow: claim.workflow.name,
-		...claim.context.skiff,
+		...claim.context.yoal,
 		workspace: input.runner.workspace,
 	};
 	return {
 		...claim.context,
-		skiff,
-		github: skiff,
+		yoal,
+		github: yoal,
 		secrets: { ...input.secrets },
 		runner: { ...input.runner },
 		steps: {},
@@ -108,9 +108,9 @@ export function runnerVariables(input: {
 	runner: RunnerInfo;
 	files: { output: string; env: string; path: string; summary: string };
 }): Record<string, string> {
-	const skiff = input.context.skiff;
+	const yoal = input.context.yoal;
 	const text = (key: string) => {
-		const value = skiff[key];
+		const value = yoal[key];
 		return value === undefined || value === null ? '' : String(value);
 	};
 	const shared: Record<string, string> = {
@@ -135,7 +135,7 @@ export function runnerVariables(input: {
 	};
 	const variables: Record<string, string> = {
 		CI: 'true',
-		SKIFF_ACTIONS: 'true',
+		YOAL_ACTIONS: 'true',
 		GITHUB_ACTIONS: 'true',
 		RUNNER_OS: input.runner.os,
 		RUNNER_ARCH: input.runner.arch,
@@ -144,13 +144,13 @@ export function runnerVariables(input: {
 		RUNNER_TOOL_CACHE: input.runner.tool_cache,
 	};
 	for (const [key, value] of Object.entries(shared)) {
-		variables[`SKIFF_${key}`] = value;
+		variables[`YOAL_${key}`] = value;
 		variables[`GITHUB_${key}`] = value;
 	}
-	// The platform registry (docs/REGISTRY.md), when it is on: `$SKIFF_REGISTRY_NAMESPACE/<name>:<tag>`.
-	if (skiff.registry) {
-		variables.SKIFF_REGISTRY = text('registry');
-		variables.SKIFF_REGISTRY_NAMESPACE = text('registry_namespace');
+	// The platform registry (docs/REGISTRY.md), when it is on: `$YOAL_REGISTRY_NAMESPACE/<name>:<tag>`.
+	if (yoal.registry) {
+		variables.YOAL_REGISTRY = text('registry');
+		variables.YOAL_REGISTRY_NAMESPACE = text('registry_namespace');
 	}
 	return variables;
 }
@@ -167,7 +167,7 @@ export function inheritedEnv(source: Record<string, string | undefined> = proces
 
 /**
  * The process environment for one step. Precedence, lowest first: inherited, runner variables,
- * workflow/job `env`, `$SKIFF_ENV` additions, step `env` (GitHub's order), and `$SKIFF_PATH`
+ * workflow/job `env`, `$YOAL_ENV` additions, step `env` (GitHub's order), and `$YOAL_PATH`
  * entries prepended to PATH, most recent first.
  */
 export function stepProcessEnv(input: {

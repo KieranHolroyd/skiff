@@ -18,7 +18,7 @@ import type {
 	PipelineResolveReport,
 	PipelineSecretsResponse,
 	PipelineStepReport,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 
 /**
  * Clients for the Pipelines protocol (docs/PIPELINES.md §4.1). `PipelineNodeClient` claims work

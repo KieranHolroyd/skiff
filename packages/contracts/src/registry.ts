@@ -157,7 +157,7 @@ export const registryImageTag = (version: string) => `ghcr.io/project-zot/zot:v$
 /** Workload ids of the registry carry this prefix. */
 export const REGISTRY_ID_PREFIX = 'reg_';
 /** Deployment pins (R11): kept by retention, hidden from lists, refused for user pushes. */
-export const REGISTRY_PIN_TAG_PREFIX = 'skiff-d-';
+export const REGISTRY_PIN_TAG_PREFIX = 'yoal-d-';
 /** Host loopback port the registry container publishes (CLUSTERING §4.3 range table). */
 export const REGISTRY_DEFAULT_PORT = 15000;
 
@@ -176,7 +176,7 @@ export const workloadRegistrySchema = z.object({
 	keepTags: z.number().int().min(1).max(1000).default(20),
 	/** G4: upstreams synced on demand into `<upstream>/…` repositories. */
 	mirrors: z.array(z.enum(REGISTRY_MIRROR_UPSTREAMS)).max(3).default([]),
-	/** G5: cosign/notation signature verification (keys uploaded by Skiff as the zot admin). */
+	/** G5: cosign/notation signature verification (keys uploaded by Yoal as the zot admin). */
 	trust: z.boolean().default(false),
 	/** G5: Trivy CVE scanning (downloads the vulnerability DB; local storage only). */
 	cve: z.boolean().default(false),
@@ -207,7 +207,7 @@ export const registrySettingsUpdateSchema = z
 		/** G5: Trivy CVE scanning (needs local storage). */
 		cveScanning: z.boolean().optional(),
 		/**
-		 * G6: store blobs in S3 (any S3-compatible endpoint, e.g. a Skiff storage instance) with a
+		 * G6: store blobs in S3 (any S3-compatible endpoint, e.g. a Yoal storage instance) with a
 		 * Redis/Valkey cache, so the registry can move to another node without copying data.
 		 * `null` returns to the node's disk (data is not migrated).
 		 */

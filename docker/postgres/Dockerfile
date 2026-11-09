@@ -1,10 +1,10 @@
-# Skiff Postgres variant images (D126): the pinned pgvector build of the official Postgres image
+# Yoal Postgres variant images (D126): the pinned pgvector build of the official Postgres image
 # plus one extension from the PGDG apt repository the base already configures. Same entrypoint,
 # uid handling and data layout as the base, so the helper runs them under the same lockdown.
 #
 #   docker build -f docker/postgres/Dockerfile --build-arg VARIANT=postgis docker/postgres
 #
-# Published as ghcr.io/<owner>/skiff-postgres:<major>-<variant>-<revision>. Bump the revision in
+# Published as ghcr.io/<owner>/yoal-postgres:<major>-<variant>-<revision>. Bump the revision in
 # the contract, the helper and .github/workflows/postgres-images.yml whenever this file or the
 # base changes, so a published tag never moves.
 ARG BASE=docker.io/pgvector/pgvector:0.8.7-pg18-trixie
@@ -21,4 +21,4 @@ RUN set -eux; \
 	apt-get install -y --no-install-recommends ${packages}; \
 	rm -rf /var/lib/apt/lists/*
 
-LABEL org.opencontainers.image.description="Skiff managed Postgres (${VARIANT} variant)"
+LABEL org.opencontainers.image.description="Yoal managed Postgres (${VARIANT} variant)"

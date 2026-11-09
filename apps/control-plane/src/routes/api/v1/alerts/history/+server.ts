@@ -1,5 +1,5 @@
 import type { RequestHandler } from './$types';
-import type { AlertEventKind } from '@skiff/contracts';
+import type { AlertEventKind } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { route } from '#lib/server/api.js';
 import { requirePrincipal } from '#lib/server/principal.js';

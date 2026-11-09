@@ -2,8 +2,8 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_FEATURES, alertRuleTemplate, type ConfigImportView, type Principal } from '@skiff/contracts';
-import { createDb } from '@skiff/db';
+import { DEFAULT_FEATURES, alertRuleTemplate, type ConfigImportView, type Principal } from '@yoal/contracts';
+import { createDb } from '@yoal/db';
 import { buildPrincipal } from '../orgs.ts';
 import { createCore, type Core } from '../index.ts';
 import { LocalObjectStore } from '../object-store.ts';
@@ -18,7 +18,7 @@ const dbs: { close(): void }[] = [];
 const clock = Date.parse('2026-11-09T10:00:00Z');
 
 function instance(name: string): Core {
-	const dir = mkdtempSync(join(tmpdir(), `skiff-import-${name}-`));
+	const dir = mkdtempSync(join(tmpdir(), `yoal-import-${name}-`));
 	dirs.push(dir);
 	const opened = createDb({ path: ':memory:' });
 	dbs.push(opened.sqlite);
@@ -152,7 +152,7 @@ const byKey = (view: ConfigImportView) => new Map(view.steps.map((step) => [step
 
 describe('config import', () => {
 	test('refuses something that is not an export', async () => {
-		await expect(fresh.configImport.plan(newOwner, { document: 'apiVersion: skiff/v1\nname: x' })).rejects.toThrow(/skiff.export\/v1/);
+		await expect(fresh.configImport.plan(newOwner, { document: 'apiVersion: yoal/v1\nname: x' })).rejects.toThrow(/yoal.export\/v1/);
 		await expect(fresh.configImport.plan(newOwner, { document: '{ nope' })).rejects.toThrow(/not valid (JSON|YAML)/);
 	});
 

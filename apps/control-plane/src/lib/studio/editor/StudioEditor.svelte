@@ -1,6 +1,6 @@
 <script module lang="ts">
 	let modelCounter = 0;
-	const MARKER_OWNER = 'skiff-studio';
+	const MARKER_OWNER = 'yoal-studio';
 </script>
 
 <script lang="ts">
@@ -75,7 +75,7 @@
 				model = loaded.editor.createModel(
 					value ?? '',
 					monacoLanguage(language, dialect),
-					loaded.Uri.parse(`inmemory://skiff-studio/query-${++modelCounter}${suffix}`)
+					loaded.Uri.parse(`inmemory://yoal-studio/query-${++modelCounter}${suffix}`)
 				);
 				editor = loaded.editor.create(container, {
 					model,
@@ -117,7 +117,7 @@
 				});
 				disposables.push(
 					editor.addAction({
-						id: 'skiff.studio.run',
+						id: 'yoal.studio.run',
 						label: 'Run',
 						keybindings: [loaded.KeyMod.CtrlCmd | loaded.KeyCode.Enter],
 						contextMenuGroupId: 'navigation',

@@ -11,7 +11,7 @@ import { confirmOrRefuse } from './run-operation.ts';
  * client over `/api/v1/iam`.
  */
 
-const usage = `Usage: skif iam <command> [options]
+const usage = `Usage: yoal iam <command> [options]
 
 Commands:
   roles [list]                  Built-in and custom roles, with how many permissions each has
@@ -59,13 +59,13 @@ that project and its environments. Attachments confer nothing. Custom roles are 
 or id; groups by name or id. Members are added by user id, because the API takes one.
 
 Examples:
-  skif iam roles create billing --permission project:read --permission database:read
-  skif iam bind user:user_abc owner --scope org
-  skif iam bind group:grp_eng deployer --scope project:prj_shop --expires 7d --reason "release week"
-  skif iam explain deployment:promote --resource project:prj_shop
-  skif iam who-can database:credentials --resource project:prj_shop
-  skif iam keys rotate --purpose sts
-  skif iam keys rotate --all`;
+  yoal iam roles create billing --permission project:read --permission database:read
+  yoal iam bind user:user_abc owner --scope org
+  yoal iam bind group:grp_eng deployer --scope project:prj_shop --expires 7d --reason "release week"
+  yoal iam explain deployment:promote --resource project:prj_shop
+  yoal iam who-can database:credentials --resource project:prj_shop
+  yoal iam keys rotate --purpose sts
+  yoal iam keys rotate --all`;
 
 const baseFlags: FlagSpec = {
 	json: { type: 'boolean' },
@@ -250,7 +250,7 @@ async function listRoles(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif iam roles [--json]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal iam roles [--json]');
 	const client = await authenticatedClient();
 	const snapshot = await fetchSnapshot(client);
 	if (args.boolean('json')) {
@@ -266,7 +266,7 @@ async function createRole(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif iam roles create <name> --permission <p>…');
+	rejectExtraPositionals(args, 1, 'Usage: yoal iam roles create <name> --permission <p>…');
 	const name = requirePositional(args, 0, `role name.\n\n${usage}`);
 	const permissions = parsePermissions(args.strings('permission'));
 	const body: Record<string, unknown> = { name, permissions };
@@ -281,7 +281,7 @@ async function createRole(argv: string[]): Promise<void> {
 	const role = asRecord(raw);
 	const id = stringValue(role?.id) ?? name;
 	console.log(`Created role "${name}" (${id}) with ${permissions.length} permission${permissions.length === 1 ? '' : 's'}.`);
-	console.log(`Bind it with: skif iam bind <type>:<id> ${name} --scope org`);
+	console.log(`Bind it with: yoal iam bind <type>:<id> ${name} --scope org`);
 }
 
 async function deleteRole(argv: string[]): Promise<void> {
@@ -290,7 +290,7 @@ async function deleteRole(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif iam roles delete <id> [--yes]');
+	rejectExtraPositionals(args, 1, 'Usage: yoal iam roles delete <id> [--yes]');
 	const id = requirePositional(args, 0, `role id.\n\n${usage}`);
 	const confirmed = await confirmOrRefuse(
 		`Delete role ${id}? It must not be bound to anyone. [y/N] `,
@@ -316,7 +316,7 @@ async function bindingsCommand(argv: string[]): Promise<void> {
 	if (!first || first.startsWith('-')) return listBindings(argv);
 	if (first === 'list' || first === 'ls') return listBindings(argv.slice(1));
 	throw new UsageError(
-		`Unknown bindings command "${first}". Use \`skif iam bind\` or \`skif iam unbind\`.\n\n${usage}`,
+		`Unknown bindings command "${first}". Use \`yoal iam bind\` or \`yoal iam unbind\`.\n\n${usage}`,
 	);
 }
 
@@ -326,7 +326,7 @@ async function listBindings(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif iam bindings [--json]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal iam bindings [--json]');
 	const client = await authenticatedClient();
 	const snapshot = await fetchSnapshot(client);
 	if (args.boolean('json')) {
@@ -334,7 +334,7 @@ async function listBindings(argv: string[]): Promise<void> {
 		return;
 	}
 	if (snapshot.bindings.length === 0) {
-		console.log('No bindings yet. Add one with `skif iam bind <type>:<id> <role> --scope org`.');
+		console.log('No bindings yet. Add one with `yoal iam bind <type>:<id> <role> --scope org`.');
 		return;
 	}
 	console.log(bindingTable(snapshot.bindings, snapshot.roles));
@@ -346,7 +346,7 @@ async function bindCommand(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 2, 'Usage: skif iam bind <type>:<id> <role> --scope <scope> [--expires <when>] [--reason <text>]');
+	rejectExtraPositionals(args, 2, 'Usage: yoal iam bind <type>:<id> <role> --scope <scope> [--expires <when>] [--reason <text>]');
 	const principal = parsePrincipal(requirePositional(args, 0, `principal, as <type>:<id>.\n\n${usage}`));
 	const roleValue = requirePositional(args, 1, `role.\n\n${usage}`);
 	const scopeValue = args.string('scope');
@@ -384,7 +384,7 @@ async function unbindCommand(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif iam unbind <id> [--yes]');
+	rejectExtraPositionals(args, 1, 'Usage: yoal iam unbind <id> [--yes]');
 	const id = requirePositional(args, 0, `binding id.\n\n${usage}`);
 	const confirmed = await confirmOrRefuse(`Remove binding ${id}? Its access stops at once. [y/N] `, {
 		yes: args.boolean('yes'),
@@ -425,7 +425,7 @@ async function listGroups(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif iam groups [--json]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal iam groups [--json]');
 	const client = await authenticatedClient();
 	const snapshot = await fetchSnapshot(client);
 	if (args.boolean('json')) {
@@ -433,7 +433,7 @@ async function listGroups(argv: string[]): Promise<void> {
 		return;
 	}
 	if (snapshot.groups.length === 0) {
-		console.log('No groups yet. Create one with `skif iam group create <name>`.');
+		console.log('No groups yet. Create one with `yoal iam group create <name>`.');
 		return;
 	}
 	console.log(groupTable(snapshot.groups));
@@ -445,7 +445,7 @@ async function createGroup(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif iam group create <name> [--description <text>]');
+	rejectExtraPositionals(args, 1, 'Usage: yoal iam group create <name> [--description <text>]');
 	const name = requirePositional(args, 0, `group name.\n\n${usage}`);
 	const body: Record<string, unknown> = { name };
 	const description = args.string('description');
@@ -458,7 +458,7 @@ async function createGroup(argv: string[]): Promise<void> {
 	}
 	const group = asRecord(raw);
 	const id = stringValue(group?.id) ?? name;
-	console.log(`Created group "${name}" (${id}). Add members with \`skif iam group add ${name} <user>\`.`);
+	console.log(`Created group "${name}" (${id}). Add members with \`yoal iam group add ${name} <user>\`.`);
 }
 
 async function addGroupMember(argv: string[]): Promise<void> {
@@ -498,7 +498,7 @@ async function groupMemberArgs(
 		console.log(usage);
 		return null;
 	}
-	rejectExtraPositionals(args, 2, `Usage: skif iam group ${action} <group> <user>`);
+	rejectExtraPositionals(args, 2, `Usage: yoal iam group ${action} <group> <user>`);
 	const groupValue = requirePositional(args, 0, `group name or id.\n\n${usage}`);
 	const userId = requirePositional(args, 1, `user id.\n\n${usage}`);
 	const client = await authenticatedClient();
@@ -514,7 +514,7 @@ async function explainCommand(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif iam explain <permission> [--resource <resource>]');
+	rejectExtraPositionals(args, 1, 'Usage: yoal iam explain <permission> [--resource <resource>]');
 	const permission = requirePositional(args, 0, `permission, e.g. project:read.\n\n${usage}`);
 	const resource = parseScope(args.string('resource') ?? 'org', '--resource');
 	const client = await authenticatedClient();
@@ -535,7 +535,7 @@ async function whoCanCommand(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif iam who-can <permission> [--resource <resource>]');
+	rejectExtraPositionals(args, 1, 'Usage: yoal iam who-can <permission> [--resource <resource>]');
 	const permission = requirePositional(args, 0, `permission, e.g. project:read.\n\n${usage}`);
 	const resource = parseScope(args.string('resource') ?? 'org', '--resource');
 	const client = await authenticatedClient();
@@ -559,7 +559,7 @@ async function keysCommand(argv: string[]): Promise<void> {
 	if (!first || first.startsWith('-')) return listKeys(argv);
 	if (first === 'list' || first === 'ls') return listKeys(argv.slice(1));
 	if (first === 'rotate') return rotateKeys(argv.slice(1));
-	throw new UsageError(`Unknown keys command "${first}". Use \`skif iam keys list\` or \`skif iam keys rotate\`.\n\n${usage}`);
+	throw new UsageError(`Unknown keys command "${first}". Use \`yoal iam keys list\` or \`yoal iam keys rotate\`.\n\n${usage}`);
 }
 
 async function listKeys(argv: string[]): Promise<void> {
@@ -568,7 +568,7 @@ async function listKeys(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif iam keys [list] [--json]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal iam keys [list] [--json]');
 	const client = await authenticatedClient();
 	const raw = await requestJson(client, 'GET', '/api/v1/iam/keys');
 	if (args.boolean('json')) {
@@ -593,7 +593,7 @@ async function rotateKeys(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif iam keys rotate --purpose <p> | --all [--json]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal iam keys rotate --purpose <p> | --all [--json]');
 	const body = parseKeyRotation({ all: args.boolean('all'), purpose: args.string('purpose') });
 	const client = await authenticatedClient();
 	const raw = await requestJson(client, 'POST', '/api/v1/iam/keys/rotate', body);
@@ -619,7 +619,7 @@ async function migrateKeys(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif iam migrate-keys [--org <id>] [--json]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal iam migrate-keys [--org <id>] [--json]');
 	const org = args.string('org');
 	const client = await authenticatedClient();
 	const raw = await requestJson(
@@ -954,13 +954,13 @@ function explainQuery(permission: string, scope: IamScopeView): string {
 
 function resolveRole(value: string, roles: IamRoleView[]): IamRoleView {
 	const role = roles.find((entry) => entry.id === value) ?? roles.find((entry) => entry.name === value);
-	if (!role) throw new UsageError(`Unknown role "${value}". Run \`skif iam roles\` to see them.`);
+	if (!role) throw new UsageError(`Unknown role "${value}". Run \`yoal iam roles\` to see them.`);
 	return role;
 }
 
 function resolveGroup(value: string, groups: IamGroupView[]): IamGroupView {
 	const group = groups.find((entry) => entry.id === value) ?? groups.find((entry) => entry.name === value);
-	if (!group) throw new UsageError(`Unknown group "${value}". Run \`skif iam groups\` to see them.`);
+	if (!group) throw new UsageError(`Unknown group "${value}". Run \`yoal iam groups\` to see them.`);
 	return group;
 }
 

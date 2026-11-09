@@ -1,4 +1,4 @@
-import type { AlertRuleSummary, AlertRuleView } from '@skiff/contracts';
+import type { AlertRuleSummary, AlertRuleView } from '@yoal/contracts';
 import type { QueryClient } from '@tanstack/svelte-query';
 import { toast } from 'svelte-sonner';
 import { goto } from '$app/navigation';

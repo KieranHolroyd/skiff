@@ -1,5 +1,5 @@
 import { and, eq, isNull, or } from 'drizzle-orm';
-import { nodes, storageBuckets, storageInstances, storageReplication } from '@skiff/db';
+import { nodes, storageBuckets, storageInstances, storageReplication } from '@yoal/db';
 import {
 	storageGatewayHost,
 	storageReplicationCreateSchema,
@@ -12,7 +12,7 @@ import {
 	type StorageReplicationReport,
 	type StorageReplicationStatus,
 	type StorageReplicationView,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, NotFoundError, ValidationError } from './errors.ts';
 import { mintStorageKeyPair } from './storage-instances.ts';

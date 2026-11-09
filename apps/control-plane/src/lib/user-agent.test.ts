@@ -55,7 +55,7 @@ describe('describeUserAgent', () => {
 		expect(describeUserAgent(null)).toBe('Unknown device');
 		expect(describeUserAgent('   ')).toBe('Unknown device');
 		expect(describeUserAgent('curl/8.10.1')).toBe('Automated client');
-		expect(describeUserAgent('SkiffBot/1.0 (+https://example.com)')).toBe('Automated client');
+		expect(describeUserAgent('YoalBot/1.0 (+https://example.com)')).toBe('Automated client');
 	});
 
 	test('falls back to whatever part it can identify', () => {

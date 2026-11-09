@@ -1,4 +1,4 @@
-# Skiff — Event notifications
+# Yoal — Event notifications
 
 Status: **implemented, 2026-11-07**. Covered by unit tests in core, agent and CLI. The RustFS
 webhook target was spiked on the pinned 1.0.4 build (§5), but the whole chain
@@ -8,7 +8,7 @@ D122 in [DECISIONS.md](./DECISIONS.md).
 An **event rule** publishes platform events into a queue, and a function consumes that queue.
 This is Cloudflare's model, as in `wrangler r2 bucket notification create --queue`: the rule
 belongs to the source and targets a queue, the function is an ordinary queue consumer, and it
-handles each event in `queue()`. Skiff never calls a function directly for an event, so delivery
+handles each event in `queue()`. Yoal never calls a function directly for an event, so delivery
 gets the queue's batching, `ack()`/`retry()`, retry delays and dead-letter queue
 ([FUNCTIONS.md §4.10](./FUNCTIONS.md), [BROKERS.md §6](./BROKERS.md)).
 
@@ -55,7 +55,7 @@ A rule with no `events` matches every event of its source.
 ## 3. Message bodies
 
 A storage event uses R2's body, so a Worker written for R2 event notifications runs unchanged.
-`skiff` carries the fields R2 has no place for:
+`yoal` carries the fields R2 has no place for:
 
 ```json
 {
@@ -64,7 +64,7 @@ A storage event uses R2's body, so a Worker written for R2 event notifications r
   "bucket": "uploads",
   "object": { "key": "incoming/cat.jpg", "size": 48213, "eTag": "82d23a75…" },
   "eventTime": "2026-11-07T11:04:18.532Z",
-  "skiff": { "type": "storage.object-create", "storage": "media", "eventName": "s3:ObjectCreated:Put" }
+  "yoal": { "type": "storage.object-create", "storage": "media", "eventName": "s3:ObjectCreated:Put" }
 }
 ```
 
@@ -78,7 +78,7 @@ Every other source uses one envelope:
 { "type": "alerts.firing", "id": "evt_…", "time": "2026-11-07T11:20:00.000Z", "account": "org_…", "data": { … } }
 ```
 
-Messages are published with `Skiff-Content-Type: json`, so the consumer gets `message.body` as an
+Messages are published with `Yoal-Content-Type: json`, so the consumer gets `message.body` as an
 object. `Nats-Msg-Id` is the delivery id, so JetStream drops a re-published duplicate.
 
 ## 4. Delivery
@@ -87,7 +87,7 @@ object. `Nats-Msg-Id` is the delivery id, so JetStream drops a re-published dupl
  source ──emit──▶ control plane: match rules ──▶ event_deliveries (pending)
                                                         │  POST /api/agent/events/lease
                                                         ▼
-                         broker's node agent ──publish──▶ skiff.q.<queue> (JetStream)
+                         broker's node agent ──publish──▶ yoal.q.<queue> (JetStream)
                                 │  POST /api/agent/events/ack        │
                                 ▼                                    ▼
                          delivered / retry later           function queue() (D112)
@@ -104,7 +104,7 @@ object. `Nats-Msg-Id` is the delivery id, so JetStream drops a re-published dupl
    delivery still pending after 24 hours is marked `failed`. A rule whose broker was deleted stops
    being leased, and its deliveries fail when they expire.
 4. **Consume.** From here it is an ordinary queue (BROKERS §6). Delivery is at least once end to
-   end, so a consumer that must not act twice should key on `skiff.eventName`/`object.eTag`
+   end, so a consumer that must not act twice should key on `yoal.eventName`/`object.eTag`
    (storage) or `id` (envelope).
 
 ## 5. Storage events (RustFS)
@@ -116,15 +116,15 @@ RustFS sends bucket events through a webhook target, and the spike on 1.0.4 deci
   address`), so a node-local listener is not an option. The instance's container already reaches
   the control plane over HTTPS.
 - **Env, only while a rule watches a bucket on the instance:** `RUSTFS_NOTIFY_ENABLE=true`,
-  `RUSTFS_NOTIFY_WEBHOOK_ENABLE_SKIFF=on`, `…_ENDPOINT_SKIFF`, `…_QUEUE_DIR_SKIFF=/data/.skiff-notify`
-  (desired state) and `…_AUTH_TOKEN_SKIFF` (activation, a secret). Changing whether it is on changes
+  `RUSTFS_NOTIFY_WEBHOOK_ENABLE_YOAL=on`, `…_ENDPOINT_YOAL`, `…_QUEUE_DIR_YOAL=/data/.yoal-notify`
+  (desired state) and `…_AUTH_TOKEN_YOAL` (activation, a secret). Changing whether it is on changes
   the activation version, so **the instance restarts once** when its first rule is created and
   after its last rule goes. Instances without rules never restart for this.
 - **The token** is `HMAC(master key, "storage-events:<id>")`. It is derived, so nothing is stored or
   rotated per instance. The webhook gives the same 401 for an unknown instance and a wrong token.
 - **Bucket config.** A watched bucket's desired state has `notifications: true`, and the agent
   `PUT ?notification` to send every `s3:ObjectCreated:*` and `s3:ObjectRemoved:*` event to
-  `arn:rustfs:sqs:us-east-1:skiff:webhook`. The ARN needs the lower-case target id and the region.
+  `arn:rustfs:sqs:us-east-1:yoal:webhook`. The ARN needs the lower-case target id and the region.
   Unwatched buckets get an empty config, and the agent re-asserts it on its 15-minute pass. The
   control plane, not RustFS, filters by event, prefix and suffix, so editing a rule never touches
   the bucket.
@@ -136,7 +136,7 @@ RustFS sends bucket events through a webhook target, and the spike on 1.0.4 deci
 
 - **Dashboard:** no page of its own. An event rule is shown as an **event trigger** in the
   **Triggers** card on the function's **Bindings & triggers** tab, next to its HTTP, cron and queue
-  triggers (behind `SKIFF_FEATURE_BROKERS`). The card lists the rules that publish into the
+  triggers (behind `YOAL_FEATURE_BROKERS`). The card lists the rules that publish into the
   function's consumer queues, plus rules on a broker attached to it whose queue no function
   consumes yet (flagged "queue not consumed", so a trigger set up before the consumer is deployed
   stays visible). Each one shows its source, events, filter, target queue and 24-hour counts with
@@ -151,15 +151,15 @@ RustFS sends bucket events through a webhook target, and the spike on 1.0.4 deci
 - **MCP and the assistant:** `list_event_rules`, `get_event_rule` (with its 20 newest deliveries),
   `create_event_rule` (returns next steps for wiring the consumer), `update_event_rule`,
   `test_event_rule`, `list_event_deliveries`, and `delete_event_rule` (asks for confirmation).
-- **CLI:** `skif events list|create|info|update|delete|test|deliveries` (alias `skif event`).
+- **CLI:** `yoal events list|create|info|update|delete|test|deliveries` (alias `yoal event`).
 - **Agent protocol:** `POST /api/agent/events/lease`, `POST /api/agent/events/ack`.
 - **Webhook:** `POST /api/webhooks/storage/:id` (RustFS only, bearer token, 256 KiB cap).
 
 Example: resize every JPEG uploaded under `incoming/`.
 
 ```sh
-skif broker attach jobs --project resizer
-skif events create storage --storage media --bucket uploads --prefix incoming/ --suffix .jpg \
+yoal broker attach jobs --project resizer
+yoal events create storage --storage media --bucket uploads --prefix incoming/ --suffix .jpg \
   --event object-create --broker jobs --queue images
 ```
 

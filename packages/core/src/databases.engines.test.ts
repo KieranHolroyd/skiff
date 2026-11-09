@@ -2,15 +2,15 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import { databaseAlias, databaseEngineRegistry, DEFAULT_FEATURES } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import { databaseAlias, databaseEngineRegistry, DEFAULT_FEATURES } from '@yoal/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import type { Core } from './index.ts';
 
 /** Engines beyond Postgres (docs/DATABASES.md §17, D95). */
-const dir = mkdtempSync(join(tmpdir(), 'skiff-db-engines-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-db-engines-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 const clock = Date.parse('2026-11-05T10:00:00Z');
@@ -109,7 +109,7 @@ describe('database engines', () => {
 		const valkey = state.workloads.find((workload) => workload.projectSlug === 'shop-cache')!;
 		expect(valkey).toMatchObject({ image: 'docker.io/valkey/valkey:9.1-alpine', env: { VALKEY_USER: 'shop_cache' } });
 		// Plus the read-only studio principal, which the helper renders into the generated ACL (track G).
-		expect(Object.keys(core.workloads.activation(edgeId, valkey.id).env)).toEqual(['VALKEY_PASSWORD', 'SKIFF_STUDIO_RO_PASSWORD']);
+		expect(Object.keys(core.workloads.activation(edgeId, valkey.id).env)).toEqual(['VALKEY_PASSWORD', 'YOAL_STUDIO_RO_PASSWORD']);
 		const mongo = state.workloads.find((workload) => workload.projectSlug === 'shop-docs')!;
 		expect(mongo.env).toEqual({ MONGO_INITDB_ROOT_USERNAME: 'shop_docs', MONGO_INITDB_DATABASE: 'shop_docs' });
 		expect(JSON.stringify(state)).not.toContain(core.databases.credentials(owner, 'shop-sql').password);

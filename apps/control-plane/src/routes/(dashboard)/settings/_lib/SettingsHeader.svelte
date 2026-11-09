@@ -25,7 +25,7 @@
 
 <header
 	class="flex flex-wrap items-start justify-between gap-x-6 gap-y-3 border-b pb-5"
-	data-skiff-target={`settings.section.${id}`}
+	data-yoal-target={`settings.section.${id}`}
 >
 	<div class="flex min-w-0 flex-1 basis-80 items-start gap-3.5">
 		<span

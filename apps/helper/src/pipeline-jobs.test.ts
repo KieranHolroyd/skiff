@@ -26,10 +26,10 @@ import type { CommandRunner, RunResult } from './systemd.ts';
 import { ValidationError } from './validate.ts';
 import { createHandler, type HelperRuntime } from './server.ts';
 
-const root = mkdtempSync(join(tmpdir(), 'skiff-pipeline-jobs-'));
+const root = mkdtempSync(join(tmpdir(), 'yoal-pipeline-jobs-'));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-const base = { jobId: 'pj_abc123', image: 'node:24-bookworm', memoryMb: 2048, cpus: 2, env: ['SKIFF_JOB_TOKEN=pjt_secret', 'SKIFF_CONTROL_URL=https://c.test'] };
+const base = { jobId: 'pj_abc123', image: 'node:24-bookworm', memoryMb: 2048, cpus: 2, env: ['YOAL_JOB_TOKEN=pjt_secret', 'YOAL_CONTROL_URL=https://c.test'] };
 
 describe('parsePipelineJobStart', () => {
 	test('accepts a full request, qualifies images and defaults runtime/profile', () => {
@@ -43,8 +43,8 @@ describe('parsePipelineJobStart', () => {
 		expect(parsed.runtime).toBe('runc');
 		expect(parsed.profile).toBe('default');
 		expect(parsed.env).toEqual([
-			['SKIFF_JOB_TOKEN', 'pjt_secret'],
-			['SKIFF_CONTROL_URL', 'https://c.test'],
+			['YOAL_JOB_TOKEN', 'pjt_secret'],
+			['YOAL_CONTROL_URL', 'https://c.test'],
 		]);
 		expect(parsed.services[0]).toEqual({
 			name: 'postgres',
@@ -93,17 +93,17 @@ describe('parsePipelineJobStart', () => {
 
 describe('paths', () => {
 	test('every host path derives from the builds root, runtime dir and job id', () => {
-		const paths = pipelineJobPaths('/var/lib/skiff-builder', '/run/skiff-workloads', 'pj_1');
+		const paths = pipelineJobPaths('/var/lib/yoal-builder', '/run/yoal-workloads', 'pj_1');
 		expect(paths).toEqual({
-			jobRoot: '/var/lib/skiff-builder/pipelines/pj_1',
-			workspace: '/var/lib/skiff-builder/pipelines/pj_1/workspace',
-			home: '/var/lib/skiff-builder/pipelines/pj_1/home',
-			tmp: '/var/lib/skiff-builder/pipelines/pj_1/tmp',
-			meta: '/var/lib/skiff-builder/pipelines/pj_1/meta',
-			runnerLog: '/var/lib/skiff-builder/pipelines/pj_1/runner.log',
-			runtime: '/run/skiff-workloads/pipeline-jobs/pj_1',
-			envFile: '/run/skiff-workloads/pipeline-jobs/pj_1/job.env',
-			buildkitSocketDir: '/run/skiff-workloads/pipeline-jobs/pj_1/buildkit',
+			jobRoot: '/var/lib/yoal-builder/pipelines/pj_1',
+			workspace: '/var/lib/yoal-builder/pipelines/pj_1/workspace',
+			home: '/var/lib/yoal-builder/pipelines/pj_1/home',
+			tmp: '/var/lib/yoal-builder/pipelines/pj_1/tmp',
+			meta: '/var/lib/yoal-builder/pipelines/pj_1/meta',
+			runnerLog: '/var/lib/yoal-builder/pipelines/pj_1/runner.log',
+			runtime: '/run/yoal-workloads/pipeline-jobs/pj_1',
+			envFile: '/run/yoal-workloads/pipeline-jobs/pj_1/job.env',
+			buildkitSocketDir: '/run/yoal-workloads/pipeline-jobs/pj_1/buildkit',
 		});
 		expect(() => pipelineJobPaths('/b', '/r', '../x')).toThrow(ValidationError);
 	});
@@ -126,11 +126,11 @@ describe('paths', () => {
 
 	test('the builds root follows the Builder storage drop-in (D48)', async () => {
 		const unitDir = join(root, 'units');
-		expect(await resolveBuildsRoot({ unitDir })).toBe('/var/lib/skiff-builder');
-		mkdirSync(join(unitDir, 'skiff-builder.service.d'), { recursive: true });
+		expect(await resolveBuildsRoot({ unitDir })).toBe('/var/lib/yoal-builder');
+		mkdirSync(join(unitDir, 'yoal-builder.service.d'), { recursive: true });
 		writeFileSync(
-			join(unitDir, 'skiff-builder.service.d', 'skiff-storage.conf'),
-			'[Service]\nEnvironment=SKIFF_BUILD_DIR=/mnt/pool/builder\nEnvironment=HOME=/mnt/pool/builder\n',
+			join(unitDir, 'yoal-builder.service.d', 'yoal-storage.conf'),
+			'[Service]\nEnvironment=YOAL_BUILD_DIR=/mnt/pool/builder\nEnvironment=HOME=/mnt/pool/builder\n',
 		);
 		expect(await resolveBuildsRoot({ unitDir })).toBe('/mnt/pool/builder');
 		expect(await resolveBuildsRoot({ unitDir, override: '/srv/builds' })).toBe('/srv/builds');
@@ -138,7 +138,7 @@ describe('paths', () => {
 });
 
 describe('rendering', () => {
-	const paths = pipelineJobPaths('/var/lib/skiff-builder', '/run/skiff-workloads', 'pj_1');
+	const paths = pipelineJobPaths('/var/lib/yoal-builder', '/run/yoal-workloads', 'pj_1');
 	const request = parsePipelineJobStart({ ...base, jobId: 'pj_1' });
 
 	test('the default job container: no capabilities, userns=auto, env only through --env-file', () => {
@@ -147,7 +147,7 @@ describe('rendering', () => {
 			request,
 			paths,
 			network: null,
-			stepBinary: '/var/lib/skiff-builder/tools/skiff-step-1-2',
+			stepBinary: '/var/lib/yoal-builder/tools/yoal-step-1-2',
 			buildctl: null,
 			fuse: true,
 			apparmorProfile: null,
@@ -156,8 +156,8 @@ describe('rendering', () => {
 			'/usr/bin/podman',
 			'run',
 			'-d',
-			'--name=skiff-job-pj_1',
-			'--label=skiff.pipeline-job=pj_1',
+			'--name=yoal-job-pj_1',
+			'--label=yoal.pipeline-job=pj_1',
 			'--init',
 			'--pull=never',
 			'--userns=auto:size=65536',
@@ -168,19 +168,19 @@ describe('rendering', () => {
 			'--memory-swap=2048m',
 			'--cpus=2',
 			'--log-driver=k8s-file',
-			'--log-opt=path=/var/lib/skiff-builder/pipelines/pj_1/runner.log',
+			'--log-opt=path=/var/lib/yoal-builder/pipelines/pj_1/runner.log',
 			'--log-opt=max-size=10mb',
-			'--env-file=/run/skiff-workloads/pipeline-jobs/pj_1/job.env',
-			'--volume=/var/lib/skiff-builder/pipelines/pj_1/workspace:/workspace:Z,U',
-			'--volume=/var/lib/skiff-builder/pipelines/pj_1/meta:/skiff/meta:ro,Z,U',
-			'--volume=/var/lib/skiff-builder/pipelines/pj_1/home:/skiff/home:Z,U',
-			'--volume=/var/lib/skiff-builder/pipelines/pj_1/tmp:/skiff/tmp:Z,U',
-			'--volume=/var/lib/skiff-builder/tools/skiff-step-1-2:/skiff/bin/skiff-step:ro,z',
+			'--env-file=/run/yoal-workloads/pipeline-jobs/pj_1/job.env',
+			'--volume=/var/lib/yoal-builder/pipelines/pj_1/workspace:/workspace:Z,U',
+			'--volume=/var/lib/yoal-builder/pipelines/pj_1/meta:/yoal/meta:ro,Z,U',
+			'--volume=/var/lib/yoal-builder/pipelines/pj_1/home:/yoal/home:Z,U',
+			'--volume=/var/lib/yoal-builder/pipelines/pj_1/tmp:/yoal/tmp:Z,U',
+			'--volume=/var/lib/yoal-builder/tools/yoal-step-1-2:/yoal/bin/yoal-step:ro,z',
 			'--workdir=/workspace',
-			'--entrypoint=/skiff/bin/skiff-step',
+			'--entrypoint=/yoal/bin/yoal-step',
 			'docker.io/library/node:24-bookworm',
 			'pipeline-step',
-			'/skiff/meta/job.json',
+			'/yoal/meta/job.json',
 		]);
 		expect(argv.join(' ')).not.toContain('pjt_secret');
 	});
@@ -190,8 +190,8 @@ describe('rendering', () => {
 			podmanPath: '/usr/bin/podman',
 			request: { ...request, profile: 'oci-build', runtime: 'runsc', buildkit: true },
 			paths,
-			network: 'skiff-job-pj_1',
-			stepBinary: '/t/skiff-step',
+			network: 'yoal-job-pj_1',
+			stepBinary: '/t/yoal-step',
 			buildctl: '/t/buildctl-0.34.2',
 			fuse: true,
 			apparmorProfile: 'unconfined',
@@ -202,9 +202,9 @@ describe('rendering', () => {
 		expect(argv).not.toContain('--cap-drop=all');
 		expect(argv).toContain('--security-opt=no-new-privileges');
 		expect(argv).toContain('--security-opt=apparmor=unconfined');
-		expect(argv).toContain('--network=skiff-job-pj_1');
-		expect(argv).toContain('--volume=/t/buildctl-0.34.2:/skiff/bin/buildctl:ro,z');
-		expect(argv).toContain('--volume=/run/skiff-workloads/pipeline-jobs/pj_1/buildkit:/skiff/buildkit:ro,z');
+		expect(argv).toContain('--network=yoal-job-pj_1');
+		expect(argv).toContain('--volume=/t/buildctl-0.34.2:/yoal/bin/buildctl:ro,z');
+		expect(argv).toContain('--volume=/run/yoal-workloads/pipeline-jobs/pj_1/buildkit:/yoal/buildkit:ro,z');
 		const noFuse = renderJobContainerArgs({
 			podmanPath: 'podman',
 			request: { ...request, profile: 'oci-build' },
@@ -229,27 +229,27 @@ describe('rendering', () => {
 			request: withService,
 			service: withService.services[0]!,
 			paths,
-			network: 'skiff-job-pj_1',
+			network: 'yoal-job-pj_1',
 			apparmorProfile: null,
 		});
 		expect(argv).toEqual([
 			'podman',
 			'run',
 			'-d',
-			'--name=skiff-job-pj_1-svc-postgres',
-			'--label=skiff.pipeline-job=pj_1',
+			'--name=yoal-job-pj_1-svc-postgres',
+			'--label=yoal.pipeline-job=pj_1',
 			'--pull=never',
 			'--userns=auto:size=65536',
 			'--security-opt=no-new-privileges',
 			'--pids-limit=4096',
 			'--memory=2048m',
-			'--network=skiff-job-pj_1',
+			'--network=yoal-job-pj_1',
 			'--network-alias=db',
 			'--network-alias=postgres',
 			'--log-driver=k8s-file',
-			'--log-opt=path=/run/skiff-workloads/pipeline-jobs/pj_1/svc-postgres.log',
+			'--log-opt=path=/run/yoal-workloads/pipeline-jobs/pj_1/svc-postgres.log',
 			'--log-opt=max-size=5mb',
-			'--env-file=/run/skiff-workloads/pipeline-jobs/pj_1/svc-postgres.env',
+			'--env-file=/run/yoal-workloads/pipeline-jobs/pj_1/svc-postgres.env',
 			'--health-cmd=pg_isready',
 			'--health-interval=disable',
 			'docker.io/library/postgres:17',
@@ -258,13 +258,13 @@ describe('rendering', () => {
 	});
 
 	test('BuildKit: pinned image, WS1 profile, never no-process-sandbox', () => {
-		const argv = renderBuildkitArgs({ podmanPath: 'podman', request, paths, cacheDir: '/var/lib/skiff-builder/buildkit-cache/main', fuse: false });
+		const argv = renderBuildkitArgs({ podmanPath: 'podman', request, paths, cacheDir: '/var/lib/yoal-builder/buildkit-cache/main', fuse: false });
 		expect(argv).toEqual([
 			'podman',
 			'run',
 			'-d',
-			'--name=skiff-job-pj_1-buildkit',
-			'--label=skiff.pipeline-job=pj_1',
+			'--name=yoal-job-pj_1-buildkit',
+			'--label=yoal.pipeline-job=pj_1',
 			'--pull=never',
 			'--userns=auto:size=165536',
 			'--security-opt=seccomp=unconfined',
@@ -275,12 +275,12 @@ describe('rendering', () => {
 			'--memory=2048m',
 			'--cpus=2',
 			'--log-driver=k8s-file',
-			'--log-opt=path=/run/skiff-workloads/pipeline-jobs/pj_1/buildkit.log',
+			'--log-opt=path=/run/yoal-workloads/pipeline-jobs/pj_1/buildkit.log',
 			'--log-opt=max-size=5mb',
-			'--volume=/var/lib/skiff-builder/buildkit-cache/main:/home/user/.local/share/buildkit:Z,U',
-			'--volume=/run/skiff-workloads/pipeline-jobs/pj_1/buildkit:/skiff/buildkit:z,U',
+			'--volume=/var/lib/yoal-builder/buildkit-cache/main:/home/user/.local/share/buildkit:Z,U',
+			'--volume=/run/yoal-workloads/pipeline-jobs/pj_1/buildkit:/yoal/buildkit:z,U',
 			BUILDKIT.image,
-			'--addr=unix:///skiff/buildkit/buildkitd.sock',
+			'--addr=unix:///yoal/buildkit/buildkitd.sock',
 		]);
 		expect(BUILDKIT.image).toMatch(/@sha256:[a-f0-9]{64}$/);
 		expect(argv.join(' ')).not.toContain('no-process-sandbox');
@@ -290,12 +290,12 @@ describe('rendering', () => {
 	test('env file and the helper-fixed variables', () => {
 		expect(renderEnvFile([])).toBe('');
 		expect(renderEnvFile([['A', '1'], ['B', 'x=y z']])).toBe('A=1\nB=x=y z\n');
-		expect(jobPath(['HOME=/root', 'PATH=/usr/local/go/bin:/usr/bin'])).toBe('/skiff/bin:/usr/local/go/bin:/usr/bin');
-		expect(jobPath(null)).toBe('/skiff/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin');
-		const env = jobEnv({ ...request, buildkit: true }, '/skiff/bin:/usr/bin');
+		expect(jobPath(['HOME=/root', 'PATH=/usr/local/go/bin:/usr/bin'])).toBe('/yoal/bin:/usr/local/go/bin:/usr/bin');
+		expect(jobPath(null)).toBe('/yoal/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin');
+		const env = jobEnv({ ...request, buildkit: true }, '/yoal/bin:/usr/bin');
 		expect(env.slice(0, 2)).toEqual(request.env);
 		expect(env).toContainEqual(['BUILDKIT_HOST', BUILDKIT_HOST]);
-		expect(env).toContainEqual(['HOME', '/skiff/home']);
+		expect(env).toContainEqual(['HOME', '/yoal/home']);
 		expect(jobEnv(request, '/p').some(([name]) => name === 'BUILDKIT_HOST')).toBe(false);
 	});
 
@@ -320,10 +320,10 @@ describe('detectPipelineCapabilities', () => {
 			return false;
 		},
 	});
-	const input = (p: ReturnType<typeof probe>) => ({ probe: p, podmanPath: '/usr/bin/podman', stepBinary: '/opt/skiff/agent', buildsRoot: '/b' });
+	const input = (p: ReturnType<typeof probe>) => ({ probe: p, podmanPath: '/usr/bin/podman', stepBinary: '/opt/yoal/agent', buildsRoot: '/b' });
 
 	test('runc always, runsc when installed where Podman looks, kata only with /dev/kvm', async () => {
-		expect(await detectPipelineCapabilities(input(probe(['/opt/skiff/agent', '/dev/fuse'])))).toEqual({
+		expect(await detectPipelineCapabilities(input(probe(['/opt/yoal/agent', '/dev/fuse'])))).toEqual({
 			podman: '5.4.2',
 			runtimes: ['runc'],
 			userns: true,
@@ -391,7 +391,7 @@ async function settle(driver: PipelineJobDriver, jobId: string, until: (state: s
 describe('PipelineJobDriver', () => {
 	const buildsRoot = join(root, 'builds');
 	const runtimeDir = join(root, 'run');
-	const stepBinary = join(root, 'skiff-agent');
+	const stepBinary = join(root, 'yoal-agent');
 	writeFileSync(stepBinary, '#!/bin/sh\n', { mode: 0o755 });
 	const subidFiles = { subuid: join(root, 'subuid'), subgid: join(root, 'subgid') };
 
@@ -429,17 +429,17 @@ describe('PipelineJobDriver', () => {
 
 		expect(statSync(paths.envFile).mode & 0o777).toBe(0o400);
 		expect(readFileSync(paths.envFile, 'utf8')).toBe(
-			'SKIFF_JOB_TOKEN=pjt_secret\nSKIFF_CONTROL_URL=https://c.test\nHOME=/skiff/home\nPATH=/skiff/bin:/usr/local/bin:/usr/bin\n' +
-				'SKIFF_PIPELINE_WORKSPACE=/workspace\nSKIFF_PIPELINE_TEMP=/skiff/tmp\n',
+			'YOAL_JOB_TOKEN=pjt_secret\nYOAL_CONTROL_URL=https://c.test\nHOME=/yoal/home\nPATH=/yoal/bin:/usr/local/bin:/usr/bin\n' +
+				'YOAL_PIPELINE_WORKSPACE=/workspace\nYOAL_PIPELINE_TEMP=/yoal/tmp\n',
 		);
 		expect(readFileSync(join(paths.runtime, 'svc-postgres.env'), 'utf8')).toBe('POSTGRES_PASSWORD=pw\n');
 		expect(readFileSync(subidFiles.subuid, 'utf8')).toContain('containers:');
 		for (const argv of fake.calls) expect(argv.join(' ')).not.toMatch(/pjt_secret|POSTGRES_PASSWORD=pw/);
 		const verbs = fake.calls.map((argv) => argv.slice(1, 3).join(' '));
 		expect(verbs.indexOf('network create')).toBeLessThan(verbs.findIndex((v) => v.startsWith('run')));
-		const jobRun = fake.calls.find((argv) => argv[1] === 'run' && argv.includes('--name=skiff-job-pj_run'))!;
-		expect(jobRun).toContain('--network=skiff-job-pj_run');
-		expect(jobRun.find((arg) => arg.includes('/skiff/bin/skiff-step'))).toMatch(/\/tools\/skiff-step-\d+-\d+:\/skiff\/bin\/skiff-step:ro,z$/);
+		const jobRun = fake.calls.find((argv) => argv[1] === 'run' && argv.includes('--name=yoal-job-pj_run'))!;
+		expect(jobRun).toContain('--network=yoal-job-pj_run');
+		expect(jobRun.find((arg) => arg.includes('/yoal/bin/yoal-step'))).toMatch(/\/tools\/yoal-step-\d+-\d+:\/yoal\/bin\/yoal-step:ro,z$/);
 		// Idempotent while it exists.
 		expect((await d.start(request)).state).toBe('running');
 
@@ -454,8 +454,8 @@ describe('PipelineJobDriver', () => {
 		await d.cleanup('pj_run');
 		expect(existsSync(paths.runtime)).toBe(false);
 		expect(existsSync(paths.workspace)).toBe(true);
-		expect(fake.calls.some((argv) => argv[1] === 'network' && argv[2] === 'rm' && argv.includes('skiff-job-pj_run'))).toBe(true);
-		expect(fake.calls.some((argv) => argv[1] === 'rm' && argv.includes('skiff-job-pj_run'))).toBe(true);
+		expect(fake.calls.some((argv) => argv[1] === 'network' && argv[2] === 'rm' && argv.includes('yoal-job-pj_run'))).toBe(true);
+		expect(fake.calls.some((argv) => argv[1] === 'rm' && argv.includes('yoal-job-pj_run'))).toBe(true);
 		expect((await d.status('pj_run')).state).toBe('not-found');
 	});
 
@@ -482,7 +482,7 @@ describe('PipelineJobDriver', () => {
 			expect(failed.state).toBe('failed');
 			expect(failed.error).toContain('Service redis did not become healthy');
 			expect(failed.error).toContain('FATAL: boom');
-			expect(fake.calls.some((argv) => argv.includes('--name=skiff-job-pj_sick'))).toBe(false);
+			expect(fake.calls.some((argv) => argv.includes('--name=yoal-job-pj_sick'))).toBe(false);
 		} finally {
 			Date.now = realNow;
 		}
@@ -507,7 +507,7 @@ describe('PipelineJobDriver', () => {
 		const runner: CommandRunner = {
 			async run(argv) {
 				if (argv[1] === 'cp') writeFileSync(argv[3]!, 'buildctl');
-				if (argv[1] === 'run' && argv.includes('--name=skiff-job-pj_bk-buildkit')) {
+				if (argv[1] === 'run' && argv.includes('--name=yoal-job-pj_bk-buildkit')) {
 					const server = Bun.listen({ unix: join(paths.buildkitSocketDir, 'buildkitd.sock'), socket: { data() {} } });
 					setTimeout(() => server.stop(true), 2_000);
 				}
@@ -522,11 +522,11 @@ describe('PipelineJobDriver', () => {
 		expect(status.events.some((event) => event.startsWith('BuildKit 0.34.2 is ready'))).toBe(true);
 		expect(statSync(join(paths.buildkitSocketDir, 'buildkitd.sock')).mode & 0o777).toBe(0o666);
 		expect(existsSync(join(buildsRoot, 'tools', 'buildctl-0.34.2'))).toBe(true);
-		const bk = fake.calls.find((argv) => argv.includes('--name=skiff-job-pj_bk-buildkit'))!;
+		const bk = fake.calls.find((argv) => argv.includes('--name=yoal-job-pj_bk-buildkit'))!;
 		expect(bk.find((arg) => arg.includes('/buildkit-cache/'))).toContain(`/buildkit-cache/${cacheScopeDirName('acme/app:trusted')}:`);
 		expect(readFileSync(paths.envFile, 'utf8')).toContain(`BUILDKIT_HOST=${BUILDKIT_HOST}\n`);
-		const job = fake.calls.find((argv) => argv.includes('--name=skiff-job-pj_bk'))!;
-		expect(job).toContain(`--volume=${join(buildsRoot, 'tools', 'buildctl-0.34.2')}:/skiff/bin/buildctl:ro,z`);
+		const job = fake.calls.find((argv) => argv.includes('--name=yoal-job-pj_bk'))!;
+		expect(job).toContain(`--volume=${join(buildsRoot, 'tools', 'buildctl-0.34.2')}:/yoal/bin/buildctl:ro,z`);
 		await d.cleanup('pj_bk');
 	});
 });

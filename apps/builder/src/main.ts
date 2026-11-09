@@ -9,7 +9,7 @@ export { runPipelineStep } from './pipeline/step-main.ts';
 /**
  * Node-token Builder daemon (D3, D47). Claims one git build at a time and converges it to a
  * release, and alongside it claims Pipelines jobs (docs/PIPELINES.md) by label. It runs on every
- * node (`skiff-agent builder`) and idles while the node does not have the Builder role, so
+ * node (`yoal-agent builder`) and idles while the node does not have the Builder role, so
  * turning the role on in the dashboard is all it takes to start building.
  */
 
@@ -90,7 +90,7 @@ export async function runBuilder(): Promise<void> {
 }
 
 if (import.meta.main) {
-	// A compiled `skiff-builder` is also its own step runner (`skiff-builder pipeline-step <job.json>`).
+	// A compiled `yoal-builder` is also its own step runner (`yoal-builder pipeline-step <job.json>`).
 	const index = process.argv.indexOf('pipeline-step');
 	if (index > 0 && index <= 2) {
 		const { runPipelineStep } = await import('./pipeline/step-main.ts');

@@ -1,8 +1,8 @@
 /**
- * End-to-end spike: an MCP client authenticates against Skiff via OAuth 2.1 and uses tools.
+ * End-to-end spike: an MCP client authenticates against Yoal via OAuth 2.1 and uses tools.
  *
- * Run against a dev server started with SKIFF_DEV_PASSWORD_LOGIN=1:
- *   SKIFF_BASE=http://localhost:5173 bun tests/mcp-oauth.e2e.ts
+ * Run against a dev server started with YOAL_DEV_PASSWORD_LOGIN=1:
+ *   YOAL_BASE=http://localhost:5173 bun tests/mcp-oauth.e2e.ts
  *
  * Covers: RFC 9728 challenge + discovery, RFC 8414 AS metadata, DCR (legacy clients),
  * sign-in, PKCE authorize → consent → token, audience-bound JWT, scope enforcement,
@@ -12,7 +12,7 @@
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { createHash, randomBytes } from 'node:crypto';
 
-const BASE = process.env.SKIFF_BASE ?? 'http://localhost:5173';
+const BASE = process.env.YOAL_BASE ?? 'http://localhost:5173';
 const MCP = `${BASE}/mcp`;
 const REDIRECT = 'http://127.0.0.1:8976/callback';
 const results: { name: string; ok: boolean; detail?: string }[] = [];
@@ -71,7 +71,7 @@ check('AS metadata: PKCE S256, CIMD + registration advertised',
 
 // 4. Dynamic client registration (older clients)
 const reg = await (await fetch(as.registration_endpoint, json({
-	client_name: 'Skiff e2e agent',
+	client_name: 'Yoal e2e agent',
 	redirect_uris: [REDIRECT],
 	grant_types: ['authorization_code', 'refresh_token'],
 	response_types: ['code'],
@@ -81,7 +81,7 @@ const reg = await (await fetch(as.registration_endpoint, json({
 check('DCR registers a public native client', typeof reg.client_id === 'string', reg.error_description ?? reg.client_id);
 
 // 5. Sign up + sign in (dev-only email/password)
-const email = `e2e-${Date.now()}@skiff.test`;
+const email = `e2e-${Date.now()}@yoal.test`;
 const signUp = await http(`${BASE}/api/auth/sign-up/email`, json({ email, password: 'correct horse battery staple', name: 'E2E' }));
 check('dev sign-up creates a session', signUp.ok && jar.size > 0, `status ${signUp.status}`);
 
@@ -129,7 +129,7 @@ check('refresh token issued (offline_access)', !!tok1.refresh_token);
 let lastElicitation = '';
 async function connect(token: string, elicitAnswer: 'accept' | 'decline', mode: 'auto' | 'legacy' = 'auto') {
 	const client = new Client(
-		{ name: 'skiff-e2e', version: '0.0.0' },
+		{ name: 'yoal-e2e', version: '0.0.0' },
 		{ capabilities: { elicitation: { form: {} } }, versionNegotiation: { mode } },
 	);
 	client.setRequestHandler('elicitation/create', async (request: { params?: { message?: string } }) => {
@@ -270,7 +270,7 @@ const mcpCall = (token: string) =>
 		headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${token}` },
 		body: JSON.stringify({
 			jsonrpc: '2.0', id: 1, method: 'initialize',
-			params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'skiff-e2e', version: '0.0.0' } },
+			params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'yoal-e2e', version: '0.0.0' } },
 		}),
 	});
 const connectedApps = await (await http(`${BASE}/api/v1/connected-apps`)).json().catch(() => ({}));

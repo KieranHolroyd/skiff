@@ -38,7 +38,7 @@ import TerminalIcon from '@lucide/svelte/icons/terminal';
 import UsersIcon from '@lucide/svelte/icons/users';
 import WebhookIcon from '@lucide/svelte/icons/webhook';
 import ZapIcon from '@lucide/svelte/icons/zap';
-import type { NavSection } from '@skiff/docs';
+import type { NavSection } from '@yoal/docs';
 import type { RouteUrl, Subnav, SubnavIcon } from '#lib/nav/subnav.js';
 
 export const DOCS_SUBNAV_KEY = 'docs';

@@ -10,7 +10,7 @@
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import VariableIcon from '@lucide/svelte/icons/variable';
 	import WebhookIcon from '@lucide/svelte/icons/webhook';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
@@ -57,7 +57,7 @@
 </script>
 
 <svelte:head>
-	<title>Settings · {repo} · Pipelines · Skiff</title>
+	<title>Settings · {repo} · Pipelines · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">
@@ -125,9 +125,9 @@
 		title="Webhook"
 		icon={WebhookIcon}
 		description={data.repository.githubAppInstallationId
-			? 'Not needed: Skiff’s GitHub App delivers this repository’s events.'
+			? 'Not needed: Yoal’s GitHub App delivers this repository’s events.'
 			: data.repository.gitProvider?.delivered
-				? `Not needed: Skiff created the webhook on ${data.repository.gitProvider.via ?? 'the forge'}.`
+				? `Not needed: Yoal created the webhook on ${data.repository.gitProvider.via ?? 'the forge'}.`
 				: data.repository.provider === 'gitlab'
 					? 'GitLab → project settings → Webhooks: this URL, the secret as Secret token, Push and Merge request events.'
 					: data.repository.provider === 'gitea' || data.repository.provider === 'forgejo'
@@ -142,7 +142,7 @@
 				</p>
 			{:else if data.repository.gitProvider?.delivered}
 				<p class="text-sm text-muted-foreground">
-					Pushes and merge or pull requests arrive through the webhook Skiff created (Settings → Git providers).
+					Pushes and merge or pull requests arrive through the webhook Yoal created (Settings → Git providers).
 					A webhook you add here as well is ignored, so nothing runs twice.
 				</p>
 			{/if}
@@ -217,16 +217,16 @@
 				<p class="text-sm text-muted-foreground">
 					{#if data.repository.gitProvider?.delivered && data.repository.provider !== 'github'}
 						{data.repository.gitProvider.via ?? 'The connected forge'} receives each run as
-						<code class="font-mono text-xs">skiff/&lt;workflow&gt;</code> on its commit through the connection; no
+						<code class="font-mono text-xs">yoal/&lt;workflow&gt;</code> on its commit through the connection; no
 						token is needed. A token set here (GitLab api, Gitea/Forgejo write:repository) is used instead.
 					{:else if data.repository.githubAppInstallationId}
-						Skiff’s GitHub App reports each run as
-						<code class="font-mono text-xs">skiff/&lt;workflow&gt;</code> on its commit and pull request; no
+						Yoal’s GitHub App reports each run as
+						<code class="font-mono text-xs">yoal/&lt;workflow&gt;</code> on its commit and pull request; no
 						token is needed. A token set here is used instead of the App.
 					{:else}
 						A GitHub token with <em>Commit statuses: write</em> on this repository. Each run then shows as
-						<code class="font-mono text-xs">skiff/&lt;workflow&gt;</code> on its commit and pull request. Or
-						install Skiff’s GitHub App (Settings → GitHub) and skip the token.
+						<code class="font-mono text-xs">yoal/&lt;workflow&gt;</code> on its commit and pull request. Or
+						install Yoal’s GitHub App (Settings → GitHub) and skip the token.
 					{/if}
 				</p>
 				<div class="flex items-center gap-2 text-sm">
@@ -606,7 +606,7 @@
 		icon={RocketIcon}
 		flush
 		count={data.links.length}
-		description="Projects that skiff/deploy may deploy to from this repository."
+		description="Projects that yoal/deploy may deploy to from this repository."
 	>
 		{#if data.links.length > 0}
 			<Table.Root>

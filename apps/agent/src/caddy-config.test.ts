@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { desiredStateSchema, type DesiredState } from '@skiff/contracts';
+import { desiredStateSchema, type DesiredState } from '@yoal/contracts';
 import {
 	buildCaddyConfig,
 	customDomainIssuers,
@@ -63,7 +63,7 @@ function config(stateValue = state()): Json {
 		state: stateValue,
 		listen: [':8080'],
 		dataDir: '/data',
-		agentSocket: '/run/skiff-agent/agent.sock',
+		agentSocket: '/run/yoal-agent/agent.sock',
 		caddyAdminSocket: '/var/lib/caddy/admin.sock',
 	});
 }
@@ -151,8 +151,8 @@ describe('buildCaddyConfig', () => {
 		const handlers = collectHandlers(route);
 		const proxy = handlers.find((handler) => handler.handler === 'reverse_proxy');
 		expect(proxy).toBeDefined();
-		expect((proxy!.upstreams as Json[])[0]!.dial).toBe('unix//run/skiff-agent/agent.sock');
-		expect((proxy!.rewrite as Json).uri).toBe('/_skiff/verify');
+		expect((proxy!.upstreams as Json[])[0]!.dial).toBe('unix//run/yoal-agent/agent.sock');
+		expect((proxy!.rewrite as Json).uri).toBe('/_yoal/verify');
 		expect(handlers.some((handler) => handler.handler === 'file_server' && handler.root === '/data/sites/prj_secret')).toBe(true);
 		expect(handlers.some((handler) => handler.handler === 'rewrite' && handler.uri === '/index.html')).toBe(true);
 		expect(
@@ -177,7 +177,7 @@ describe('buildCaddyConfig', () => {
 			state: state(),
 			listen: [':443'],
 			dataDir: '/data',
-			agentSocket: '/run/skiff-agent/agent.sock',
+			agentSocket: '/run/yoal-agent/agent.sock',
 			caddyAdminSocket: '/var/lib/caddy/admin.sock',
 			tls: {
 				email: 'ops@example.com',
@@ -295,7 +295,7 @@ describe('per-deployment roots, worker routes and logging', () => {
 		)!;
 		const secureHandlers = collectHandlers(secureRoute);
 		expect((secureHandlers.find((handler) => handler.handler === 'reverse_proxy')?.upstreams as Json[])[0]!.dial).toBe(
-			'unix//run/skiff-agent/agent.sock',
+			'unix//run/yoal-agent/agent.sock',
 		);
 		expect(secureHandlers.some((handler) => handler.handler === 'file_server' && handler.root === '/data/sites/prj_secret')).toBe(
 			true,
@@ -347,7 +347,7 @@ describe('per-deployment roots, worker routes and logging', () => {
 			state: state(),
 			listen: [':443'],
 			dataDir: '/data',
-			agentSocket: '/run/skiff-agent/agent.sock',
+			agentSocket: '/run/yoal-agent/agent.sock',
 			caddyAdminSocket: '/var/lib/caddy/admin.sock',
 			tls,
 		});
@@ -361,7 +361,7 @@ describe('per-deployment roots, worker routes and logging', () => {
 			state: value,
 			listen: [':443'],
 			dataDir: '/data',
-			agentSocket: '/run/skiff-agent/agent.sock',
+			agentSocket: '/run/yoal-agent/agent.sock',
 			caddyAdminSocket: '/var/lib/caddy/admin.sock',
 			tls,
 		});
@@ -539,28 +539,28 @@ describe('per-deployment roots, worker routes and logging', () => {
 			state: state(),
 			listen: [':8080'],
 			dataDir: '/data',
-			agentSocket: '/run/skiff-agent/agent.sock',
+			agentSocket: '/run/yoal-agent/agent.sock',
 			caddyAdminSocket: '/var/lib/caddy/admin.sock',
-			accessLog: '/var/lib/skiff/caddy/logs/access.log',
-			platform: { host: 'cloud.example.com', upstream: 'unix//run/skiff/control.sock' },
+			accessLog: '/var/lib/yoal/caddy/logs/access.log',
+			platform: { host: 'cloud.example.com', upstream: 'unix//run/yoal/control.sock' },
 		});
 		expect(server(compiled).logs).toEqual({
-			default_logger_name: 'skiff_access',
+			default_logger_name: 'yoal_access',
 			skip_hosts: ['cloud.example.com'],
 		});
 		const logging = compiled.logging as { logs: Record<string, Json> };
-		expect(logging.logs.skiff_access!.writer).toMatchObject({
+		expect(logging.logs.yoal_access!.writer).toMatchObject({
 			output: 'file',
-			filename: '/var/lib/skiff/caddy/logs/access.log',
+			filename: '/var/lib/yoal/caddy/logs/access.log',
 			roll_keep_days: 7,
 		});
-		expect(logging.logs.skiff_access!.encoder).toEqual({ format: 'json' });
+		expect(logging.logs.yoal_access!.encoder).toEqual({ format: 'json' });
 		expect(config().logging).toBeUndefined();
 	});
 });
 
 describe('function routes (D110)', () => {
-	const FUNCTION_UPSTREAM = 'unix//run/skiff-workloads/prj_public.sock';
+	const FUNCTION_UPSTREAM = 'unix//run/yoal-workloads/prj_public.sock';
 
 	/** A state whose production (`prj_public`) or protected (`prj_secret`) route is a function. */
 	function functionState(
@@ -577,7 +577,7 @@ describe('function routes (D110)', () => {
 		const route = value.routes[index]!;
 		value.routes[index] = {
 			...route,
-			upstream: `unix//run/skiff-workloads/${route.projectId}.sock`,
+			upstream: `unix//run/yoal-workloads/${route.projectId}.sock`,
 			function: {
 				assetsDirectory: options.assetsDirectory === undefined ? 'public' : options.assetsDirectory,
 				runWorkerFirst: options.runWorkerFirst ?? [],
@@ -646,7 +646,7 @@ describe('function routes (D110)', () => {
 		expect(proxy.headers).toEqual({
 			request: {
 				set: {
-					'X-Skiff-Internal': ['0'],
+					'X-Yoal-Internal': ['0'],
 					'X-Forwarded-Host': ['{http.request.host}'],
 				},
 			},
@@ -662,7 +662,7 @@ describe('function routes (D110)', () => {
 
 		const proxy = (innerRoutes(route)[1]!.handle as Json[])[0]!;
 		expect((proxy.upstreams as Json[])[0]!.dial).toBe(FUNCTION_UPSTREAM);
-		expect(((proxy.headers as Json).request as Json).set).toMatchObject({ 'X-Skiff-Internal': ['0'] });
+		expect(((proxy.headers as Json).request as Json).set).toMatchObject({ 'X-Yoal-Internal': ['0'] });
 	});
 
 	test('a protected function route authenticates before anything is served', () => {
@@ -679,10 +679,10 @@ describe('function routes (D110)', () => {
 		]);
 
 		const auth = (innerRoutes(route)[0]!.handle as Json[])[0]!;
-		expect((auth.upstreams as Json[])[0]!.dial).toBe('unix//run/skiff-agent/agent.sock');
-		expect((auth.rewrite as Json).uri).toBe('/_skiff/verify');
+		expect((auth.upstreams as Json[])[0]!.dial).toBe('unix//run/yoal-agent/agent.sock');
+		expect((auth.rewrite as Json).uri).toBe('/_yoal/verify');
 		expect((auth.headers as Json).request).toEqual({
-			set: { 'X-Forwarded-Uri': ['{http.request.uri}'], 'X-Skiff-Project': ['{http.request.host}'] },
+			set: { 'X-Forwarded-Uri': ['{http.request.uri}'], 'X-Yoal-Project': ['{http.request.host}'] },
 		});
 
 		const set = (((innerRoutes(route)[1]!.handle as Json[])[0]!.response as Json).set as Json);
@@ -714,15 +714,15 @@ describe('function routes (D110)', () => {
 		expect(clone['@id']).toBe('site:prj_public:dep_1:app.customer.test');
 		expect(handlerNames(clone)).toEqual(['headers', 'reverse_proxy', 'file_server', 'reverse_proxy']);
 		const proxy = (innerRoutes(clone)[3]!.handle as Json[])[0]!;
-		expect(((proxy.headers as Json).request as Json).set).toMatchObject({ 'X-Skiff-Internal': ['0'] });
+		expect(((proxy.headers as Json).request as Json).set).toMatchObject({ 'X-Yoal-Internal': ['0'] });
 		expect(String(JSON.stringify(innerRoutes(clone)[2]!.match))).toContain('/data/sites/prj_public/public');
 	});
 
 	test('a scaled stateless function proxies to every replica socket in order', () => {
 		const replicas = [
-			'unix//run/skiff-workloads/wld_public.sock',
-			'unix//run/skiff-workloads/wld_public-r1.sock',
-			'unix//run/skiff-workloads/wld_public-r2.sock',
+			'unix//run/yoal-workloads/wld_public.sock',
+			'unix//run/yoal-workloads/wld_public-r1.sock',
+			'unix//run/yoal-workloads/wld_public-r2.sock',
 		];
 		const compiled = config(functionState({ runWorkerFirst: ['/api/*'], upstreams: replicas }));
 		const route = siteRoute(compiled, 'public.example.com');
@@ -733,7 +733,7 @@ describe('function routes (D110)', () => {
 		expect(proxies).toHaveLength(2);
 		for (const proxy of proxies) {
 			expect(proxy.upstreams).toEqual(replicas.map((dial) => ({ dial })));
-			expect(((proxy.headers as Json).request as Json).set).toMatchObject({ 'X-Skiff-Internal': ['0'] });
+			expect(((proxy.headers as Json).request as Json).set).toMatchObject({ 'X-Yoal-Internal': ['0'] });
 			expect((proxy.transport as Json).response_header_timeout).toBe('5m');
 			expect(JSON.stringify(proxy.handle_response)).toContain('"status_code":503');
 		}

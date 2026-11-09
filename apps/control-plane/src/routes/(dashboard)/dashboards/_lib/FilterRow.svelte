@@ -6,7 +6,7 @@
 		type DatasetInfo,
 		type FilterOperator,
 		type QueryResult
-	} from '@skiff/contracts';
+	} from '@yoal/contracts';
 	import XIcon from '@lucide/svelte/icons/x';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';

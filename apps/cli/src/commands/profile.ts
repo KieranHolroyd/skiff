@@ -20,12 +20,12 @@ const flags: FlagSpec = {
 	help: { type: 'boolean', short: 'h' },
 };
 
-const usage = `Usage: skif profile <list|add|use|remove|show|current> [options]
+const usage = `Usage: yoal profile <list|add|use|remove|show|current> [options]
 
 Profiles keep a separate control-plane URL, API key and content domain for each
-Skiff deployment, so one machine can talk to production, staging and a local
+Yoal deployment, so one machine can talk to production, staging and a local
 dev server. With one profile, commands use it automatically. With several, set
-an active profile with \`skif profile use <name>\`, or select one per command
+an active profile with \`yoal profile use <name>\`, or select one per command
 with \`--profile <name>\` (or ${PROFILE_ENV}).
 
 Commands:
@@ -38,14 +38,14 @@ Commands:
 
 Add options:
   -u, --url <platform>              Control-plane URL, e.g. https://control.example.com
-  -t, --token <key>                 API key; prefer \`skif login --profile <name>\`
+  -t, --token <key>                 API key; prefer \`yoal login --profile <name>\`
       --content-domain <domain>     Domain deployed sites use, e.g. sites.example.com
       --use                         Make the new profile active
       --force                       Replace an existing profile
       --json                        Print the result as JSON
   -h, --help                        Show this help
 
-Profiles live in ~/.config/skiff/config.json (mode 0600).`;
+Profiles live in ~/.config/yoal/config.json (mode 0600).`;
 
 export async function profileCommand(argv: string[]): Promise<void> {
 	const first = argv[0];
@@ -104,7 +104,7 @@ async function listProfiles(json: boolean): Promise<void> {
 	}
 
 	if (profiles.length === 0) {
-		console.log('No profiles yet. Run `skif login` or `skif profile add <name> --url <url>`.');
+		console.log('No profiles yet. Run `yoal login` or `yoal profile add <name> --url <url>`.');
 		return;
 	}
 
@@ -118,7 +118,7 @@ async function listProfiles(json: boolean): Promise<void> {
 	console.log(`\nConfig  ${report.path}`);
 	if (report.activeProfile) console.log(`Active  ${report.activeProfile}`);
 	else if (report.profiles.length > 1)
-		console.log('No active profile. Run `skif profile use <name>`.');
+		console.log('No active profile. Run `yoal profile use <name>`.');
 }
 
 async function add(args: ReturnType<typeof parseArgs>): Promise<void> {
@@ -129,7 +129,7 @@ async function add(args: ReturnType<typeof parseArgs>): Promise<void> {
 	const contentDomain = args.string('content-domain');
 	if (!url && !token)
 		throw new UsageError(
-			'Provide --url and/or --token, or run `skif login --profile <name>` to sign in.',
+			'Provide --url and/or --token, or run `yoal login --profile <name>` to sign in.',
 		);
 
 	const change = await addProfile(
@@ -145,8 +145,8 @@ async function add(args: ReturnType<typeof parseArgs>): Promise<void> {
 	if (change.activeProfile) console.log(`Active  ${change.activeProfile}`);
 	console.log(`Config  ${change.path}`);
 	if (change.activeProfile === change.name)
-		console.log(`Run \`skif --profile ${change.name} status\` to check the connection.`);
-	else console.log(`Run \`skif profile use ${change.name}\` to make it the default.`);
+		console.log(`Run \`yoal --profile ${change.name} status\` to check the connection.`);
+	else console.log(`Run \`yoal profile use ${change.name}\` to make it the default.`);
 }
 
 async function use(args: ReturnType<typeof parseArgs>): Promise<void> {
@@ -171,7 +171,7 @@ async function remove(args: ReturnType<typeof parseArgs>): Promise<void> {
 	}
 	console.log(`Removed profile ${change.name}.`);
 	if (change.activeProfile) console.log(`Active  ${change.activeProfile}`);
-	else console.log('No active profile. Run `skif profile use <name>` to choose one.');
+	else console.log('No active profile. Run `yoal profile use <name>` to choose one.');
 }
 
 async function show(args: ReturnType<typeof parseArgs>): Promise<void> {
@@ -225,10 +225,10 @@ function maskProfile(profile: ProfileSummary): ProfileSummary & { token?: string
 function noCurrentProfile(names: string[]): ConfigError {
 	if (names.length === 0)
 		return new ConfigError(
-			'No profiles configured. Run `skif login` or `skif profile add <name> --url <url>`.',
+			'No profiles configured. Run `yoal login` or `yoal profile add <name> --url <url>`.',
 		);
 	return new ConfigError(
-		`No active profile. Choose one of: ${[...names].sort().join(', ')}. Run \`skif profile use <name>\`.`,
-		{ suggestions: ['Run `skif profile list` to see the profiles.'] },
+		`No active profile. Choose one of: ${[...names].sort().join(', ')}. Run \`yoal profile use <name>\`.`,
+		{ suggestions: ['Run `yoal profile list` to see the profiles.'] },
 	);
 }

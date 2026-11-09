@@ -3,17 +3,17 @@ title: Brokers, queues and events
 description: Run managed NATS brokers, work with their queues, and route platform events into queues that functions consume.
 ---
 
-A **managed broker** is a message broker that Skiff runs for you on one of your nodes. Apps use it for background jobs, fan-out and events without running a broker container themselves. This page covers creating and attaching a broker, working with its queues and streams, reading its metrics, and routing platform events (uploads, deployments, alerts and backups) into a queue. Functions are the usual consumer of those queues; see [Functions](/compute/functions) for writing the handler.
+A **managed broker** is a message broker that Yoal runs for you on one of your nodes. Apps use it for background jobs, fan-out and events without running a broker container themselves. This page covers creating and attaching a broker, working with its queues and streams, reading its metrics, and routing platform events (uploads, deployments, alerts and backups) into a queue. Functions are the usual consumer of those queues; see [Functions](/compute/functions) for writing the handler.
 
 ## Create a broker
 
-Skiff brokers run NATS with JetStream turned on. NATS is the only engine at the moment. In the dashboard, open **Queues → Create broker**, or use the CLI:
+Yoal brokers run NATS with JetStream turned on. NATS is the only engine at the moment. In the dashboard, open **Queues → Create broker**, or use the CLI:
 
 ```sh
-skif broker create jobs --project api
+yoal broker create jobs --project api
 ```
 
-This creates a broker called `jobs` and attaches it to the `api` project, which then receives `NATS_URL`. Skiff places the broker on the same node as the project. Broker names are 3 to 40 characters: lower-case letters, digits and single hyphens.
+This creates a broker called `jobs` and attaches it to the `api` project, which then receives `NATS_URL`. Yoal places the broker on the same node as the project. Broker names are 3 to 40 characters: lower-case letters, digits and single hyphens.
 
 | Option | Default | Limits |
 |---|---|---|
@@ -29,26 +29,26 @@ A broker listens only on its node's loopback address and its private container n
 
 ### Resize, upgrade and restart
 
-`skif broker update` changes memory, CPUs, storage or version. The broker restarts with the new settings and keeps its data:
+`yoal broker update` changes memory, CPUs, storage or version. The broker restarts with the new settings and keeps its data:
 
 ```sh
-skif broker update jobs --memory 512M --storage 4G
-skif broker update jobs --version 2.12
+yoal broker update jobs --memory 512M --storage 4G
+yoal broker update jobs --version 2.12
 ```
 
-Versions only move forward. Upgrading a `2.11` broker to `2.12` works in place; going back to an older version is refused. `skif broker restart jobs` restarts the container, and its streams are kept.
+Versions only move forward. Upgrading a `2.11` broker to `2.12` works in place; going back to an older version is refused. `yoal broker restart jobs` restarts the container, and its streams are kept.
 
 ### Delete and purge
 
-`skif broker delete jobs` moves a broker to the trash. Its container stops, its streams stay on disk, and you can bring it back with `skif broker restore jobs` for 7 days. You cannot delete a broker that is still attached to a project; detach it first. A trashed broker is purged when its trash period ends, or immediately with `skif broker purge jobs`, which deletes its data and streams for good.
+`yoal broker delete jobs` moves a broker to the trash. Its container stops, its streams stay on disk, and you can bring it back with `yoal broker restore jobs` for 7 days. You cannot delete a broker that is still attached to a project; detach it first. A trashed broker is purged when its trash period ends, or immediately with `yoal broker purge jobs`, which deletes its data and streams for good.
 
 ## Attach a broker to an app
 
 Attach a broker to a process, container or function project:
 
 ```sh
-skif broker attach jobs --project worker
-skif broker detach jobs --project worker
+yoal broker attach jobs --project worker
+yoal broker detach jobs --project worker
 ```
 
 An attached app receives five environment variables, named after the attachment prefix. With the default prefix `NATS`, the app gets:
@@ -71,24 +71,24 @@ A few rules apply:
 
 ### Connection details
 
-The broker's page in the dashboard shows its connection details and client snippets. From the CLI, `skif broker credentials jobs` prints the connection URL, and `--json` prints the user, password, host and port as well:
+The broker's page in the dashboard shows its connection details and client snippets. From the CLI, `yoal broker credentials jobs` prints the connection URL, and `--json` prints the user, password, host and port as well:
 
 ```bash
-nats --server "$(skif broker credentials jobs)" stream ls
+nats --server "$(yoal broker credentials jobs)" stream ls
 ```
 
 The URL points at loopback on the broker's node, so run the client there or through `ssh -L`. Revealing the password needs the `broker:credentials` permission, from a dashboard session or an API key that holds it. The **Deploy** key preset leaves it out, so tick the scope on the key the CLI uses. The MCP server never returns broker credentials. Every reveal is recorded in the audit log.
 
 ## Queues and streams
 
-JetStream keeps messages in **streams**. A function queue called `emails` is the stream `SKIFF_Q_emails` on the broker, and Skiff creates it the first time something uses it. Streams that your own apps create with a NATS client also appear in the list, under their own names.
+JetStream keeps messages in **streams**. A function queue called `emails` is the stream `YOAL_Q_emails` on the broker, and Yoal creates it the first time something uses it. Streams that your own apps create with a NATS client also appear in the list, under their own names.
 
-To create a queue before anything uses it, run `skif broker queue-create jobs emails`, or choose **New queue** on the broker's **Queues** tab.
+To create a queue before anything uses it, run `yoal broker queue-create jobs emails`, or choose **New queue** on the broker's **Queues** tab.
 
 ### Inspect the queues
 
 ```sh
-skif broker queues jobs
+yoal broker queues jobs
 ```
 
 This lists each stream with its messages and bytes, and its consumers with the pending, awaiting-acknowledgement and redelivered counts. The listing refreshes about once a minute while the broker runs. It shows up to 200 streams, and up to 20 consumers per stream. The dashboard shows the same information on the **Queues** tab.
@@ -96,17 +96,17 @@ This lists each stream with its messages and bytes, and its consumers with the p
 To read messages without consuming them, peek at a stream. Peeking returns up to 50 messages per call, and each body is cut at 16 KiB:
 
 ```sh
-skif broker peek jobs emails-dlq --limit 20
-skif broker peek jobs emails-dlq --from 120
+yoal broker peek jobs emails-dlq --limit 20
+yoal broker peek jobs emails-dlq --from 120
 ```
 
-Use `--stream <name>` instead of a queue name for a stream your app created itself, for example `skif broker peek jobs --stream EVENTS`.
+Use `--stream <name>` instead of a queue name for a stream your app created itself, for example `yoal broker peek jobs --stream EVENTS`.
 
 ### Send a test message
 
 ```sh
-skif broker send jobs emails '{"to":"a@example.com"}'
-skif broker send jobs emails --file event.json --count 10 --delay 30s
+yoal broker send jobs emails '{"to":"a@example.com"}'
+yoal broker send jobs emails --file event.json --count 10 --delay 30s
 ```
 
 Bodies are JSON unless you pass `--text`. A body is at most 128 KiB, `--count` publishes up to 100 copies, and `--delay` holds a message back for up to 12 hours before the consumer sees it.
@@ -116,7 +116,7 @@ Bodies are JSON unless you pass `--text`. A body is at most 128 KiB, `--count` p
 Messages that ran out of retries land in the dead-letter queue. Move them back into a queue once the bug is fixed:
 
 ```sh
-skif broker redrive jobs emails-dlq --to emails --limit 100
+yoal broker redrive jobs emails-dlq --to emails --limit 100
 ```
 
 Each call moves up to 1,000 messages. Run it again to move more.
@@ -125,9 +125,9 @@ To clear messages, use these commands:
 
 | Command | Effect |
 |---|---|
-| `skif broker queue-purge jobs emails` | Removes every message. The stream and its consumers stay. |
-| `skif broker message-rm jobs emails 42` | Deletes one message by its sequence number, as shown by `peek`. |
-| `skif broker queue-rm jobs emails` | Deletes the stream, its messages and its consumers. A function queue gets an empty stream again on its next use. |
+| `yoal broker queue-purge jobs emails` | Removes every message. The stream and its consumers stay. |
+| `yoal broker message-rm jobs emails 42` | Deletes one message by its sequence number, as shown by `peek`. |
+| `yoal broker queue-rm jobs emails` | Deletes the stream, its messages and its consumers. A function queue gets an empty stream again on its next use. |
 
 Creating, sending, peeking and redriving need `broker:update`. Purging, deleting and removing messages need `broker:delete`.
 
@@ -135,7 +135,7 @@ These actions run on the broker's node, so the broker must be running. The REST 
 
 ## Consume queues from a function
 
-Declare producers and consumers in your function's `wrangler.jsonc`, the same way as on Cloudflare. Use `skiff.brokers` to say which broker holds each queue. If the function has only one attached broker, you can leave it out.
+Declare producers and consumers in your function's `wrangler.jsonc`, the same way as on Cloudflare. Use `yoal.brokers` to say which broker holds each queue. If the function has only one attached broker, you can leave it out.
 
 ```jsonc
 {
@@ -145,7 +145,7 @@ Declare producers and consumers in your function's `wrangler.jsonc`, the same wa
       { "queue": "jobs", "max_batch_size": 20, "max_retries": 5, "dead_letter_queue": "jobs-dlq" }
     ]
   },
-  "skiff": { "brokers": { "jobs": "events", "jobs-dlq": "events" } }
+  "yoal": { "brokers": { "jobs": "events", "jobs-dlq": "events" } }
 }
 ```
 
@@ -198,8 +198,8 @@ Some rules to know:
 ## Broker metrics
 
 ```sh
-skif broker metrics jobs --since 1h
-skif broker metrics jobs --from 2026-11-07T09:00:00Z --to 2026-11-07T10:00:00Z --interval 1m --samples
+yoal broker metrics jobs --since 1h
+yoal broker metrics jobs --from 2026-11-07T09:00:00Z --to 2026-11-07T10:00:00Z --interval 1m --samples
 ```
 
 `--interval` takes `1m` or `1h`, and `--samples` prints every row. The dashboard's **Metrics** tab charts the same data:
@@ -210,16 +210,16 @@ skif broker metrics jobs --from 2026-11-07T09:00:00Z --to 2026-11-07T10:00:00Z -
 - messages and bytes in and out, slow consumers and connections
 - container memory
 
-The node samples each running broker once a minute. Samples are kept as history only when the platform's telemetry store is installed. Without it, `skif broker metrics` reports that there are no samples, but `skif broker queues` still works.
+The node samples each running broker once a minute. Samples are kept as history only when the platform's telemetry store is installed. Without it, `yoal broker metrics` reports that there are no samples, but `yoal broker queues` still works.
 
 You can alert on a broker that is down, on a store that is nearly full, and on a backlog that is not draining. See [Alerts](/observe/alerts).
 
 > [!WARNING]
-> When the store is full, the broker refuses new messages rather than dropping old ones, so publishes fail. Raise `--storage` with `skif broker update`, or let consumers drain the queue.
+> When the store is full, the broker refuses new messages rather than dropping old ones, so publishes fail. Raise `--storage` with `yoal broker update`, or let consumers drain the queue.
 
 ## Platform events
 
-An **event rule** watches a source inside Skiff and publishes each matching event into a queue on one of your brokers. A function consumes that queue like any other. Skiff never calls a function directly for an event, so you get the queue's batching, retries and dead-letter queue.
+An **event rule** watches a source inside Yoal and publishes each matching event into a queue on one of your brokers. A function consumes that queue like any other. Yoal never calls a function directly for an event, so you get the queue's batching, retries and dead-letter queue.
 
 The diagram follows an event from its source to the consumer. Delivery is handled by the control plane's outbox and the node that runs the broker, as described under [Delivery and retries](#delivery-and-retries):
 
@@ -242,7 +242,7 @@ flowchart TD
 | Source | Events | Filter | Fires when |
 |---|---|---|---|
 | `storage` | `object-create`, `object-delete` | the storage instance and bucket (required), a key `--prefix` and `--suffix` | an object is uploaded, copied or deleted |
-| `alerts` | `firing`, `resolved` | one alert rule, or every rule | Skiff sends an alert notification for the rule |
+| `alerts` | `firing`, `resolved` | one alert rule, or every rule | Yoal sends an alert notification for the rule |
 | `deployments` | `created`, `promoted`, `failed` | one project, or every project | a deployment is created, promoted or rolled back, or a git build fails |
 | `database-backups` | `completed`, `failed` | one database, or every database | a scheduled or manual backup finishes |
 
@@ -251,10 +251,10 @@ A rule with no `--event` matches every event its source has.
 ### Create a rule
 
 ```sh
-skif events create storage --storage media --bucket uploads --prefix incoming/ --suffix .jpg \
+yoal events create storage --storage media --bucket uploads --prefix incoming/ --suffix .jpg \
   --event object-create --broker jobs --queue images
 
-skif events create deployments --project shop --broker jobs --queue deploys
+yoal events create deployments --project shop --broker jobs --queue deploys
 ```
 
 A rule needs `--broker` and `--queue`. Creating a rule also needs read access to what it watches, such as `storage:read` for a storage rule. When the first rule watches a bucket, the storage instance restarts once to turn on bucket notifications.
@@ -281,7 +281,7 @@ In the dashboard, choose **Events → Create rule**. The form changes its fields
 
 ### Message bodies
 
-A storage event uses the same body as Cloudflare's R2 event notifications, so a consumer written for R2 runs unchanged. Skiff adds a `skiff` field with what R2 has no place for:
+A storage event uses the same body as Cloudflare's R2 event notifications, so a consumer written for R2 runs unchanged. Yoal adds a `yoal` field with what R2 has no place for:
 
 ```json
 {
@@ -290,7 +290,7 @@ A storage event uses the same body as Cloudflare's R2 event notifications, so a 
   "bucket": "uploads",
   "object": { "key": "incoming/cat.jpg", "size": 48213, "eTag": "82d23a75…" },
   "eventTime": "2026-11-07T11:04:18.532Z",
-  "skiff": { "type": "storage.object-create", "storage": "media", "eventName": "s3:ObjectCreated:Put" }
+  "yoal": { "type": "storage.object-create", "storage": "media", "eventName": "s3:ObjectCreated:Put" }
 }
 ```
 
@@ -306,7 +306,7 @@ Use `id` to recognise a repeat. Messages carry the `json` content type, so `mess
 
 ### Delivery and retries
 
-1. When the event happens, Skiff queues one delivery per matching rule.
+1. When the event happens, Yoal queues one delivery per matching rule.
 2. The node that runs the broker publishes queued deliveries to the queue. It checks for new work every 2 seconds while idle.
 3. A failed publish, for example while the broker is down or its store is full, is retried. The wait starts at 1 second, doubles each time, and stops at 5 minutes.
 4. A delivery still unpublished after 24 hours is marked `failed`.
@@ -328,15 +328,15 @@ To change a rule's events, filters or queue, use the CLI or the REST API.
 
 | Command | Purpose |
 |---|---|
-| `skif events list` | List rules |
-| `skif events create <source>` | Create a rule |
-| `skif events info <id>` | Show one rule, with its counts and last error |
-| `skif events update <id>` | Change events, filters, queue or description; `--enable` or `--disable` |
-| `skif events test <id>` | Queue one synthetic event to check the consumer end to end |
-| `skif events deliveries [<id>]` | Recent deliveries; `--status pending\|delivered\|failed` |
-| `skif events delete <id>` | Delete a rule and drop its undelivered events |
+| `yoal events list` | List rules |
+| `yoal events create <source>` | Create a rule |
+| `yoal events info <id>` | Show one rule, with its counts and last error |
+| `yoal events update <id>` | Change events, filters, queue or description; `--enable` or `--disable` |
+| `yoal events test <id>` | Queue one synthetic event to check the consumer end to end |
+| `yoal events deliveries [<id>]` | Recent deliveries; `--status pending\|delivered\|failed` |
+| `yoal events delete <id>` | Delete a rule and drop its undelivered events |
 
-`skif event` is an alias.
+`yoal event` is an alias.
 
 ## Broker and event API
 
@@ -363,7 +363,7 @@ Send a test message with curl:
 
 ```sh
 curl -X POST https://control.example.com/api/v1/brokers/jobs/queues/emails/messages \
-  -H "Authorization: Bearer skif_…" \
+  -H "Authorization: Bearer yoal_…" \
   -H "Content-Type: application/json" \
   -d '{"body": "{\"to\":\"a@example.com\"}", "contentType": "json", "count": 1}'
 ```

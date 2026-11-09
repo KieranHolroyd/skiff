@@ -2,7 +2,7 @@
  * Release-owned canary: boot *this* release in isolation against a copy of the live database.
  *
  * This file ships inside every release and is run by the stage-0 updater through `hooks.ts`
- * with the release's own Bun. Everything that encodes Skiff's data layout (which directories the
+ * with the release's own Bun. Everything that encodes Yoal's data layout (which directories the
  * control plane needs, who must own them, which environment overrides make a copy harmless)
  * lives here, so a bug in it can only fail the release that contains it. The next release
  * ships its own fixed copy. Stage-0 only provides an empty scratch directory and reads the verdict.
@@ -46,7 +46,7 @@ export interface CanaryInput {
 	bootTimeoutMs?: number;
 }
 
-/** The directories the control plane writes to below SKIFF_DATA_DIR. Keep in step with /readyz. */
+/** The directories the control plane writes to below YOAL_DATA_DIR. Keep in step with /readyz. */
 export const DATA_SUBDIRS = ['objects'] as const;
 
 type Run = (cmd: string[]) => { code: number; stdout: string; stderr: string };
@@ -61,8 +61,8 @@ const defaultRun: Run = (cmd) => {
 };
 
 /**
- * Lay out the scratch data dir. All directories exist *before* ownership is handed to skiff:
- * the canary runs as skiff, so anything created afterwards by root is unwritable to it.
+ * Lay out the scratch data dir. All directories exist *before* ownership is handed to yoal:
+ * the canary runs as yoal, so anything created afterwards by root is unwritable to it.
  */
 export function prepareScratch(input: Pick<CanaryInput, 'scratch' | 'dbPath'>, run: Run = defaultRun): void {
 	const data = join(input.scratch, 'data');
@@ -71,28 +71,28 @@ export function prepareScratch(input: Pick<CanaryInput, 'scratch' | 'dbPath'>, r
 		const db = new Database(input.dbPath, { readonly: true });
 		try {
 			db.run('PRAGMA busy_timeout = 10000');
-			db.run('VACUUM INTO ?', [join(data, 'skiff.db')]);
+			db.run('VACUUM INTO ?', [join(data, 'yoal.db')]);
 		} finally {
 			db.close();
 		}
 	}
-	const chown = run(['chown', '-R', 'skiff:skiff', input.scratch]);
+	const chown = run(['chown', '-R', 'yoal:yoal', input.scratch]);
 	if (chown.code !== 0) throw new Error(`chown ${input.scratch}: ${chown.stderr || `exit ${chown.code}`}`);
 }
 
 /** Environment for the copy: same config, but no outbound side effects and its own paths. */
 export function canaryEnvironment(base: Map<string, string>, input: { scratch: string; unit: string }): Map<string, string> {
 	const env = new Map(base);
-	for (const key of [...env.keys()]) if (/^(SKIFF_SMTP_|SKIFF_ALERT_|SKIFF_TWILIO_|R2_|SKIFF_R2_)/.test(key)) env.delete(key);
-	env.set('SKIFF_OBJECT_STORE', 'local');
-	env.set('SKIFF_DATA_DIR', join(input.scratch, 'data'));
-	env.set('SKIFF_MASTER_KEY_FILE', `/run/credentials/${input.unit}.service/master-key`);
+	for (const key of [...env.keys()]) if (/^(YOAL_SMTP_|YOAL_ALERT_|YOAL_TWILIO_|R2_|YOAL_R2_)/.test(key)) env.delete(key);
+	env.set('YOAL_OBJECT_STORE', 'local');
+	env.set('YOAL_DATA_DIR', join(input.scratch, 'data'));
+	env.set('YOAL_MASTER_KEY_FILE', `/run/credentials/${input.unit}.service/master-key`);
 	env.set('SOCKET_PATH', join(input.scratch, 'control.sock'));
 	env.set('NODE_ENV', 'production');
 	env.set('PROTOCOL_HEADER', 'x-forwarded-proto');
 	env.set('HOST_HEADER', 'x-forwarded-host');
 	// A canary must never run singleton background work against the copy's view of the world.
-	env.set('SKIFF_STANDBY', '1');
+	env.set('YOAL_STANDBY', '1');
 	// The sandbox makes $HOME read-only; do not let Bun try to write its transpiler cache there.
 	env.set('BUN_RUNTIME_TRANSPILER_CACHE_PATH', '0');
 	return env;
@@ -117,14 +117,14 @@ export async function runCanary(input: CanaryInput, run: Run = defaultRun): Prom
 		return verdict(false, 'prepare', `could not prepare the canary data dir: ${(error as Error).message}`);
 	}
 
-	const unit = `skiff-update-canary-${randomBytes(4).toString('hex')}`;
+	const unit = `yoal-update-canary-${randomBytes(4).toString('hex')}`;
 	const socket = join(input.scratch, 'control.sock');
 	const env = canaryEnvironment(readEnvFile(input.envFile), { scratch: input.scratch, unit });
 	const envFile = join(dirname(input.scratch), `${unit}.env`);
 	writeFileSync(envFile, formatEnvFile(env, false), { mode: 0o600 });
 	const props = [
-		'User=skiff',
-		'Group=skiff',
+		'User=yoal',
+		'Group=yoal',
 		'UMask=0007',
 		`EnvironmentFile=${envFile}`,
 		// Sealed (`master.key.cred`) or plaintext, whichever the host uses; stage-0 passes the plain path.

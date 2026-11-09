@@ -2,15 +2,15 @@ import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import type { Principal } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import type { Principal } from '@yoal/contracts';
 import { ForbiddenError } from '../errors.ts';
 import { createCore, type Core } from '../index.ts';
 import { LocalObjectStore } from '../object-store.ts';
 import { buildPrincipal } from '../orgs.ts';
 import { hashScimToken, mintScimToken, SCIM_TOKEN_PREFIX } from './scim.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-scim-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-scim-'));
 const opened = createDb({ path: ':memory:' });
 let now = Date.parse('2026-11-08T12:00:00Z');
 
@@ -157,7 +157,7 @@ describe('SCIM reconciliation', () => {
 			`INSERT INTO access_keys
 			   (id, org_id, principal_type, principal_id, name, prefix, start, hash, restriction_json,
 			    allowed_cidrs, expires_at, last_used_at, last_used_ip_hash, created_by, revoked_at, created_at)
-			 VALUES ('ak_1', 'org_1', 'user', 'user_leaver', 'cli', 'skif_', 'skif_abc',
+			 VALUES ('ak_1', 'org_1', 'user', 'user_leaver', 'cli', 'yoal_', 'yoal_abc',
 			         'hash', '{}', '[]', NULL, NULL, NULL, 'user_leaver', NULL, ?)`,
 			[now]
 		);

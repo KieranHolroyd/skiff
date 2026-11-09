@@ -2,7 +2,7 @@ import type { RequestHandler } from './$types';
 import { core } from '#lib/server/core.js';
 import { json, route } from '#lib/server/api.js';
 import { requirePrincipal } from '#lib/server/principal.js';
-import { nodeTaskDone } from '@skiff/contracts';
+import { nodeTaskDone } from '@yoal/contracts';
 
 /** One queue or function tool task (D124); `?wait=<seconds>` (≤ 25) holds until it finishes. */
 export const GET: RequestHandler = (event) =>

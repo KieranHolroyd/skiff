@@ -20,7 +20,7 @@ export type Result<T> = { ok: true; value: T } | { ok: false; message: string };
 export async function startTotpEnrolment(headers: Headers, password?: string): Promise<Result<TotpEnrolment>> {
 	try {
 		const result = await auth.api.enableTwoFactor({
-			body: { issuer: 'Skiff', ...(password ? { password } : {}) },
+			body: { issuer: 'Yoal', ...(password ? { password } : {}) },
 			headers
 		});
 		if (!('totpURI' in result) || !result.totpURI) return { ok: false, message: 'Could not start authenticator setup.' };

@@ -1,9 +1,9 @@
 <script lang="ts">
-	import Logo from '#lib/components/skiff/Logo.svelte';
+	import Logo from '#lib/components/yoal/Logo.svelte';
 </script>
 
 <svelte:head>
-	<title>Skiff</title>
+	<title>Yoal</title>
 </svelte:head>
 
 <main class="grid min-h-svh place-items-center bg-background p-6">

@@ -1,12 +1,12 @@
 /**
  * Build → registry → deploy, end to end (docs/REGISTRY.md, docs/PIPELINES.md).
  *
- * The real control-plane engine (`@skiff/core`) behind a small HTTP server that mirrors the
+ * The real control-plane engine (`@yoal/core`) behind a small HTTP server that mirrors the
  * SvelteKit routes it needs (pipeline job API, registry token realm, registry webhook), the real
  * Builder pipeline loop and step runner (direct mode), and a real zot from the helper's own pinned
  * image and rendered config, run in Docker. The workflow builds a Dockerfile with
- * `skiff/build-image` (docker backend), pushes `registry/web:<sha>` and `registry/web:latest` with
- * the job's own registry login, and deploys the built digest with `skiff/deploy`. A push of
+ * `yoal/build-image` (docker backend), pushes `registry/web:<sha>` and `registry/web:latest` with
+ * the job's own registry login, and deploys the built digest with `yoal/deploy`. A push of
  * `latest` also deploys a second project through deploy on push.
  *
  * Needs Docker (OrbStack/Docker Desktop), whose engine reaches this process as host.docker.internal.
@@ -36,12 +36,12 @@ import { renderZotConfig } from '../../apps/helper/src/registry.ts';
 const ZOT_PORT = 5057;
 const REGISTRY = `localhost:${ZOT_PORT}`;
 const ZOT_IMAGE = 'ghcr.io/project-zot/zot:v2.1.23@sha256:9d3de83ac2099e6f4843045b4c9b65b7e8baf40f92d28f54906dee9d4d390fd7';
-const CONTAINER = 'skiff-registry-e2e';
+const CONTAINER = 'yoal-registry-e2e';
 
 /** How the Docker engine (and zot inside it) reaches this process: OrbStack/Docker Desktop's host alias. */
 const DOCKER_HOST_ALIAS = process.env.E2E_DOCKER_HOST_ALIAS ?? 'host.docker.internal';
 
-const root = mkdtempSync(join(tmpdir(), 'skiff-registry-e2e-'));
+const root = mkdtempSync(join(tmpdir(), 'yoal-registry-e2e-'));
 let core: Core;
 const json = (data: unknown, status = 200) => Response.json(data, { status });
 
@@ -144,13 +144,13 @@ const zotDir = join(root, 'zot');
 await Bun.write(
 	join(zotDir, 'config.json'),
 	renderZotConfig(zot!.registry as never, {
-		certificatePem: activation.env.SKIFF_REGISTRY_TOKEN_CERT!,
-		eventsUrl: activation.env.SKIFF_REGISTRY_EVENTS_URL!,
+		certificatePem: activation.env.YOAL_REGISTRY_TOKEN_CERT!,
+		eventsUrl: activation.env.YOAL_REGISTRY_EVENTS_URL!,
 		adminHtpasswd: null,
 		s3: null,
 	}),
 );
-await Bun.write(join(zotDir, 'cert.pem'), activation.env.SKIFF_REGISTRY_TOKEN_CERT!);
+await Bun.write(join(zotDir, 'cert.pem'), activation.env.YOAL_REGISTRY_TOKEN_CERT!);
 const docker = (...args: string[]) => Bun.spawnSync(['docker', ...args], { stdout: 'pipe', stderr: 'pipe' });
 docker('rm', '-f', CONTAINER);
 const started = docker(
@@ -175,7 +175,7 @@ const repo = gitRepo(repoDir);
 repo.commit(
 	{
 		Dockerfile: 'FROM busybox:1.37\nCOPY index.html /www/index.html\nCMD ["httpd", "-f", "-p", "8080", "-h", "/www"]\n',
-		'index.html': `<h1>built by skiff ${Date.now()}</h1>\n`,
+		'index.html': `<h1>built by yoal ${Date.now()}</h1>\n`,
 	},
 	'Initial commit',
 );
@@ -190,16 +190,16 @@ jobs:
   image:
     runs-on: self-hosted
     steps:
-      - uses: skiff/checkout
-      - run: echo "pushing to $SKIFF_REGISTRY_NAMESPACE"
+      - uses: yoal/checkout
+      - run: echo "pushing to $YOAL_REGISTRY_NAMESPACE"
       - id: build
-        uses: skiff/build-image
+        uses: yoal/build-image
         with:
           builder: docker
           tags: |
-            registry/web:\${{ skiff.sha }}
+            registry/web:\${{ yoal.sha }}
             registry/web:latest
-      - uses: skiff/deploy
+      - uses: yoal/deploy
         with:
           project: web
           image: \${{ steps.build.outputs.image }}
@@ -208,13 +208,13 @@ jobs:
 
 const config = loadConfig(
 	{
-		SKIFF_CONTROL_URL: local,
-		SKIFF_NODE_TOKEN: joined.token,
-		SKIFF_BUILD_DIR: join(root, 'build'),
-		SKIFF_BUILDER_SYSTEMD: 'false',
-		SKIFF_PIPELINE_POLL_MS: '200',
-		SKIFF_PIPELINE_ISOLATION: 'sandbox',
-		SKIFF_PIPELINE_STEP_BINARY: process.env.E2E_STEP_BINARY ?? '',
+		YOAL_CONTROL_URL: local,
+		YOAL_NODE_TOKEN: joined.token,
+		YOAL_BUILD_DIR: join(root, 'build'),
+		YOAL_BUILDER_SYSTEMD: 'false',
+		YOAL_PIPELINE_POLL_MS: '200',
+		YOAL_PIPELINE_ISOLATION: 'sandbox',
+		YOAL_PIPELINE_STEP_BINARY: process.env.E2E_STEP_BINARY ?? '',
 	},
 	{ platform: process.platform, isRoot: false, has: (b) => Boolean(Bun.which(b)), arch: process.arch, exists: () => false },
 );
@@ -261,7 +261,7 @@ try {
 	check('the job token never reached the logs', !logs.some((line) => line.includes('pjt_')));
 
 	const web = core.workloads.view(core.projects.requireRow(owner, 'web'));
-	check('skiff/deploy pinned web to the built digest', web?.imageDigest === digest, JSON.stringify(web));
+	check('yoal/deploy pinned web to the built digest', web?.imageDigest === digest, JSON.stringify(web));
 
 	const repository = await waitFor(
 		() => core.registry.listRepositories(owner).find((row) => row.name === 'acme/web'),
@@ -282,8 +282,8 @@ try {
 	const tagList = await registryFetch(`https://${REGISTRY}/v2/acme/web/tags/list`, {
 		headers: { Authorization: `Bearer ${core.registry.internalToken('acme/web')}` },
 	}).then((response) => response.json() as Promise<{ tags: string[] }>);
-	check('pin tags exist in zot', pins.every((pin) => tagList.tags.includes(`skiff-d-${pin.deployment_id}`)), JSON.stringify(tagList.tags));
-	check('dashboard tags hide the pins', (await core.registry.tags(owner, 'acme/web')).every((tag) => !tag.tag.startsWith('skiff-d-')));
+	check('pin tags exist in zot', pins.every((pin) => tagList.tags.includes(`yoal-d-${pin.deployment_id}`)), JSON.stringify(tagList.tags));
+	check('dashboard tags hide the pins', (await core.registry.tags(owner, 'acme/web')).every((tag) => !tag.tag.startsWith('yoal-d-')));
 
 	// The pull-through cache (G4): a node logs in with its node token and pulls Docker Hub through zot.
 	const mirrorConfig = join(root, 'mirror-docker');

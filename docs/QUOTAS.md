@@ -93,7 +93,7 @@ maintenance sweep for the trend.
   `GET /api/v1/quotas[?project=<slug>]`, `PUT|PATCH /api/v1/quotas[?project=<slug>]`,
   `DELETE /api/v1/quotas?project=<slug>`.
 - MCP: `get_usage` and `get_quotas`, both read-only. A token cannot write a quota.
-- CLI: `skif usage [project]`.
+- CLI: `yoal usage [project]`.
 - Dashboard: **Settings → Usage** cards, table and CSV. Project scoping is available through REST,
   MCP and the CLI.
 
@@ -108,5 +108,5 @@ warning/critical alert.
 
 ## Feature flag
 
-`SKIFF_FEATURE_QUOTAS` defaults on. Setting it off makes `get()` return unlimited, preserving the
+`YOAL_FEATURE_QUOTAS` defaults on. Setting it off makes `get()` return unlimited, preserving the
 pre-plan behaviour; usage/showback reads still work.

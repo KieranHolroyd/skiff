@@ -1,7 +1,7 @@
 import { error, fail } from '@sveltejs/kit';
-import { hasPermission, type RegistryTagView } from '@skiff/contracts';
+import { hasPermission, type RegistryTagView } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
-import { CoreError } from '@skiff/core';
+import { CoreError } from '@yoal/core';
 import type { Actions, PageServerLoad } from './$types';
 
 /** One registry repository: its tags, the deployments pinning it, deploy on push (docs/REGISTRY.md). */

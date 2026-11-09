@@ -4,7 +4,7 @@ import type {
 	AssistantEvent,
 	AssistantGuide,
 	AssistantPageContext
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { collectPageContext } from './page-context.js';
 
 /**
@@ -176,7 +176,7 @@ class AssistantChatState {
 	// --- persistence -------------------------------------------------------------------------
 
 	private get key(): string {
-		return `skiff.assistant.v${STORAGE_VERSION}.${this.userId ?? 'anon'}`;
+		return `yoal.assistant.v${STORAGE_VERSION}.${this.userId ?? 'anon'}`;
 	}
 
 	/** Load this user's conversations and panel preferences. Safe to call more than once. */
@@ -190,7 +190,7 @@ class AssistantChatState {
 		this.activeId = this.conversations.some((c) => c.id === stored?.activeId)
 			? (stored?.activeId ?? null)
 			: null;
-		const prefs = readStorage<Partial<AssistantPrefs>>('skiff.assistant.prefs');
+		const prefs = readStorage<Partial<AssistantPrefs>>('yoal.assistant.prefs');
 		if (prefs) this.prefs = { ...this.prefs, ...prefs };
 		window.addEventListener('storage', (event) => {
 			// Another tab changed the history: pick it up unless this tab is mid-run.
@@ -247,7 +247,7 @@ class AssistantChatState {
 	setPref<K extends keyof AssistantPrefs>(key: K, value: AssistantPrefs[K]): void {
 		this.prefs[key] = value;
 		try {
-			localStorage.setItem('skiff.assistant.prefs', JSON.stringify(this.prefs));
+			localStorage.setItem('yoal.assistant.prefs', JSON.stringify(this.prefs));
 		} catch {
 			// per-browser convenience only
 		}
@@ -381,7 +381,7 @@ class AssistantChatState {
 		if (!conversation) return '';
 		const lines = [`# ${conversation.title}`, '', `_Exported ${new Date().toISOString()}_`, ''];
 		for (const message of conversation.messages) {
-			const who = message.role === 'user' ? 'You' : 'Skiff';
+			const who = message.role === 'user' ? 'You' : 'Yoal';
 			lines.push(
 				`## ${who} · ${new Date(message.createdAt).toLocaleString()}`,
 				'',

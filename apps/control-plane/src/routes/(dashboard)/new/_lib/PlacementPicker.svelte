@@ -4,9 +4,9 @@
 	import ServerIcon from '@lucide/svelte/icons/server';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
-	import type { NodeCapacityView } from '@skiff/contracts';
+	import type { NodeCapacityView } from '@yoal/contracts';
 	import type { Component } from 'svelte';
-	import StatusDot from '#lib/components/skiff/StatusDot.svelte';
+	import StatusDot from '#lib/components/yoal/StatusDot.svelte';
 	import { formatMb, predictAuto } from './template-form.js';
 
 	/**

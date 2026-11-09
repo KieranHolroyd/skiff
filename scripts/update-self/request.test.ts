@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { consumeRequestedApprovals, consumeRequestedChannel, consumeRequestedMethod } from './request.ts';
 
-const path = join(mkdtempSync(join(tmpdir(), 'skiff-update-request-')), 'request.mode');
+const path = join(mkdtempSync(join(tmpdir(), 'yoal-update-request-')), 'request.mode');
 
 function write(value: string): void {
 	writeFileSync(path, `${value}\n`);
@@ -37,7 +37,7 @@ describe('consumeRequestedMethod', () => {
 afterAll(() => rmSync(path, { force: true }));
 
 describe('consumeRequestedChannel', () => {
-	const channelPath = join(mkdtempSync(join(tmpdir(), 'skiff-update-channel-')), 'request.channel');
+	const channelPath = join(mkdtempSync(join(tmpdir(), 'yoal-update-channel-')), 'request.channel');
 
 	test('returns an allowlisted dashboard channel and deletes the sidecar', () => {
 		writeFileSync(channelPath, 'stable\n');
@@ -58,7 +58,7 @@ describe('consumeRequestedChannel', () => {
 });
 
 describe('consumeRequestedApprovals', () => {
-	const approvePath = join(mkdtempSync(join(tmpdir(), 'skiff-update-approve-')), 'request.approve');
+	const approvePath = join(mkdtempSync(join(tmpdir(), 'yoal-update-approve-')), 'request.approve');
 	afterAll(() => rmSync(dirname(approvePath), { recursive: true, force: true }));
 	const sha = 'b'.repeat(64);
 

@@ -12,7 +12,7 @@
 	import { runAction } from '#lib/actions.js';
 	import { formatRelative } from '#lib/assistant/format.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Item from '#lib/components/ui/item/index.js';
@@ -202,7 +202,7 @@
 		askConfirm({
 			title: 'Set up push notifications?',
 			description:
-				'Skiff creates a key pair for signing push alerts and restarts the dashboard for a few seconds.',
+				'Yoal creates a key pair for signing push alerts and restarts the dashboard for a few seconds.',
 			confirmLabel: 'Set up',
 			action: '?/setupPush'
 		});
@@ -216,7 +216,7 @@
 <Panel
 	title="Push notifications"
 	icon={BellRingIcon}
-	description="Alerts on your phone or computer, from Skiff installed as an app."
+	description="Alerts on your phone or computer, from Yoal installed as an app."
 >
 	{#snippet actions()}
 		<StatusBadge
@@ -234,11 +234,11 @@
 			<p class="min-w-0 flex-1">
 				{#if push.canSetUp}
 					This server has no push keys yet: it was updated by an older updater. Set them up once
-					here, or run <code>sudo skiff-update-self check</code> on the server.
+					here, or run <code>sudo yoal-update-self check</code> on the server.
 				{:else}
-					This server has no push keys. Set <code>SKIFF_VAPID_PUBLIC_KEY</code> and
-					<code>SKIFF_VAPID_PRIVATE_KEY</code>, or run the installer or
-					<code>skiff-update-self</code>, which create them.
+					This server has no push keys. Set <code>YOAL_VAPID_PUBLIC_KEY</code> and
+					<code>YOAL_VAPID_PRIVATE_KEY</code>, or run the installer or
+					<code>yoal-update-self</code>, which create them.
 				{/if}
 			</p>
 			{#if push.canSetUp}
@@ -252,10 +252,10 @@
 			{#if support === 'ios-browser'}
 				<Alert.Root>
 					<MonitorSmartphoneIcon />
-					<Alert.Title>Add Skiff to your Home Screen first</Alert.Title>
+					<Alert.Title>Add Yoal to your Home Screen first</Alert.Title>
 					<Alert.Description>
 						On iPhone and iPad, Safari only allows notifications from installed apps. Tap Share,
-						then Add to Home Screen, open Skiff from there and come back to this page.
+						then Add to Home Screen, open Yoal from there and come back to this page.
 					</Alert.Description>
 				</Alert.Root>
 			{:else if support === 'unsupported'}
@@ -285,9 +285,9 @@
 								Notifications are blocked for this site; allow them in the browser or system
 								settings.
 							{:else if !standalone}
-								Works in this browser, or install Skiff as an app to get alerts like any other app.
+								Works in this browser, or install Yoal as an app to get alerts like any other app.
 							{:else}
-								Get Skiff alerts here even when the app is closed.
+								Get Yoal alerts here even when the app is closed.
 							{/if}
 						</Item.Description>
 					</Item.Content>

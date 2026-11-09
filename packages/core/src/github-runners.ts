@@ -1,6 +1,6 @@
 import { createSign } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
-import { githubRunnerRegistrations, projects, workloads } from '@skiff/db';
+import { githubRunnerRegistrations, projects, workloads } from '@yoal/db';
 import {
 	GITHUB_RUNNER_JITCONFIG_ENV,
 	githubRunnerLabels,
@@ -11,7 +11,7 @@ import {
 	type GithubRunnerView,
 	type Principal,
 	type WorkloadSpec,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { CoreError } from './errors.ts';
 import { newId, parseJson } from './util.ts';
@@ -241,7 +241,7 @@ export class GithubRunnerService {
 		await this.request(token, 'DELETE', `${basePath(runner)}/actions/runners/${runnerId}`, undefined, [404]);
 	}
 
-	/** A PAT from the secret store, a cached App installation token, or Skiff's own App (D165). */
+	/** A PAT from the secret store, a cached App installation token, or Yoal's own App (D165). */
 	private async accessToken(orgId: string, projectId: string, runner: GithubRunner): Promise<string> {
 		if (runner.auth.method === 'installation') {
 			return this.ctx.githubApp.ownerToken(orgId, runner.owner, {
@@ -290,7 +290,7 @@ export class GithubRunnerService {
 					accept: 'application/vnd.github+json',
 					authorization: `Bearer ${token}`,
 					'x-github-api-version': GITHUB_API_VERSION,
-					'user-agent': 'skiff-runner-controller',
+					'user-agent': 'yoal-runner-controller',
 					...(body === undefined ? {} : { 'content-type': 'application/json' }),
 				},
 				...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -321,10 +321,10 @@ function basePath(runner: GithubRunner): string {
 		: `/orgs/${encodeURIComponent(runner.owner)}`;
 }
 
-/** `skiff-<slug>-<replica>-<random>`; unique so a replica's next runner never clashes with the last. */
+/** `yoal-<slug>-<replica>-<random>`; unique so a replica's next runner never clashes with the last. */
 export function runnerName(slug: string, replica: number): string {
 	const suffix = crypto.randomUUID().replace(/-/g, '').slice(0, 6);
-	return `skiff-${slug}-${replica}-${suffix}`;
+	return `yoal-${slug}-${replica}-${suffix}`;
 }
 
 function githubErrorMessage(status: number, detail: string): string {

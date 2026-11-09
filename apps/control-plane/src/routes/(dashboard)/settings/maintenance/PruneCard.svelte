@@ -13,10 +13,10 @@
 		type OperationView,
 		type PruneCategory,
 		type PruneScope
-	} from '@skiff/contracts';
+	} from '@yoal/contracts';
 	import { toast } from 'svelte-sonner';
-	import Notice from '#lib/components/skiff/Notice.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';

@@ -1,4 +1,4 @@
-import type { FunctionRuntimeBinding } from '@skiff/contracts';
+import type { FunctionRuntimeBinding } from '@yoal/contracts';
 import type { BindingResolver } from './types.ts';
 
 /**

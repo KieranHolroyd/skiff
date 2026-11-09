@@ -56,7 +56,7 @@ describe('identity HTTP shape', () => {
 
 	test('scopes the session and CSRF cookies to the pool path', () => {
 		const cookie = sessionCookie('shop', 'tok_en', true);
-		expect(cookie).toContain('skiff_pool_session=tok_en');
+		expect(cookie).toContain('yoal_pool_session=tok_en');
 		expect(cookie).toContain('Path=/shop');
 		expect(cookie).toContain('HttpOnly');
 		expect(cookie).toContain('SameSite=Lax');
@@ -64,15 +64,15 @@ describe('identity HTTP shape', () => {
 		expect(clearSessionCookie('shop', false)).toContain('Max-Age=0');
 		expect(clearSessionCookie('shop', false)).not.toContain('Secure');
 		const csrf = csrfCookie('shop', 'csrf-token', true);
-		expect(csrf).toContain('skiff_pool_csrf=csrf-token');
+		expect(csrf).toContain('yoal_pool_csrf=csrf-token');
 		expect(csrf).toContain('Path=/shop');
 		expect(csrf).toContain('Max-Age=900');
 		expect(csrf).toContain('Secure');
 	});
 
 	test('reads a cookie out of a shared host header', () => {
-		expect(cookieValue('a=1; skiff_pool_session=tok%2Fen; b=2', 'skiff_pool_session')).toBe('tok/en');
-		expect(cookieValue('a=1', 'skiff_pool_session')).toBeNull();
+		expect(cookieValue('a=1; yoal_pool_session=tok%2Fen; b=2', 'yoal_pool_session')).toBe('tok/en');
+		expect(cookieValue('a=1', 'yoal_pool_session')).toBeNull();
 	});
 
 	test('only same-site return paths are accepted', () => {

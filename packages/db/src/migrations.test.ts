@@ -9,12 +9,12 @@ import { migrate, migrations } from './index.ts';
 describe('0023 org networks upgrade', () => {
 	test('backfills built-in credentials and keeps existing attachments working', () => {
 		const sqlite = new Database(':memory:', { create: true, strict: true });
-		sqlite.run('CREATE TABLE skiff_migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)');
+		sqlite.run('CREATE TABLE yoal_migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)');
 		const apply = (id: string) => {
 			const migration = migrations.find((entry) => entry.id === id);
 			if (!migration) throw new Error(`missing migration ${id}`);
 			sqlite.run(migration.sql);
-			sqlite.run('INSERT INTO skiff_migrations (id, applied_at) VALUES (?, ?)', [id, Date.now()]);
+			sqlite.run('INSERT INTO yoal_migrations (id, applied_at) VALUES (?, ?)', [id, Date.now()]);
 		};
 		for (const migration of migrations) {
 			if (Number(migration.id.slice(0, 4)) <= 18) apply(migration.id);
@@ -37,7 +37,7 @@ describe('0023 org networks upgrade', () => {
 			)
 			.all();
 		expect(credentials).toEqual([
-			{ role: 'monitor', username: 'skiff_monitor', secret_sealed: 'monitor-sealed' },
+			{ role: 'monitor', username: 'yoal_monitor', secret_sealed: 'monitor-sealed' },
 			{ role: 'owner', username: 'old_db', secret_sealed: 'owner-sealed' },
 		]);
 		const attachment = sqlite
@@ -56,13 +56,13 @@ describe('0023 org networks upgrade', () => {
 describe('migration aliases', () => {
 	test('records a renamed migration as applied instead of rerunning it', () => {
 		const sqlite = new Database(':memory:', { create: true, strict: true });
-		sqlite.run('CREATE TABLE skiff_migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)');
+		sqlite.run('CREATE TABLE yoal_migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)');
 
 		const apply = (id: string) => {
 			const migration = migrations.find((entry) => entry.id === id);
 			if (!migration) throw new Error(`missing migration ${id}`);
 			sqlite.run(migration.sql);
-			sqlite.run('INSERT INTO skiff_migrations (id, applied_at) VALUES (?, ?)', [id, Date.now()]);
+			sqlite.run('INSERT INTO yoal_migrations (id, applied_at) VALUES (?, ?)', [id, Date.now()]);
 		};
 
 		apply('0001_init.sql');
@@ -70,11 +70,11 @@ describe('migration aliases', () => {
 		// The pre-rename id, with the same schema change, already recorded.
 		const promoted = migrations.find((entry) => entry.id === '0004_deployment_promoted_at.sql')!;
 		sqlite.run(promoted.sql);
-		sqlite.run("INSERT INTO skiff_migrations (id, applied_at) VALUES ('0003_deployment_promoted_at.sql', ?)", [Date.now()]);
+		sqlite.run("INSERT INTO yoal_migrations (id, applied_at) VALUES ('0003_deployment_promoted_at.sql', ?)", [Date.now()]);
 
 		expect(() => migrate(sqlite)).not.toThrow();
 		const ids = sqlite
-			.query<{ id: string }, []>('SELECT id FROM skiff_migrations ORDER BY id')
+			.query<{ id: string }, []>('SELECT id FROM yoal_migrations ORDER BY id')
 			.all()
 			.map((row) => row.id);
 		expect(ids).toContain('0004_deployment_promoted_at.sql');
@@ -94,11 +94,11 @@ describe('migration aliases', () => {
 	 */
 	test('records the Postgres variant migration after it moved from 0053', () => {
 		const sqlite = new Database(':memory:', { create: true, strict: true });
-		sqlite.run('CREATE TABLE skiff_migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)');
+		sqlite.run('CREATE TABLE yoal_migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)');
 
 		const apply = (migration: { id: string; sql: string }) => {
 			sqlite.run(migration.sql);
-			sqlite.run('INSERT INTO skiff_migrations (id, applied_at) VALUES (?, ?)', [
+			sqlite.run('INSERT INTO yoal_migrations (id, applied_at) VALUES (?, ?)', [
 				migration.id,
 				Date.now(),
 			]);
@@ -111,13 +111,13 @@ describe('migration aliases', () => {
 		}
 		// The old file had the same ALTER and is what the database already ran.
 		sqlite.run(variant.sql);
-		sqlite.run("INSERT INTO skiff_migrations (id, applied_at) VALUES ('0053_database_variant.sql', ?)", [
+		sqlite.run("INSERT INTO yoal_migrations (id, applied_at) VALUES ('0053_database_variant.sql', ?)", [
 			Date.now(),
 		]);
 
 		expect(() => migrate(sqlite)).not.toThrow();
 		const ids = sqlite
-			.query<{ id: string }, []>('SELECT id FROM skiff_migrations ORDER BY id')
+			.query<{ id: string }, []>('SELECT id FROM yoal_migrations ORDER BY id')
 			.all()
 			.map((row) => row.id);
 		expect(ids).toContain('0055_database_variant.sql');

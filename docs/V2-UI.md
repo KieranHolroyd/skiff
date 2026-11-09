@@ -1,4 +1,4 @@
-# Skiff v2 — Dashboard guide
+# Yoal v2 — Dashboard guide
 
 For operators who know the v1 dashboard: where v2 appears ([V2-BACKEND.md](./V2-BACKEND.md)), the
 multi-screen flows, and deliberate limits. Rationale: [DESIGN.md](./DESIGN.md), [DECISIONS.md](./DECISIONS.md).
@@ -24,7 +24,7 @@ deployed`.
 
 `/new` lists the first-party templates (plan 21) and the three blank runtimes, which open the
 `New project` dialog with that runtime chosen. `/new/<template>` is generated entirely from the
-template's definition in `@skiff/contracts`: its `groups` become numbered sections, and field hints
+template's definition in `@yoal/contracts`: its `groups` become numbered sections, and field hints
 (`options[].description`, `unit`, `presets`, `accept`, `fixed`, `replaces`, `suggest`) pick the
 control. A new catalog entry needs no dashboard change.
 
@@ -136,7 +136,7 @@ deployed content can never execute on the platform origin.
   Caddy issues a certificate on the first request. `lastError` is shown as a warning.
 - **Custom domains serve the production route.** Environment hosts are separate; per-environment
   domains are not part of v2.
-- Removing stops serving and cleans up Skiff-created records; certificates are left to expire. The
+- Removing stops serving and cleans up Yoal-created records; certificates are left to expire. The
   `www` choice is fixed at attach time — remove and re-add to change it.
 
 ### Runtime
@@ -168,7 +168,7 @@ stops the workload and clears the spec but keeps deployments and releases.
 Container projects (only) get **Overview**, **Files** and **Shell** in a **Container** group
 beside Logs. They act on the running container, not on a release, and each is gated by its own
 permission (`container:inspect`, `container:files`, `container:exec`; Restart also needs
-`project:update`) and hidden when `SKIFF_FEATURE_CONTAINER_CONSOLE` is off.
+`project:update`) and hidden when `YOAL_FEATURE_CONTAINER_CONSOLE` is off.
 
 - **Overview** is the live container: state, image and digest, node, unit and restart count, last
   exit, CPU/memory/network/disk rates, the process table, configuration (environment variable
@@ -216,7 +216,7 @@ leaves no secret versions.
 - **Secrets**: editing one replaces its value (a new version on save), switches delivery between a
   variable and a `_FILE` path, or pins a version.
 - **Edit as .env** shows the plaintext variables as `.env` text (`parseEnvFile`/`formatEnvFile` in
-  `@skiff/contracts`: `export`, comments, quotes and multi-line values; no `${VAR}` expansion).
+  `@yoal/contracts`: `export`, comments, quotes and multi-line values; no `${VAR}` expansion).
   Names left out of the text are removed. Secrets and linked variables are untouched.
 - **Export**: copy or download the draft as `.env`. Secrets cannot be read back, so they appear as
   `# NAME=` comments.
@@ -269,7 +269,7 @@ Workload status: `pending → starting → running`, plus `failed` / `stopped`. 
 
 **Process app.** `/projects` → `New project` with runtime `process` and a placement → project
 **Runtime** → `Configure` (command, port, health path, memory) → **Variables** (plain, secrets) → deploy from CLI,
-MCP or REST (`skif deploy ./dist --project <slug>`) → confirm node, upstream and reservation on the
+MCP or REST (`yoal deploy ./dist --project <slug>`) → confirm node, upstream and reservation on the
 Runtime card. **Container app:** same, but set the `image` before the first deploy.
 
 **Git → build → environment.** **Builds** → `Connect repository` (repo, branch, root, command,

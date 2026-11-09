@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { workloadDesiredSchema, type WorkloadDesired } from '@skiff/contracts';
+import { workloadDesiredSchema, type WorkloadDesired } from '@yoal/contracts';
 import { capnpText } from '../function-config.ts';
 import { renderHyperdrive } from './hyperdrive.ts';
 
@@ -21,11 +21,11 @@ function functionWorkload(bindings: unknown[]): WorkloadDesired {
 		runtime: 'function',
 		status: 'running',
 		release: SHA,
-		upstream: 'unix//run/skiff-workloads/prj_1.sock',
+		upstream: 'unix//run/yoal-workloads/prj_1.sock',
 		memoryMb: 128,
 		cpus: 1,
 		port: 3000,
-		healthPath: '/__skiff/health',
+		healthPath: '/__yoal/health',
 		socketActivation: true,
 		activationVersion: SHA,
 		function: {

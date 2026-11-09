@@ -1,5 +1,5 @@
 /**
- * Skiff R2 binding service (docs/FUNCTIONS.md §4.5, FN10).
+ * Yoal R2 binding service (docs/FUNCTIONS.md §4.5, FN10).
  *
  * A Worker that implements the workerd R2 binding protocol on top of a managed RustFS instance
  * spoken to over the S3 API. The user Worker gets an `r2Bucket` binding pointing at this service;
@@ -131,7 +131,7 @@ async function handleRequest(request, env) {
 			case 'abortMultipartUpload':
 				throw new R2Error(
 					501,
-					'Multipart uploads are not supported by this R2 binding: Skiff stores objects single-part (25 MiB per put).',
+					'Multipart uploads are not supported by this R2 binding: Yoal stores objects single-part (25 MiB per put).',
 					R2_ERROR_CODES.invalidArgument,
 				);
 			default:

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { EMAIL_REPUTATION, emailEventKinds } from '@skiff/contracts';
+import { EMAIL_REPUTATION, emailEventKinds } from '@yoal/contracts';
 import {
 	activitySearch,
 	formatRate,

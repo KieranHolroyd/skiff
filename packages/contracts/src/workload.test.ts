@@ -79,8 +79,8 @@ describe('WorkloadDesired additive fields', () => {
 
 describe('per-org network derivation', () => {
 	test('derives a stable org network and keeps the shared fallback', () => {
-		expect(orgNetworkName('org_123')).toBe('skiff-org-org_123');
-		expect(orgNetworkName('Org ABC')).toBe('skiff-org-org-abc');
+		expect(orgNetworkName('org_123')).toBe('yoal-org-org_123');
+		expect(orgNetworkName('Org ABC')).toBe('yoal-org-org-abc');
 		expect(workloadNetworkName({})).toBe(DEFAULT_WORKLOAD_NETWORK);
 	});
 
@@ -91,7 +91,7 @@ describe('per-org network derivation', () => {
 		expect(workloadsShareNetwork(a, { orgId: 'org_1' })).toBe(true);
 		expect(workloadsShareNetwork(a, b)).toBe(false);
 		// Explicit names win, which is what the node protocol sends.
-		expect(workloadNetworkName({ orgId: 'org_1', networkName: 'skiff-org-org_1' })).toBe('skiff-org-org_1');
+		expect(workloadNetworkName({ orgId: 'org_1', networkName: 'yoal-org-org_1' })).toBe('yoal-org-org_1');
 	});
 
 	test('desired state accepts the new fields and old state stays valid', () => {
@@ -226,7 +226,7 @@ describe('function route replica sockets', () => {
 		access: {
 			mode: 'public' as const,
 			siteKey: 'site-key-0123456789',
-			loginUrl: 'https://control.test/_skiff/site-login',
+			loginUrl: 'https://control.test/_yoal/site-login',
 		},
 		accessMode: 'public' as const,
 		spa: false,
@@ -238,24 +238,24 @@ describe('function route replica sockets', () => {
 	test('a scaled function route carries its replica sockets in order', () => {
 		const parsed = routeSpecSchema.parse({
 			...base,
-			upstream: 'unix//run/skiff-workloads/wld_1.sock',
+			upstream: 'unix//run/yoal-workloads/wld_1.sock',
 			function: {
 				assetsDirectory: 'public',
 				runWorkerFirst: [],
 				upstreams: [
-					'unix//run/skiff-workloads/wld_1.sock',
-					'unix//run/skiff-workloads/wld_1-r1.sock',
-					'unix//run/skiff-workloads/wld_1-r2.sock',
+					'unix//run/yoal-workloads/wld_1.sock',
+					'unix//run/yoal-workloads/wld_1-r1.sock',
+					'unix//run/yoal-workloads/wld_1-r2.sock',
 				],
 			},
 		});
 		expect(parsed.function?.upstreams).toEqual([
-			'unix//run/skiff-workloads/wld_1.sock',
-			'unix//run/skiff-workloads/wld_1-r1.sock',
-			'unix//run/skiff-workloads/wld_1-r2.sock',
+			'unix//run/yoal-workloads/wld_1.sock',
+			'unix//run/yoal-workloads/wld_1-r1.sock',
+			'unix//run/yoal-workloads/wld_1-r2.sock',
 		]);
 		// The primary target stays for older agents and for the edge, which has no function block.
-		expect(parsed.upstream).toBe('unix//run/skiff-workloads/wld_1.sock');
+		expect(parsed.upstream).toBe('unix//run/yoal-workloads/wld_1.sock');
 	});
 
 	test('older desired state without upstreams still parses', () => {

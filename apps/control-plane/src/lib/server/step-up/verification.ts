@@ -1,4 +1,4 @@
-import type { StepUpClass, StepUpVerification } from '@skiff/contracts';
+import type { StepUpClass, StepUpVerification } from '@yoal/contracts';
 
 /**
  * Read the step-up window off a Better Auth session row (STEP-UP.md §3, §6).

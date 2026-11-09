@@ -46,7 +46,7 @@ describe('assistant markdown', () => {
 				'2. second',
 				'',
 				'```sh',
-				'skiff deploy',
+				'yoal deploy',
 				'```',
 				'',
 				'| Project | Status |',
@@ -73,13 +73,13 @@ describe('assistant markdown', () => {
 			[0, true]
 		]);
 		const code = blocks[3];
-		expect(code).toEqual({ type: 'code', lang: 'sh', text: 'skiff deploy', open: false });
+		expect(code).toEqual({ type: 'code', lang: 'sh', text: 'yoal deploy', open: false });
 		const table = blocks[4];
 		expect(table?.type === 'table' && table.align).toEqual([null, 'center']);
 	});
 
 	test('a fence still streaming is an open code block', () => {
-		const blocks = parseMarkdown('Run:\n```sh\nskiff dep');
-		expect(blocks[1]).toEqual({ type: 'code', lang: 'sh', text: 'skiff dep', open: true });
+		const blocks = parseMarkdown('Run:\n```sh\nyoal dep');
+		expect(blocks[1]).toEqual({ type: 'code', lang: 'sh', text: 'yoal dep', open: true });
 	});
 });

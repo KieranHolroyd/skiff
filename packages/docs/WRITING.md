@@ -1,21 +1,21 @@
-# Writing Skiff documentation
+# Writing Yoal documentation
 
-User-facing documentation for Skiff lives in `content/` as Markdown, one file per page. The same
+User-facing documentation for Yoal lives in `content/` as Markdown, one file per page. The same
 files render in two places: the dashboard's **Docs** page (`/docs` on the control plane) and the
 standalone docs site (`apps/docs`, deployable on its own). `src/manifest.ts` decides the sidebar
 order; a page that is not in the manifest is not published.
 
 `docs/` at the repository root is different: those are design documents and decision logs for
-people building Skiff. They are excellent research sources, but user docs explain **how to use
-and run Skiff**, not why it was designed that way.
+people building Yoal. They are excellent research sources, but user docs explain **how to use
+and run Yoal**, not why it was designed that way.
 
 ## Audience
 
-- **Users** deploying sites, functions, apps and data services through the dashboard, the `skif`
+- **Users** deploying sites, functions, apps and data services through the dashboard, the `yoal`
   CLI, the REST API or an AI agent over MCP.
-- **Operators** self-hosting Skiff on their own server(s).
+- **Operators** self-hosting Yoal on their own server(s).
 
-Write for a competent developer who has never seen Skiff. Lead with what they want to do, then
+Write for a competent developer who has never seen Yoal. Lead with what they want to do, then
 show how. Explain a concept once, in the page that owns it, and link to it elsewhere.
 
 ## File format
@@ -67,7 +67,7 @@ Opening paragraph: what this page covers and when you'd use it (2–4 sentences)
 
   ```mermaid
   sequenceDiagram
-    participant CLI as skif CLI
+    participant CLI as yoal CLI
     participant CP as Control plane
     participant Agent as Node agent
     CLI->>CP: create upload, PUT zip, finalize
@@ -94,10 +94,10 @@ Opening paragraph: what this page covers and when you'd use it (2–4 sentences)
 
 - British spelling, matching the codebase (organisation, behaviour, colour). Plain, direct
   sentences; second person ("you"); present tense.
-- Product name **Skiff**. The CLI binary is **`skif`** (`skiff` is an alias). The package is
-  `@skiffy/skiff`.
-- Prefer concrete examples: a real command with real flags, a real `skiff.json`, a real REST call
-  with `curl`. Use `example.com`, `control.example.com`, `my-site`, `skif_…` as placeholders.
+- Product name **Yoal**. The CLI binary is **`yoal`** (`yoal` is an alias). The package is
+  `@yoal/cli`.
+- Prefer concrete examples: a real command with real flags, a real `yoal.json`, a real REST call
+  with `curl`. Use `example.com`, `control.example.com`, `my-site`, `yoal_…` as placeholders.
 - Tables are great for reference material (flags, env vars, permissions, limits).
 - Don't cite internal decision numbers (D42), wave names, plan files, or test names.
 - Don't pad. No "In this guide we will…", no closing summaries. A page is usually 600–1,800

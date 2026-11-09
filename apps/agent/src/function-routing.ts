@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import type { RouteSpec } from '@skiff/contracts';
+import type { RouteSpec } from '@yoal/contracts';
 import {
 	compilePattern,
 	compileTarget,
@@ -9,7 +9,7 @@ import {
 	type HeaderRule,
 	type Redirect,
 	type SiteCompileInput,
-} from '@skiff/site-config';
+} from '@yoal/site-config';
 
 /**
  * Caddy route for a `runtime: "function"` site (docs/FUNCTIONS.md §4.2, D110).
@@ -135,12 +135,12 @@ function authRoute(agentSocket: string): CaddyRoute {
 			{
 				handler: 'reverse_proxy',
 				upstreams: [{ dial: `unix/${agentSocket}` }],
-				rewrite: { method: 'GET', uri: '/_skiff/verify' },
+				rewrite: { method: 'GET', uri: '/_yoal/verify' },
 				headers: {
 					request: {
 						set: {
 							'X-Forwarded-Uri': ['{http.request.uri}'],
-							'X-Skiff-Project': ['{http.request.host}'],
+							'X-Yoal-Project': ['{http.request.host}'],
 						},
 					},
 				},
@@ -203,7 +203,7 @@ function redirectRule(redirect: Redirect): CaddyRoute {
 	const target = compileTarget(redirect.to);
 	const hasPattern = compiled.groups.length > 0;
 	const match = hasPattern
-		? [{ path_regexp: { name: 'skiff_redirect', pattern: compiled.regex } }]
+		? [{ path_regexp: { name: 'yoal_redirect', pattern: compiled.regex } }]
 		: [{ path: [redirect.from] }];
 	if (redirect.status === 200) return { match, handle: [{ handler: 'rewrite', uri: target }] };
 	if (redirect.status >= 300 && redirect.status < 400)
@@ -220,8 +220,8 @@ function redirectRule(redirect: Redirect): CaddyRoute {
 export const FUNCTION_DIAL_RETRY = '30s';
 
 /**
- * The function host. `X-Skiff-Internal: 0` overwrites a client-supplied value so the shim's
- * `POST /__skiff/scheduled` and `/__skiff/queue` routes stay unreachable from the internet (FN9:
+ * The function host. `X-Yoal-Internal: 0` overwrites a client-supplied value so the shim's
+ * `POST /__yoal/scheduled` and `/__yoal/queue` routes stay unreachable from the internet (FN9:
  * only the node's timer sends `1`). The 5-minute response header timeout is FN5's wall clock for
  * `fetch` (docs/FUNCTIONS.md §4.7, sized for long AI calls); Caddy sets none by default, so a hung
  * host would otherwise hold the request open indefinitely.
@@ -241,7 +241,7 @@ function proxyHandler(upstreams: readonly string[]): CaddyHandler {
 		headers: {
 			request: {
 				set: {
-					'X-Skiff-Internal': ['0'],
+					'X-Yoal-Internal': ['0'],
 					'X-Forwarded-Host': ['{http.request.host}'],
 				},
 			},

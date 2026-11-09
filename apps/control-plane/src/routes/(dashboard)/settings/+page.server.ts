@@ -4,8 +4,8 @@ import {
 	isGuestPrincipal,
 	statements,
 	type Permission
-} from '@skiff/contracts';
-import { renameOrganization } from '@skiff/core';
+} from '@yoal/contracts';
+import { renameOrganization } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import { failStatus, formString, toFormFailure } from '../_lib/errors.js';
 import { RESOURCE_LABELS } from './_lib/resources.js';

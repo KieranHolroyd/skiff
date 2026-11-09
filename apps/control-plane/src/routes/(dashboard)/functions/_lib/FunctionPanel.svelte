@@ -1,6 +1,6 @@
 <script lang="ts">
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import DetailList from '#lib/components/yoal/DetailList.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
@@ -8,7 +8,7 @@
 	import { Progress } from '#lib/components/ui/progress/index.js';
 	import * as Table from '#lib/components/ui/table/index.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import type { ProjectView } from '@skiff/core';
+	import type { ProjectView } from '@yoal/core';
 	import {
 		WORKERD_MAX_COMPATIBILITY_DATE,
 		WORKERD_PINNED_VERSION,
@@ -16,7 +16,7 @@
 		type NodeCapacityView,
 		type WorkloadSpec,
 		type WorkloadView
-	} from '@skiff/contracts';
+	} from '@yoal/contracts';
 	import CableIcon from '@lucide/svelte/icons/cable';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import FolderOpenIcon from '@lucide/svelte/icons/folder-open';
@@ -246,7 +246,7 @@
 				{/if}
 			{:else}
 				<p class="text-sm">
-					Nothing deployed yet. Run <code class="font-mono text-xs">skif deploy</code> in the Wrangler
+					Nothing deployed yet. Run <code class="font-mono text-xs">yoal deploy</code> in the Wrangler
 					project; the control plane validates the bundle, resolves the bindings and starts a workerd
 					host on the next reconcile.
 				</p>
@@ -278,7 +278,7 @@
 					{#if view.bindings.length === 0}
 						<p class="px-6 py-4 text-sm text-muted-foreground">
 							No bindings. Declare <code class="font-mono text-xs">vars</code>, secrets, same-bundle
-							services or Skiff apps in the manifest to add them.
+							services or Yoal apps in the manifest to add them.
 						</p>
 					{:else}
 						<Table.Root>
@@ -373,7 +373,7 @@
 						What you can bind
 					</Card.Title>
 					<Card.Description>
-						Every Workers binding Skiff serves, where it goes in wrangler.jsonc and what backs it.
+						Every Workers binding Yoal serves, where it goes in wrangler.jsonc and what backs it.
 						Bindings marked <span class="font-medium">one host</span> keep state on the node, so a function
 						using them cannot scale out yet.
 					</Card.Description>

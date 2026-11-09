@@ -18,13 +18,13 @@ import { QueueProducer, messageHeaders } from './queue.js';
 
 /**
  * Queues on the managed broker (D112). Protocol units always run; the broker tests need a NATS
- * server with JetStream at SKIFF_TEST_NATS (`host:port`, user `tester`, password
+ * server with JetStream at YOAL_TEST_NATS (`host:port`, user `tester`, password
  * `tester-password-123`), for example:
  *
  *   docker run --rm -p 127.0.0.1:14999:4222 nats:2.12-alpine -js --user tester --pass tester-password-123
- *   SKIFF_TEST_NATS=127.0.0.1:14999 bun test
+ *   YOAL_TEST_NATS=127.0.0.1:14999 bun test
  */
-const target = process.env.SKIFF_TEST_NATS ?? '';
+const target = process.env.YOAL_TEST_NATS ?? '';
 const [testHost, testPort] = target.split(':');
 const USER = 'tester';
 const PASS = 'tester-password-123';
@@ -58,8 +58,8 @@ const unique = (name: string) => `${name}-${Math.random().toString(36).slice(2, 
 
 describe('NATS protocol pieces', () => {
 	test('headers round-trip and refuse injection', () => {
-		const bytes = encodeHeaders({ 'Nats-Msg-Id': 'abc', 'Skiff-Content-Type': 'json' });
-		expect(new TextDecoder().decode(bytes)).toBe('NATS/1.0\r\nNats-Msg-Id: abc\r\nSkiff-Content-Type: json\r\n\r\n');
+		const bytes = encodeHeaders({ 'Nats-Msg-Id': 'abc', 'Yoal-Content-Type': 'json' });
+		expect(new TextDecoder().decode(bytes)).toBe('NATS/1.0\r\nNats-Msg-Id: abc\r\nYoal-Content-Type: json\r\n\r\n');
 		const parsed = decodeHeaders(bytes);
 		expect(parsed.get('nats-msg-id')).toBe('abc');
 		expect(decodeHeaders(new TextEncoder().encode('NATS/1.0 404 No Messages\r\n\r\n'))).toMatchObject({
@@ -71,14 +71,14 @@ describe('NATS protocol pieces', () => {
 	});
 
 	test('ack subjects of both forms parse', () => {
-		expect(ackInfo('$JS.ACK.SKIFF_Q_jobs.skiff-consumer.3.17.20.1700000000123456789.4')).toMatchObject({
-			stream: 'SKIFF_Q_jobs',
+		expect(ackInfo('$JS.ACK.YOAL_Q_jobs.yoal-consumer.3.17.20.1700000000123456789.4')).toMatchObject({
+			stream: 'YOAL_Q_jobs',
 			delivered: 3,
 			streamSequence: 17,
 			timestampMs: 1_700_000_000_123,
 		});
-		expect(ackInfo('$JS.ACK.hub.ACCHASH.SKIFF_Q_jobs.skiff-consumer.2.5.6.1700000000999000000.0.abc')).toMatchObject({
-			stream: 'SKIFF_Q_jobs',
+		expect(ackInfo('$JS.ACK.hub.ACCHASH.YOAL_Q_jobs.yoal-consumer.2.5.6.1700000000999000000.0.abc')).toMatchObject({
+			stream: 'YOAL_Q_jobs',
 			delivered: 2,
 			streamSequence: 5,
 		});
@@ -86,8 +86,8 @@ describe('NATS protocol pieces', () => {
 	});
 
 	test('queue names map to safe streams and subjects', () => {
-		expect(queueStreamName('email-jobs')).toBe('SKIFF_Q_email-jobs');
-		expect(queueSubject('email-jobs')).toBe('skiff.q.email-jobs');
+		expect(queueStreamName('email-jobs')).toBe('YOAL_Q_email-jobs');
+		expect(queueSubject('email-jobs')).toBe('yoal.q.email-jobs');
 		expect(() => queueSubject('a.b')).toThrow(/not valid/);
 		expect(() => queueSubject('>')).toThrow(/not valid/);
 	});

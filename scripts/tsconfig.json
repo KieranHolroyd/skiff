@@ -12,7 +12,7 @@
 		"rotate-master-key.ts",
 		"rotate-master-key.test.ts",
 		"uninstall.test.ts",
-		"skiff-alert.ts",
+		"yoal-alert.ts",
 		"install/**/*.ts",
 		"systemd/**/*.ts",
 		"release/**/*.ts"

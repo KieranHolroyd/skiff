@@ -6,7 +6,7 @@ import {
 	type Permission,
 	type Principal,
 	type ResourceRef,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 
 /**
  * The IAM read tools (IAM.md §9.3, §12) against a fake `core`: roles, explain, who-can and service
@@ -202,7 +202,7 @@ const fakeCore = {
 					orgId: principal.orgId,
 					serviceAccountId: 'sa_ci',
 					issuer: 'https://token.actions.githubusercontent.com',
-					audiences: ['skiff'],
+					audiences: ['yoal'],
 					subjectPattern: 'repo:acme/*',
 					claimConditions: {},
 					maxTtlSeconds: 900,
@@ -217,7 +217,7 @@ mock.module('./core', () => ({ core: fakeCore }));
 mock.module('./config', () => ({ platformOrigin: 'https://control.test', authSecret: 'test-secret' }));
 mock.module('./principal', () => principalStub({ principalFromMcp: () => null }));
 
-const { skiffToolDefinitions, visibleTools, visibleToolNames } = await import('./mcp');
+const { yoalToolDefinitions, visibleTools, visibleToolNames } = await import('./mcp');
 const { assistantTools } = await import('./assistant/tools');
 
 const owner: Principal = {
@@ -258,7 +258,7 @@ type Challenge = (context: { authInfo?: { scopes?: string[] } }) => Promise<{ sc
 
 describe('IAM read MCP tools', () => {
 	test('read tools are read-only and never offer approvals, keys, SSO, guardrails or owner changes', () => {
-		const definitions = new Map(skiffToolDefinitions(owner).map((entry) => [entry.name, entry]));
+		const definitions = new Map(yoalToolDefinitions(owner).map((entry) => [entry.name, entry]));
 		for (const name of IAM_READ_TOOLS) {
 			expect(definitions.has(name)).toBe(true);
 			expect(definitions.get(name)?.config.annotations).toMatchObject({
@@ -277,7 +277,7 @@ describe('IAM read MCP tools', () => {
 	});
 
 	test('ask the client for iam:read or serviceAccount:read, and nothing when already granted', async () => {
-		const definitions = new Map(skiffToolDefinitions(owner).map((entry) => [entry.name, entry]));
+		const definitions = new Map(yoalToolDefinitions(owner).map((entry) => [entry.name, entry]));
 		const iamChallenge = definitions.get('explain_access')?.config.scopeChallenge as Challenge;
 		expect(await iamChallenge({ authInfo: { scopes: ['project:read'] }, request: { params: {} } } as never)).toMatchObject({
 			scopes: ['project:read', 'iam:read'],
@@ -391,7 +391,7 @@ describe('IAM read MCP tools', () => {
 				id: 'ft_github',
 				serviceAccountId: 'sa_ci',
 				issuer: 'https://token.actions.githubusercontent.com',
-				audiences: ['skiff'],
+				audiences: ['yoal'],
 			},
 		]);
 		expect(result.text).not.toContain('secret');
@@ -469,7 +469,7 @@ describe('IAM read MCP tools', () => {
 
 describe('IAM write MCP tools', () => {
 	test('the chat confirms every IAM write and hides it from a read-only user', () => {
-		const definitions = new Map(skiffToolDefinitions(owner).map((entry) => [entry.name, entry]));
+		const definitions = new Map(yoalToolDefinitions(owner).map((entry) => [entry.name, entry]));
 		for (const name of IAM_WRITE_TOOLS) {
 			expect(definitions.has(name)).toBe(true);
 			expect(definitions.get(name)?.config.annotations).toMatchObject({ readOnlyHint: false });
@@ -505,7 +505,7 @@ describe('IAM write MCP tools', () => {
 	});
 
 	test('ask for serviceAccount:create or iam:manage-bindings; requesting access needs no extra scope', async () => {
-		const definitions = new Map(skiffToolDefinitions(owner).map((entry) => [entry.name, entry]));
+		const definitions = new Map(yoalToolDefinitions(owner).map((entry) => [entry.name, entry]));
 		const serviceAccount = definitions.get('create_service_account')?.config.scopeChallenge as Challenge;
 		expect(await serviceAccount({ authInfo: { scopes: [] }, request: { params: {} } } as never)).toMatchObject({
 			scopes: ['serviceAccount:create'],
@@ -686,7 +686,7 @@ describe('IAM write MCP tools', () => {
 	});
 
 	test('never offers approvals, keys, tokens, SSO/SCIM, guardrails, owner changes or platform bindings', () => {
-		const names = skiffToolDefinitions(owner).map((entry) => entry.name);
+		const names = yoalToolDefinitions(owner).map((entry) => entry.name);
 		const forbidden = [
 			'approve_access',
 			'deny_access',

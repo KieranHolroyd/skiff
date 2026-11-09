@@ -13,7 +13,7 @@
 		type PanelQuery,
 		type QueryResult,
 		type VizType
-	} from '@skiff/contracts';
+	} from '@yoal/contracts';
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { toast } from 'svelte-sonner';
 	import ChartLineIcon from '@lucide/svelte/icons/chart-line';
@@ -235,7 +235,7 @@
 	}
 </script>
 
-<svelte:head><title>Explore · Dashboards · Skiff</title></svelte:head>
+<svelte:head><title>Explore · Dashboards · Yoal</title></svelte:head>
 
 <div class="space-y-4">
 	<PageHeader

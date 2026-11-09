@@ -1,4 +1,4 @@
-import { FUNCTION_ANALYTICS_PORT } from '@skiff/contracts';
+import { FUNCTION_ANALYTICS_PORT } from '@yoal/contracts';
 import type { BindingRenderer, RenderedBinding } from './types.ts';
 import { capnpText } from '../function-config.ts';
 import analyticsWorkerSource from '../../../../packages/function-bindings/src/analytics.js' with { type: 'text' };
@@ -6,7 +6,7 @@ import analyticsWorkerSource from '../../../../packages/function-bindings/src/an
 /** Helper credential name the Analytics Engine wrapper module is embedded as. */
 export const ANALYTICS_BINDING_FILE = 'binding-analytics';
 /** `Config.extensions` module name the wrapped binding refers to. */
-export const ANALYTICS_EXTENSION_MODULE = 'skiff-analytics:writer';
+export const ANALYTICS_EXTENSION_MODULE = 'yoal-analytics:writer';
 
 /**
  * Phase-2 Analytics Engine: workerd's `analyticsEngine` capability is a **wrapped binding** whose
@@ -38,7 +38,7 @@ export const renderAnalyticsEngineBinding: BindingRenderer = (context) => {
 	const service = `    ( name = ${capnpText(serviceName)},\n      external = ( address = ${capnpText(`127.0.0.1:${FUNCTION_ANALYTICS_PORT}`)}, http = () ) )`;
 
 	// One extension per host: workerd resolves extension modules by name, so emitting the same
-	// `skiff-analytics:writer` block twice (one per binding) would be a duplicate definition. The
+	// `yoal-analytics:writer` block twice (one per binding) would be a duplicate definition. The
 	// first Analytics binding in the list declares it; every wrapped binding points at it.
 	const extension = `    ( modules = [ ( name = ${capnpText(ANALYTICS_EXTENSION_MODULE)}, internal = true, esModule = embed ${capnpText(ANALYTICS_BINDING_FILE)} ) ] )`;
 	const declaresExtension = spec.bindings.find((entry) => entry.type === 'analytics_engine')?.name === binding.name;

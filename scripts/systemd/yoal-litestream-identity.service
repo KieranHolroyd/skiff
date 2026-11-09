@@ -1,0 +1,50 @@
+[Unit]
+Description=Yoal identity SQLite continuous replication (Litestream)
+Documentation=https://github.com/KieranHolroyd/yoal/blob/main/docs/IAM.md
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=yoal
+Group=yoal
+UMask=0027
+EnvironmentFile=/etc/yoal/yoal.env
+
+ExecStart=/usr/local/bin/litestream replicate -config /etc/yoal/litestream-identity.yml
+
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGTERM
+LimitNOFILE=4096
+TasksMax=64
+MemoryMax=128M
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+ReadWritePaths=/var/lib/yoal/identity
+
+# Deliberately no [Install] section: the identity node's helper starts it with the process.

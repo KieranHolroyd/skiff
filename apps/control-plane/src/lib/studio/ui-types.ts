@@ -20,7 +20,7 @@ import type {
 	RowChange,
 	StudioInfo,
 	TreeNode,
-} from '@skiff/studio/protocol';
+} from '@yoal/studio/protocol';
 
 export interface StudioGridProps {
 	columns: Column[];

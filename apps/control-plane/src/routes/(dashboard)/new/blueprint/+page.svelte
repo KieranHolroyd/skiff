@@ -14,9 +14,9 @@
 		type BlueprintPlanAction,
 		type BlueprintPlanView,
 		type ItemStatus
-	} from '@skiff/contracts';
-	import Notice from '#lib/components/skiff/Notice.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	} from '@yoal/contracts';
+	import Notice from '#lib/components/yoal/Notice.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
@@ -33,7 +33,7 @@
 
 	let { data }: PageProps = $props();
 
-	const example = `apiVersion: skiff/v1
+	const example = `apiVersion: yoal/v1
 name: shop
 projects:
   shop-api:
@@ -224,7 +224,7 @@ attachments:
 </script>
 
 <svelte:head>
-	<title>Apply a blueprint · Skiff</title>
+	<title>Apply a blueprint · Yoal</title>
 </svelte:head>
 
 <div class="space-y-8">
@@ -239,13 +239,13 @@ attachments:
 
 	{#if !data.enabled}
 		<Notice tone="warning" title="Blueprints are turned off on this platform">
-			An operator turns them on with <code>SKIFF_FEATURE_BLUEPRINTS=1</code> in the control plane's environment.
+			An operator turns them on with <code>YOAL_FEATURE_BLUEPRINTS=1</code> in the control plane's environment.
 		</Notice>
 	{:else}
 		<Panel
 			title="Blueprint"
 			icon={ScrollTextIcon}
-			description={`YAML or JSON with apiVersion: skiff/v1. The CLI looks for ${BLUEPRINT_FILE_NAMES[0]}. Secrets are names only; create their values first.`}
+			description={`YAML or JSON with apiVersion: yoal/v1. The CLI looks for ${BLUEPRINT_FILE_NAMES[0]}. Secrets are names only; create their values first.`}
 		>
 			{#snippet actions()}
 				<Button variant="ghost" size="sm" onclick={() => (documentText = example)}
@@ -264,7 +264,7 @@ attachments:
 					rows={18}
 					spellcheck={false}
 					class="font-mono text-xs"
-					placeholder={'apiVersion: skiff/v1\nname: my-stack\nprojects:\n  my-site: {}'}
+					placeholder={'apiVersion: yoal/v1\nname: my-stack\nprojects:\n  my-site: {}'}
 					aria-label="Blueprint document"
 				/>
 				<div class="flex flex-wrap items-center justify-between gap-3">

@@ -1,6 +1,6 @@
 # v2-stress (container variant)
 
-Skiff v2 runs tier-3 workloads as rootless Podman Quadlet units. This image is the same app as
+Yoal v2 runs tier-3 workloads as rootless Podman Quadlet units. This image is the same app as
 `../src/server.ts`, bundled and copied into a small Bun image. Build it where Podman/Docker can
 push to a registry your node can pull from.
 
@@ -10,7 +10,7 @@ bun run build
 docker build -t registry.example.com/v2-stress:dev -f container/Dockerfile .
 docker push registry.example.com/v2-stress:dev
 
-SKIFF_URL=https://control.example.com SKIFF_TOKEN=skif_… \
+YOAL_URL=https://control.example.com YOAL_TOKEN=yoal_… \
   bun scripts/provision.ts --slug v2-stress-container \
   --runtime container --image registry.example.com/v2-stress:dev
 ```

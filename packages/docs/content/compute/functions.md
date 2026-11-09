@@ -1,9 +1,9 @@
 ---
 title: Functions
-description: Run Cloudflare Workers-compatible JavaScript or Python on Skiff, scale to zero when idle, and bind KV, D1, R2, queues and more.
+description: Run Cloudflare Workers-compatible JavaScript or Python on Yoal, scale to zero when idle, and bind KV, D1, R2, queues and more.
 ---
 
-Functions run code written for Cloudflare Workers on workerd, the open-source runtime behind Workers. You write `export default { fetch }`, keep a `wrangler.jsonc` next to it, and run `skif deploy .`. Skiff bundles the Worker and runs it as its own process on a node. The process starts on the first request and stops after a period of idleness. Use a function for API routes, form handlers, webhooks and scheduled jobs that do not need an always-on process.
+Functions run code written for Cloudflare Workers on workerd, the open-source runtime behind Workers. You write `export default { fetch }`, keep a `wrangler.jsonc` next to it, and run `yoal deploy .`. Yoal bundles the Worker and runs it as its own process on a node. The process starts on the first request and stops after a period of idleness. Use a function for API routes, form handlers, webhooks and scheduled jobs that do not need an always-on process.
 
 ## Project layout
 
@@ -16,7 +16,7 @@ my-api/
     └── logo.svg
 ```
 
-A `wrangler.jsonc` (or `wrangler.json`) in the directory makes it a function project. A `wrangler.toml` is not read, so convert it to JSONC first. The `main` key names the entry module. Skiff bundles it with its own pinned bundler, so you do not need to install Wrangler to deploy. Imports from `node_modules` are bundled into the entry module.
+A `wrangler.jsonc` (or `wrangler.json`) in the directory makes it a function project. A `wrangler.toml` is not read, so convert it to JSONC first. The `main` key names the entry module. Yoal bundles it with its own pinned bundler, so you do not need to install Wrangler to deploy. Imports from `node_modules` are bundled into the entry module.
 
 A minimal Worker:
 
@@ -30,12 +30,12 @@ export default {
 
 ## Configuration
 
-Skiff reads these keys from `wrangler.jsonc` and uses the same names as Wrangler. Other Wrangler keys are ignored.
+Yoal reads these keys from `wrangler.jsonc` and uses the same names as Wrangler. Other Wrangler keys are ignored.
 
 | Key | Purpose |
 | --- | --- |
 | `main` | Entry module: `.js`, `.mjs`, `.cjs`, `.ts` or `.py`. Required. |
-| `compatibility_date` | Required, as `YYYY-MM-DD`. Must be from 2022-01-01 up to the newest workerd Skiff ships (currently 2026-11-06). |
+| `compatibility_date` | Required, as `YYYY-MM-DD`. Must be from 2022-01-01 up to the newest workerd Yoal ships (currently 2026-11-06). |
 | `compatibility_flags` | Passed to workerd. Node built-ins are enabled automatically for compatibility dates from 2026-08-04. |
 | `name` | Used only to recognise a service binding that points back at this Worker. It does not set the project slug. |
 | `vars` | Plain variables. A string becomes a text binding; any other JSON value becomes a JSON binding. Stored in the deployment, not as secrets. Each text value is limited to 16 KiB. |
@@ -44,22 +44,22 @@ Skiff reads these keys from `wrangler.jsonc` and uses the same names as Wrangler
 | `kv_namespaces`, `d1_databases`, `r2_buckets`, `durable_objects.bindings`, `hyperdrive`, `analytics_engine_datasets`, `services`, `assets` | Bindings. See [bindings](#bindings). |
 | `build.command`, `build.cwd` | A command to run before bundling, for example to install vendored packages. |
 | `minify`, `keep_names`, `define`, `alias`, `tsconfig`, `jsx_factory`, `jsx_fragment`, `rules` | Bundler options, as in Wrangler. |
-| `skiff` | Skiff-only settings, described below. |
+| `yoal` | Yoal-only settings, described below. |
 
-The `skiff` section holds the Skiff-side names and sizing:
+The `yoal` section holds the Yoal-side names and sizing:
 
 | Key | Purpose |
 | --- | --- |
-| `skiff.storage` | Maps an R2 binding name to the name of the RustFS instance that holds its bucket. |
-| `skiff.brokers` | Maps a queue name to the managed broker that holds it. Needed when the project has more than one broker attached. |
-| `skiff.hyperdrive` | Maps a Hyperdrive binding name to the name of the attached Postgres database. |
-| `skiff.secrets` | Secret names to bind, including organisation-wide secrets. |
-| `skiff.bindings` | Raw binding entries (`{ "name": "…", "type": "…" }`) for bindings that have no Wrangler key, such as `cache`. |
-| `skiff.idleStopSeconds` | Seconds of inactivity before the host stops. `0` keeps it running. Default 300. |
-| `skiff.memoryMb` | Memory reservation, from 32 to 2048. Default 128, or 384 for Python. |
-| `skiff.cpus` | CPU share, up to 4. Default 1. |
+| `yoal.storage` | Maps an R2 binding name to the name of the RustFS instance that holds its bucket. |
+| `yoal.brokers` | Maps a queue name to the managed broker that holds it. Needed when the project has more than one broker attached. |
+| `yoal.hyperdrive` | Maps a Hyperdrive binding name to the name of the attached Postgres database. |
+| `yoal.secrets` | Secret names to bind, including organisation-wide secrets. |
+| `yoal.bindings` | Raw binding entries (`{ "name": "…", "type": "…" }`) for bindings that have no Wrangler key, such as `cache`. |
+| `yoal.idleStopSeconds` | Seconds of inactivity before the host stops. `0` keeps it running. Default 300. |
+| `yoal.memoryMb` | Memory reservation, from 32 to 2048. Default 128, or 384 for Python. |
+| `yoal.cpus` | CPU share, up to 4. Default 1. |
 
-These keys fail the deploy with an error, because Skiff cannot back them: `ai`, `browser`, `vectorize`, `images`, `send_email`, `containers`, `mtls_certificates`, `dispatch_namespaces` and `workflows`. Also refused are `no_bundle`, `find_additional_modules`, the retired `node_compat` option, and queue consumers that set `max_concurrency` or `visibility_timeout_ms`.
+These keys fail the deploy with an error, because Yoal cannot back them: `ai`, `browser`, `vectorize`, `images`, `send_email`, `containers`, `mtls_certificates`, `dispatch_namespaces` and `workflows`. Also refused are `no_bundle`, `find_additional_modules`, the retired `node_compat` option, and queue consumers that set `max_concurrency` or `visibility_timeout_ms`.
 
 ## Bindings
 
@@ -83,7 +83,7 @@ This example uses most of the supported bindings. The resources it names must ex
   },
   "assets": { "directory": "public", "run_worker_first": ["/api/*"] },
   "triggers": { "crons": ["*/15 * * * *"] },
-  "skiff": {
+  "yoal": {
     "storage": { "UPLOADS": "files" },
     "brokers": { "jobs": "orders-broker" },
     "hyperdrive": { "PG": "orders-db" },
@@ -97,23 +97,23 @@ This example uses most of the supported bindings. The resources it names must ex
 | --- | --- | --- |
 | KV | `kv_namespaces: [{ "binding" }]` | `env.CACHE_KV.get`, `put`, `delete` and `list`. Each binding has its own namespace on the node. |
 | D1 | `d1_databases: [{ "binding", "database_name" }]` | The D1 API (`prepare`, `bind`, `all`, `run`). The database lives on the node. The `d1_binding_jsrpc` flag is refused. |
-| R2 | `r2_buckets: [{ "binding", "bucket_name", "prefix" }]` | The R2 API for single-part objects. Needs a RustFS storage instance attached to the project, with a grant on the bucket, named in `skiff.storage`. Without an entry there, Skiff looks for an instance with the bucket's name. |
+| R2 | `r2_buckets: [{ "binding", "bucket_name", "prefix" }]` | The R2 API for single-part objects. Needs a RustFS storage instance attached to the project, with a grant on the bucket, named in `yoal.storage`. Without an entry there, Yoal looks for an instance with the bucket's name. |
 | Durable Objects | `durable_objects.bindings: [{ "name", "class_name" }]` | The Durable Object API. Export the class from the entry module. SQL storage is enabled. Objects live on one node. |
-| Hyperdrive | `hyperdrive: [{ "binding" }]` | Connects through a Postgres database attached to the project. Map a different database name in `skiff.hyperdrive`. |
+| Hyperdrive | `hyperdrive: [{ "binding" }]` | Connects through a Postgres database attached to the project. Map a different database name in `yoal.hyperdrive`. |
 | Queue producer | `queues.producers: [{ "binding", "queue" }]` | `env.JOBS.send(body)` and `sendBatch`. Needs a broker attached to the project. |
 | Analytics Engine | `analytics_engine_datasets: [{ "binding", "dataset" }]` | `env.EVENTS.writeDataPoint({ blobs, doubles, indexes })`. A dataset defaults to the binding name. |
 | Static assets | `assets: { "directory", "binding", "run_worker_first" }` | `env.ASSETS.fetch(request)`. The default binding name is `ASSETS`. |
 | Services | `services: [{ "binding", "service", "entrypoint" }]` | Another function's entry point, or your own named export when `service` is this Worker's `name`. Calls to another project's slug are `fetch` only. |
 
-The Cache API has no Wrangler key. To use `caches.default`, declare a cache binding in `skiff` instead:
+The Cache API has no Wrangler key. To use `caches.default`, declare a cache binding in `yoal` instead:
 
 ```jsonc
-"skiff": { "bindings": [{ "name": "EDGE_CACHE", "type": "cache" }] }
+"yoal": { "bindings": [{ "name": "EDGE_CACHE", "type": "cache" }] }
 ```
 
 Only one cache binding is allowed per function. Each host caches responses up to 16 MiB each, with a total of 64 MiB and 10,000 entries.
 
-Skiff's own invocation logs are always on, so there is no tail binding to declare.
+Yoal's own invocation logs are always on, so there is no tail binding to declare.
 
 Bindings that hold data (KV, D1, Cache and Durable Objects) keep a function on one host.
 
@@ -122,13 +122,13 @@ Bindings that hold data (KV, D1, Cache and Durable Objects) keep a function on o
 From the project directory, run:
 
 ```sh
-skif deploy .
+yoal deploy .
 ```
 
 The command:
 
 1. Finds `wrangler.jsonc` or `wrangler.json`. Use `--wrangler <path>` to choose a file, or `--no-wrangler` to deploy the directory as it is.
-2. Runs `build.command` if you set one, then bundles `main` with Skiff's pinned bundler and generates the internal manifest.
+2. Runs `build.command` if you set one, then bundles `main` with Yoal's pinned bundler and generates the internal manifest.
 3. Creates the project with the function runtime if it does not exist. The slug comes from `--project`, else `--name`, else the directory name. `--no-create` fails instead of creating it.
 4. Promotes the deployment to production. Pass `--no-promote` to create a preview only.
 
@@ -136,7 +136,7 @@ The bundle then reaches a node in these steps:
 
 ```mermaid
 flowchart LR
-  CLI["skif deploy ."] --> Bundle["Bundle main with Skiff's bundler"]
+  CLI["yoal deploy ."] --> Bundle["Bundle main with Yoal's bundler"]
   Bundle --> Upload["Upload modules, assets and manifest"]
   Upload --> CP["Control plane stores the deployment"]
   CP --> Agent["Node agent writes the workerd config"]
@@ -147,22 +147,22 @@ You need the `deployment:create` permission. Deploying a Functions bundle to a p
 
 Secrets are bound when you deploy. Add a project secret, then deploy again so the function can read it.
 
-If you already built the Worker yourself, you can deploy the built directory with `skif deploy ./dist`. Once a function has been deployed, Skiff reuses its bindings, compatibility settings and assets directory and takes only the new modules and files. A first deploy of a prebuilt directory has no crons or bindings beyond the project's secrets, so use `wrangler.jsonc` for real configuration.
+If you already built the Worker yourself, you can deploy the built directory with `yoal deploy ./dist`. Once a function has been deployed, Yoal reuses its bindings, compatibility settings and assets directory and takes only the new modules and files. A first deploy of a prebuilt directory has no crons or bindings beyond the project's secrets, so use `wrangler.jsonc` for real configuration.
 
 ## Local development
 
 ```sh
-skif wrangler dev
+yoal wrangler dev
 ```
 
-This runs Wrangler's local dev server in the project directory. If Wrangler is not installed there, the command installs it first. Wrangler uses workerd, the same runtime production uses. Deploys do not need Wrangler, and `skif wrangler` is the only command that uses it.
+This runs Wrangler's local dev server in the project directory. If Wrangler is not installed there, the command installs it first. Wrangler uses workerd, the same runtime production uses. Deploys do not need Wrangler, and `yoal wrangler` is the only command that uses it.
 
 To test a deployed function, send one request from the CLI. This goes straight to the function's node, so it bypasses domains and access rules:
 
 ```sh
-skif function invoke my-api /health
-skif fn invoke my-api /users -X POST -H 'content-type: application/json' -d '{"name":"Ada"}'
-skif function cron my-api '*/15 * * * *'
+yoal function invoke my-api /health
+yoal fn invoke my-api /users -X POST -H 'content-type: application/json' -d '{"name":"Ada"}'
+yoal function cron my-api '*/15 * * * *'
 ```
 
 `invoke` prints the response body and a summary line with the status, time and cold start. It exits with status 1 for a non-2xx response. `cron` runs the `scheduled()` handler once for one of the crons in `triggers.crons`.
@@ -171,7 +171,7 @@ skif function cron my-api '*/15 * * * *'
 
 Every request to the project's domain follows this order:
 
-1. If `assets.directory` holds a file for the path, Skiff serves that file. A path ending in `/` also tries `index.html`.
+1. If `assets.directory` holds a file for the path, Yoal serves that file. A path ending in `/` also tries `index.html`.
 2. If the path matches a `run_worker_first` glob, the function handles it, even when a file exists. Use `true` for every path, or a list of globs. A glob starting with `!` excludes paths.
 3. Everything else goes to the function's `fetch`.
 
@@ -185,7 +185,7 @@ Use `vars` for configuration that can be read from the file. Use secrets for any
 
 Create secrets in the **Variables & secrets** tab of the function. Values are write-only, and nobody can read them back from the dashboard. A secret named `STRIPE_KEY` appears in code as `env.STRIPE_KEY`.
 
-A project's own secrets are bound automatically at deploy time. To bind an organisation-wide secret, list its name in `skiff.secrets`. A name that matches no secret fails the deploy.
+A project's own secrets are bound automatically at deploy time. To bind an organisation-wide secret, list its name in `yoal.secrets`. A name that matches no secret fails the deploy.
 
 ## Cron triggers
 
@@ -212,8 +212,8 @@ export default {
 A queue lives on a managed broker. Create one and attach it to the project before you use queues:
 
 ```sh
-skif broker create orders-broker
-skif broker attach orders-broker -p my-api
+yoal broker create orders-broker
+yoal broker attach orders-broker -p my-api
 ```
 
 Queue names use lowercase letters, digits and hyphens, up to 63 characters. A queue can have one consumer per broker.
@@ -252,7 +252,7 @@ If the handler returns, the whole batch is acknowledged. If it throws, the whole
 
 ## Python functions
 
-Set `main` to a `.py` file to make a Python Worker. It runs on Pyodide inside workerd, and Skiff adds the `python_workers` compatibility flag for you.
+Set `main` to a `.py` file to make a Python Worker. It runs on Pyodide inside workerd, and Yoal adds the `python_workers` compatibility flag for you.
 
 ```python
 from workers import Response, WorkerEntrypoint
@@ -266,8 +266,8 @@ class Default(WorkerEntrypoint):
         print(f"cron {controller.cron} at {controller.scheduledTime}")
 ```
 
-- Skiff ships every `.py` file in the entry module's directory. A file's module name is its path relative to that directory.
-- Put dependencies in `python_modules/`. Use `build.command` to fill it, for example `"build": { "command": "uv run pywrangler sync" }`. Skiff does not resolve packages itself.
+- Yoal ships every `.py` file in the entry module's directory. A file's module name is its path relative to that directory.
+- Put dependencies in `python_modules/`. Use `build.command` to fill it, for example `"build": { "command": "uv run pywrangler sync" }`. Yoal does not resolve packages itself.
 - A Python Worker can include at most 512 files, counting `python_modules/`. It cannot include JavaScript modules, but it can ship JavaScript files as data.
 - The default memory is 384 MB, and the minimum is 256 MB. An idle Pyodide host uses about 230 MB.
 - Python functions are placed only on nodes that have the Pyodide runtime cached.
@@ -275,7 +275,7 @@ class Default(WorkerEntrypoint):
 
 ## Cold starts and idle stop
 
-A function with no requests for `skiff.idleStopSeconds` (default 300) is stopped. The next request starts it again. The first request after a stop takes longer, because the host starts while the request waits. Cron occurrences and queue batches also start a stopped host.
+A function with no requests for `yoal.idleStopSeconds` (default 300) is stopped. The next request starts it again. The first request after a stop takes longer, because the host starts while the request waits. Cron occurrences and queue batches also start a stopped host.
 
 Requests reach the host through a socket that stays open while the host is stopped, so the first request is the one that starts it:
 

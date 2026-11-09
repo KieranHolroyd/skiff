@@ -77,7 +77,7 @@ export const routeAccessSchema = z.object({
 	siteKey: z.string().min(16),
 	/** Hashed password for `password` mode, verified by the control plane. */
 	loginUrl: z.string().url(),
-	/** The Skiff Access policy this host uses; present when `mode` is `access`. */
+	/** The Yoal Access policy this host uses; present when `mode` is `access`. */
 	policyId: z.string().nullable().optional(),
 	/** `false` when the policy is disabled; the edge fails closed before any token or cookie. */
 	policyEnabled: z.boolean().optional(),
@@ -176,7 +176,7 @@ export const desiredStateSchema = z.object({
 	contentDomain: z.string(),
 	/** Platform origin, for Caddy's on-demand TLS `ask` endpoint (custom domains). */
 	platformOrigin: z.string().url().optional(),
-	/** This node's `skiff-workloads.slice` budget; the agent applies it before starting units. */
+	/** This node's `yoal-workloads.slice` budget; the agent applies it before starting units. */
 	sliceMemoryMb: z.number().int().positive().optional(),
 	/** CPUWeight for the same slice; omitted by older control planes (agent default 200). */
 	sliceCpuWeight: z.number().int().positive().optional(),
@@ -225,7 +225,7 @@ export const desiredStateSchema = z.object({
 	databasePoolerRestarts: z.array(z.string()).default([]),
 	/**
 	 * Streaming replication this node serves as a primary (docs/CLUSTERING.md §9.2, C7): keep the
-	 * `skiff_repl` role, its `pg_hba` rule and exactly these slots. The password is fetched from
+	 * `yoal_repl` role, its `pg_hba` rule and exactly these slots. The password is fetched from
 	 * `/api/agent/database-replication/:databaseId`, never carried here.
 	 */
 	databaseReplication: z.array(databaseReplicationTaskSchema).default([]),
@@ -235,11 +235,11 @@ export const desiredStateSchema = z.object({
 	databaseReplicaPromotions: z.array(databaseReplicaPromotionTaskSchema).default([]),
 	/** Disks this node must know about, so disk-backed data dirs can be verified (D76, D169). */
 	volumes: z.array(nodeVolumeDesiredSchema).default([]),
-	/** Network shares this node keeps mounted under `/mnt/skiff-shares` (docs/STORAGE.md §3, D143). */
+	/** Network shares this node keeps mounted under `/mnt/yoal-shares` (docs/STORAGE.md §3, D143). */
 	shareMounts: z.array(shareMountDesiredSchema).default([]),
 	/** Share mounts to remove; the node unmounts and reports `unmountedShares`. */
 	shareUnmounts: z.array(shareUnmountDesiredSchema).default([]),
-	/** Disks this node keeps mounted under `/mnt/skiff-disks` by filesystem UUID (docs/STORAGE.md §3). */
+	/** Disks this node keeps mounted under `/mnt/yoal-disks` by filesystem UUID (docs/STORAGE.md §3). */
 	diskMounts: z.array(diskMountDesiredSchema).default([]),
 	/** Disk mounts to remove; the node unmounts and reports `unmountedDisks`. */
 	diskUnmounts: z.array(diskUnmountDesiredSchema).default([]),
@@ -286,12 +286,12 @@ export const desiredStateSchema = z.object({
 	/** Purged queue brokers whose data dir this node must delete, then report (D111). */
 	brokerPurges: z.array(z.string()).default([]),
 	/**
-	 * Present only on the mail node (docs/EMAIL.md §3.5): run `skiff-mail` and keep it fed. No
+	 * Present only on the mail node (docs/EMAIL.md §3.5): run `yoal-mail` and keep it fed. No
 	 * secrets: the agent fetches keys and credential hashes from `/api/agent/email-state`.
 	 */
 	mail: mailDesiredSchema.nullable().default(null),
 	/**
-	 * Present only on the node that runs `skiff-identity` (docs/IAM.md §11.2): the pool projection
+	 * Present only on the node that runs `yoal-identity` (docs/IAM.md §11.2): the pool projection
 	 * the agent pushes to the identity process. Carries ids, hosts and non-secret client metadata;
 	 * never a client secret, signing key or user.
 	 */
@@ -314,8 +314,8 @@ export type DesiredState = z.infer<typeof desiredStateSchema>;
  * - `node-update`: installs `nodeUpdate` through the helper's signed-release verb (D99).
  * - `functions`: renders and runs `runtime: "function"` workloads (D110).
  * - `brokers`: runs `broker` workloads with the helper's fixed profile and purges `brokerPurges` (D111).
- * - `mail`: runs `skiff-mail` and bridges it to the control plane when `mail` is set (docs/EMAIL.md).
- * - `identity`: runs the separate `skiff-identity` user-pool process and pushes its projection
+ * - `mail`: runs `yoal-mail` and bridges it to the control plane when `mail` is set (docs/EMAIL.md).
+ * - `identity`: runs the separate `yoal-identity` user-pool process and pushes its projection
  *   (docs/IAM.md §11.2).
  * - `node-tasks`: leases one-shot queue and function test tasks (`node-task.ts`, D124).
  * - `container-console`: runs the console front for inspect, files and shells (D127).
@@ -570,8 +570,8 @@ export const nodeJoinSchema = z.object({
 	name: z.string().min(1).max(120),
 	publicAddress: z.string().max(253).optional(),
 	version: z.string().max(64).optional(),
-	/** `skiff` asks the control plane for a managed overlay address. */
-	networkMode: z.enum(['skiff', 'external']).default('external'),
+	/** `yoal` asks the control plane for a managed overlay address. */
+	networkMode: z.enum(['yoal', 'external']).default('external'),
 	/** Public key generated by the node's helper; the private key never travels. */
 	wireguardPublicKey: z.string().trim().regex(/^[A-Za-z0-9+/]{43}=$/).optional(),
 });

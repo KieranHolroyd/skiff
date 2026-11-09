@@ -13,7 +13,7 @@ interface Seen {
 }
 
 beforeEach(async () => {
-	dir = await mkdtemp(join(tmpdir(), 'skiff-cli-db-'));
+	dir = await mkdtemp(join(tmpdir(), 'yoal-cli-db-'));
 });
 
 afterEach(async () => {
@@ -87,11 +87,11 @@ async function cli(...args: string[]) {
 		cwd: join(import.meta.dir, '../..'),
 		env: {
 			...process.env,
-			SKIFF_CONFIG_DIR: dir,
-			SKIFF_URL: `http://127.0.0.1:${server!.port}`,
-			SKIFF_TOKEN: 'skif_test',
-			SKIFF_CONTENT_DOMAIN: '',
-			SKIFF_PROFILE: '',
+			YOAL_CONFIG_DIR: dir,
+			YOAL_URL: `http://127.0.0.1:${server!.port}`,
+			YOAL_TOKEN: 'yoal_test',
+			YOAL_CONTENT_DOMAIN: '',
+			YOAL_PROFILE: '',
 		},
 		stdin: 'ignore',
 		stdout: 'pipe',
@@ -101,7 +101,7 @@ async function cli(...args: string[]) {
 	return { code, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
 }
 
-describe('skif db', () => {
+describe('yoal db', () => {
 	test('create --project attaches in one call and prints next steps', async () => {
 		const seen = serve({ 'POST /api/v1/databases': { database: view({ status: 'pending', attachments: [attachment()] }) } });
 		const result = await cli('db', 'create', 'main', '--project', 'api', '--storage', '20G');
@@ -113,8 +113,8 @@ describe('skif db', () => {
 		});
 		expect(result.stdout).toContain('Created PostgreSQL 17 database "main" on node homelab (pending).');
 		expect(result.stdout).toContain('Attached to api as DATABASE');
-		expect(result.stdout).toContain('skif db info main');
-		expect(result.stdout).not.toContain('skif db attach');
+		expect(result.stdout).toContain('yoal db info main');
+		expect(result.stdout).not.toContain('yoal db attach');
 	});
 
 	test('create rejects --prefix without --project before calling the server', async () => {
@@ -144,7 +144,7 @@ describe('skif db', () => {
 		serve({});
 		const result = await cli('db', 'detach', 'main');
 		expect(result.code).toBe(1);
-		expect(result.stderr).toContain('skif db detach main --project <slug>');
+		expect(result.stderr).toContain('yoal db detach main --project <slug>');
 	});
 
 	test('detach sends DELETE to the project attachment', async () => {
@@ -179,7 +179,7 @@ describe('skif db', () => {
 		id: 'dbc_1',
 		databaseId: 'db_1',
 		role: 'readonly',
-		username: 'skiff_readonly_ab12cd34',
+		username: 'yoal_readonly_ab12cd34',
 		purpose: 'BI',
 		status: 'ready',
 		lastUsedAt: null,
@@ -195,7 +195,7 @@ describe('skif db', () => {
 		});
 		const list = await cli('db', 'credentials', 'list', 'main');
 		expect(list.code).toBe(0);
-		expect(list.stdout).toContain('skiff_readonly_ab12cd34');
+		expect(list.stdout).toContain('yoal_readonly_ab12cd34');
 		expect(list.stdout).toContain('readonly');
 		const created = await cli('db', 'credentials', 'create', 'main', '--role', 'readonly', '--purpose', 'BI');
 		expect(created.code).toBe(0);
@@ -280,7 +280,7 @@ describe('skif db', () => {
 		const result = await cli('db', 'delete', 'main', '--yes');
 		expect(result.code).toBe(1);
 		expect(result.stderr).toContain('is attached to api');
-		expect(result.stderr).toContain('skif db detach main --project api');
+		expect(result.stderr).toContain('yoal db detach main --project api');
 		expect(seen.some((item) => item.method === 'DELETE')).toBe(false);
 	});
 
@@ -294,7 +294,7 @@ describe('skif db', () => {
 		const result = await cli('db', 'delete', 'main', '--yes');
 		expect(result.code).toBe(0);
 		expect(seen.at(-1)?.path).toBe('/api/v1/databases/main');
-		expect(result.stdout).toContain('Undo: skif db restore main');
+		expect(result.stdout).toContain('Undo: yoal db restore main');
 	});
 
 	test('purge needs a typed confirmation: off a terminal it refuses without --yes', async () => {

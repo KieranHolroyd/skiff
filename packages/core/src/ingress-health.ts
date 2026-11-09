@@ -3,7 +3,7 @@ import {
 	type IngressHealthDecision,
 	type IngressHealthPolicy,
 	type IngressObservation,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 
 /**
  * DNS failover health policy (docs/CLUSTERING.md §7.2, C5).

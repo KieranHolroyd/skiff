@@ -1,25 +1,24 @@
 {
-  "name": "@skiffy/skiff",
+  "name": "@yoal/cli",
   "version": "0.2.0",
-  "description": "CLI for Skiff, a lightweight self-hosted deploy platform",
-  "keywords": ["skiff", "deploy", "static-site", "self-hosted", "cli", "paas"],
+  "description": "CLI for Yoal, a lightweight self-hosted deploy platform",
+  "keywords": ["yoal", "deploy", "static-site", "self-hosted", "cli", "paas"],
   "license": "MIT",
   "author": "Kieran Holroyd",
-  "homepage": "https://github.com/KieranHolroyd/skiff#readme",
+  "homepage": "https://github.com/KieranHolroyd/yoal#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/KieranHolroyd/skiff.git",
+    "url": "git+https://github.com/KieranHolroyd/yoal.git",
     "directory": "apps/cli"
   },
-  "bugs": "https://github.com/KieranHolroyd/skiff/issues",
+  "bugs": "https://github.com/KieranHolroyd/yoal/issues",
   "type": "module",
   "bin": {
-    "skif": "dist/skif.js",
-    "skiff": "dist/skif.js"
+    "yoal": "dist/yoal.js"
   },
   "files": ["dist", "README.md", "LICENSE"],
   "scripts": {
-    "build": "bun build src/main.ts --target=node --external esbuild --outfile dist/skif.js",
+    "build": "bun build src/main.ts --target=node --external esbuild --outfile dist/yoal.js",
     "check": "tsc -p . --noEmit",
     "test": "bun test",
     "prepack": "bun run build"

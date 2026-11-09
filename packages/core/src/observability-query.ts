@@ -8,7 +8,7 @@ import type {
 	MetricAggregation,
 	ObservabilityDataset,
 	QueryVariables,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { quoteString } from './clickhouse.ts';
 import { ValidationError } from './errors.ts';
 

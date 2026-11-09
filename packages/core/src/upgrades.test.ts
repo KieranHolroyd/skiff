@@ -18,7 +18,7 @@ import {
 	type DataDirStatus
 } from './upgrade-plan.ts';
 
-const root = mkdtempSync(join(tmpdir(), 'skiff-upgrades-'));
+const root = mkdtempSync(join(tmpdir(), 'yoal-upgrades-'));
 const writableDir = (name: string, path: string): DataDirStatus => ({
 	name,
 	path,
@@ -127,7 +127,7 @@ describe('preflight rules', () => {
 		expect(plan.ok).toBe(false);
 		expect(plan.migrations.destructive).toBe(true);
 		expect(plan.errors.join(' ')).toMatch(/Destructive migration 0003_drop_old\.sql \(DROP TABLE on line 1\)/);
-		expect(plan.errors.join(' ')).toMatch(/Settings → Updates → Review and approve.*skiff-update-self --allow-destructive/);
+		expect(plan.errors.join(' ')).toMatch(/Settings → Updates → Review and approve.*yoal-update-self --allow-destructive/);
 
 		// Approving by id covers exactly the named migrations.
 		const byId = (approved: string[]) =>
@@ -169,7 +169,7 @@ describe('preflight rules', () => {
 		expect(plan.ok).toBe(false);
 		expect(plan.postgresWizardRequired).toBe(true);
 		expect(plan.managedDatabases.majorChanges).toEqual([{ name: 'main', from: '16', to: '17' }]);
-		expect(plan.errors.join(' ')).toMatch(/skif db upgrade <name> --to <version> --plan/);
+		expect(plan.errors.join(' ')).toMatch(/yoal db upgrade <name> --to <version> --plan/);
 	});
 
 	test('does not treat a same-major database as a change', () => {
@@ -210,14 +210,14 @@ describe('snapshot bundles', () => {
 		const etc = join(root, 'etc-1');
 		mkdirSync(data, { recursive: true });
 		mkdirSync(etc, { recursive: true });
-		makeDb(join(data, 'skiff.db'), 'before');
-		writeFileSync(join(etc, 'skiff.env'), 'BETTER_AUTH_SECRET=abc\n', { mode: 0o600 });
+		makeDb(join(data, 'yoal.db'), 'before');
+		writeFileSync(join(etc, 'yoal.env'), 'BETTER_AUTH_SECRET=abc\n', { mode: 0o600 });
 		writeFileSync(join(etc, 'master.key'), 'app-key\n', { mode: 0o400 });
 		writeFileSync(join(data, 'platform-settings.json'), '{"smtp":true}\n', { mode: 0o600 });
 
 		const bundle = createUpgradeSnapshotBundle({
 			backupsDir: backups,
-			dbPath: join(data, 'skiff.db'),
+			dbPath: join(data, 'yoal.db'),
 			dataDir: data,
 			envDir: etc,
 			fromVersion: '1.0.0',
@@ -243,7 +243,7 @@ describe('snapshot bundles', () => {
 			controlDb: 'db/control.db',
 			versions: { agent: '0.2.0', desiredState: 42 }
 		});
-		expect(manifest.files.some((file: { path: string }) => file.path === 'config/skiff.env')).toBe(true);
+		expect(manifest.files.some((file: { path: string }) => file.path === 'config/yoal.env')).toBe(true);
 
 		const restored = new Database(bundle.controlDb!);
 		expect(restored.query<{ body: string }, []>('SELECT body FROM notes').get()?.body).toBe('before');
@@ -252,7 +252,7 @@ describe('snapshot bundles', () => {
 
 	test('keeps the pinned pre-update bundle and the newest N unpinned bundles', () => {
 		const backups = join(root, 'bundles-2');
-		const dbPath = join(root, 'data-2', 'skiff.db');
+		const dbPath = join(root, 'data-2', 'yoal.db');
 		makeDb(dbPath, 'x');
 		const now = Date.parse('2026-02-01T00:00:00Z');
 		const pinned = createUpgradeSnapshotBundle({
@@ -283,7 +283,7 @@ describe('snapshot bundles', () => {
 
 	test('a successful upgrade unpins the bundle for normal retention', () => {
 		const backups = join(root, 'bundles-3');
-		const dbPath = join(root, 'data-3', 'skiff.db');
+		const dbPath = join(root, 'data-3', 'yoal.db');
 		makeDb(dbPath, 'x');
 		const bundle = createUpgradeSnapshotBundle({
 			backupsDir: backups,
@@ -300,7 +300,7 @@ describe('snapshot bundles', () => {
 
 	test('retiring pins after a success makes the last N the only retained bundles', () => {
 		const backups = join(root, 'bundles-3b');
-		const dbPath = join(root, 'data-3b', 'skiff.db');
+		const dbPath = join(root, 'data-3b', 'yoal.db');
 		makeDb(dbPath, 'x');
 		const failed = createUpgradeSnapshotBundle({
 			backupsDir: backups,
@@ -327,7 +327,7 @@ describe('snapshot bundles', () => {
 
 	test('rollback selection prefers the newest pinned bundle with a control DB', () => {
 		const backups = join(root, 'bundles-4');
-		const dbPath = join(root, 'data-4', 'skiff.db');
+		const dbPath = join(root, 'data-4', 'yoal.db');
 		makeDb(dbPath, 'x');
 		const old = createUpgradeSnapshotBundle({
 			backupsDir: backups,

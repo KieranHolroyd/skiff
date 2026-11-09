@@ -34,7 +34,7 @@ import {
 	type SystemAlertRouting,
 	type SystemAlertsUpdate,
 	type SystemAlertsView,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { AlertMessage, Notifier } from './config.ts';
 import type { CoreContext } from './context.ts';
 import { ClickHouseError, ClickHouseUnavailableError } from './clickhouse.ts';
@@ -1033,7 +1033,7 @@ export class AlertService {
 		return this.#send(notifiers, {
 			key: `alert_test:${name ?? 'all'}`,
 			title: 'Test alert',
-			detail: `A test from Skiff’s Alerts → Channels. If you can read this, ${name ? `the ${name} channel` : 'this channel'} works.\n\n${this.url()}`,
+			detail: `A test from Yoal’s Alerts → Channels. If you can read this, ${name ? `the ${name} channel` : 'this channel'} works.\n\n${this.url()}`,
 			severity: 'info',
 			url: this.url(),
 		});
@@ -1452,7 +1452,7 @@ export class AlertService {
 				continue;
 			}
 			delivery[`email:${to}`] = await withTimeout(
-				transport.send({ to, subject: `[Skiff ${alert.status === 'resolved' ? 'resolved' : alert.severity}] ${alert.title}`, text: alert.detail }),
+				transport.send({ to, subject: `[Yoal ${alert.status === 'resolved' ? 'resolved' : alert.severity}] ${alert.title}`, text: alert.detail }),
 			);
 		}
 		const missing = spec.channels.filter((name) => !this.ctx.notifiers.some((notifier) => notifier.name === name));

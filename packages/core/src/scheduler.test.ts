@@ -2,14 +2,14 @@ import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
+import { createDb } from '@yoal/db';
 import type { CoreContext } from './context.ts';
 import { createCore, DEFAULT_LEASE_MS, nextRun, retryDelayMs, SchedulerService } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import type { Core } from './index.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-scheduler-'));
-const dbPath = join(dir, 'skiff.db');
+const dir = mkdtempSync(join(tmpdir(), 'yoal-scheduler-'));
+const dbPath = join(dir, 'yoal.db');
 const opened = createDb({ path: dbPath });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 const base = Date.parse('2026-11-05T10:00:00Z');

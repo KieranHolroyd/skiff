@@ -6,7 +6,7 @@ import {
 	type TemplateField,
 	type TemplateGroup,
 	type TemplatePlan
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 
 /**
  * The template form's state and rules, kept pure so they are testable and so the page stays a
@@ -240,7 +240,7 @@ export function apiSnippet(
 	const json = JSON.stringify({ values: body }).replace(/'/g, `'\\''`);
 	return [
 		`curl -X POST ${origin}/api/v1/templates/${template.id} \\`,
-		`  -H "Authorization: Bearer $SKIFF_TOKEN" \\`,
+		`  -H "Authorization: Bearer $YOAL_TOKEN" \\`,
 		`  -H 'content-type: application/json' \\`,
 		`  -d '${json}'`
 	].join('\n');

@@ -154,7 +154,7 @@ The explicit hooks (Mender state scripts, RAUC bundle scripts, Android postinsta
 - **Portable services:** images stay read-only, and writable data lives on the host via `StateDirectory=` — [systemd Portable Services](https://systemd.io/PORTABLE_SERVICES/)
 
 ### Inferences
-- For Skiff, SQLite is the "/data" problem. These are the transferable patterns:
+- For Yoal, SQLite is the "/data" problem. These are the transferable patterns:
   1. Snapshot the DB atomically before the trial. Use SQLite's online backup API or `VACUUM INTO`, keyed to the version.
   2. Make migrations expand-only (backwards-compatible) for at least one release, so release N-1 can still run against schema N. This mirrors RAUC's "older client can install newer bundle" compatibility rule.
   3. Treat any irreversible migration as happening at "commit". Like Mender's point of no return, it runs only after the health window, or else restore from the pre-update snapshot on rollback.
@@ -194,10 +194,10 @@ What does *not* translate is the bootloader as an independent arbiter. On a sing
 
 ### Inferences
 These are proposed mappings, not sourced claims:
-- **Slots → release directories:** `/opt/skiff/releases/<version>/`, read-only after unpack and verify, never edited in place.
+- **Slots → release directories:** `/opt/yoal/releases/<version>/`, read-only after unpack and verify, never edited in place.
 - **Active pointer → `current` symlink:** replaced atomically with `ln -s new tmp && rename(tmp, current)`, since `rename(2)` over a symlink is atomic on POSIX. `previous` is kept as the fallback and never deleted until the new release is committed.
-- **Boot counter → trial file:** for example `/var/lib/skiff/update/trial` containing `{version, tries_left, started_at}`. It is armed before the flip and decremented by the supervisor before each start of the service.
-- **The supervisor** is a small updater/watchdog unit triggered on `skiff.service` failure via `OnFailure=` or a timer. It must not be replaced in the same transaction. Equivalently, `ExecStartPre=` logic lives outside the release directory.
+- **Boot counter → trial file:** for example `/var/lib/yoal/update/trial` containing `{version, tries_left, started_at}`. It is armed before the flip and decremented by the supervisor before each start of the service.
+- **The supervisor** is a small updater/watchdog unit triggered on `yoal.service` failure via `OnFailure=` or a timer. It must not be replaced in the same transaction. Equivalently, `ExecStartPre=` logic lives outside the release directory.
 - **boot-complete.target → health window:** an `ExecStartPost=` or separate oneshot health unit that polls `/health` and runs DB integrity checks, all with a hard timeout. On success it writes `committed`; otherwise the supervisor flips back.
 - **Watchdog → `WatchdogSec=` with `sd_notify`:** Bun can send `WATCHDOG=1` via a notify socket helper, which converts hangs into restarts that consume tries. `Type=notify` gives a real readiness signal.
 - **"Download, verify, stage" is separated from "apply":** like bootc's `--download-only`/`--from-downloaded`. The failure-prone parts (fetch, unpack, permissions) all happen in staging, while the old version runs, and a failure there can never change `current`.
@@ -250,8 +250,8 @@ The lessons are consistent:
 - **Mender's documented pitfall:** errors in scripts after commit can't roll back and leave `_INCONSISTENT` state — [Mender](https://docs.mender.io/artifact-creation/state-scripts)
 
 ### Inferences
-- **Lesson for Skiff from the Hackaday case:** everything the new release needs must be inside the release or explicitly version-checked. That covers the Bun runtime version, native modules, unit-file drop-ins, file ownership and permissions, and Caddy config. Shared mutable pieces outside the "slot" are what break fallback.
-- **Lesson for Skiff from the repeated canary permission failures:** the pre-flip stage behaved correctly (it blocked the flip), so the design worked as a safety net. The defect is that it never *makes progress*. "Can't fail" in mature systems means "can't leave the host broken", not "always succeeds". Reducing on-host variability makes success likely: prebuilt artifacts, fixed ownership baked in at packaging, and no host build.
+- **Lesson for Yoal from the Hackaday case:** everything the new release needs must be inside the release or explicitly version-checked. That covers the Bun runtime version, native modules, unit-file drop-ins, file ownership and permissions, and Caddy config. Shared mutable pieces outside the "slot" are what break fallback.
+- **Lesson for Yoal from the repeated canary permission failures:** the pre-flip stage behaved correctly (it blocked the flip), so the design worked as a safety net. The defect is that it never *makes progress*. "Can't fail" in mature systems means "can't leave the host broken", not "always succeeds". Reducing on-host variability makes success likely: prebuilt artifacts, fixed ownership baked in at packaging, and no host build.
 - **Lesson from CrowdStrike:** treat config, content and migrations as part of the release, with the same verification and staged gating as code.
 - Rollback loops (Tuxera) argue for a bounded number of total attempts. Once a version is marked bad, it shouldn't be auto-retried until a newer version appears (systemd's "bad entries sort last" semantics).
 

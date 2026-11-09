@@ -12,7 +12,7 @@ let procRoot: string;
 let cgroupRoot: string;
 
 const ID = 'wld_abc123';
-const NAME = `skiff-workload-${ID}`;
+const NAME = `yoal-workload-${ID}`;
 
 function inspectJson(running = true): string {
 	return JSON.stringify([
@@ -31,7 +31,7 @@ function inspectJson(running = true): string {
 				Error: '',
 				StartedAt: '2026-11-07T10:00:00.000000000Z',
 				FinishedAt: '0001-01-01T00:00:00Z',
-				CgroupPath: '/skiff-workloads.slice/skiff-workload-wld_abc123.service/libpod-payload-x',
+				CgroupPath: '/yoal-workloads.slice/yoal-workload-wld_abc123.service/libpod-payload-x',
 			},
 			Config: {
 				Env: ['PATH=/usr/bin', 'DATABASE_PASSWORD=hunter2', 'PORT=3000'],
@@ -45,11 +45,11 @@ function inspectJson(running = true): string {
 			GraphDriver: { Data: { MergedDir: join(dir, 'merged') } },
 			Mounts: [
 				{ Type: 'bind', Source: join(dir, 'data'), Destination: '/data', RW: true },
-				{ Type: 'bind', Source: '/run/skiff/secrets/x', Destination: '/run/skiff-secrets', RW: false },
+				{ Type: 'bind', Source: '/run/yoal/secrets/x', Destination: '/run/yoal-secrets', RW: false },
 			],
 			NetworkSettings: {
 				Ports: { '3000/tcp': [{ HostIp: '127.0.0.1', HostPort: '41000' }] },
-				Networks: { 'skiff-org-x': { IPAddress: '10.89.0.4', Aliases: ['app'] } },
+				Networks: { 'yoal-org-x': { IPAddress: '10.89.0.4', Aliases: ['app'] } },
 			},
 		},
 	]);
@@ -65,7 +65,7 @@ function runner(running = true): CommandRunner & { calls: string[][] } {
 			if (argv[1] === 'show')
 				return {
 					code: 0,
-					stdout: `ActiveState=active\nSubState=running\nNRestarts=2\nControlGroup=/skiff-workloads.slice/${NAME}.service\n`,
+					stdout: `ActiveState=active\nSubState=running\nNRestarts=2\nControlGroup=/yoal-workloads.slice/${NAME}.service\n`,
 					stderr: '',
 				};
 			return { code: 1, stdout: '', stderr: 'unexpected' };
@@ -112,7 +112,7 @@ function ptyFactory(): { spawn: SpawnPty; ptys: FakePty[] } {
 }
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), 'skiff-ctr-console-'));
+	dir = mkdtempSync(join(tmpdir(), 'yoal-ctr-console-'));
 	quadletDir = join(dir, 'quadlet');
 	procRoot = join(dir, 'proc');
 	cgroupRoot = join(dir, 'cgroup');
@@ -121,7 +121,7 @@ beforeEach(() => {
 	mkdirSync(join(dir, 'merged/etc'), { recursive: true });
 	mkdirSync(join(dir, 'data'), { recursive: true });
 	writeFileSync(join(dir, 'merged/etc/os-release'), 'ID=alpine\n');
-	const cg = join(cgroupRoot, `skiff-workloads.slice/${NAME}.service/libpod-payload-x`);
+	const cg = join(cgroupRoot, `yoal-workloads.slice/${NAME}.service/libpod-payload-x`);
 	mkdirSync(cg, { recursive: true });
 	writeFileSync(join(cg, 'cgroup.procs'), '100\n101\n');
 	writeFileSync(join(cg, 'cpu.stat'), 'usage_usec 1500000\nuser_usec 1000000\n');
@@ -205,7 +205,7 @@ describe('ContainerConsole.inspect', () => {
 		expect(view.config.entrypoint).toEqual(['/docker-entrypoint.sh']);
 		expect(view.security).toMatchObject({ readOnlyRootfs: true, noNewPrivileges: true });
 		expect(view.network.ports).toEqual([{ container: '3000/tcp', host: '127.0.0.1:41000' }]);
-		expect(view.mounts.find((mount: any) => mount.destination === '/run/skiff-secrets')).toMatchObject({ browsable: false, note: 'secrets' });
+		expect(view.mounts.find((mount: any) => mount.destination === '/run/yoal-secrets')).toMatchObject({ browsable: false, note: 'secrets' });
 		expect(view.mounts.find((mount: any) => mount.destination === '/tmp')).toMatchObject({ browsable: false, note: 'tmpfs' });
 		expect(view.stats).toMatchObject({
 			cpuMicros: 1_500_000,
@@ -244,7 +244,7 @@ describe('mountViews', () => {
 	test('maps the merged dir to / and hides secrets', () => {
 		const views = mountViews(JSON.parse(inspectJson())[0]);
 		expect(views[0]).toMatchObject({ destination: '/', source: join(dir, 'merged'), readOnly: true });
-		expect(views.find((view) => view.destination === '/run/skiff-secrets')?.source).toBeNull();
+		expect(views.find((view) => view.destination === '/run/yoal-secrets')?.source).toBeNull();
 	});
 });
 
@@ -270,7 +270,7 @@ describe('ContainerConsole exec', () => {
 		expect(opened.execId).toMatch(/^cx_[A-Za-z0-9]{24}$/);
 		const pty = ptys[0]!;
 		expect(pty.argv.slice(0, 5)).toEqual(['/usr/bin/podman', 'exec', '--interactive', '--tty', '--detach-keys=']);
-		expect(pty.argv).toContain(`SKIFF_EXEC_ID=${opened.execId}`);
+		expect(pty.argv).toContain(`YOAL_EXEC_ID=${opened.execId}`);
 		expect(pty.argv).toContain('0:0');
 		expect(pty.argv.slice(-4)).toEqual([NAME, ...shellArgv('auto')]);
 

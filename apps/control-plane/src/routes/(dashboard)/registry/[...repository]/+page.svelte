@@ -10,12 +10,12 @@
 	import TagIcon from '@lucide/svelte/icons/tag';
 	import TrashIcon from '@lucide/svelte/icons/trash';
 	import { toast } from 'svelte-sonner';
-	import type { RegistryTagView } from '@skiff/contracts';
+	import type { RegistryTagView } from '@yoal/contracts';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
+	import DetailList from '#lib/components/yoal/DetailList.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
@@ -138,7 +138,7 @@
 				: ('neutral' as const);
 </script>
 
-<svelte:head><title>{repo.name} · Registry · Skiff</title></svelte:head>
+<svelte:head><title>{repo.name} · Registry · Yoal</title></svelte:head>
 
 <div class="space-y-6">
 	<div>

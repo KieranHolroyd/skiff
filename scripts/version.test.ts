@@ -82,7 +82,7 @@ describe('pre-commit hook in a real repository', () => {
 	};
 
 	beforeEach(() => {
-		dir = realpathSync(mkdtempSync(join(tmpdir(), 'skiff-version-')));
+		dir = realpathSync(mkdtempSync(join(tmpdir(), 'yoal-version-')));
 		const root = resolve(import.meta.dir, '..');
 		const seed = join(dir, 'seed');
 		mkdirSync(seed);
@@ -126,9 +126,9 @@ describe('pre-commit hook in a real repository', () => {
 		expect(committed(work)).toBe('0.2.0\n');
 	});
 
-	test('SKIFF_NO_VERSION_BUMP=1 skips the hook', () => {
+	test('YOAL_NO_VERSION_BUMP=1 skips the hook', () => {
 		const work = join(dir, 'work');
-		commit(work, 'packages/core/src/x.ts', { SKIFF_NO_VERSION_BUMP: '1' });
+		commit(work, 'packages/core/src/x.ts', { YOAL_NO_VERSION_BUMP: '1' });
 		expect(committed(work)).toBe('0.1.0\n');
 	});
 });

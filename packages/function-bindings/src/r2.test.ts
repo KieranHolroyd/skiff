@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import r2Worker from './r2.js';
 
 /**
- * Tests for the Skiff R2 binding service. Everything runs against an in-process fake of the RustFS
+ * Tests for the Yoal R2 binding service. Everything runs against an in-process fake of the RustFS
  * S3 endpoint: no network, no real credentials (the values below are AWS's published documentation
  * example key pair), and a fixed clock so SigV4 signatures are deterministic.
  */

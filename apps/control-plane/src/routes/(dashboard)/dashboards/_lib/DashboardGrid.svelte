@@ -10,7 +10,7 @@
 	 * layout preview (with collisions pushed down and everything compacted, see grid.ts) is shown
 	 * live and committed on release. Below 768 px panels stack full width in reading order.
 	 */
-	import type { DashboardPanel } from '@skiff/contracts';
+	import type { DashboardPanel } from '@yoal/contracts';
 	import type { Snippet } from 'svelte';
 	import { COLUMNS, bottom, moveItem, readingOrder, resizeItem, type GridItem } from './grid.js';
 

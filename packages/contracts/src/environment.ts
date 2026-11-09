@@ -30,7 +30,7 @@ export const environmentCreateSchema = z.object({
 	access: z.enum(accessModes).optional(),
 	/** Required for `password` access, unless the mode is inherited from password-protected previews. */
 	password: z.string().min(8).max(200).optional(),
-	/** Required when `access` is `access`: the Skiff Access policy for this environment. */
+	/** Required when `access` is `access`: the Yoal Access policy for this environment. */
 	policyId: z.string().min(1).max(100).optional(),
 });
 export type EnvironmentCreateInput = z.infer<typeof environmentCreateSchema>;
@@ -40,7 +40,7 @@ export const environmentUpdateSchema = z.object({
 	access: z.enum(accessModes).optional(),
 	/** New password for `password` access; omit to keep the current one. */
 	password: z.string().min(8).max(200).optional(),
-	/** The Skiff Access policy when `access` is `access`; `null` clears it. */
+	/** The Yoal Access policy when `access` is `access`; `null` clears it. */
 	policyId: z.string().min(1).max(100).nullable().optional(),
 });
 export type EnvironmentUpdateInput = z.infer<typeof environmentUpdateSchema>;
@@ -53,7 +53,7 @@ export interface EnvironmentView {
 	slug: string;
 	isProduction: boolean;
 	access: (typeof accessModes)[number];
-	/** The Skiff Access policy when `access` is `access` (production follows the project's). */
+	/** The Yoal Access policy when `access` is `access` (production follows the project's). */
 	accessPolicyId: string | null;
 	/** Whether a password is stored for this environment (production follows the project's). */
 	passwordSet: boolean;

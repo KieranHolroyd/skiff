@@ -1,4 +1,4 @@
-import type { JobConcurrency, JobRunStatus, JobRunView, JobView, LogQueryResult } from '@skiff/contracts';
+import type { JobConcurrency, JobRunStatus, JobRunView, JobView, LogQueryResult } from '@yoal/contracts';
 import { HttpError } from '#lib/query.js';
 
 /**

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Skiff installer / upgrader.
+ * Yoal installer / upgrader.
  *
  * The `install.sh` bootstrap downloads Bun and this repository, then runs this file. Everything
  * that can fail is explicit and reversible: preflight → build a new release → atomically switch
@@ -12,7 +12,7 @@
  * Options:
  *   --yes                     non-interactive (all required values must be flags/env)
  *   --dry-run                 print the plan; change nothing
- *   --upgrade                 reuse /etc/skiff + data, build a new release
+ *   --upgrade                 reuse /etc/yoal + data, build a new release
  *   --uninstall [--purge]     stop/remove units (purge also deletes data/config)
  *   --platform-host <host>    dashboard/API domain; blank serves the dashboard at http://<server-ip>
  *   --content-domain <domain> sites domain; blank uses the temporary <server-ip>.sslip.io (HTTP)
@@ -30,9 +30,9 @@
  *   --no-agent                install the control plane only
  *   --no-python               skip warming the Pyodide cache Python functions need (D121; ~36 MB)
  *   --with-php                install the pinned FrankenPHP runtime for PHP process apps (D121;
- *                             ~175 MB; or SKIFF_INSTALL_PHP=1)
+ *                             ~175 MB; or YOAL_INSTALL_PHP=1)
  *   --no-node                 skip the pinned Node.js LTS for Node.js process apps (D125; ~190 MB;
- *                             or SKIFF_NO_NODE=1)
+ *                             or YOAL_NO_NODE=1)
  *   --version <label>         release label (default: the repository VERSION file)
  *   --canary                  follow the canary channel (install.sh then builds main instead of
  *                             the newest stable release; D128)
@@ -80,19 +80,19 @@ import {
 	retireUpgradeSnapshotBundles
 } from '../../packages/core/src/upgrade-plan.ts';
 
-const SOURCE = process.env.SKIFF_SOURCE_DIR ? resolve(process.env.SKIFF_SOURCE_DIR) : resolve(import.meta.dir, '../..');
-const OPT_DIR = process.env.SKIFF_OPT_DIR ?? '/opt/skiff';
-const ETC_DIR = process.env.SKIFF_ETC_DIR ?? '/etc/skiff';
-const VAR_DIR = process.env.SKIFF_VAR_DIR ?? '/var/lib/skiff';
-const RUN_DIR = process.env.SKIFF_RUN_DIR ?? '/run/skiff';
-const SYSTEMD_DIR = process.env.SKIFF_SYSTEMD_DIR ?? '/etc/systemd/system';
-const BUN_BIN = process.env.SKIFF_BUN_BIN ?? join(OPT_DIR, 'runtime', 'bin', 'bun');
-const ENV_FILE = join(ETC_DIR, 'skiff.env');
+const SOURCE = process.env.YOAL_SOURCE_DIR ? resolve(process.env.YOAL_SOURCE_DIR) : resolve(import.meta.dir, '../..');
+const OPT_DIR = process.env.YOAL_OPT_DIR ?? '/opt/yoal';
+const ETC_DIR = process.env.YOAL_ETC_DIR ?? '/etc/yoal';
+const VAR_DIR = process.env.YOAL_VAR_DIR ?? '/var/lib/yoal';
+const RUN_DIR = process.env.YOAL_RUN_DIR ?? '/run/yoal';
+const SYSTEMD_DIR = process.env.YOAL_SYSTEMD_DIR ?? '/etc/systemd/system';
+const BUN_BIN = process.env.YOAL_BUN_BIN ?? join(OPT_DIR, 'runtime', 'bin', 'bun');
+const ENV_FILE = join(ETC_DIR, 'yoal.env');
 const AGENT_ENV_FILE = join(ETC_DIR, 'agent.env');
 const MASTER_KEY_FILE = join(ETC_DIR, 'master.key');
 const SETUP_TOKEN_FILE = join(ETC_DIR, 'setup-token');
 
-/** The platform version is the repository-root VERSION file (semver); skiff-update-self compares it. */
+/** The platform version is the repository-root VERSION file (semver); yoal-update-self compares it. */
 function sourceVersion(): string {
 	try {
 		const raw = readFileSync(join(SOURCE, 'VERSION'), 'utf8');
@@ -146,7 +146,7 @@ interface Options {
 	acmeEmail: string;
 	/** HTTPS through Let's Encrypt; decided by resolveDomains() (D105). */
 	tls: boolean;
-	/** Server IPv4 for IP-only installs (--public-address / SKIFF_PUBLIC_HOST, else detected). */
+	/** Server IPv4 for IP-only installs (--public-address / YOAL_PUBLIC_HOST, else detected). */
 	publicAddress: string;
 	adminEmail: string;
 	cloudflareTokenFile: string;
@@ -190,7 +190,7 @@ function value(flag: string, fallback = ''): string {
 
 /**
  * Re-running the installer (with or without --upgrade) must not reset an existing install: every
- * setting defaults to flag → process env → the current /etc/skiff/skiff.env → built-in default.
+ * setting defaults to flag → process env → the current /etc/yoal/yoal.env → built-in default.
  */
 const existingEnv = (() => {
 	try {
@@ -221,12 +221,12 @@ function setting(flag: string, envKeys: string[], fallback = ''): string {
 }
 
 /**
- * --canary, else what install.sh resolved (SKIFF_CHANNEL or the host's remembered channel), else
- * the existing skiff.env default, else stable. A fresh install follows promoted releases only.
+ * --canary, else what install.sh resolved (YOAL_CHANNEL or the host's remembered channel), else
+ * the existing yoal.env default, else stable. A fresh install follows promoted releases only.
  */
 function installChannel(): SelfUpdateChannel {
 	if (has('--canary')) return 'canary';
-	for (const candidate of [process.env.SKIFF_INSTALL_CHANNEL, process.env.SKIFF_CHANNEL, existingEnv.get('SKIFF_UPDATE_CHANNEL')]) {
+	for (const candidate of [process.env.YOAL_INSTALL_CHANNEL, process.env.YOAL_CHANNEL, existingEnv.get('YOAL_UPDATE_CHANNEL')]) {
 		if (!candidate) continue;
 		if (isSelfUpdateChannel(candidate)) return candidate;
 		console.error(`release channel must be stable or canary (got "${candidate}")`);
@@ -236,36 +236,36 @@ function installChannel(): SelfUpdateChannel {
 }
 
 const options: Options = {
-	yes: has('--yes') || process.env.SKIFF_YES === '1',
+	yes: has('--yes') || process.env.YOAL_YES === '1',
 	dryRun: has('--dry-run'),
 	upgrade: has('--upgrade'),
 	uninstall: has('--uninstall'),
 	purge: has('--purge'),
 	platformHost: value(
 		'--platform-host',
-		process.env.SKIFF_PLATFORM_HOST ?? existingHost('SKIFF_PLATFORM_ORIGIN') ?? '',
+		process.env.YOAL_PLATFORM_HOST ?? existingHost('YOAL_PLATFORM_ORIGIN') ?? '',
 	),
-	contentDomain: setting('--content-domain', ['SKIFF_CONTENT_DOMAIN'], ''),
-	acmeEmail: setting('--acme-email', ['SKIFF_ACME_EMAIL']),
+	contentDomain: setting('--content-domain', ['YOAL_CONTENT_DOMAIN'], ''),
+	acmeEmail: setting('--acme-email', ['YOAL_ACME_EMAIL']),
 	tls: false,
-	publicAddress: value('--public-address', process.env.SKIFF_PUBLIC_HOST ?? ''),
-	adminEmail: value('--admin-email', process.env.SKIFF_ADMIN_EMAIL ?? ''),
-	cloudflareTokenFile: setting('--cloudflare-token-file', ['SKIFF_CLOUDFLARE_TOKEN_FILE'], '/etc/caddy/cloudflare.token'),
+	publicAddress: value('--public-address', process.env.YOAL_PUBLIC_HOST ?? ''),
+	adminEmail: value('--admin-email', process.env.YOAL_ADMIN_EMAIL ?? ''),
+	cloudflareTokenFile: setting('--cloudflare-token-file', ['YOAL_CLOUDFLARE_TOKEN_FILE'], '/etc/caddy/cloudflare.token'),
 	skipDnsCheck: has('--skip-dns-check'),
-	skipDeps: has('--skip-deps') || process.env.SKIFF_SKIP_DEPS === '1',
+	skipDeps: has('--skip-deps') || process.env.YOAL_SKIP_DEPS === '1',
 	githubClientId: setting('--github-client-id', ['GITHUB_CLIENT_ID']) || undefined,
 	githubClientSecret: setting('--github-client-secret', ['GITHUB_CLIENT_SECRET']) || undefined,
-	objectStore: (setting('--object-store', ['SKIFF_OBJECT_STORE'], 'local') as 'local' | 'r2') || 'local',
+	objectStore: (setting('--object-store', ['YOAL_OBJECT_STORE'], 'local') as 'local' | 'r2') || 'local',
 	noAgent: has('--no-agent'),
-	withPhp: has('--with-php') || process.env.SKIFF_INSTALL_PHP === '1',
-	noPython: has('--no-python') || process.env.SKIFF_NO_PYTHON === '1',
-	noNode: has('--no-node') || process.env.SKIFF_NO_NODE === '1',
+	withPhp: has('--with-php') || process.env.YOAL_INSTALL_PHP === '1',
+	noPython: has('--no-python') || process.env.YOAL_NO_PYTHON === '1',
+	noNode: has('--no-node') || process.env.YOAL_NO_NODE === '1',
 	clickhouse: has('--no-clickhouse')
 		? false
-		: has('--clickhouse') || process.env.SKIFF_INSTALL_CLICKHOUSE === '1'
+		: has('--clickhouse') || process.env.YOAL_INSTALL_CLICKHOUSE === '1'
 			? true
 			: undefined,
-	version: value('--version', process.env.SKIFF_VERSION ?? sourceVersion()),
+	version: value('--version', process.env.YOAL_VERSION ?? sourceVersion()),
 	channel: installChannel(),
 };
 if (options.objectStore !== 'local' && options.objectStore !== 'r2') {
@@ -273,21 +273,21 @@ if (options.objectStore !== 'local' && options.objectStore !== 'r2') {
 	process.exit(64);
 }
 
-if (process.env.SKIFF_SMTP_HOST || args.includes('--smtp-host') || existingEnv.get('SKIFF_SMTP_HOST')) {
+if (process.env.YOAL_SMTP_HOST || args.includes('--smtp-host') || existingEnv.get('YOAL_SMTP_HOST')) {
 	options.smtp = {
-		host: setting('--smtp-host', ['SKIFF_SMTP_HOST']),
-		port: Number(setting('--smtp-port', ['SKIFF_SMTP_PORT'], '587')),
-		user: setting('--smtp-user', ['SKIFF_SMTP_USER']),
-		password: setting('--smtp-password', ['SKIFF_SMTP_PASSWORD']),
-		from: setting('--smtp-from', ['SKIFF_SMTP_FROM'], `Skiff <noreply@${options.contentDomain}>`),
+		host: setting('--smtp-host', ['YOAL_SMTP_HOST']),
+		port: Number(setting('--smtp-port', ['YOAL_SMTP_PORT'], '587')),
+		user: setting('--smtp-user', ['YOAL_SMTP_USER']),
+		password: setting('--smtp-password', ['YOAL_SMTP_PASSWORD']),
+		from: setting('--smtp-from', ['YOAL_SMTP_FROM'], `Yoal <noreply@${options.contentDomain}>`),
 	};
 }
 if (options.objectStore === 'r2') {
 	options.r2 = {
-		accountId: setting('--r2-account-id', ['R2_ACCOUNT_ID', 'SKIFF_R2_ACCOUNT_ID']),
-		bucket: setting('--r2-bucket', ['R2_BUCKET', 'SKIFF_R2_BUCKET']),
-		accessKeyId: setting('--r2-access-key-id', ['R2_ACCESS_KEY_ID', 'SKIFF_R2_ACCESS_KEY_ID']),
-		secretAccessKey: setting('--r2-secret-access-key', ['R2_SECRET_ACCESS_KEY', 'SKIFF_R2_SECRET_ACCESS_KEY']),
+		accountId: setting('--r2-account-id', ['R2_ACCOUNT_ID', 'YOAL_R2_ACCOUNT_ID']),
+		bucket: setting('--r2-bucket', ['R2_BUCKET', 'YOAL_R2_BUCKET']),
+		accessKeyId: setting('--r2-access-key-id', ['R2_ACCESS_KEY_ID', 'YOAL_R2_ACCESS_KEY_ID']),
+		secretAccessKey: setting('--r2-secret-access-key', ['R2_SECRET_ACCESS_KEY', 'YOAL_R2_SECRET_ACCESS_KEY']),
 	};
 }
 
@@ -459,7 +459,7 @@ function httpsWanted(): boolean {
 
 /**
  * Sites share the wildcard certificate `*.<content domain>`, which Let's Encrypt only issues over
- * DNS-01. Caddy's Cloudflare provider is the only solver in the Skiff build, so without this token
+ * DNS-01. Caddy's Cloudflare provider is the only solver in the Yoal build, so without this token
  * the install looks healthy while every deployed site returns Cloudflare error 525.
  */
 async function promptCloudflareToken(): Promise<void> {
@@ -483,7 +483,7 @@ async function promptCloudflareToken(): Promise<void> {
 	writeCloudflareToken(token);
 }
 
-/** The agent reads this file as the `skiff` user through the caddy group. */
+/** The agent reads this file as the `yoal` user through the caddy group. */
 function writeCloudflareToken(token: string): void {
 	const path = options.cloudflareTokenFile;
 	if (options.dryRun) {
@@ -626,7 +626,7 @@ function resolveDomains(): void {
 	if (!options.acmeEmail && options.upgrade) {
 		// Older installs kept the ACME email only in agent.env.
 		try {
-			options.acmeEmail = readEnvFile(AGENT_ENV_FILE).get('SKIFF_ACME_EMAIL') ?? '';
+			options.acmeEmail = readEnvFile(AGENT_ENV_FILE).get('YOAL_ACME_EMAIL') ?? '';
 		} catch {
 			/* no agent */
 		}
@@ -665,7 +665,7 @@ function aptInstall(packages: string[]): boolean {
 }
 
 /**
- * Install what Skiff runs on before setting it up: Caddy (with the DNS-01 module HTTPS needs) and,
+ * Install what Yoal runs on before setting it up: Caddy (with the DNS-01 module HTTPS needs) and,
  * for the agent, Podman for managed databases and object storage. Debian/Ubuntu only (checked
  * above). `--skip-deps` leaves packages to the operator; the checks below still report gaps.
  */
@@ -691,7 +691,7 @@ function installPrerequisites(): void {
 	if (missingStorage.length) installStorageTools(missingStorage);
 }
 
-/** Best effort: Skiff runs without them, but profiling and network shares are limited. */
+/** Best effort: Yoal runs without them, but profiling and network shares are limited. */
 function installStorageTools(packages: string[]): void {
 	log(`installing ${packages.join(' ')} (volume profiling and network shares)`);
 	if (aptInstall(packages)) return;
@@ -712,7 +712,7 @@ function installCaddy(): void {
 	aptUpdated = false;
 	if (!aptInstall(['caddy'])) fail('Could not install Caddy (see the apt output above).');
 
-	// The package's Caddyfile serves a welcome page with the admin API on TCP. Skiff wants the admin
+	// The package's Caddyfile serves a welcome page with the admin API on TCP. Yoal wants the admin
 	// API on a unix socket only (the agent pushes the real config through it).
 	const stock = existsSync(CADDYFILE) ? readFileSync(CADDYFILE, 'utf8') : '';
 	if (!stock.includes('admin unix/')) {
@@ -720,14 +720,14 @@ function installCaddy(): void {
 		writeFileSync(
 			CADDYFILE,
 			[
-				'# Bootstrap config written by the Skiff installer. The Skiff agent replaces it at runtime',
+				'# Bootstrap config written by the Yoal installer. The Yoal agent replaces it at runtime',
 				'# through the admin socket below; this only serves until the agent starts.',
 				'{',
 				'\tadmin unix//var/lib/caddy/admin.sock|0660',
 				'}',
 				'',
 				':80 {',
-				'\trespond "Skiff is starting." 503',
+				'\trespond "Yoal is starting." 503',
 				'}',
 				'',
 			].join('\n'),
@@ -762,7 +762,7 @@ function installPodman(): void {
 
 async function preflight(): Promise<void> {
 	step('Preflight');
-	if (process.platform !== 'linux') fail('Skiff installs on Linux only.');
+	if (process.platform !== 'linux') fail('Yoal installs on Linux only.');
 	if (process.getuid?.() !== 0) fail('Run the installer as root (curl … | sudo sh).');
 	if (!existsSync('/run/systemd/system')) fail('systemd is required.');
 
@@ -770,7 +770,7 @@ async function preflight(): Promise<void> {
 	const id = /^ID=(.*)$/m.exec(os)?.[1]?.replace(/"/g, '') ?? '';
 	const versionId = /^VERSION_ID=(.*)$/m.exec(os)?.[1]?.replace(/"/g, '') ?? '';
 	if (!['debian', 'ubuntu'].includes(id)) {
-		if (process.env.SKIFF_FORCE_OS !== '1') fail(`Unsupported OS "${id}". Debian/Ubuntu is required (SKIFF_FORCE_OS=1 to override).`);
+		if (process.env.YOAL_FORCE_OS !== '1') fail(`Unsupported OS "${id}". Debian/Ubuntu is required (YOAL_FORCE_OS=1 to override).`);
 		log(color.yellow(`warning: unsupported OS ${id}`));
 	} else {
 		log(`${id} ${versionId}`);
@@ -796,14 +796,14 @@ async function preflight(): Promise<void> {
 				dryRun: options.dryRun,
 				log,
 			});
-			log(`workerd ${version} ready in /usr/lib/skiff/workerd`);
+			log(`workerd ${version} ready in /usr/lib/yoal/workerd`);
 			// Python functions load Pyodide from a read-only cache next to the binary (D121); the
 			// agent advertises `functions-python` only once it is there.
 			if (!options.noPython) {
 				try {
 					const result = await warmPyodideCache({
-						workerdPath: join('/usr/lib/skiff/workerd', version, 'workerd'),
-						cacheDir: join('/usr/lib/skiff/workerd', version, 'pyodide'),
+						workerdPath: join('/usr/lib/yoal/workerd', version, 'workerd'),
+						cacheDir: join('/usr/lib/yoal/workerd', version, 'pyodide'),
 						eras: await pythonBundleEras(SOURCE),
 						dryRun: options.dryRun,
 						log,
@@ -884,8 +884,8 @@ async function preflight(): Promise<void> {
 	const modules = capture(caddyBin, ['list-modules']) ?? '';
 	if (!modules.includes('dns.providers.cloudflare')) {
 		// Only the wildcard HTTPS certificate needs DNS-01; HTTP installs work with any Caddy.
-		if (options.tls) fail(`Caddy at ${caddyBin} has no caddy-dns/cloudflare module. Install the Skiff Caddy build first.`);
-		log(color.yellow(`warning: Caddy at ${caddyBin} has no caddy-dns/cloudflare module; install the Skiff Caddy build before turning on HTTPS`));
+		if (options.tls) fail(`Caddy at ${caddyBin} has no caddy-dns/cloudflare module. Install the Yoal Caddy build first.`);
+		log(color.yellow(`warning: Caddy at ${caddyBin} has no caddy-dns/cloudflare module; install the Yoal Caddy build before turning on HTTPS`));
 	}
 	log(`caddy ${capture(caddyBin, ['version']) ?? 'unknown'}`);
 
@@ -927,41 +927,41 @@ async function preflight(): Promise<void> {
 
 function ensureUsersAndDirs(): void {
 	step('Users and directories');
-	if (!capture('getent', ['group', 'skiff'])) {
-		if (options.dryRun) log('would create skiff group');
-		else run('groupadd', ['--system', 'skiff']);
+	if (!capture('getent', ['group', 'yoal'])) {
+		if (options.dryRun) log('would create yoal group');
+		else run('groupadd', ['--system', 'yoal']);
 	}
 	if (!capture('getent', ['group', 'caddy'])) {
 		if (options.dryRun) log('would create caddy group');
 		else run('groupadd', ['--system', 'caddy']);
 	}
-	if (!capture('id', ['-u', 'skiff'])) {
-		if (options.dryRun) log('would create skiff user');
-		else run('useradd', ['--system', '--gid', 'skiff', '--home-dir', VAR_DIR, '--shell', '/usr/sbin/nologin', 'skiff']);
+	if (!capture('id', ['-u', 'yoal'])) {
+		if (options.dryRun) log('would create yoal user');
+		else run('useradd', ['--system', '--gid', 'yoal', '--home-dir', VAR_DIR, '--shell', '/usr/sbin/nologin', 'yoal']);
 	}
-	const groups = (capture('id', ['-nG', 'skiff']) ?? '').split(/\s+/);
+	const groups = (capture('id', ['-nG', 'yoal']) ?? '').split(/\s+/);
 	if (!groups.includes('caddy')) {
-		if (options.dryRun) log('would add skiff to caddy group');
-		else run('usermod', ['-aG', 'caddy', 'skiff']);
+		if (options.dryRun) log('would add yoal to caddy group');
+		else run('usermod', ['-aG', 'caddy', 'yoal']);
 	}
 
 	ensureDir(OPT_DIR, '0755', 'root:root');
 	ensureDir(join(OPT_DIR, 'releases'), '0755', 'root:root');
-	ensureDir(ETC_DIR, '0750', 'root:skiff');
-	ensureDir(VAR_DIR, '0751', 'skiff:skiff');
-	for (const sub of ['data', 'data/objects', 'agent', 'backups']) ensureDir(join(VAR_DIR, sub), '0750', 'skiff:skiff');
+	ensureDir(ETC_DIR, '0750', 'root:yoal');
+	ensureDir(VAR_DIR, '0751', 'yoal:yoal');
+	for (const sub of ['data', 'data/objects', 'agent', 'backups']) ensureDir(join(VAR_DIR, sub), '0750', 'yoal:yoal');
 	// Dashboard-requested updates: the control plane drops a request in a directory it owns; the
 	// root updater reports progress from a directory the control plane can read but not write.
-	ensureDir(dirname(SELF_UPDATE_DEFAULTS.requestFile), '0750', 'skiff:skiff');
-	ensureDir(dirname(SELF_UPDATE_DEFAULTS.statusFile), '0750', 'root:skiff');
+	ensureDir(dirname(SELF_UPDATE_DEFAULTS.requestFile), '0750', 'yoal:yoal');
+	ensureDir(dirname(SELF_UPDATE_DEFAULTS.statusFile), '0750', 'root:yoal');
 	ensureDir(RUN_DIR, '2770', 'root:caddy');
 	// Quadlet's generator reads .container/.network files from here for managed services.
 	ensureDir('/etc/containers/systemd', '0755', 'root:root');
 	// Caddy writes its JSON access log here (0640); the agent reads it via the caddy group (DESIGN §8).
 	ensureDir(dirname(CADDY_ACCESS_LOG), '0750', 'caddy:caddy');
 	if (!options.dryRun) {
-		writeFileSync('/etc/tmpfiles.d/skiff.conf', '# Skiff runtime directory (setgid so Caddy and the agent share sockets)\nd /run/skiff 2770 root caddy -\n');
-		run('systemd-tmpfiles', ['--create', '/etc/tmpfiles.d/skiff.conf'], { allowFailure: true });
+		writeFileSync('/etc/tmpfiles.d/yoal.conf', '# Yoal runtime directory (setgid so Caddy and the agent share sockets)\nd /run/yoal 2770 root caddy -\n');
+		run('systemd-tmpfiles', ['--create', '/etc/tmpfiles.d/yoal.conf'], { allowFailure: true });
 	}
 }
 
@@ -970,8 +970,8 @@ let masterKey: EnsureMasterKeyResult | null = null;
 
 /**
  * A host that once chose a channel keeps it in the updater's channel file, which outranks
- * skiff.env. install.sh starts from that file, so a difference here means --canary or
- * SKIFF_CHANNEL asked for another one: rewrite it the way the updater does (root:skiff 0640).
+ * yoal.env. install.sh starts from that file, so a difference here means --canary or
+ * YOAL_CHANNEL asked for another one: rewrite it the way the updater does (root:yoal 0640).
  */
 function syncRememberedChannel(): void {
 	const file = SELF_UPDATE_DEFAULTS.channelFile;
@@ -983,7 +983,7 @@ function syncRememberedChannel(): void {
 	}
 	if (current === options.channel) return;
 	writeFileSync(`${file}.tmp-${process.pid}`, `${options.channel}\n`, { mode: 0o640 });
-	run('chown', ['root:skiff', `${file}.tmp-${process.pid}`], { allowFailure: true });
+	run('chown', ['root:yoal', `${file}.tmp-${process.pid}`], { allowFailure: true });
 	renameSync(`${file}.tmp-${process.pid}`, file);
 	log(`release channel changed: ${current || 'unset'} -> ${options.channel}`);
 }
@@ -997,32 +997,32 @@ function writeSecrets(): Map<string, string> {
 
 	const env = new Map(existing);
 	env.set('NODE_ENV', 'production');
-	env.set('SKIFF_PLATFORM_ORIGIN', `${options.tls ? 'https' : 'http'}://${options.platformHost}`);
-	env.set('SKIFF_CONTENT_DOMAIN', options.contentDomain);
-	env.set('SKIFF_DATA_DIR', join(VAR_DIR, 'data'));
-	env.set('SKIFF_OBJECT_STORE', options.objectStore);
-	env.set('SKIFF_AGENT_VERSION', options.version);
+	env.set('YOAL_PLATFORM_ORIGIN', `${options.tls ? 'https' : 'http'}://${options.platformHost}`);
+	env.set('YOAL_CONTENT_DOMAIN', options.contentDomain);
+	env.set('YOAL_DATA_DIR', join(VAR_DIR, 'data'));
+	env.set('YOAL_OBJECT_STORE', options.objectStore);
+	env.set('YOAL_AGENT_VERSION', options.version);
 	// The updater's default channel until the host chooses one (D128).
-	env.set('SKIFF_UPDATE_CHANNEL', options.channel);
-	env.set('SKIFF_EDGE_NODE_ID', existing.get('SKIFF_EDGE_NODE_ID') ?? '');
+	env.set('YOAL_UPDATE_CHANNEL', options.channel);
+	env.set('YOAL_EDGE_NODE_ID', existing.get('YOAL_EDGE_NODE_ID') ?? '');
 	env.set('BETTER_AUTH_SECRET', existing.get('BETTER_AUTH_SECRET') ?? base64(48));
-	env.set('SKIFF_SITE_COOKIE_SECRET', existing.get('SKIFF_SITE_COOKIE_SECRET') ?? base64(32));
-	env.set('SKIFF_OBJECT_STORE_SECRET', existing.get('SKIFF_OBJECT_STORE_SECRET') ?? base64(32));
+	env.set('YOAL_SITE_COOKIE_SECRET', existing.get('YOAL_SITE_COOKIE_SECRET') ?? base64(32));
+	env.set('YOAL_OBJECT_STORE_SECRET', existing.get('YOAL_OBJECT_STORE_SECRET') ?? base64(32));
 	// Web Push alerts (D108): kept across re-runs, since a new pair orphans every subscribed device.
 	if (ensureVapidKeys(env)) log('generated the Web Push (VAPID) key pair');
 	// Nothing reads it (backups are Litestream + per-database schedules); drop it from old installs.
-	env.delete('SKIFF_DAILY_BACKUPS');
+	env.delete('YOAL_DAILY_BACKUPS');
 	// Remembered so a later re-run/upgrade keeps them without repeating the flags.
-	if (options.tls) env.set('SKIFF_ACME_EMAIL', options.acmeEmail);
-	else env.delete('SKIFF_ACME_EMAIL');
-	if (cloudflareTokenFile()) env.set('SKIFF_CLOUDFLARE_TOKEN_FILE', cloudflareTokenFile());
-	else env.delete('SKIFF_CLOUDFLARE_TOKEN_FILE');
+	if (options.tls) env.set('YOAL_ACME_EMAIL', options.acmeEmail);
+	else env.delete('YOAL_ACME_EMAIL');
+	if (cloudflareTokenFile()) env.set('YOAL_CLOUDFLARE_TOKEN_FILE', cloudflareTokenFile());
+	else env.delete('YOAL_CLOUDFLARE_TOKEN_FILE');
 	if (options.smtp) {
-		env.set('SKIFF_SMTP_HOST', options.smtp.host);
-		env.set('SKIFF_SMTP_PORT', String(options.smtp.port));
-		env.set('SKIFF_SMTP_USER', options.smtp.user);
-		env.set('SKIFF_SMTP_PASSWORD', options.smtp.password);
-		env.set('SKIFF_SMTP_FROM', options.smtp.from);
+		env.set('YOAL_SMTP_HOST', options.smtp.host);
+		env.set('YOAL_SMTP_PORT', String(options.smtp.port));
+		env.set('YOAL_SMTP_USER', options.smtp.user);
+		env.set('YOAL_SMTP_PASSWORD', options.smtp.password);
+		env.set('YOAL_SMTP_FROM', options.smtp.from);
 	}
 	if (options.githubClientId && options.githubClientSecret) {
 		env.set('GITHUB_CLIENT_ID', options.githubClientId);
@@ -1040,15 +1040,15 @@ function writeSecrets(): Map<string, string> {
 	if (!options.dryRun) {
 		writeEnvFile(ENV_FILE, env);
 		syncRememberedChannel();
-		run('chown', ['root:skiff', ENV_FILE], { allowFailure: true });
+		run('chown', ['root:yoal', ENV_FILE], { allowFailure: true });
 		run('chmod', ['0640', ENV_FILE], { allowFailure: true });
 	}
 	if (!options.dryRun) {
 		if (!existsSync(SETUP_TOKEN_FILE))
 			writeFileSync(SETUP_TOKEN_FILE, `${randomBytes(32).toString('base64url')}\n`, { mode: 0o640 });
-		// The control plane (user skiff) reads it to verify the setup link (D102). Installs before
+		// The control plane (user yoal) reads it to verify the setup link (D102). Installs before
 		// 0.6.x wrote it root 0600, so fix the mode on every run.
-		run('chown', ['root:skiff', SETUP_TOKEN_FILE], { allowFailure: true });
+		run('chown', ['root:yoal', SETUP_TOKEN_FILE], { allowFailure: true });
 		run('chmod', ['0640', SETUP_TOKEN_FILE], { allowFailure: true });
 	}
 	return env;
@@ -1090,27 +1090,27 @@ function buildRelease(env: Map<string, string>): string {
 	run(BUN_BIN, ['run', '--cwd', 'apps/agent', 'build'], { cwd: join(release, 'repo') });
 	run(BUN_BIN, ['run', '--cwd', 'apps/cli', 'build'], { cwd: join(release, 'repo') });
 	run(BUN_BIN, ['run', '--cwd', 'apps/helper', 'build'], { cwd: join(release, 'repo') });
-	cpSync(join(release, 'repo', 'apps', 'agent', 'dist', 'skiff-agent'), join(release, 'agent', 'skiff-agent'));
-	chmodSync(join(release, 'agent', 'skiff-agent'), 0o755);
+	cpSync(join(release, 'repo', 'apps', 'agent', 'dist', 'yoal-agent'), join(release, 'agent', 'yoal-agent'));
+	chmodSync(join(release, 'agent', 'yoal-agent'), 0o755);
 	linkAgentCommands(release);
 	ensureDir(join(release, 'helper'), '0755', 'root:root');
-	cpSync(join(release, 'repo', 'apps', 'helper', 'dist', 'skiff-helper'), join(release, 'helper', 'skiff-helper'));
-	chmodSync(join(release, 'helper', 'skiff-helper'), 0o755);
+	cpSync(join(release, 'repo', 'apps', 'helper', 'dist', 'yoal-helper'), join(release, 'helper', 'yoal-helper'));
+	chmodSync(join(release, 'helper', 'yoal-helper'), 0o755);
 	ensureDir(join(release, 'cli'), '0755', 'root:root');
-	cpSync(join(release, 'repo', 'apps', 'cli', 'dist', 'skif.js'), join(release, 'cli', 'skif.js'));
-	chmodSync(join(release, 'cli', 'skif.js'), 0o644);
+	cpSync(join(release, 'repo', 'apps', 'cli', 'dist', 'yoal.js'), join(release, 'cli', 'yoal.js'));
+	chmodSync(join(release, 'cli', 'yoal.js'), 0o644);
 	writeFileSync(
 		join(release, 'meta.json'),
 		`${JSON.stringify(
 			{
 				version: options.version,
 				builtAt: new Date().toISOString(),
-				source: process.env.SKIFF_SOURCE_TAG ?? process.env.SKIFF_SOURCE_REF ?? 'local',
-				// Read by skiff-update-self to know where to pull updates from. `ref` is the branch
+				source: process.env.YOAL_SOURCE_TAG ?? process.env.YOAL_SOURCE_REF ?? 'local',
+				// Read by yoal-update-self to know where to pull updates from. `ref` is the branch
 				// source builds track, never a release tag; a stable install records its tag apart.
-				...(process.env.SKIFF_REPO ? { repo: process.env.SKIFF_REPO } : {}),
-				...(process.env.SKIFF_SOURCE_REF ? { ref: process.env.SKIFF_SOURCE_REF } : {}),
-				...(process.env.SKIFF_SOURCE_TAG ? { tag: process.env.SKIFF_SOURCE_TAG } : {}),
+				...(process.env.YOAL_REPO ? { repo: process.env.YOAL_REPO } : {}),
+				...(process.env.YOAL_SOURCE_REF ? { ref: process.env.YOAL_SOURCE_REF } : {}),
+				...(process.env.YOAL_SOURCE_TAG ? { tag: process.env.YOAL_SOURCE_TAG } : {}),
 			},
 			null,
 			2,
@@ -1133,7 +1133,7 @@ function writeUnits(release: string): void {
 	});
 	const agent = agentUnit({ optDir: OPT_DIR, etcDir: ETC_DIR, varDir: VAR_DIR, runDir: RUN_DIR });
 	if (options.dryRun) {
-		log(`would write ${Object.keys(controlUnits).join(', ')}, skiff-agent.service, ${STUDIO_UNIT} and ${IDENTITY_UNIT}`);
+		log(`would write ${Object.keys(controlUnits).join(', ')}, yoal-agent.service, ${STUDIO_UNIT} and ${IDENTITY_UNIT}`);
 		if (masterKey?.store.kind === 'sealed' || masterKey?.action === 'seal-existing')
 			log(`would point both control-plane units at the sealed master key (${MASTER_KEY_DROP_IN} drop-ins)`);
 		return;
@@ -1141,7 +1141,7 @@ function writeUnits(release: string): void {
 	for (const [name, body] of Object.entries(controlUnits)) writeFileSync(join(SYSTEMD_DIR, name), body);
 	// LoadCredentialEncrypted= when the key is sealed (removed again if it is not).
 	ensureMasterKeyDropIns({ systemdDir: SYSTEMD_DIR, masterKeyFile: MASTER_KEY_FILE });
-	writeFileSync(join(SYSTEMD_DIR, 'skiff-agent.service'), agent);
+	writeFileSync(join(SYSTEMD_DIR, 'yoal-agent.service'), agent);
 	// The on-demand database studio (plan 22): installed beside the agent, never enabled. The
 	// agent starts it through the helper; it exits by itself when idle.
 	writeFileSync(join(SYSTEMD_DIR, STUDIO_UNIT), studioUnit({ optDir: OPT_DIR, runDir: RUN_DIR, socketGroup: 'caddy' }));
@@ -1166,8 +1166,8 @@ function writeUnits(release: string): void {
 	if (options.skipDeps) {
 		const helperEnvFile = join(ETC_DIR, 'helper.env');
 		const body = existsSync(helperEnvFile) ? readFileSync(helperEnvFile, 'utf8') : '';
-		if (!/^SKIFF_HELPER_STORAGE_TOOLS=/m.test(body))
-			writeFileSync(helperEnvFile, `${body}${body && !body.endsWith('\n') ? '\n' : ''}SKIFF_HELPER_STORAGE_TOOLS=0\n`);
+		if (!/^YOAL_HELPER_STORAGE_TOOLS=/m.test(body))
+			writeFileSync(helperEnvFile, `${body}${body && !body.endsWith('\n') ? '\n' : ''}YOAL_HELPER_STORAGE_TOOLS=0\n`);
 	}
 	for (const [name, body] of Object.entries(triggerUnits())) writeFileSync(join(SYSTEMD_DIR, name), body);
 	run('systemctl', ['daemon-reload']);
@@ -1194,17 +1194,17 @@ function ensureCaddyAccess(): void {
 	const dropInDir = '/etc/systemd/system/caddy.service.d';
 	mkdirSync(dropInDir, { recursive: true });
 	writeFileSync(
-		join(dropInDir, 'skiff-admin-socket.conf'),
-		`[Service]\n# Caddy reads deployed artifacts from the agent cache and the agent needs the admin socket.\nSupplementaryGroups=skiff\nExecStartPost=/usr/bin/chmod 0660 ${socket}\n`,
+		join(dropInDir, 'yoal-admin-socket.conf'),
+		`[Service]\n# Caddy reads deployed artifacts from the agent cache and the agent needs the admin socket.\nSupplementaryGroups=yoal\nExecStartPost=/usr/bin/chmod 0660 ${socket}\n`,
 	);
 	run('systemctl', ['daemon-reload'], { allowFailure: true });
 	if (existsSync(socket)) run('chmod', ['0660', socket], { allowFailure: true });
-	// `systemctl show -p SupplementaryGroups` reports the unit file, which already lists skiff once
+	// `systemctl show -p SupplementaryGroups` reports the unit file, which already lists yoal once
 	// the drop-in is written, so it cannot tell whether the running process has it. A Caddy started
 	// before this drop-in does not, and then it cannot read release artifacts: every site is a 403
 	// while the node otherwise looks healthy. Inspect the process, and restart only when it is stale.
 	const pid = (capture('systemctl', ['show', 'caddy', '-p', 'MainPID', '--value']) ?? '').trim();
-	const gid = parseGetentGroupId(capture('getent', ['group', 'skiff']) ?? '');
+	const gid = parseGetentGroupId(capture('getent', ['group', 'yoal']) ?? '');
 	let status = '';
 	try {
 		if (pid && pid !== '0') status = readFileSync(`/proc/${pid}/status`, 'utf8');
@@ -1213,7 +1213,7 @@ function ensureCaddyAccess(): void {
 	}
 	const running = pid !== '' && pid !== '0';
 	if (running && gid !== null && !processHasGroup(status, gid)) {
-		log('restarting caddy so it picks up the skiff group');
+		log('restarting caddy so it picks up the yoal group');
 		run('systemctl', ['restart', 'caddy'], { allowFailure: true });
 	}
 }
@@ -1226,7 +1226,7 @@ function switchCurrent(release: string): void {
 		log(`would point ${link} -> ${release}`);
 		return;
 	}
-	// Keep the outgoing release as `previous` so `skiff-update-self rollback` can return to it.
+	// Keep the outgoing release as `previous` so `yoal-update-self rollback` can return to it.
 	const outgoing = existsSync(link) ? capture('readlink', ['-f', link]) : null;
 	if (outgoing && outgoing !== release) {
 		const previous = join(OPT_DIR, 'previous');
@@ -1241,17 +1241,17 @@ function switchCurrent(release: string): void {
 }
 
 /**
- * `skiff-update-self` runs the updater from the active release (falling back to the previous one,
+ * `yoal-update-self` runs the updater from the active release (falling back to the previous one,
  * e.g. after rolling back to a release that predates the updater), never from the release it is
  * about to install.
  */
 function installUpdateCommand(): void {
-	const path = '/usr/local/sbin/skiff-update-self';
+	const path = '/usr/local/sbin/yoal-update-self';
 	if (options.dryRun) {
 		log(`would install ${path}`);
 		return;
 	}
-	const script = updateCommandScript({ optDir: OPT_DIR, bunBin: BUN_BIN, updaterDir: '/usr/local/lib/skiff-updater' });
+	const script = updateCommandScript({ optDir: OPT_DIR, bunBin: BUN_BIN, updaterDir: '/usr/local/lib/yoal-updater' });
 	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(`${path}.tmp`, script, { mode: 0o755 });
 	renameSync(`${path}.tmp`, path);
@@ -1259,7 +1259,7 @@ function installUpdateCommand(): void {
 }
 
 /**
- * `skif` / `skiff` (D33) run the CLI bundled into the active release with the shared Bun, so the
+ * `yoal` (D33) runs the CLI bundled into the active release with the shared Bun, so the
  * CLI is upgraded and rolled back together with the platform. No Node.js needed on the host.
  */
 function installCliCommands(): void {
@@ -1271,22 +1271,22 @@ function installCliCommands(): void {
 }
 
 const BACKUP_UNITS = [
-	'skiff-litestream.service',
-	'skiff-litestream-identity.service',
-	'skiff-restore-drill.service',
-	'skiff-restore-drill.timer',
-	'skiff-alert@.service',
+	'yoal-litestream.service',
+	'yoal-litestream-identity.service',
+	'yoal-restore-drill.service',
+	'yoal-restore-drill.timer',
+	'yoal-alert@.service',
 ];
 const LITESTREAM_CONFIG = join(ETC_DIR, 'litestream.yml');
 const LITESTREAM_IDENTITY_CONFIG = join(ETC_DIR, 'litestream-identity.yml');
 
 /**
  * Backups (DESIGN §10): Litestream → R2 plus the monthly restore drill, both alerting through
- * skiff-alert@.service on failure. Only with --object-store r2. The units are installed even when
+ * yoal-alert@.service on failure. Only with --object-store r2. The units are installed even when
  * the litestream binary is missing, so installing it later only needs `systemctl enable --now`.
  */
 function installBackups(env: Map<string, string>): void {
-	if (env.get('SKIFF_OBJECT_STORE') !== 'r2') {
+	if (env.get('YOAL_OBJECT_STORE') !== 'r2') {
 		log(color.yellow('backups: the object store is local, so Litestream → R2 and the restore drill are not installed'));
 		return;
 	}
@@ -1304,11 +1304,11 @@ function installBackups(env: Map<string, string>): void {
 	const litestream = capture('sh', ['-c', 'command -v litestream']);
 	copyFileSync(join(SOURCE, 'scripts', 'litestream.yml'), `${LITESTREAM_CONFIG}.tmp`);
 	renameSync(`${LITESTREAM_CONFIG}.tmp`, LITESTREAM_CONFIG);
-	run('chown', ['root:skiff', LITESTREAM_CONFIG], { allowFailure: true });
+	run('chown', ['root:yoal', LITESTREAM_CONFIG], { allowFailure: true });
 	run('chmod', ['0640', LITESTREAM_CONFIG], { allowFailure: true });
 	copyFileSync(join(SOURCE, 'scripts', 'litestream-identity.yml'), `${LITESTREAM_IDENTITY_CONFIG}.tmp`);
 	renameSync(`${LITESTREAM_IDENTITY_CONFIG}.tmp`, LITESTREAM_IDENTITY_CONFIG);
-	run('chown', ['root:skiff', LITESTREAM_IDENTITY_CONFIG], { allowFailure: true });
+	run('chown', ['root:yoal', LITESTREAM_IDENTITY_CONFIG], { allowFailure: true });
 	run('chmod', ['0640', LITESTREAM_IDENTITY_CONFIG], { allowFailure: true });
 	for (const name of BACKUP_UNITS) {
 		let body = readFileSync(join(SOURCE, 'scripts', 'systemd', name), 'utf8');
@@ -1318,26 +1318,26 @@ function installBackups(env: Map<string, string>): void {
 	run('systemctl', ['daemon-reload']);
 	ensureDir(join(VAR_DIR, 'drill'), '0755', 'root:root');
 	if (!capture('sh', ['-c', 'command -v sqlite3']))
-		log(color.yellow('warning: sqlite3 is not installed; skiff-restore and the restore drill need it'));
+		log(color.yellow('warning: sqlite3 is not installed; yoal-restore and the restore drill need it'));
 	if (!litestream) {
 		log(
 			color.yellow(
 				'warning: litestream is not installed, so SQLite is NOT being backed up. Install it ' +
-					'(https://litestream.io/install/) and run: systemctl enable --now skiff-litestream.service skiff-restore-drill.timer',
+					'(https://litestream.io/install/) and run: systemctl enable --now yoal-litestream.service yoal-restore-drill.timer',
 			),
 		);
 		return;
 	}
-	run('systemctl', ['enable', 'skiff-litestream.service', 'skiff-restore-drill.timer']);
-	run('systemctl', ['restart', 'skiff-litestream.service'], { allowFailure: true });
-	run('systemctl', ['start', 'skiff-restore-drill.timer'], { allowFailure: true });
-	log(`Litestream replicating ${env.get('SKIFF_DATA_DIR')}/skiff.db to ${env.get('R2_BUCKET')}/skiff/sqlite`);
+	run('systemctl', ['enable', 'yoal-litestream.service', 'yoal-restore-drill.timer']);
+	run('systemctl', ['restart', 'yoal-litestream.service'], { allowFailure: true });
+	run('systemctl', ['start', 'yoal-restore-drill.timer'], { allowFailure: true });
+	log(`Litestream replicating ${env.get('YOAL_DATA_DIR')}/yoal.db to ${env.get('R2_BUCKET')}/yoal/sqlite`);
 }
 
 /**
  * The optional telemetry store (D101, docs/OPS.md §3.6): a loopback-only ClickHouse, installed only
  * when asked for (prompt, --clickhouse) or already present (kept current on --upgrade). Started
- * before the control plane so its SKIFF_CLICKHOUSE_* settings are in skiff.env when it boots. A
+ * before the control plane so its YOAL_CLICKHOUSE_* settings are in yoal.env when it boots. A
  * failed download or start is a warning, never an install failure.
  */
 async function installClickHouse(): Promise<void> {
@@ -1380,14 +1380,14 @@ function waitFor(label: string, check: () => boolean, timeoutMs = 60_000): void 
 function startServices(): void {
 	step('Start services');
 	if (options.dryRun) {
-		log(`would enable and restart skiff-control-plane, skiff-agent, ${HELPER_UNIT}, ${BUILDER_UNIT}, ${STORAGE_PATH_UNIT}`);
+		log(`would enable and restart yoal-control-plane, yoal-agent, ${HELPER_UNIT}, ${BUILDER_UNIT}, ${STORAGE_PATH_UNIT}`);
 		return;
 	}
 	run('systemctl', ['enable', HELPER_UNIT]);
 	run('systemctl', ['restart', HELPER_UNIT]);
-	run('systemctl', ['enable', 'skiff-control-plane.service', GUARD_UNIT]);
+	run('systemctl', ['enable', 'yoal-control-plane.service', GUARD_UNIT]);
 	run('systemctl', ['enable', '--now', TRIGGER_PATH_UNIT], { allowFailure: true });
-	run('systemctl', ['restart', 'skiff-control-plane.service']);
+	run('systemctl', ['restart', 'yoal-control-plane.service']);
 	waitFor('control plane socket', () => existsSync(join(RUN_DIR, 'control.sock')), 90_000);
 	waitFor(
 		'control plane /readyz',
@@ -1415,8 +1415,8 @@ function startServices(): void {
 	);
 	patchCaddyfilePlatform();
 	if (!options.noAgent && existsSync(AGENT_ENV_FILE)) {
-		run('systemctl', ['enable', 'skiff-agent.service']);
-		run('systemctl', ['restart', 'skiff-agent.service']);
+		run('systemctl', ['enable', 'yoal-agent.service']);
+		run('systemctl', ['restart', 'yoal-agent.service']);
 		// A running studio moves to the new binary; a stopped one stays stopped.
 		run('systemctl', ['try-restart', STUDIO_UNIT], { allowFailure: true });
 		run('systemctl', ['try-restart', MAIL_UNIT], { allowFailure: true });
@@ -1467,14 +1467,14 @@ function patchCaddyfilePlatform(): void {
 	if (updated.includes(options.platformHost)) {
 		updated = updated.replace(
 			/reverse_proxy\s+127\.0\.0\.1:3000/g,
-			'reverse_proxy unix//run/skiff/control.sock',
+			'reverse_proxy unix//run/yoal/control.sock',
 		);
 	} else {
 		log(color.yellow(`warning: ${path} has no ${options.platformHost} block; the agent will add it`));
 	}
 
 	if (updated === original) return;
-	writeFileSync('/etc/caddy/Caddyfile.pre-skiff', original);
+	writeFileSync('/etc/caddy/Caddyfile.pre-yoal', original);
 	writeFileSync(path, updated);
 	run('systemctl', ['reload', 'caddy'], { allowFailure: true });
 	log('Caddy platform upstream and admin socket permissions updated');
@@ -1484,10 +1484,10 @@ function bootstrapNode(env: Map<string, string>, release: string): void {
 	if (options.noAgent) return;
 	step('Enroll edge node');
 	if (options.dryRun) {
-		log('would create an edge node and write /etc/skiff/agent.env');
+		log('would create an edge node and write /etc/yoal/agent.env');
 		return;
 	}
-	const platformOrigin = env.get('SKIFF_PLATFORM_ORIGIN')!;
+	const platformOrigin = env.get('YOAL_PLATFORM_ORIGIN')!;
 	const platformHost = new URL(platformOrigin).host;
 	const proto = platformOrigin.startsWith('https:') ? 'https' : 'http';
 	waitFor(
@@ -1499,35 +1499,35 @@ function bootstrapNode(env: Map<string, string>, release: string): void {
 	const result = run(BUN_BIN, ['run', script], {
 		cwd: join(release, 'repo'),
 		env: {
-			SKIFF_DATA_DIR: env.get('SKIFF_DATA_DIR')!,
-			SKIFF_PLATFORM_ORIGIN: platformOrigin,
-			SKIFF_CONTENT_DOMAIN: env.get('SKIFF_CONTENT_DOMAIN')!,
-			SKIFF_SITE_COOKIE_SECRET: env.get('SKIFF_SITE_COOKIE_SECRET')!,
-			SKIFF_OBJECT_STORE_SECRET: env.get('SKIFF_OBJECT_STORE_SECRET')!,
+			YOAL_DATA_DIR: env.get('YOAL_DATA_DIR')!,
+			YOAL_PLATFORM_ORIGIN: platformOrigin,
+			YOAL_CONTENT_DOMAIN: env.get('YOAL_CONTENT_DOMAIN')!,
+			YOAL_SITE_COOKIE_SECRET: env.get('YOAL_SITE_COOKIE_SECRET')!,
+			YOAL_OBJECT_STORE_SECRET: env.get('YOAL_OBJECT_STORE_SECRET')!,
 			// The key itself: a sealed key has no plaintext file to read.
-			SKIFF_MASTER_KEY: masterKey?.key ?? '',
-			SKIFF_MASTER_KEY_FILE: MASTER_KEY_FILE,
-			SKIFF_AGENT_ENV_FILE: AGENT_ENV_FILE,
-			SKIFF_PLATFORM_HOST: platformHost,
-			SKIFF_PLATFORM_UPSTREAM: `unix/${join(RUN_DIR, 'control.sock')}`,
+			YOAL_MASTER_KEY: masterKey?.key ?? '',
+			YOAL_MASTER_KEY_FILE: MASTER_KEY_FILE,
+			YOAL_AGENT_ENV_FILE: AGENT_ENV_FILE,
+			YOAL_PLATFORM_HOST: platformHost,
+			YOAL_PLATFORM_UPSTREAM: `unix/${join(RUN_DIR, 'control.sock')}`,
 			// TLS follows the ACME email in bootstrap-node.ts; HTTP installs pass none.
-			SKIFF_ACME_EMAIL: options.tls ? options.acmeEmail : '',
-			SKIFF_CLOUDFLARE_API_TOKEN_FILE: options.tls ? cloudflareTokenFile() : '',
+			YOAL_ACME_EMAIL: options.tls ? options.acmeEmail : '',
+			YOAL_CLOUDFLARE_API_TOKEN_FILE: options.tls ? cloudflareTokenFile() : '',
 			// The edge agent reaches the control plane on its socket, not through Caddy (D105).
-			SKIFF_CONTROL_SOCKET: CONTROL_SOCKET,
-			SKIFF_CADDY_ADMIN_SOCKET: detectCaddyAdminSocket(),
+			YOAL_CONTROL_SOCKET: CONTROL_SOCKET,
+			YOAL_CADDY_ADMIN_SOCKET: detectCaddyAdminSocket(),
 		},
 	});
 	if (result.code !== 0) fail('Node enrollment failed.');
 	// The agent unit is gated on agent.env; restart to pick it up.
-	run('systemctl', ['restart', 'skiff-agent.service']);
+	run('systemctl', ['restart', 'yoal-agent.service']);
 	run('systemctl', ['restart', BUILDER_UNIT], { allowFailure: true });
 	run('systemctl', ['restart', STORAGE_PATH_UNIT], { allowFailure: true });
 }
 
 function publicHealth(env: Map<string, string>): void {
 	if (options.dryRun) return;
-	const origin = env.get('SKIFF_PLATFORM_ORIGIN')!;
+	const origin = env.get('YOAL_PLATFORM_ORIGIN')!;
 	step('Health check');
 	waitFor(
 		`${origin}/api/setup/status`,
@@ -1554,10 +1554,10 @@ function publicHealth(env: Map<string, string>): void {
 async function verifySiteTls(): Promise<boolean> {
 	if (options.dryRun || !options.tls || options.noAgent) return true;
 	step('Site TLS');
-	let listen = process.env.SKIFF_CADDY_LISTEN;
+	let listen = process.env.YOAL_CADDY_LISTEN;
 	if (!listen) {
 		try {
-			listen = readEnvFile(AGENT_ENV_FILE).get('SKIFF_CADDY_LISTEN');
+			listen = readEnvFile(AGENT_ENV_FILE).get('YOAL_CADDY_LISTEN');
 		} catch {
 			/* the default below is the packaged listen address */
 		}
@@ -1594,7 +1594,7 @@ async function verifySiteTls(): Promise<boolean> {
  */
 function printSetupLink(env: Map<string, string>): void {
 	if (options.dryRun) return;
-	const origin = env.get('SKIFF_PLATFORM_ORIGIN')!;
+	const origin = env.get('YOAL_PLATFORM_ORIGIN')!;
 	const status = capture('curl', [
 		'-fsS',
 		'--max-time',
@@ -1620,7 +1620,7 @@ function printSetupLink(env: Map<string, string>): void {
 		// Reported below.
 	}
 	if (!token) {
-		log(color.yellow(`no setup token in ${SETUP_TOKEN_FILE}; find the link with: journalctl -u skiff-control-plane | grep setup`));
+		log(color.yellow(`no setup token in ${SETUP_TOKEN_FILE}; find the link with: journalctl -u yoal-control-plane | grep setup`));
 		return;
 	}
 	const url = new URL('/setup', origin);
@@ -1628,7 +1628,7 @@ function printSetupLink(env: Map<string, string>): void {
 	if (options.adminEmail) url.searchParams.set('email', options.adminEmail);
 	console.log(`\nOpen this link to create the owner account (works once, until an owner exists):`);
 	console.log(color.bold(url.toString()));
-	console.log(color.dim(`Lost it? sudo cat ${SETUP_TOKEN_FILE}, or journalctl -u skiff-control-plane | grep setup`));
+	console.log(color.dim(`Lost it? sudo cat ${SETUP_TOKEN_FILE}, or journalctl -u yoal-control-plane | grep setup`));
 }
 
 /** Atomically point `link` at `target` (or remove it when `target` is null). */
@@ -1644,15 +1644,15 @@ function relink(link: string, target: string | null): void {
 
 function rollback(previous: string | null, snapshot: string | null, previousLink: string | null): void {
 	console.error(color.red('\nInstall failed. Rolling back…'));
-	for (const service of ['skiff-agent', 'skiff-control-plane']) {
+	for (const service of ['yoal-agent', 'yoal-control-plane']) {
 		Bun.spawnSync({ cmd: ['systemctl', 'stop', `${service}.service`], stdout: 'ignore', stderr: 'ignore' });
 	}
 	if (snapshot && existsSync(snapshot)) {
-		const target = join(VAR_DIR, 'data', 'skiff.db');
+		const target = join(VAR_DIR, 'data', 'yoal.db');
 		rmSync(`${target}-wal`, { force: true });
 		rmSync(`${target}-shm`, { force: true });
 		copyFileSync(snapshot, target);
-		run('chown', ['skiff:skiff', target], { allowFailure: true });
+		run('chown', ['yoal:yoal', target], { allowFailure: true });
 		console.error(color.yellow(`restored database snapshot ${snapshot}`));
 	}
 	if (previous) {
@@ -1667,11 +1667,11 @@ function rollback(previous: string | null, snapshot: string | null, previousLink
 		Bun.spawnSync({ cmd: ['systemctl', 'daemon-reload'], stdout: 'ignore', stderr: 'ignore' });
 		console.error(color.yellow(`restored the plaintext master key ${MASTER_KEY_FILE}`));
 	}
-	Bun.spawnSync({ cmd: ['systemctl', 'start', 'skiff-control-plane.service'], stdout: 'ignore', stderr: 'ignore' });
+	Bun.spawnSync({ cmd: ['systemctl', 'start', 'yoal-control-plane.service'], stdout: 'ignore', stderr: 'ignore' });
 	if (!options.noAgent && existsSync(AGENT_ENV_FILE)) {
-		// The restored release's agent may predate `skiff-agent studio`; it restarts the studio on demand.
+		// The restored release's agent may predate `yoal-agent studio`; it restarts the studio on demand.
 		Bun.spawnSync({ cmd: ['systemctl', 'stop', STUDIO_UNIT], stdout: 'ignore', stderr: 'ignore' });
-		Bun.spawnSync({ cmd: ['systemctl', 'start', 'skiff-agent.service'], stdout: 'ignore', stderr: 'ignore' });
+		Bun.spawnSync({ cmd: ['systemctl', 'start', 'yoal-agent.service'], stdout: 'ignore', stderr: 'ignore' });
 	}
 }
 
@@ -1705,20 +1705,20 @@ async function install(): Promise<void> {
 	try {
 		// Any re-run against an existing database (with or without --upgrade) may apply
 		// migrations, so always take a sealed bundle the rollback/operator can restore.
-		if (existsSync(join(VAR_DIR, 'data', 'skiff.db'))) {
+		if (existsSync(join(VAR_DIR, 'data', 'yoal.db'))) {
 			step('Upgrade snapshot');
 			if (options.dryRun) {
 				log(`would seal a pre-upgrade bundle in ${join(VAR_DIR, 'backups')}`);
 			} else {
 				const bundle = createUpgradeSnapshotBundle({
 					backupsDir: join(VAR_DIR, 'backups'),
-					dbPath: join(VAR_DIR, 'data', 'skiff.db'),
+					dbPath: join(VAR_DIR, 'data', 'yoal.db'),
 					dataDir: join(VAR_DIR, 'data'),
 					envDir: ETC_DIR,
 					fromVersion: releaseVersion(previousRelease),
 					targetVersion: options.version,
 					migrations: migrationIds(SOURCE),
-					desiredStateVersion: readDesiredStateVersion(join(VAR_DIR, 'data', 'skiff.db')),
+					desiredStateVersion: readDesiredStateVersion(join(VAR_DIR, 'data', 'yoal.db')),
 					pinned: true,
 					retain: 3
 				});
@@ -1730,7 +1730,7 @@ async function install(): Promise<void> {
 		release = buildRelease(env);
 		switchCurrent(release);
 		installUpdateCommand();
-		// skif/skiff plus the operator scripts (skiff-restore, skiff-alert, …).
+		// yoal plus the operator scripts (yoal-restore, yoal-alert, …).
 		installCliCommands();
 		writeUnits(release);
 		await installClickHouse();
@@ -1754,7 +1754,7 @@ async function install(): Promise<void> {
 			pruneUpgradeSnapshotBundles(join(VAR_DIR, 'backups'), { keep: 3, protect: [snapshotBundle] });
 		}
 		step('Installed');
-		console.log(`${color.green('Skiff is installed.')} Platform: ${env.get('SKIFF_PLATFORM_ORIGIN')}`);
+		console.log(`${color.green('Yoal is installed.')} Platform: ${env.get('YOAL_PLATFORM_ORIGIN')}`);
 		if (!siteTls) {
 			console.log(
 				color.yellow(
@@ -1762,7 +1762,7 @@ async function install(): Promise<void> {
 				),
 			);
 		}
-		console.log(`Logs: ${color.dim('journalctl -u skiff-control-plane -u skiff-agent -f')}`);
+		console.log(`Logs: ${color.dim('journalctl -u yoal-control-plane -u yoal-agent -f')}`);
 		await offerRecoveryKit();
 	} catch (error) {
 		console.error(color.red(`\nError: ${(error as Error).message}`));
@@ -1776,7 +1776,7 @@ async function install(): Promise<void> {
  * key encrypts every secret, so a restore without it cannot decrypt them. Never fails the install.
  */
 async function offerRecoveryKit(): Promise<void> {
-	const later = 'sudo skiff-recovery-kit export --include-env';
+	const later = 'sudo yoal-recovery-kit export --include-env';
 	if (options.dryRun || options.upgrade) return;
 	if (!interactive) {
 		log(`Export a recovery kit and store it offline: ${later}`);
@@ -1791,7 +1791,7 @@ async function offerRecoveryKit(): Promise<void> {
 	// The kit reads its passphrase from the terminal itself.
 	const result = withTerminal(() =>
 		Bun.spawnSync({
-			cmd: ['/usr/local/sbin/skiff-recovery-kit', 'export', '--include-env'],
+			cmd: ['/usr/local/sbin/yoal-recovery-kit', 'export', '--include-env'],
 			stdio: ['inherit', 'inherit', 'inherit'],
 		}),
 	);
@@ -1802,15 +1802,15 @@ async function offerRecoveryKit(): Promise<void> {
 function uninstall(): void {
 	step('Uninstall');
 	if (options.dryRun) {
-		log('would stop/disable/remove skiff units and, with --purge, delete data');
+		log('would stop/disable/remove yoal units and, with --purge, delete data');
 		return;
 	}
-	for (const service of ['skiff-agent', 'skiff-control-plane', 'skiff-helper']) {
+	for (const service of ['yoal-agent', 'yoal-control-plane', 'yoal-helper']) {
 		run('systemctl', ['disable', '--now', `${service}.service`], { allowFailure: true });
 		rmSync(join(SYSTEMD_DIR, `${service}.service`), { force: true });
 	}
 	for (const unit of [PRIMARY_UNIT, STANDBY_UNIT]) rmSync(join(SYSTEMD_DIR, `${unit}.d`, MASTER_KEY_DROP_IN), { force: true });
-	// Its data (/var/lib/skiff/clickhouse) and binary (/opt/skiff/clickhouse) go only with --purge.
+	// Its data (/var/lib/yoal/clickhouse) and binary (/opt/yoal/clickhouse) go only with --purge.
 	removeClickHouseUnit({ systemdDir: SYSTEMD_DIR, run: (cmd) => void run(cmd[0]!, cmd.slice(1), { allowFailure: true }) });
 	for (const unit of BACKUP_UNITS) {
 		if (!unit.includes('@')) run('systemctl', ['disable', '--now', unit], { allowFailure: true });
@@ -1833,7 +1833,7 @@ function uninstall(): void {
 }
 
 const main = async (): Promise<void> => {
-	console.log(`${color.bold('Skiff installer')} ${options.version} ${color.dim(`(${options.channel} channel)`)}`);
+	console.log(`${color.bold('Yoal installer')} ${options.version} ${color.dim(`(${options.channel} channel)`)}`);
 	if (options.uninstall) return uninstall();
 	return install();
 };

@@ -15,7 +15,7 @@ export const NATS_BINDING_FILE = 'binding-nats';
  * Queues on the managed broker (docs/FUNCTIONS.md §4.5, §4.10, D112).
  *
  * The main Worker gets workerd's `queue` capability binding, which makes `send`, `sendBatch` and
- * `metrics` POST to a Skiff-supplied service. That service publishes to a JetStream stream on the
+ * `metrics` POST to a Yoal-supplied service. That service publishes to a JetStream stream on the
  * project's attached broker over a raw TCP socket: an `external` service at the broker's loopback
  * port, the same pattern as Hyperdrive, so the user Worker's own `globalOutbound` stays
  * public-only. The broker user and password reach the service through `fromEnvironment` (the

@@ -9,9 +9,9 @@
 	import PackageIcon from '@lucide/svelte/icons/package';
 	import SlidersHorizontalIcon from '@lucide/svelte/icons/sliders-horizontal';
 	import type { Component } from 'svelte';
-	import type { QuotaField, QuotaUsageMetric, QuotaUsageMetricKey } from '@skiff/contracts';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import type { QuotaField, QuotaUsageMetric, QuotaUsageMetricKey } from '@yoal/contracts';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import * as InputGroup from '#lib/components/ui/input-group/index.js';
@@ -73,7 +73,7 @@
 	const newestFirst = $derived([...history].reverse());
 </script>
 
-<svelte:head><title>Usage · Settings · Skiff</title></svelte:head>
+<svelte:head><title>Usage · Settings · Yoal</title></svelte:head>
 
 <SettingsHeader
 	id="usage"

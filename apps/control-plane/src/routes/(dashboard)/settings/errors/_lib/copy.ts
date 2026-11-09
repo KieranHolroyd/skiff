@@ -1,4 +1,4 @@
-import type { ServerErrorSource, ServerErrorStatus } from '@skiff/contracts';
+import type { ServerErrorSource, ServerErrorStatus } from '@yoal/contracts';
 import type { Tone } from '#lib/status.js';
 
 export const statusLabel: Record<ServerErrorStatus, string> = {
@@ -13,7 +13,7 @@ export const statusTone: Record<ServerErrorStatus, Tone> = {
 	ignored: 'neutral'
 };
 
-export { serverErrorSourceLabels as sourceLabel } from '@skiff/contracts';
+export { serverErrorSourceLabels as sourceLabel } from '@yoal/contracts';
 
 export const sourceDescription: Record<ServerErrorSource, string> = {
 	request: 'Thrown in a dashboard page load, form action or endpoint.',

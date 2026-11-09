@@ -3,16 +3,16 @@ import { principalStub } from './principal-stub.test-support';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_FEATURES } from '@skiff/contracts';
-import { LocalObjectStore, buildPrincipal, createCore, type Core } from '@skiff/core';
-import { createDb } from '@skiff/db';
+import { DEFAULT_FEATURES } from '@yoal/contracts';
+import { LocalObjectStore, buildPrincipal, createCore, type Core } from '@yoal/core';
+import { createDb } from '@yoal/db';
 
 /**
  * Named storage key tools (docs/OBJECT-STORAGE.md §5) against a real core. Metadata only: a key's
  * secret never comes back over MCP (D67).
  */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-mcp-storage-keys-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-mcp-storage-keys-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(
 	join(dir, 'objects'),
@@ -40,7 +40,7 @@ mock.module('./core', () => ({ core: realCore }));
 mock.module('./config', () => ({ platformOrigin: 'https://control.test', authSecret: 'test-secret' }));
 mock.module('./principal', () => principalStub({ principalFromMcp: () => null }));
 
-const { skiffToolDefinitions } = await import('./mcp');
+const { yoalToolDefinitions } = await import('./mcp');
 const { assistantTools } = await import('./assistant/tools');
 
 afterAll(() => {
@@ -78,7 +78,7 @@ describe('storage key MCP tools', () => {
 	});
 
 	test('are registered with the right annotations, and there is no reveal tool', () => {
-		const definitions = new Map(skiffToolDefinitions(owner).map((entry) => [entry.name, entry]));
+		const definitions = new Map(yoalToolDefinitions(owner).map((entry) => [entry.name, entry]));
 		expect(definitions.get('list_storage_keys')?.config.annotations?.readOnlyHint).toBe(true);
 		expect(definitions.get('create_storage_key')?.config.annotations?.destructiveHint).toBe(false);
 		expect(definitions.get('revoke_storage_key')?.config.annotations?.destructiveHint).toBe(true);

@@ -2,19 +2,19 @@ import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
-import { evaluateAccessEdge, sha256Hex, type AccessPolicyRule } from '@skiff/contracts';
+import { createDb } from '@yoal/db';
+import { evaluateAccessEdge, sha256Hex, type AccessPolicyRule } from '@yoal/contracts';
 import { buildPrincipal } from '../orgs.ts';
 import { createCore, type Core } from '../index.ts';
 import { LocalObjectStore } from '../object-store.ts';
 
 /**
- * Named machine tokens for Skiff Access (IAM.md I25, §11.1). The migration file owns the table;
+ * Named machine tokens for Yoal Access (IAM.md I25, §11.1). The migration file owns the table;
  * this test creates the same shape directly because `packages/db/src/migrations.ts` is regenerated
  * separately and 0106 is not in the checked-in snapshot yet.
  */
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-service-tokens-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-service-tokens-'));
 const opened = createDb({ path: ':memory:' });
 let clock = Date.parse('2026-11-09T12:00:00Z');
 
@@ -81,7 +81,7 @@ describe('access service tokens', () => {
 			header: 'X-CI-Token',
 		});
 
-		expect(created.secret).toMatch(/^skiff_svc_/);
+		expect(created.secret).toMatch(/^yoal_svc_/);
 		expect(created.token.name).toBe('Deploy');
 		expect(created.token.header).toBe('X-CI-Token');
 		expect(created.token.revokedAt).toBeNull();

@@ -76,7 +76,7 @@ export const procFdView: FdView = {
 };
 
 export const MAX_SYMLINK_HOPS = 40;
-export const SECRETS_DESTINATION = '/run/skiff-secrets';
+export const SECRETS_DESTINATION = '/run/yoal-secrets';
 
 const O_NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 const O_NONBLOCK = constants.O_NONBLOCK ?? 0;

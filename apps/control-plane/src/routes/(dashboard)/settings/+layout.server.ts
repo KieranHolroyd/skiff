@@ -1,4 +1,4 @@
-import { isGuestPrincipal } from '@skiff/contracts';
+import { isGuestPrincipal } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import {
 	backupHealth,

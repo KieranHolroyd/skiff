@@ -6,13 +6,13 @@
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import TrashIcon from '@lucide/svelte/icons/trash';
 	import ServerIcon from '@lucide/svelte/icons/server';
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import DetailList from '#lib/components/yoal/DetailList.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
-	import type { RegistryCredentialView } from '@skiff/contracts';
+	import type { RegistryCredentialView } from '@yoal/contracts';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
@@ -25,7 +25,7 @@
 	import type { PageProps } from './$types';
 	import SettingsHeader from '../_lib/SettingsHeader.svelte';
 	import { Textarea } from '#lib/components/ui/textarea/index.js';
-	import { REGISTRY_MIRROR_UPSTREAMS } from '@skiff/contracts';
+	import { REGISTRY_MIRROR_UPSTREAMS } from '@yoal/contracts';
 
 	let { data }: PageProps = $props();
 
@@ -52,7 +52,7 @@
 	}
 </script>
 
-<svelte:head><title>Container registries · Settings · Skiff</title></svelte:head>
+<svelte:head><title>Container registries · Settings · Yoal</title></svelte:head>
 
 <SettingsHeader id="registry" />
 
@@ -60,7 +60,7 @@
 	<Panel
 		title="Platform registry"
 		icon={ServerIcon}
-		description="An OCI registry Skiff runs for this install. Push with your Skiff API key; deploys pin the digest."
+		description="An OCI registry Yoal runs for this install. Push with your Yoal API key; deploys pin the digest."
 	>
 		{#snippet actions()}
 			{#if data.canAdminister}

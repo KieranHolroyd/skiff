@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseActionManifest } from '@skiff/contracts';
+import { parseActionManifest } from '@yoal/contracts';
 import {
 	ActionResolver,
 	actionCacheDir,
@@ -14,7 +14,7 @@ import {
 	stateEnv,
 } from './remote-actions.ts';
 
-const root = mkdtempSync(join(tmpdir(), 'skiff-remote-actions-'));
+const root = mkdtempSync(join(tmpdir(), 'yoal-remote-actions-'));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 let counter = 0;
 

@@ -10,7 +10,7 @@
 ## Goal
 
 Make it easy to move data in and out: import a Postgres dump, sync an S3 bucket, export a project
-as a `skiff.yaml` plus data, and document a tested exit path. Portability is a trust feature, not
+as a `yoal.yaml` plus data, and document a tested exit path. Portability is a trust feature, not
 an afterthought.
 
 ## Non-goals
@@ -24,20 +24,20 @@ an afterthought.
 
 - Restore creates a new database from an artifact (01); there is no arbitrary dump import or
   object sync.
-- `skif` has no import/export commands.
-- `skiff.yaml` can describe a stack (11); no bundle format.
+- `yoal` has no import/export commands.
+- `yoal.yaml` can describe a stack (11); no bundle format.
 - Zeabur's shutdown and the general vendor-risk argument make export a differentiator.
 
 ## Design
 
 ### Database import/export
 
-- `skif db import <file|s3-url> --database <name> [--format dump|csv] [--dry-run]`
+- `yoal db import <file|s3-url> --database <name> [--format dump|csv] [--dry-run]`
   - Stream the file to the node; `pg_restore` or `psql` into a **new** database by default.
   - `--dry-run` validates the dump header and lists objects without applying.
   - Reject a dump whose database name does not match unless `--remap`.
   - For CSV: `--table <name> --columns ...`; use `COPY`, not a shell.
-- `skif db export <name> [--format dump|sql|parquet?] --out <file|s3-url>`
+- `yoal db export <name> [--format dump|sql|parquet?] --out <file|s3-url>`
   - `pg_dump -Fc` streamed to stdout or a presigned URL.
   - `--schema-only`, `--data-only`, `--table`.
 - REST: `POST /databases/:name/import`, `POST /databases/:name/export`.
@@ -46,27 +46,27 @@ an afterthought.
 
 ### Object storage sync
 
-- `skif storage sync <source> <destination>` using an S3 client:
-  - Source/destination can be a Skiff storage instance (bucket/prefix), an external S3 endpoint, or
+- `yoal storage sync <source> <destination>` using an S3 client:
+  - Source/destination can be a Yoal storage instance (bucket/prefix), an external S3 endpoint, or
     a local directory.
   - `--delete` is opt-in; default copy only.
   - `--dry-run` lists changes; `--include/--exclude` globs.
   - Preserve metadata/key; multipart for large objects.
-- `skif storage export <instance>/<bucket> --out <dir|s3-url>`.
+- `yoal storage export <instance>/<bucket> --out <dir|s3-url>`.
 - REST/MCP equivalents; stream, never buffer.
-- For a Skiff instance, use a scoped key or the root key with an audited operation; prefer a
+- For a Yoal instance, use a scoped key or the root key with an audited operation; prefer a
   temporary key.
 
 ### Project bundle
 
-- `skif export <project> --out project.tar.gz`:
-  - `skiff.yaml` (blueprint, no secrets), release artifacts or a pointer, database dump(s), object
+- `yoal export <project> --out project.tar.gz`:
+  - `yoal.yaml` (blueprint, no secrets), release artifacts or a pointer, database dump(s), object
     manifest, job definitions, domain list, env **names**.
   - `manifest.json` with versions, checksums, and a `secrets` section listing names only.
-- `skif import <bundle>`:
+- `yoal import <bundle>`:
   - Validate manifest/checksums, create a new project, apply the blueprint, restore dumps, sync
     objects, prompt for secrets (never include them), and leave the source untouched.
-- This is the "leave Skiff" path; document it and test it in CI.
+- This is the "leave Yoal" path; document it and test it in CI.
 
 ### Safety
 
@@ -88,11 +88,11 @@ an afterthought.
 
 ## Acceptance criteria
 
-- [ ] `skif db export` streams a 1 GB dump to a file/S3 without buffering in the control plane.
-- [ ] `skif db import` creates a new database and verifies row counts; the source is untouched.
-- [ ] `skif storage sync` copies a bucket to local/S3, supports `--dry-run`, and `--delete` is opt-in.
-- [ ] `skif export` produces a bundle with a manifest/checksums but no secret values.
-- [ ] `skif import` recreates the stack and prompts for secrets; a checksum mismatch fails safely.
+- [ ] `yoal db export` streams a 1 GB dump to a file/S3 without buffering in the control plane.
+- [ ] `yoal db import` creates a new database and verifies row counts; the source is untouched.
+- [ ] `yoal storage sync` copies a bucket to local/S3, supports `--dry-run`, and `--delete` is opt-in.
+- [ ] `yoal export` produces a bundle with a manifest/checksums but no secret values.
+- [ ] `yoal import` recreates the stack and prompts for secrets; a checksum mismatch fails safely.
 - [ ] A CI test exports and imports a fixture project end-to-end.
 - [ ] No import overwrites an existing resource without typed confirmation.
 
@@ -115,14 +115,14 @@ an afterthought.
 
 ## Rollout
 
-Export/sync (read-only) first; import behind `SKIFF_FEATURE_IMPORT`. Document the exit path in
+Export/sync (read-only) first; import behind `YOAL_FEATURE_IMPORT`. Document the exit path in
 `docs/PORTABILITY.md` and test it every release.
 
 ## Open questions
 
 - Do we support a full project bundle import in v1, or only DB/storage? Start with DB/storage, then
   the bundle.
-- Should `skif export` include release artifacts? Include a pointer and optionally the files; a
+- Should `yoal export` include release artifacts? Include a pointer and optionally the files; a
   bundle with artifacts is large.
 - Do we need Parquet export for analytics? Not in v1.
 

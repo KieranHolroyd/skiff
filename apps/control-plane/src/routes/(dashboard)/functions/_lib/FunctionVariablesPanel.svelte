@@ -1,6 +1,6 @@
 <script lang="ts">
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
@@ -8,8 +8,8 @@
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as Table from '#lib/components/ui/table/index.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import type { ProjectView, SecretView } from '@skiff/core';
-	import type { FunctionView } from '@skiff/contracts';
+	import type { ProjectView, SecretView } from '@yoal/core';
+	import type { FunctionView } from '@yoal/contracts';
 	import BracesIcon from '@lucide/svelte/icons/braces';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import PlusIcon from '@lucide/svelte/icons/plus';
@@ -102,7 +102,7 @@
 			</Card.Title>
 			<Card.Description>
 				Values are write-only and reach the host only at activation. Bind one in
-				<code class="font-mono text-xs">skiff-function.json</code> with
+				<code class="font-mono text-xs">yoal-function.json</code> with
 				<code class="font-mono text-xs">{'{ "name": "API_KEY", "type": "secret" }'}</code>; add
 				<code class="font-mono text-xs">"secret"</code> to read a differently named store entry.
 			</Card.Description>

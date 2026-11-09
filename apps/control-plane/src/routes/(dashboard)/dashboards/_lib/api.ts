@@ -6,7 +6,7 @@ import type {
 	ObservabilityQueryRequest,
 	ObservabilitySchema,
 	QueryResult
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { fetchJson } from '#lib/query.js';
 
 /**

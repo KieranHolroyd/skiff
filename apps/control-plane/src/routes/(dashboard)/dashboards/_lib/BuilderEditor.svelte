@@ -11,7 +11,7 @@
 		type MetricAggregation,
 		type ObservabilityDataset,
 		type ObservabilitySchema
-	} from '@skiff/contracts';
+	} from '@yoal/contracts';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import XIcon from '@lucide/svelte/icons/x';
 	import { Badge } from '#lib/components/ui/badge/index.js';

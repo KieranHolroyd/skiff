@@ -6,14 +6,14 @@ import { databaseRestoreSchema } from './database-backup.ts';
  * Point-in-time recovery for managed databases (docs/PITR.md).
  *
  * The data path is pgBackRest on the database's node. A PITR-enabled Postgres 18 database runs the
- * Skiff-built `skiff-postgres-pitr` image (`postgresPitrImage`), whose `archive_command` pushes WAL
+ * Yoal-built `yoal-postgres-pitr` image (`postgresPitrImage`), whose `archive_command` pushes WAL
  * to an S3-compatible repository; weekly full / daily differential base backups and the status
  * check run inside that container, and a restore runs one-shot containers of the same image.
  * Restores always create a NEW database; in-place is out of scope.
  *
  * Repository credentials never enter desired state or a view. The agent fetches them from the
  * node-authenticated activation endpoint; the helper writes the pgBackRest config as 0400 files
- * under `/run/skiff-workloads/<id>/pgbackrest/`.
+ * under `/run/yoal-workloads/<id>/pgbackrest/`.
  */
 
 export const DATABASE_PITR_FORMAT = 'pgbackrest' as const;

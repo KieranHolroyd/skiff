@@ -1,10 +1,10 @@
 /**
- * `skif workflow run --local` (docs/PIPELINES.md §8, WP4): run a workflow's jobs on this machine
+ * `yoal workflow run --local` (docs/PIPELINES.md §8, WP4): run a workflow's jobs on this machine
  * with the builder's own step runner, without a control plane. A Bun.serve on 127.0.0.1 plays the
- * job API (`/api/pipeline/*`) in memory; artifacts and caches live under `.skiff/local/`.
+ * job API (`/api/pipeline/*`) in memory; artifacts and caches live under `.yoal/local/`.
  *
  * Steps run directly on this machine (no job container, no services); `container:`, `services:`,
- * environments' approvals and `skiff/deploy` need a real control plane and are reported, not faked.
+ * environments' approvals and `yoal/deploy` need a real control plane and are reported, not faked.
  * Loaded lazily (and only under Bun): it pulls in the step runner and the workflow parser.
  */
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
@@ -44,7 +44,7 @@ export interface LocalRunOptions {
 	vars?: Record<string, string>;
 	/** `--matrix key=value`: run only the combinations that match. */
 	matrix?: Record<string, string>;
-	/** `skiff.event_name` (default `workflow_dispatch`). */
+	/** `yoal.event_name` (default `workflow_dispatch`). */
 	event?: string;
 	/** Repository root; the workspace unless `copy`. */
 	cwd: string;
@@ -88,7 +88,7 @@ function repositoryName(cwd: string): string {
 
 export async function loadWorkflow(file: string, cwd: string): Promise<PipelineWorkflow> {
 	const yaml = (globalThis as { Bun?: { YAML?: { parse(text: string): unknown } } }).Bun?.YAML;
-	if (!yaml) throw new CliError('skif workflow run --local needs the Bun runtime. Run it with bun, or use the standalone skif binary.');
+	if (!yaml) throw new CliError('yoal workflow run --local needs the Bun runtime. Run it with bun, or use the standalone yoal binary.');
 	let text: string;
 	try {
 		text = await readFile(file, 'utf8');
@@ -247,8 +247,8 @@ class LocalJobApiServer {
 			await writeFile(join(this.dirs.caches, 'index.json'), JSON.stringify(index, null, 2));
 			return json({ ok: true });
 		}
-		if (path.startsWith('/api/pipeline/deploy')) return json({ error: 'skiff/deploy needs a control plane; it does not run with --local' }, 501);
-		if (path === '/api/pipeline/oidc-token') return json({ error: 'skiff/oidc-token needs a control plane; it does not run with --local' }, 501);
+		if (path.startsWith('/api/pipeline/deploy')) return json({ error: 'yoal/deploy needs a control plane; it does not run with --local' }, 501);
+		if (path === '/api/pipeline/oidc-token') return json({ error: 'yoal/oidc-token needs a control plane; it does not run with --local' }, 501);
 		return json({ error: `not available locally: ${path}` }, 404);
 	}
 
@@ -268,7 +268,7 @@ export async function runLocalWorkflow(options: LocalRunOptions): Promise<LocalR
 	const root = resolve(options.cwd);
 	const workflow = await loadWorkflow(resolve(root, options.file), root);
 	const runId = `local-${new Date().toISOString().replace(/[-:]/g, '').replace(/\..*/, '')}-${randomBytes(2).toString('hex')}`;
-	const localDir = join(root, '.skiff', 'local');
+	const localDir = join(root, '.yoal', 'local');
 	const runDir = join(localDir, 'runs', runId);
 	const dirs = { artifacts: join(runDir, 'artifacts'), caches: join(localDir, 'caches') };
 	await mkdir(dirs.artifacts, { recursive: true });
@@ -277,7 +277,7 @@ export async function runLocalWorkflow(options: LocalRunOptions): Promise<LocalR
 	let workspace = root;
 	if (options.copy) {
 		workspace = join(runDir, 'workspace');
-		const skip = join(root, '.skiff', 'local');
+		const skip = join(root, '.yoal', 'local');
 		await cp(root, workspace, { recursive: true, filter: (source) => source !== skip && !source.startsWith(`${skip}/`) });
 		print(`Copied ${root} to ${workspace}`);
 	}
@@ -300,7 +300,7 @@ export async function runLocalWorkflow(options: LocalRunOptions): Promise<LocalR
 	const secrets = options.secrets ?? {};
 	const server = new LocalJobApiServer(dirs, secrets, print);
 	server.start();
-	const skiff: Record<string, unknown> = {
+	const yoal: Record<string, unknown> = {
 		sha,
 		ref,
 		ref_name: ref.replace(/^refs\/(heads|tags)\//, ''),
@@ -352,7 +352,7 @@ export async function runLocalWorkflow(options: LocalRunOptions): Promise<LocalR
 			const spec = workflow.jobs[key]!;
 			const needs: Record<string, PipelineNeedsContext> = {};
 			for (const need of spec.needs) needs[need] = needsResults[need] ?? { result: 'success', outputs: {} };
-			const base = { skiff, inputs, vars: options.vars ?? {}, needs };
+			const base = { yoal, inputs, vars: options.vars ?? {}, needs };
 			const finish = (conclusion: LocalJobResult['conclusion'], name = spec.name, outputs: Record<string, string> = {}) => {
 				results.push({ key, name, conclusion, outputs });
 				needsResults[key] = { result: conclusion === 'success' ? 'success' : conclusion === 'skipped' ? 'skipped' : conclusion === 'cancelled' ? 'cancelled' : 'failure', outputs };
@@ -436,7 +436,7 @@ export async function runLocalWorkflow(options: LocalRunOptions): Promise<LocalR
 					job: resolved,
 					workflowEnv: workflow.env,
 					workflowDefaults: workflow.defaults,
-					context: { ...context, skiff: { ...skiff, job: key } },
+					context: { ...context, yoal: { ...yoal, job: key } },
 					secretNames: Object.keys(secrets),
 					trust: 'trusted',
 					image: '',

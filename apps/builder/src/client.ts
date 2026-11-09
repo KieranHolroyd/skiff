@@ -1,4 +1,4 @@
-import type { BuildJob, BuildLogChunk, BuildReport } from '@skiff/contracts';
+import type { BuildJob, BuildLogChunk, BuildReport } from '@yoal/contracts';
 
 export class ControlError extends Error {
 	constructor(

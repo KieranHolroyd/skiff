@@ -3,7 +3,7 @@
  * workspace. Tree paths look like `['0']` (keyspace), `['0', 'user:', 'user:1:']` (key groups,
  * each segment the full prefix) and `[..., 'user:1:name']` (a key, the full key name last).
  */
-import type { Cell, Column, ObjectRef, TreeNode } from '@skiff/studio/protocol';
+import type { Cell, Column, ObjectRef, TreeNode } from '@yoal/studio/protocol';
 import { formatTtl, ttlFromCell } from './ttl.js';
 
 /** Escape a literal for a SCAN MATCH glob (the plugin's `globEscape`). */

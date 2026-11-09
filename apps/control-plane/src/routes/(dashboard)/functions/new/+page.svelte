@@ -4,8 +4,8 @@
 	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
 	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
 	import ZapIcon from '@lucide/svelte/icons/zap';
-	import { WORKERD_MAX_COMPATIBILITY_DATE, WORKERD_PINNED_VERSION } from '@skiff/contracts';
-	import FormFeedback from '#lib/components/skiff/FormFeedback.svelte';
+	import { WORKERD_MAX_COMPATIBILITY_DATE, WORKERD_PINNED_VERSION } from '@yoal/contracts';
+	import FormFeedback from '#lib/components/yoal/FormFeedback.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
@@ -55,7 +55,7 @@
 	]);
 
 	const features = [
-		'Runs ordinary Workers code on workerd, the same runtime skif wrangler dev uses locally',
+		'Runs ordinary Workers code on workerd, the same runtime yoal wrangler dev uses locally',
 		'KV, D1, Durable Objects, queues, cache, R2, Hyperdrive and Analytics Engine bindings',
 		'Cron triggers fired from the node, and invocation logs for every request',
 		'Scales to zero when idle; stateless functions can run several replicas',
@@ -65,12 +65,12 @@
 
 	const quickstart = `npm create cloudflare@latest my-function -- --type hello-world
 cd my-function
-skif wrangler dev      # same runtime, locally
-skif deploy            # creates the function if it does not exist`;
+yoal wrangler dev      # same runtime, locally
+yoal deploy            # creates the function if it does not exist`;
 </script>
 
 <svelte:head>
-	<title>Create a function · Skiff</title>
+	<title>Create a function · Yoal</title>
 </svelte:head>
 
 <div class="mx-auto max-w-6xl space-y-6">
@@ -92,7 +92,7 @@ skif deploy            # creates the function if it does not exist`;
 				<p class="max-w-2xl text-sm text-muted-foreground">
 					A Workers-compatible function with its own URL, deployments and secrets. Create it here to
 					choose placement and access first, or just run <code class="font-mono text-xs"
-						>skif deploy</code
+						>yoal deploy</code
 					>
 					in a Wrangler project and it is created for you.
 				</p>

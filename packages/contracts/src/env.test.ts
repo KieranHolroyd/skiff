@@ -162,7 +162,7 @@ describe('parseEnvFile', () => {
 			'# comment',
 			'',
 			'export PORT=3000',
-			'NAME = skiff ',
+			'NAME = yoal ',
 			'URL=https://example.com/#anchor # trailing comment',
 			"SINGLE='keep $HOME \\n literal'",
 			'DOUBLE="line one\\nline \\"two\\""',
@@ -174,7 +174,7 @@ describe('parseEnvFile', () => {
 		].join('\n');
 		const parsed = parseEnvFile(text);
 		expect(parsed.entries).toEqual([
-			{ key: 'NAME', value: 'skiff' },
+			{ key: 'NAME', value: 'yoal' },
 			{ key: 'URL', value: 'https://example.com/#anchor' },
 			{ key: 'SINGLE', value: 'keep $HOME \\n literal' },
 			{ key: 'DOUBLE', value: 'line one\nline "two"' },

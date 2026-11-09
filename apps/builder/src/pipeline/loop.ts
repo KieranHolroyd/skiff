@@ -33,10 +33,10 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 	});
 }
 
-/** How often `auto` asks skiff-helper again while it chose `sandbox` (the helper may start later). */
+/** How often `auto` asks yoal-helper again while it chose `sandbox` (the helper may start later). */
 const ISOLATION_REPROBE_MS = 5 * 60_000;
 
-/** Ask skiff-helper what it can do and pick the effective isolation (`chooseIsolation`). */
+/** Ask yoal-helper what it can do and pick the effective isolation (`chooseIsolation`). */
 export async function probeIsolation(config: BuilderConfig, helper: PipelineHelper): Promise<IsolationChoice> {
 	if (config.pipelineIsolationMode === 'sandbox' || config.pipelineContainerDriver === 'podman')
 		return chooseIsolation({ mode: config.pipelineIsolationMode, driver: config.pipelineContainerDriver, buildDir: config.buildDir, caps: null, probe: hostProbe });
@@ -50,7 +50,7 @@ export async function probeIsolation(config: BuilderConfig, helper: PipelineHelp
 
 export async function runPipelineLoop(config: BuilderConfig, signal: AbortSignal): Promise<void> {
 	if (!config.pipelinesEnabled) {
-		log('disabled (SKIFF_PIPELINES=false)');
+		log('disabled (YOAL_PIPELINES=false)');
 		return;
 	}
 	const client = new PipelineNodeClient(config.controlUrl, config.nodeToken);

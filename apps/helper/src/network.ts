@@ -7,7 +7,7 @@ import { defaultRunner, type CommandRunner } from './wireguard.ts';
  *
  * The helper owns one small firewall policy: the underlay WireGuard port and only the overlay
  * ports a node actually serves. It prefers the host's existing manager (ufw or firewalld) when one
- * is active, and otherwise writes a dedicated `inet skiff` nftables table. It never edits the
+ * is active, and otherwise writes a dedicated `inet yoal` nftables table. It never edits the
  * host's own filter table.
  */
 
@@ -44,7 +44,7 @@ export const DEFAULT_NETWORK_PATHS: NetworkPaths = {
 	nftPath: 'nft',
 	ufwPath: 'ufw',
 	firewallCmdPath: 'firewall-cmd',
-	configPath: '/etc/skiff/network/skiff.nft',
+	configPath: '/etc/yoal/network/yoal.nft',
 };
 
 export type FirewallBackend = 'ufw' | 'firewalld' | 'nftables' | 'none';
@@ -99,7 +99,7 @@ export class NetworkManager {
 		const accept = this.paths.overlayTcpPorts
 			.map((port) => `\t\tiifname "${this.paths.interface}" tcp dport ${portSpec(port, '-')} accept`)
 			.join('\n');
-		return `table inet skiff {
+		return `table inet yoal {
 \tchain input {
 \t\ttype filter hook input priority -10; policy accept;
 ${accept}

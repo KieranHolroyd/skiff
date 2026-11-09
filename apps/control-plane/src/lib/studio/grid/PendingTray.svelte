@@ -2,7 +2,7 @@
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import ListIcon from '@lucide/svelte/icons/list';
 	import Undo2Icon from '@lucide/svelte/icons/undo-2';
-	import type { Cell, RowChange } from '@skiff/studio/protocol';
+	import type { Cell, RowChange } from '@yoal/studio/protocol';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Dialog from '#lib/components/ui/dialog/index.js';

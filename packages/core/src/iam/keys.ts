@@ -1,7 +1,7 @@
 /**
  * The platform signing-key ring (docs/IAM.md I15, §4, §7.3).
  *
- * Every token Skiff mints is signed by one ring, keyed by purpose (`sts`, `registry`, `oidc`,
+ * Every token Yoal mints is signed by one ring, keyed by purpose (`sts`, `registry`, `oidc`,
  * `workload`, `pool:<id>`), so there is one issuer and one public JWKS. Keys are ES256 (P-256)
  * generated with WebCrypto (or Node crypto on the synchronous path), and only the public JWK is
  * stored in the clear: the private JWK is sealed with the platform master key (the same `encrypt`
@@ -33,7 +33,7 @@
  */
 import type { Database } from 'bun:sqlite';
 import { createHash, createPrivateKey, sign as cryptoSign, generateKeyPairSync } from 'node:crypto';
-import type { Principal } from '@skiff/contracts';
+import type { Principal } from '@yoal/contracts';
 import type { CoreContext } from '../context.ts';
 import { ValidationError } from '../errors.ts';
 import { decrypt, encrypt } from '../util.ts';

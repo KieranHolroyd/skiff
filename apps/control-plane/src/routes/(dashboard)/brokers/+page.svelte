@@ -1,5 +1,5 @@
 <script lang="ts">
-	import StorageSelect from '#lib/components/skiff/StorageSelect.svelte';
+	import StorageSelect from '#lib/components/yoal/StorageSelect.svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -13,11 +13,11 @@
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
 	import TrashIcon from '@lucide/svelte/icons/trash';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
-	import { brokerEnvNames } from '@skiff/contracts';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
-	import DataTable, { type DataColumn } from '#lib/components/skiff/DataTable.svelte';
+	import { brokerEnvNames } from '@yoal/contracts';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
+	import DataTable, { type DataColumn } from '#lib/components/yoal/DataTable.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
@@ -180,7 +180,7 @@
 </script>
 
 <svelte:head>
-	<title>{trashView ? 'Queue trash' : 'Queues'} · Skiff</title>
+	<title>{trashView ? 'Queue trash' : 'Queues'} · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">
@@ -200,7 +200,7 @@
 
 	{#if !data.enabled}
 		<Notice tone="warning" title="Queue brokers are switched off">
-			Set <code class="font-mono">SKIFF_FEATURE_BROKERS=1</code> to create new brokers. Existing ones keep
+			Set <code class="font-mono">YOAL_FEATURE_BROKERS=1</code> to create new brokers. Existing ones keep
 			running.
 		</Notice>
 	{/if}

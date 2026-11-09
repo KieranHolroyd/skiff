@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import type { AnalyticsEvent, FunctionTailEvent, MetricBucket } from '@skiff/contracts';
+import type { AnalyticsEvent, FunctionTailEvent, MetricBucket } from '@yoal/contracts';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -253,7 +253,7 @@ describe.skipIf(!hasClickHouse)('TelemetryStore', () => {
 	});
 
 	test('exports day-partitioned Parquet and uploads it to the object store', async () => {
-		const dir = await mkdtemp(join(tmpdir(), 'skiff-telemetry-'));
+		const dir = await mkdtemp(join(tmpdir(), 'yoal-telemetry-'));
 		const uploaded = new Map<string, Uint8Array>();
 		const objectStore: ObjectStore = {
 			kind: 'local',
@@ -308,10 +308,10 @@ describe.skipIf(!hasClickHouse)('TelemetryStore', () => {
 		]);
 
 		const text = await store.getPrometheusMetrics('a.test');
-		expect(text).toContain('# TYPE skiff_http_requests_total gauge');
-		expect(text).toContain('skiff_http_requests_total{host="a.test"} 10');
-		expect(text).toContain('skiff_http_errors_total{class="5xx"} 2');
-		expect(text).toContain('skiff_bytes_total 1500');
+		expect(text).toContain('# TYPE yoal_http_requests_total gauge');
+		expect(text).toContain('yoal_http_requests_total{host="a.test"} 10');
+		expect(text).toContain('yoal_http_errors_total{class="5xx"} 2');
+		expect(text).toContain('yoal_bytes_total 1500');
 		expect(text).not.toContain('host="b.test"');
 	});
 
@@ -490,7 +490,7 @@ describe('TelemetryStore without a server', () => {
 	test('falls back to a no-op store when ClickHouse is unreachable', async () => {
 		const errors: Error[] = [];
 		const store = new TelemetryStore({
-			clickhouse: { url: 'http://127.0.0.1:1', user: 'skiff', password: '', fetch: refused },
+			clickhouse: { url: 'http://127.0.0.1:1', user: 'yoal', password: '', fetch: refused },
 			onError: (error) => errors.push(error),
 		});
 
@@ -521,7 +521,7 @@ describe('TelemetryStore without a server', () => {
 			{ preconnect: () => undefined },
 		);
 		const store = new TelemetryStore({
-			clickhouse: { url: 'http://127.0.0.1:1', user: 'skiff', password: '', fetch: flaky },
+			clickhouse: { url: 'http://127.0.0.1:1', user: 'yoal', password: '', fetch: flaky },
 			now: () => now,
 			openRetryMs: 30_000,
 		});
@@ -548,7 +548,7 @@ describe('TelemetryStore without a server', () => {
 			{ preconnect: () => undefined },
 		);
 		const store = new TelemetryStore({
-			clickhouse: { url: 'http://127.0.0.1:1', user: 'skiff', password: '', fetch: fetcher },
+			clickhouse: { url: 'http://127.0.0.1:1', user: 'yoal', password: '', fetch: fetcher },
 			now: () => now,
 			openRetryMs: 30_000,
 		});
@@ -576,7 +576,7 @@ describe('TelemetryStore without a server', () => {
 			{ preconnect: () => undefined },
 		);
 		const store = new TelemetryStore({
-			clickhouse: { url: 'http://127.0.0.1:1', user: 'skiff', password: '', fetch: fetcher, timeoutMs: 50 },
+			clickhouse: { url: 'http://127.0.0.1:1', user: 'yoal', password: '', fetch: fetcher, timeoutMs: 50 },
 		});
 		expect(await store.ready()).toBe(true);
 
@@ -600,7 +600,7 @@ describe('TelemetryStore without a server', () => {
 			{ preconnect: () => undefined },
 		);
 		const disabled = new TelemetryStore({
-			clickhouse: { url: 'http://127.0.0.1:1', user: 'skiff', password: '', fetch: spy },
+			clickhouse: { url: 'http://127.0.0.1:1', user: 'yoal', password: '', fetch: spy },
 			disabledReason: 'standby',
 		});
 		await disabled.open();
@@ -650,7 +650,7 @@ function fakeClickHouse() {
 
 function makeStore(fake: ReturnType<typeof fakeClickHouse>): TelemetryStore {
 	return new TelemetryStore({
-		clickhouse: { url: 'http://clickhouse.test', user: 'skiff', password: 'secret', database: 'skiff', fetch: fake.fetch },
+		clickhouse: { url: 'http://clickhouse.test', user: 'yoal', password: 'secret', database: 'yoal', fetch: fake.fetch },
 		tableTtl: false,
 	});
 }
@@ -706,7 +706,7 @@ describe('TelemetryStore analytics ingestion (injected client)', () => {
 		]);
 
 		const insert = fake.calls.find(
-			(call) => call.query === 'INSERT INTO skiff.function_analytics FORMAT JSONEachRow',
+			(call) => call.query === 'INSERT INTO yoal.function_analytics FORMAT JSONEachRow',
 		);
 		expect(insert).toBeDefined();
 		const rows = insert!.body.split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
@@ -729,7 +729,7 @@ describe('TelemetryStore analytics ingestion (injected client)', () => {
 		await store.open();
 
 		await store.ingestAnalytics(Array.from({ length: 12_001 }, (_, index) => makeAnalyticsEvent(index)));
-		const inserts = fake.calls.filter((call) => call.query?.startsWith('INSERT INTO skiff.function_analytics'));
+		const inserts = fake.calls.filter((call) => call.query?.startsWith('INSERT INTO yoal.function_analytics'));
 		expect(inserts.map((call) => call.body.split('\n').length)).toEqual([5_000, 5_000, 2_001]);
 	});
 
@@ -820,7 +820,7 @@ describe('TelemetryStore tail ingestion (injected client)', () => {
 		]);
 
 		const insert = fake.calls.find(
-			(call) => call.query === 'INSERT INTO skiff.function_tail_events FORMAT JSONEachRow',
+			(call) => call.query === 'INSERT INTO yoal.function_tail_events FORMAT JSONEachRow',
 		);
 		expect(insert).toBeDefined();
 		const rows = insert!.body.split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
@@ -847,7 +847,7 @@ describe('TelemetryStore tail ingestion (injected client)', () => {
 		await store.open();
 
 		await store.ingestTails(Array.from({ length: 4_500 }, (_, index) => makeTailEvent(index)));
-		const inserts = fake.calls.filter((call) => call.query?.startsWith('INSERT INTO skiff.function_tail_events'));
+		const inserts = fake.calls.filter((call) => call.query?.startsWith('INSERT INTO yoal.function_tail_events'));
 		expect(inserts.map((call) => call.body.split('\n').length)).toEqual([2_000, 2_000, 500]);
 	});
 

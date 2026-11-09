@@ -4,7 +4,7 @@ import {
 	type FunctionModule,
 	type FunctionRuntimeBinding,
 	type WorkloadDesired,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import {
 	capnpText,
 	functionModuleEmbedNames,
@@ -13,7 +13,7 @@ import {
 } from './function-config.ts';
 
 const SHA = 'c'.repeat(64);
-const RELEASE_DIR = `/srv/skiff/releases/${SHA}`;
+const RELEASE_DIR = `/srv/yoal/releases/${SHA}`;
 
 interface WorkloadOptions {
 	main?: string;
@@ -34,11 +34,11 @@ function functionWorkload(options: WorkloadOptions = {}): WorkloadDesired {
 		runtime: 'function',
 		status: 'running',
 		release: SHA,
-		upstream: 'unix//run/skiff-workloads/prj_1.sock',
+		upstream: 'unix//run/yoal-workloads/prj_1.sock',
 		memoryMb: options.memoryMb ?? 128,
 		cpus: 1,
 		port: 3000,
-		healthPath: '/__skiff/health',
+		healthPath: '/__yoal/health',
 		socketActivation: true,
 		activationVersion: SHA,
 		function: {
@@ -181,7 +181,7 @@ describe('renderWorkerdConfig', () => {
 
 	test('renders the config envelope, the public-only egress and the http socket', () => {
 		const config = render(functionWorkload());
-		expect(config.startsWith('# Skiff function host for workload wl_1 (project api).\n')).toBe(true);
+		expect(config.startsWith('# Yoal function host for workload wl_1 (project api).\n')).toBe(true);
 		expect(config).toContain(`# Module sources are embedded as helper credentials from the release at ${RELEASE_DIR}.`);
 		expect(config).toContain('using Workerd = import "/workerd/workerd.capnp";');
 		expect(config).toContain('const config :Workerd.Config = (');
@@ -227,13 +227,13 @@ describe('renderWorkerdConfig', () => {
 
 	test('gives two app bindings with the same upstream one external service', () => {
 		const workload = withBindings([
-			{ name: 'SHOP', type: 'app', project: 'shop', upstream: 'unix//run/skiff-workloads/prj_shop.sock' },
-			{ name: 'SHOP_AGAIN', type: 'app', project: 'shop', upstream: 'unix:/run/skiff-workloads/prj_shop.sock' },
+			{ name: 'SHOP', type: 'app', project: 'shop', upstream: 'unix//run/yoal-workloads/prj_shop.sock' },
+			{ name: 'SHOP_AGAIN', type: 'app', project: 'shop', upstream: 'unix:/run/yoal-workloads/prj_shop.sock' },
 			{ name: 'WEB', type: 'app', project: 'web', upstream: 'http://127.0.0.1:4100' },
 		]);
 		const config = render(workload);
 		expect(externalLines(config)).toEqual([
-			'external = ( address = "unix:/run/skiff-workloads/prj_shop.sock", http = () ) ),',
+			'external = ( address = "unix:/run/yoal-workloads/prj_shop.sock", http = () ) ),',
 			'external = ( address = "127.0.0.1:4100", http = () ) ),',
 		]);
 		expect(config).toContain('( name = "app-0",');
@@ -247,10 +247,10 @@ describe('renderWorkerdConfig', () => {
 
 	test('converts Caddy unix and loopback upstreams to workerd addresses', () => {
 		const cases: [upstream: string, address: string][] = [
-			['unix//run/skiff-workloads/prj_a.sock', 'unix:/run/skiff-workloads/prj_a.sock'],
-			['unix://run/skiff-workloads/prj_b.sock', 'unix:/run/skiff-workloads/prj_b.sock'],
-			['unix:/run/skiff-workloads/prj_c.sock', 'unix:/run/skiff-workloads/prj_c.sock'],
-			['unix:///run/skiff-workloads/prj_d.sock', 'unix:/run/skiff-workloads/prj_d.sock'],
+			['unix//run/yoal-workloads/prj_a.sock', 'unix:/run/yoal-workloads/prj_a.sock'],
+			['unix://run/yoal-workloads/prj_b.sock', 'unix:/run/yoal-workloads/prj_b.sock'],
+			['unix:/run/yoal-workloads/prj_c.sock', 'unix:/run/yoal-workloads/prj_c.sock'],
+			['unix:///run/yoal-workloads/prj_d.sock', 'unix:/run/yoal-workloads/prj_d.sock'],
 			['http://127.0.0.1:3000', '127.0.0.1:3000'],
 			['https://127.0.0.1:3443/', '127.0.0.1:3443'],
 			['127.0.0.1:8080', '127.0.0.1:8080'],
@@ -330,7 +330,7 @@ describe('renderWorkerdConfig', () => {
 
 	test('refuses an unknown binding type', () => {
 		expect(() => render(withBindings([{ name: 'MYSTERY', type: 'teleporter' }]))).toThrow(
-			/which has no node renderer in this Skiff build yet/,
+			/which has no node renderer in this Yoal build yet/,
 		);
 	});
 
@@ -361,7 +361,7 @@ describe('renderWorkerdConfig', () => {
 			status: 'running',
 			release: SHA,
 			command: ['bun', 'run', 'start'],
-			upstream: 'unix//run/skiff-workloads/prj_2.sock',
+			upstream: 'unix//run/yoal-workloads/prj_2.sock',
 			memoryMb: 256,
 			cpus: 1,
 			port: 3000,
@@ -380,7 +380,7 @@ describe('renderWorkerdConfig', () => {
 	test('is deterministic', () => {
 		const bindings = [
 			{ name: 'GREETING', type: 'text', value: 'hello' },
-			{ name: 'SHOP', type: 'app', project: 'shop', upstream: 'unix//run/skiff-workloads/prj_shop.sock' },
+			{ name: 'SHOP', type: 'app', project: 'shop', upstream: 'unix//run/yoal-workloads/prj_shop.sock' },
 		];
 		// Two independently built workloads: no clock, no randomness, no module-level state.
 		const first = render(withBindings(bindings));
@@ -399,10 +399,10 @@ describe('renderWorkerdConfig', () => {
 				{ name: 'GREETING', type: 'text', value: 'hello world' },
 				{ name: 'API_KEY', type: 'secret' },
 				{ name: 'ADMIN', type: 'service', entrypoint: 'admin' },
-				{ name: 'SHOP', type: 'app', project: 'shop', upstream: 'unix//run/skiff-workloads/prj_shop.sock' },
+				{ name: 'SHOP', type: 'app', project: 'shop', upstream: 'unix//run/yoal-workloads/prj_shop.sock' },
 			],
 		});
-		expect(render(workload)).toBe(`# Skiff function host for workload wl_1 (project api).
+		expect(render(workload)).toBe(`# Yoal function host for workload wl_1 (project api).
 # Rendered by the agent from desired state on every apply; local edits are overwritten.
 # Module sources are embedded as helper credentials from the release at ${RELEASE_DIR}.
 
@@ -415,7 +415,7 @@ const config :Workerd.Config = (
     ( name = "internet",
       network = ( allow = ["public"], deny = ["private"] ) ),
     ( name = "app-0",
-      external = ( address = "unix:/run/skiff-workloads/prj_shop.sock", http = () ) ),
+      external = ( address = "unix:/run/yoal-workloads/prj_shop.sock", http = () ) ),
     ( name = "tail-api",
       worker = (
         modules = [
@@ -773,9 +773,9 @@ describe('phase-2 KV and Cache services', () => {
  * Parse every rendered shape with the real workerd (`workerd compile`). String assertions above
  * cannot catch Cap'n Proto syntax errors: a missing `;` or field comma made every function host
  * fail to start in production while all of them passed. Runs when a workerd binary is available
- * (`SKIFF_TEST_WORKERD=/path/to/workerd`, or `workerd` on PATH) and is skipped otherwise.
+ * (`YOAL_TEST_WORKERD=/path/to/workerd`, or `workerd` on PATH) and is skipped otherwise.
  */
-const WORKERD_BIN = process.env.SKIFF_TEST_WORKERD || Bun.which('workerd');
+const WORKERD_BIN = process.env.YOAL_TEST_WORKERD || Bun.which('workerd');
 
 describe.skipIf(!WORKERD_BIN)('rendered configs compile with workerd', () => {
 	const allBindings = [
@@ -783,7 +783,7 @@ describe.skipIf(!WORKERD_BIN)('rendered configs compile with workerd', () => {
 		{ name: 'CONF', type: 'json', value: { a: 1 } },
 		{ name: 'API_KEY', type: 'secret' },
 		{ name: 'ADMIN', type: 'service', entrypoint: 'admin' },
-		{ name: 'SHOP', type: 'app', project: 'shop', upstream: 'unix//run/skiff-workloads/prj_shop.sock' },
+		{ name: 'SHOP', type: 'app', project: 'shop', upstream: 'unix//run/yoal-workloads/prj_shop.sock' },
 		{ name: 'ROOMS', type: 'durable_object', className: 'Room', uniqueKey: 'prj_1-ROOMS' },
 		{ name: 'DB', type: 'hyperdrive', database: 'app-db', envPrefix: 'DATABASE' },
 		{ name: 'KV', type: 'kv', namespaceId: 'prj_1-KV' },
@@ -810,7 +810,7 @@ describe.skipIf(!WORKERD_BIN)('rendered configs compile with workerd', () => {
 		const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises');
 		const { tmpdir } = await import('node:os');
 		const { join } = await import('node:path');
-		const dir = await mkdtemp(join(tmpdir(), 'skiff-workerd-'));
+		const dir = await mkdtemp(join(tmpdir(), 'yoal-workerd-'));
 		try {
 			const releaseDir = join(dir, 'release');
 			await mkdir(join(releaseDir, 'public'), { recursive: true });

@@ -10,7 +10,7 @@ import {
 	type MetricsSection,
 	type Permission,
 	type Principal,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { DB_COUNTERS } from './database-metrics-sql.ts';
 import { CoreError, ForbiddenError, NotFoundError, UnauthorizedError, ValidationError } from './errors.ts';
@@ -206,8 +206,8 @@ export class MetricsExporter {
 		if (wants('brokers')) this.#brokerSeries(brokerRows, samples, out);
 
 		if (needsTelemetry)
-			out.gauge('skiff_telemetry_up', 'Whether the ClickHouse telemetry store answered this scrape (1 = up).', {}, telemetryUp ? 1 : 0);
-		out.gauge('skiff_scrape_duration_seconds', 'Time the control plane spent rendering this scrape.', {}, (performance.now() - started) / 1000);
+			out.gauge('yoal_telemetry_up', 'Whether the ClickHouse telemetry store answered this scrape (1 = up).', {}, telemetryUp ? 1 : 0);
+		out.gauge('yoal_scrape_duration_seconds', 'Time the control plane spent rendering this scrape.', {}, (performance.now() - started) / 1000);
 		return out.render();
 	}
 
@@ -226,7 +226,7 @@ export class MetricsExporter {
 			.all(orgId, settings.maxApps + 1);
 		const truncated = rows.length > settings.maxApps;
 		out.gauge(
-			'skiff_scrape_truncated',
+			'yoal_scrape_truncated',
 			'1 when this scrape left apps out (Settings → Metrics → max apps); scrape /metrics/apps/<slug> for the rest.',
 			{ section: 'apps' },
 			truncated ? 1 : 0,
@@ -239,9 +239,9 @@ export class MetricsExporter {
 		for (const key of quotaUsageMetricKeys) {
 			const metric = view.metrics[key];
 			const labels = { metric: key, unit: metric.unit };
-			out.gauge('skiff_quota_used', 'Current usage per quota metric (egress: 30-day sum).', labels, metric.used);
-			if (metric.limit >= 0) out.gauge('skiff_quota_limit', 'Quota limit per metric; absent when unlimited.', labels, metric.limit);
-			if (metric.percent !== null) out.gauge('skiff_quota_used_ratio', 'Usage as a share of the limit (0–1+).', { metric: key }, metric.percent / 100);
+			out.gauge('yoal_quota_used', 'Current usage per quota metric (egress: 30-day sum).', labels, metric.used);
+			if (metric.limit >= 0) out.gauge('yoal_quota_limit', 'Quota limit per metric; absent when unlimited.', labels, metric.limit);
+			if (metric.percent !== null) out.gauge('yoal_quota_used_ratio', 'Usage as a share of the limit (0–1+).', { metric: key }, metric.percent / 100);
 		}
 	}
 
@@ -258,8 +258,8 @@ export class MetricsExporter {
 			.all(...ids);
 		for (const row of info) {
 			const project = slugOf.get(row.id)!;
-			out.gauge('skiff_project_info', 'One series per app, carrying its name and runtime.', { project, name: row.name, runtime: row.runtime, placement: row.placement }, 1);
-			out.gauge('skiff_project_created_timestamp_seconds', 'When the app was created.', { project }, row.created_at / 1000);
+			out.gauge('yoal_project_info', 'One series per app, carrying its name and runtime.', { project, name: row.name, runtime: row.runtime, placement: row.placement }, 1);
+			out.gauge('yoal_project_created_timestamp_seconds', 'When the app was created.', { project }, row.created_at / 1000);
 		}
 
 		const deployments = this.ctx.sqlite
@@ -271,11 +271,11 @@ export class MetricsExporter {
 		const lastDeploy = new Map<string, number>();
 		for (const row of deployments) {
 			const project = slugOf.get(row.project_id)!;
-			out.gauge('skiff_project_deployments', 'Deployments per app and status (deleted excluded).', { project, status: row.status }, row.n);
+			out.gauge('yoal_project_deployments', 'Deployments per app and status (deleted excluded).', { project, status: row.status }, row.n);
 			lastDeploy.set(row.project_id, Math.max(lastDeploy.get(row.project_id) ?? 0, row.last));
 		}
 		for (const [id, at] of lastDeploy)
-			out.gauge('skiff_project_last_deploy_timestamp_seconds', 'When the app last received a deployment.', { project: slugOf.get(id)! }, at / 1000);
+			out.gauge('yoal_project_last_deploy_timestamp_seconds', 'When the app last received a deployment.', { project: slugOf.get(id)! }, at / 1000);
 
 		const releaseBytes = this.ctx.sqlite
 			.query<{ project_id: string; bytes: number }, string[]>(
@@ -285,7 +285,7 @@ export class MetricsExporter {
 			)
 			.all(...ids);
 		for (const row of releaseBytes)
-			out.gauge('skiff_project_release_bytes', 'Bytes of release artifacts retained by the app’s deployments.', { project: slugOf.get(row.project_id)! }, row.bytes);
+			out.gauge('yoal_project_release_bytes', 'Bytes of release artifacts retained by the app’s deployments.', { project: slugOf.get(row.project_id)! }, row.bytes);
 
 		const since = this.ctx.now() - DAY_MS;
 		const builds = this.ctx.sqlite
@@ -297,9 +297,9 @@ export class MetricsExporter {
 			.all(orgId, since, ...ids);
 		for (const row of builds) {
 			const project = slugOf.get(row.project_id)!;
-			out.gauge('skiff_project_builds_24h', 'Git builds started in the last 24 hours, per status.', { project, status: row.status }, row.n);
+			out.gauge('yoal_project_builds_24h', 'Git builds started in the last 24 hours, per status.', { project, status: row.status }, row.n);
 			if (row.avg_ms !== null)
-				out.gauge('skiff_project_build_duration_seconds_avg_24h', 'Mean build time over the last 24 hours, per status.', { project, status: row.status }, row.avg_ms / 1000);
+				out.gauge('yoal_project_build_duration_seconds_avg_24h', 'Mean build time over the last 24 hours, per status.', { project, status: row.status }, row.avg_ms / 1000);
 		}
 
 		const workloads = this.ctx.sqlite
@@ -309,9 +309,9 @@ export class MetricsExporter {
 			.all(...ids);
 		for (const row of workloads) {
 			const project = slugOf.get(row.project_id)!;
-			out.gauge('skiff_project_workload_up', '1 while the app’s process/container workload is running.', { project, runtime: row.runtime }, row.status === 'running' ? 1 : 0);
-			out.gauge('skiff_project_workload_memory_limit_bytes', 'Memory reserved for the app’s workload.', { project }, row.memory_mb * MIB);
-			out.gauge('skiff_project_workload_cpu_limit', 'CPUs reserved for the app’s workload.', { project }, row.cpus);
+			out.gauge('yoal_project_workload_up', '1 while the app’s process/container workload is running.', { project, runtime: row.runtime }, row.status === 'running' ? 1 : 0);
+			out.gauge('yoal_project_workload_memory_limit_bytes', 'Memory reserved for the app’s workload.', { project }, row.memory_mb * MIB);
+			out.gauge('yoal_project_workload_cpu_limit', 'CPUs reserved for the app’s workload.', { project }, row.cpus);
 		}
 
 		const domains = this.ctx.sqlite
@@ -320,7 +320,7 @@ export class MetricsExporter {
 			)
 			.all(...ids);
 		for (const row of domains)
-			out.gauge('skiff_project_domains', 'Custom domains per app and status.', { project: slugOf.get(row.project_id)!, status: row.status }, row.n);
+			out.gauge('yoal_project_domains', 'Custom domains per app and status.', { project: slugOf.get(row.project_id)!, status: row.status }, row.n);
 	}
 
 	#traffic(projects: ProjectRef[], samples: ScrapeSamples, out: Exposition): void {
@@ -329,13 +329,13 @@ export class MetricsExporter {
 		for (const row of samples.traffic) {
 			const project = slugOf.get(row.projectId);
 			if (!project) continue;
-			out.gauge('skiff_project_http_requests_1h', help, { project, status_class: '2xx' }, row.status2xx);
-			out.gauge('skiff_project_http_requests_1h', help, { project, status_class: '3xx' }, row.status3xx);
-			out.gauge('skiff_project_http_requests_1h', help, { project, status_class: '4xx' }, row.status4xx);
-			out.gauge('skiff_project_http_requests_1h', help, { project, status_class: '5xx' }, row.status5xx);
-			out.gauge('skiff_project_http_response_bytes_1h', 'Response bytes served in the last hour (egress).', { project }, row.bytes);
-			out.gauge('skiff_project_http_duration_p50_ms_1h', 'Request-weighted median latency over the last hour, ms.', { project }, row.durationP50Ms);
-			out.gauge('skiff_project_http_duration_p95_ms_1h', 'Request-weighted p95 latency over the last hour, ms.', { project }, row.durationP95Ms);
+			out.gauge('yoal_project_http_requests_1h', help, { project, status_class: '2xx' }, row.status2xx);
+			out.gauge('yoal_project_http_requests_1h', help, { project, status_class: '3xx' }, row.status3xx);
+			out.gauge('yoal_project_http_requests_1h', help, { project, status_class: '4xx' }, row.status4xx);
+			out.gauge('yoal_project_http_requests_1h', help, { project, status_class: '5xx' }, row.status5xx);
+			out.gauge('yoal_project_http_response_bytes_1h', 'Response bytes served in the last hour (egress).', { project }, row.bytes);
+			out.gauge('yoal_project_http_duration_p50_ms_1h', 'Request-weighted median latency over the last hour, ms.', { project }, row.durationP50Ms);
+			out.gauge('yoal_project_http_duration_p95_ms_1h', 'Request-weighted p95 latency over the last hour, ms.', { project }, row.durationP95Ms);
 		}
 	}
 
@@ -351,9 +351,9 @@ export class MetricsExporter {
 			.all(orgId, ...ids);
 		for (const row of rows) {
 			const labels = { project: slugOf.get(row.project_id)!, volume: row.name };
-			out.gauge('skiff_project_volume_ready', '1 while the app volume is mounted and ready.', labels, row.status === 'ready' ? 1 : 0);
-			out.gauge('skiff_project_volume_size_bytes', 'App volume size (its quota).', labels, row.size_mb * MIB);
-			if (row.used_bytes !== null) out.gauge('skiff_project_volume_used_bytes', 'Bytes used on the app volume (last node sample).', labels, row.used_bytes);
+			out.gauge('yoal_project_volume_ready', '1 while the app volume is mounted and ready.', labels, row.status === 'ready' ? 1 : 0);
+			out.gauge('yoal_project_volume_size_bytes', 'App volume size (its quota).', labels, row.size_mb * MIB);
+			if (row.used_bytes !== null) out.gauge('yoal_project_volume_used_bytes', 'Bytes used on the app volume (last node sample).', labels, row.used_bytes);
 		}
 	}
 
@@ -388,40 +388,40 @@ export class MetricsExporter {
 		const counters = byId(samples.databaseCounters);
 		for (const db of rows) {
 			const labels = { database: db.name, database_id: db.id };
-			out.gauge('skiff_database_info', 'One series per managed database, carrying its engine and version.', { ...labels, engine: db.engine, version: db.version }, 1);
-			out.gauge('skiff_database_running', '1 while the control plane considers the database running.', labels, db.status === 'running' ? 1 : 0);
-			out.gauge('skiff_database_memory_limit_bytes', 'Configured memory limit.', labels, db.memory_mb * MIB);
-			out.gauge('skiff_database_cpu_limit', 'Configured CPU limit.', labels, db.cpus);
-			out.gauge('skiff_database_storage_limit_bytes', 'Configured storage budget.', labels, db.storage_mb * MIB);
+			out.gauge('yoal_database_info', 'One series per managed database, carrying its engine and version.', { ...labels, engine: db.engine, version: db.version }, 1);
+			out.gauge('yoal_database_running', '1 while the control plane considers the database running.', labels, db.status === 'running' ? 1 : 0);
+			out.gauge('yoal_database_memory_limit_bytes', 'Configured memory limit.', labels, db.memory_mb * MIB);
+			out.gauge('yoal_database_cpu_limit', 'Configured CPU limit.', labels, db.cpus);
+			out.gauge('yoal_database_storage_limit_bytes', 'Configured storage budget.', labels, db.storage_mb * MIB);
 			const sample = latest.get(db.id);
 			const size = sample?.['size_bytes'] ?? db.size_bytes;
-			if (size !== null && size !== undefined) out.gauge('skiff_database_size_bytes', 'Database size on disk.', labels, size);
+			if (size !== null && size !== undefined) out.gauge('yoal_database_size_bytes', 'Database size on disk.', labels, size);
 			if (sample) {
-				out.gauge('skiff_database_up', 'Whether the database answered its last sample (1 = up).', labels, sample['up'] ?? 0);
-				out.gauge('skiff_database_connections', 'Open connections.', labels, sample['connections_total'] ?? 0);
-				out.gauge('skiff_database_max_connections', 'Configured max_connections.', labels, sample['max_connections'] ?? 0);
-				out.gauge('skiff_database_memory_bytes', 'Container memory use.', labels, sample['memory_bytes'] ?? 0);
-				out.gauge('skiff_database_pooler_up', 'Whether the PgBouncer admin console answered (1 = up).', labels, sample['pooler_up'] ?? 0);
-				out.gauge('skiff_database_pool_active', 'PgBouncer client/server connections in use.', labels, sample['pool_active'] ?? 0);
-				out.gauge('skiff_database_pool_idle', 'Idle PgBouncer server connections.', labels, sample['pool_idle'] ?? 0);
-				out.gauge('skiff_database_pool_waiting', 'Clients waiting for a PgBouncer server connection.', labels, sample['pool_waiting'] ?? 0);
-				out.gauge('skiff_database_pool_saturation', 'Share of max_client_conn in use (0–1).', labels, sample['pool_saturation'] ?? 0);
-				out.gauge('skiff_database_pool_avg_wait_ms', 'Average PgBouncer wait, milliseconds.', labels, sample['pool_avg_wait_ms'] ?? 0);
+				out.gauge('yoal_database_up', 'Whether the database answered its last sample (1 = up).', labels, sample['up'] ?? 0);
+				out.gauge('yoal_database_connections', 'Open connections.', labels, sample['connections_total'] ?? 0);
+				out.gauge('yoal_database_max_connections', 'Configured max_connections.', labels, sample['max_connections'] ?? 0);
+				out.gauge('yoal_database_memory_bytes', 'Container memory use.', labels, sample['memory_bytes'] ?? 0);
+				out.gauge('yoal_database_pooler_up', 'Whether the PgBouncer admin console answered (1 = up).', labels, sample['pooler_up'] ?? 0);
+				out.gauge('yoal_database_pool_active', 'PgBouncer client/server connections in use.', labels, sample['pool_active'] ?? 0);
+				out.gauge('yoal_database_pool_idle', 'Idle PgBouncer server connections.', labels, sample['pool_idle'] ?? 0);
+				out.gauge('yoal_database_pool_waiting', 'Clients waiting for a PgBouncer server connection.', labels, sample['pool_waiting'] ?? 0);
+				out.gauge('yoal_database_pool_saturation', 'Share of max_client_conn in use (0–1).', labels, sample['pool_saturation'] ?? 0);
+				out.gauge('yoal_database_pool_avg_wait_ms', 'Average PgBouncer wait, milliseconds.', labels, sample['pool_avg_wait_ms'] ?? 0);
 			}
 			const sums = counters.get(db.id);
 			if (!sums) continue;
 			const v = (column: (typeof DB_COUNTERS)[number][0]) => sums[column] ?? 0;
 			const tx = 'Transactions in the last hour (pg_stat_database).';
-			out.gauge('skiff_database_transactions_1h', tx, { ...labels, result: 'commit' }, v('xact_commit'));
-			out.gauge('skiff_database_transactions_1h', tx, { ...labels, result: 'rollback' }, v('xact_rollback'));
+			out.gauge('yoal_database_transactions_1h', tx, { ...labels, result: 'commit' }, v('xact_commit'));
+			out.gauge('yoal_database_transactions_1h', tx, { ...labels, result: 'rollback' }, v('xact_rollback'));
 			const tuples = 'Rows touched in the last hour, per operation (pg_stat_database).';
 			for (const op of ['returned', 'fetched', 'inserted', 'updated', 'deleted'] as const)
-				out.gauge('skiff_database_tuples_1h', tuples, { ...labels, op }, v(`tup_${op}`));
+				out.gauge('yoal_database_tuples_1h', tuples, { ...labels, op }, v(`tup_${op}`));
 			const blocks = 'Blocks read in the last hour, from shared buffers (hit) or disk (read).';
-			out.gauge('skiff_database_blocks_1h', blocks, { ...labels, source: 'hit' }, v('blks_hit'));
-			out.gauge('skiff_database_blocks_1h', blocks, { ...labels, source: 'read' }, v('blks_read'));
-			out.gauge('skiff_database_deadlocks_1h', 'Deadlocks in the last hour.', labels, v('deadlocks'));
-			out.gauge('skiff_database_temp_bytes_1h', 'Temporary file bytes written in the last hour.', labels, v('temp_bytes'));
+			out.gauge('yoal_database_blocks_1h', blocks, { ...labels, source: 'hit' }, v('blks_hit'));
+			out.gauge('yoal_database_blocks_1h', blocks, { ...labels, source: 'read' }, v('blks_read'));
+			out.gauge('yoal_database_deadlocks_1h', 'Deadlocks in the last hour.', labels, v('deadlocks'));
+			out.gauge('yoal_database_temp_bytes_1h', 'Temporary file bytes written in the last hour.', labels, v('temp_bytes'));
 		}
 	}
 
@@ -429,19 +429,19 @@ export class MetricsExporter {
 		const latest = byId(samples.storage);
 		for (const st of rows) {
 			const labels = { storage: st.name, storage_id: st.id };
-			out.gauge('skiff_storage_info', 'One series per object storage instance.', { ...labels, engine: st.engine, version: st.version, public: st.public ? 'true' : 'false' }, 1);
-			out.gauge('skiff_storage_running', '1 while the control plane considers the instance running.', labels, st.status === 'running' ? 1 : 0);
-			out.gauge('skiff_storage_memory_limit_bytes', 'Configured memory limit.', labels, st.memory_mb * MIB);
-			out.gauge('skiff_storage_storage_limit_bytes', 'Configured storage budget.', labels, st.storage_mb * MIB);
+			out.gauge('yoal_storage_info', 'One series per object storage instance.', { ...labels, engine: st.engine, version: st.version, public: st.public ? 'true' : 'false' }, 1);
+			out.gauge('yoal_storage_running', '1 while the control plane considers the instance running.', labels, st.status === 'running' ? 1 : 0);
+			out.gauge('yoal_storage_memory_limit_bytes', 'Configured memory limit.', labels, st.memory_mb * MIB);
+			out.gauge('yoal_storage_storage_limit_bytes', 'Configured storage budget.', labels, st.storage_mb * MIB);
 			const sample = latest.get(st.id);
 			const used = sample?.['used_bytes'] ?? st.used_bytes;
 			const objects = sample?.['objects'] ?? st.objects;
-			if (used !== null && used !== undefined) out.gauge('skiff_storage_used_bytes', 'Bytes stored across buckets.', labels, used);
-			if (objects !== null && objects !== undefined) out.gauge('skiff_storage_objects', 'Objects stored across buckets.', labels, objects);
+			if (used !== null && used !== undefined) out.gauge('yoal_storage_used_bytes', 'Bytes stored across buckets.', labels, used);
+			if (objects !== null && objects !== undefined) out.gauge('yoal_storage_objects', 'Objects stored across buckets.', labels, objects);
 			if (sample) {
-				out.gauge('skiff_storage_up', 'Whether the instance answered its last sample (1 = up).', labels, sample['up'] ?? 0);
-				out.gauge('skiff_storage_buckets', 'Buckets on the instance.', labels, sample['bucket_count'] ?? 0);
-				out.gauge('skiff_storage_memory_bytes', 'Container memory use.', labels, sample['memory_bytes'] ?? 0);
+				out.gauge('yoal_storage_up', 'Whether the instance answered its last sample (1 = up).', labels, sample['up'] ?? 0);
+				out.gauge('yoal_storage_buckets', 'Buckets on the instance.', labels, sample['bucket_count'] ?? 0);
+				out.gauge('yoal_storage_memory_bytes', 'Container memory use.', labels, sample['memory_bytes'] ?? 0);
 			}
 		}
 	}
@@ -455,54 +455,54 @@ export class MetricsExporter {
 		const counters = byId(samples.brokerCounters);
 		for (const mq of rows) {
 			const labels = { broker: mq.name, broker_id: mq.id };
-			out.gauge('skiff_broker_info', 'One series per managed queue broker, carrying its engine and version.', { ...labels, engine: mq.engine, version: mq.version }, 1);
-			out.gauge('skiff_broker_running', '1 while the control plane considers the broker running.', labels, mq.status === 'running' ? 1 : 0);
-			out.gauge('skiff_broker_memory_limit_bytes', 'Configured memory limit.', labels, mq.memory_mb * MIB);
-			out.gauge('skiff_broker_cpu_limit', 'Configured CPU limit.', labels, mq.cpus);
-			out.gauge('skiff_broker_storage_limit_bytes', 'Configured message store budget (JetStream file store).', labels, mq.storage_mb * MIB);
+			out.gauge('yoal_broker_info', 'One series per managed queue broker, carrying its engine and version.', { ...labels, engine: mq.engine, version: mq.version }, 1);
+			out.gauge('yoal_broker_running', '1 while the control plane considers the broker running.', labels, mq.status === 'running' ? 1 : 0);
+			out.gauge('yoal_broker_memory_limit_bytes', 'Configured memory limit.', labels, mq.memory_mb * MIB);
+			out.gauge('yoal_broker_cpu_limit', 'Configured CPU limit.', labels, mq.cpus);
+			out.gauge('yoal_broker_storage_limit_bytes', 'Configured message store budget (JetStream file store).', labels, mq.storage_mb * MIB);
 			const sample = latest.get(mq.id);
 			// A down sample reads zeros; the last good totals (SQLite) stay the better answer.
 			const live = sample && sample['up'] ? sample : undefined;
 			const store = live?.['store_bytes'] ?? mq.store_bytes;
 			const messages = live?.['messages'] ?? mq.messages;
-			if (store !== null && store !== undefined) out.gauge('skiff_broker_store_bytes', 'JetStream file store in use.', labels, store);
-			if (messages !== null && messages !== undefined) out.gauge('skiff_broker_messages', 'Messages held across streams.', labels, messages);
+			if (store !== null && store !== undefined) out.gauge('yoal_broker_store_bytes', 'JetStream file store in use.', labels, store);
+			if (messages !== null && messages !== undefined) out.gauge('yoal_broker_messages', 'Messages held across streams.', labels, messages);
 			if (sample) {
-				out.gauge('skiff_broker_up', 'Whether the broker answered its last sample (1 = up).', labels, sample['up'] ?? 0);
-				out.gauge('skiff_broker_connections', 'Client connections (not counting the sampler).', labels, sample['connections'] ?? 0);
-				out.gauge('skiff_broker_streams', 'JetStream streams.', labels, sample['streams'] ?? 0);
-				out.gauge('skiff_broker_consumers', 'JetStream consumers.', labels, sample['consumers'] ?? 0);
-				out.gauge('skiff_broker_memory_store_bytes', 'JetStream memory store in use.', labels, sample['memory_store_bytes'] ?? 0);
-				out.gauge('skiff_broker_pending', 'Messages not yet delivered, summed over consumers.', labels, sample['pending'] ?? 0);
-				out.gauge('skiff_broker_ack_pending', 'Delivered messages awaiting an ack.', labels, sample['ack_pending'] ?? 0);
-				out.gauge('skiff_broker_redelivered', 'Unacknowledged messages delivered more than once.', labels, sample['redelivered'] ?? 0);
-				out.gauge('skiff_broker_oldest_message_age_seconds', 'Age of the oldest message held in any stream.', labels, sample['oldest_age_seconds'] ?? 0);
-				out.gauge('skiff_broker_memory_bytes', 'Container memory use.', labels, sample['memory_bytes'] ?? 0);
+				out.gauge('yoal_broker_up', 'Whether the broker answered its last sample (1 = up).', labels, sample['up'] ?? 0);
+				out.gauge('yoal_broker_connections', 'Client connections (not counting the sampler).', labels, sample['connections'] ?? 0);
+				out.gauge('yoal_broker_streams', 'JetStream streams.', labels, sample['streams'] ?? 0);
+				out.gauge('yoal_broker_consumers', 'JetStream consumers.', labels, sample['consumers'] ?? 0);
+				out.gauge('yoal_broker_memory_store_bytes', 'JetStream memory store in use.', labels, sample['memory_store_bytes'] ?? 0);
+				out.gauge('yoal_broker_pending', 'Messages not yet delivered, summed over consumers.', labels, sample['pending'] ?? 0);
+				out.gauge('yoal_broker_ack_pending', 'Delivered messages awaiting an ack.', labels, sample['ack_pending'] ?? 0);
+				out.gauge('yoal_broker_redelivered', 'Unacknowledged messages delivered more than once.', labels, sample['redelivered'] ?? 0);
+				out.gauge('yoal_broker_oldest_message_age_seconds', 'Age of the oldest message held in any stream.', labels, sample['oldest_age_seconds'] ?? 0);
+				out.gauge('yoal_broker_memory_bytes', 'Container memory use.', labels, sample['memory_bytes'] ?? 0);
 			}
 			const sums = counters.get(mq.id);
 			if (sums) {
-				out.gauge('skiff_broker_published_1h', 'Messages JetStream stored in the last hour.', labels, sums['published'] ?? 0);
+				out.gauge('yoal_broker_published_1h', 'Messages JetStream stored in the last hour.', labels, sums['published'] ?? 0);
 				const msgs = 'Messages through the server in the last hour (in = sent by clients).';
-				out.gauge('skiff_broker_messages_1h', msgs, { ...labels, direction: 'in' }, sums['messages_in'] ?? 0);
-				out.gauge('skiff_broker_messages_1h', msgs, { ...labels, direction: 'out' }, sums['messages_out'] ?? 0);
+				out.gauge('yoal_broker_messages_1h', msgs, { ...labels, direction: 'in' }, sums['messages_in'] ?? 0);
+				out.gauge('yoal_broker_messages_1h', msgs, { ...labels, direction: 'out' }, sums['messages_out'] ?? 0);
 				const bytes = 'Bytes through the server in the last hour (in = sent by clients).';
-				out.gauge('skiff_broker_bytes_1h', bytes, { ...labels, direction: 'in' }, sums['bytes_in'] ?? 0);
-				out.gauge('skiff_broker_bytes_1h', bytes, { ...labels, direction: 'out' }, sums['bytes_out'] ?? 0);
-				out.gauge('skiff_broker_slow_consumers_1h', 'Clients cut off as slow consumers in the last hour.', labels, sums['slow_consumers'] ?? 0);
+				out.gauge('yoal_broker_bytes_1h', bytes, { ...labels, direction: 'in' }, sums['bytes_in'] ?? 0);
+				out.gauge('yoal_broker_bytes_1h', bytes, { ...labels, direction: 'out' }, sums['bytes_out'] ?? 0);
+				out.gauge('yoal_broker_slow_consumers_1h', 'Clients cut off as slow consumers in the last hour.', labels, sums['slow_consumers'] ?? 0);
 			}
 			if (mq.stats_at === null) continue;
-			out.gauge('skiff_broker_streams_timestamp_seconds', 'When the node took the newest stream listing.', labels, mq.stats_at / 1000);
+			out.gauge('yoal_broker_streams_timestamp_seconds', 'When the node took the newest stream listing.', labels, mq.stats_at / 1000);
 			for (const stream of parseStreams(mq.queue_stats)) {
 				const streamLabels = { ...labels, stream: stream.stream, queue: stream.queue ?? '' };
-				out.gauge('skiff_broker_stream_messages', 'Messages held in the stream.', streamLabels, stream.messages);
-				out.gauge('skiff_broker_stream_bytes', 'Bytes held in the stream.', streamLabels, stream.bytes);
-				out.gauge('skiff_broker_stream_consumers', 'Consumers on the stream.', streamLabels, stream.consumerCount);
-				out.gauge('skiff_broker_stream_pending', 'Messages not yet delivered, summed over the stream’s consumers.', streamLabels, stream.pending);
-				out.gauge('skiff_broker_stream_ack_pending', 'Delivered messages awaiting an ack.', streamLabels, stream.ackPending);
-				out.gauge('skiff_broker_stream_redelivered', 'Unacknowledged messages delivered more than once.', streamLabels, stream.redelivered);
+				out.gauge('yoal_broker_stream_messages', 'Messages held in the stream.', streamLabels, stream.messages);
+				out.gauge('yoal_broker_stream_bytes', 'Bytes held in the stream.', streamLabels, stream.bytes);
+				out.gauge('yoal_broker_stream_consumers', 'Consumers on the stream.', streamLabels, stream.consumerCount);
+				out.gauge('yoal_broker_stream_pending', 'Messages not yet delivered, summed over the stream’s consumers.', streamLabels, stream.pending);
+				out.gauge('yoal_broker_stream_ack_pending', 'Delivered messages awaiting an ack.', streamLabels, stream.ackPending);
+				out.gauge('yoal_broker_stream_redelivered', 'Unacknowledged messages delivered more than once.', streamLabels, stream.redelivered);
 				const first = stream.firstAt ? Date.parse(stream.firstAt) : Number.NaN;
 				out.gauge(
-					'skiff_broker_stream_oldest_message_age_seconds',
+					'yoal_broker_stream_oldest_message_age_seconds',
 					'Age of the stream’s oldest message at the listing (0 when empty).',
 					streamLabels,
 					stream.messages > 0 && Number.isFinite(first) ? Math.max(0, (mq.stats_at - first) / 1000) : 0,
@@ -540,29 +540,29 @@ export class MetricsExporter {
 		const nameOf = new Map(nodes.map((n) => [n.id, n.name]));
 		for (const node of nodes) {
 			const labels = { node: node.name };
-			out.gauge('skiff_node_up', '1 while the node is online.', { ...labels, mode: node.mode }, node.status === 'online' ? 1 : 0);
-			out.gauge('skiff_node_info', 'One series per node, carrying its agent version and status.', { ...labels, mode: node.mode, status: node.status, agent_version: node.agent_version ?? '' }, 1);
+			out.gauge('yoal_node_up', '1 while the node is online.', { ...labels, mode: node.mode }, node.status === 'online' ? 1 : 0);
+			out.gauge('yoal_node_info', 'One series per node, carrying its agent version and status.', { ...labels, mode: node.mode, status: node.status, agent_version: node.agent_version ?? '' }, 1);
 			if (node.last_heartbeat_at !== null)
-				out.gauge('skiff_node_last_heartbeat_timestamp_seconds', 'When the node last sent a heartbeat.', labels, node.last_heartbeat_at / 1000);
+				out.gauge('yoal_node_last_heartbeat_timestamp_seconds', 'When the node last sent a heartbeat.', labels, node.last_heartbeat_at / 1000);
 			const stats = parseStats(node.stats_json);
 			if (!stats) continue;
 			const num = (key: string) => (typeof stats[key] === 'number' ? (stats[key] as number) : undefined);
 			const series: Array<[string, string, number | undefined]> = [
-				['skiff_node_cpu_percent', 'Host CPU use, percent.', num('cpuPercent')],
-				['skiff_node_load1', 'One-minute load average.', num('load1')],
-				['skiff_node_memory_used_bytes', 'Host memory in use.', num('memoryBytes')],
-				['skiff_node_memory_total_bytes', 'Host memory.', num('memoryTotalBytes')],
-				['skiff_node_disk_used_bytes', 'Data filesystem bytes used.', num('diskUsedBytes')],
-				['skiff_node_disk_total_bytes', 'Data filesystem size.', num('diskTotalBytes')],
-				['skiff_node_disk_free_bytes', 'Data filesystem bytes free.', num('diskFreeBytes')],
-				['skiff_node_uptime_seconds', 'Host uptime.', num('uptimeSeconds')],
+				['yoal_node_cpu_percent', 'Host CPU use, percent.', num('cpuPercent')],
+				['yoal_node_load1', 'One-minute load average.', num('load1')],
+				['yoal_node_memory_used_bytes', 'Host memory in use.', num('memoryBytes')],
+				['yoal_node_memory_total_bytes', 'Host memory.', num('memoryTotalBytes')],
+				['yoal_node_disk_used_bytes', 'Data filesystem bytes used.', num('diskUsedBytes')],
+				['yoal_node_disk_total_bytes', 'Data filesystem size.', num('diskTotalBytes')],
+				['yoal_node_disk_free_bytes', 'Data filesystem bytes free.', num('diskFreeBytes')],
+				['yoal_node_uptime_seconds', 'Host uptime.', num('uptimeSeconds')],
 			];
 			for (const [name, help, value] of series) if (value !== undefined) out.gauge(name, help, labels, value);
 			if (Array.isArray(stats['certs'])) {
 				for (const cert of stats['certs'] as Array<{ host?: unknown; notAfter?: unknown }>) {
 					const expires = typeof cert.notAfter === 'string' ? Date.parse(cert.notAfter) : Number.NaN;
 					if (typeof cert.host === 'string' && Number.isFinite(expires))
-						out.gauge('skiff_node_cert_expiry_timestamp_seconds', 'When a TLS certificate served by the node expires.', { ...labels, host: cert.host }, expires / 1000);
+						out.gauge('yoal_node_cert_expiry_timestamp_seconds', 'When a TLS certificate served by the node expires.', { ...labels, host: cert.host }, expires / 1000);
 				}
 			}
 		}
@@ -576,9 +576,9 @@ export class MetricsExporter {
 			.all();
 		for (const volume of volumes) {
 			const labels = { node: nameOf.get(volume.node_id) ?? volume.node_id, volume: volume.name, kind: volume.kind, tier: volume.tier };
-			out.gauge('skiff_volume_up', '1 while the disk is mounted and ready.', labels, volume.status === 'ready' ? 1 : 0);
-			if (volume.size_bytes !== null) out.gauge('skiff_volume_size_bytes', 'Disk size.', labels, volume.size_bytes);
-			if (volume.free_bytes !== null) out.gauge('skiff_volume_free_bytes', 'Disk free space.', labels, volume.free_bytes);
+			out.gauge('yoal_volume_up', '1 while the disk is mounted and ready.', labels, volume.status === 'ready' ? 1 : 0);
+			if (volume.size_bytes !== null) out.gauge('yoal_volume_size_bytes', 'Disk size.', labels, volume.size_bytes);
+			if (volume.free_bytes !== null) out.gauge('yoal_volume_free_bytes', 'Disk free space.', labels, volume.free_bytes);
 		}
 	}
 }

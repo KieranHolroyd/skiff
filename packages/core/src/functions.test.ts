@@ -2,17 +2,17 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_FEATURES, WORKERD_MAX_COMPATIBILITY_DATE } from '@skiff/contracts';
-import { createDb } from '@skiff/db';
+import { DEFAULT_FEATURES, WORKERD_MAX_COMPATIBILITY_DATE } from '@yoal/contracts';
+import { createDb } from '@yoal/db';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import { effectiveRuntime } from './runtime-tier.ts';
 import { sha256Hex } from './util.ts';
 import type { Core } from './index.ts';
-import type { InlineFile } from '@skiff/contracts';
+import type { InlineFile } from '@yoal/contracts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-functions-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-functions-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 const clock = Date.now();
@@ -59,7 +59,7 @@ function manifest(overrides: Record<string, unknown> = {}): Record<string, unkno
 
 function bundle(overrides: Record<string, unknown> = {}): InlineFile[] {
 	return [
-		file('skiff-function.json', JSON.stringify(manifest(overrides))),
+		file('yoal-function.json', JSON.stringify(manifest(overrides))),
 		file('index.js', MODULE_SOURCE),
 		file('public/index.html', '<!doctype html><title>function</title>'),
 	];
@@ -153,7 +153,7 @@ describe('phase 1 functions', () => {
 			memoryMb: 128,
 			cpus: 1,
 			port: 3000,
-			healthPath: '/__skiff/health',
+			healthPath: '/__yoal/health',
 			socketActivation: true,
 			ingress: 'http',
 			replicas: 1,
@@ -169,7 +169,7 @@ describe('phase 1 functions', () => {
 		expect(workload).toMatchObject({
 			runtime: 'function',
 			// Functions are socket-activated one socket per desired-state id (phase 4).
-			upstream: `unix//run/skiff-workloads/${workload!.id}.sock`,
+			upstream: `unix//run/yoal-workloads/${workload!.id}.sock`,
 			function: { main: 'index.js' },
 		});
 		const route = state.routes.find((item) => item.slug === 'fn-app');
@@ -202,7 +202,7 @@ describe('phase 1 functions', () => {
 					compatibilityFlags: ['d1_binding_jsrpc'],
 				}),
 			),
-		).rejects.toThrow('D1 bindings on Skiff use the HTTP binding path');
+		).rejects.toThrow('D1 bindings on Yoal use the HTTP binding path');
 		await expect(
 			core.uploads.deployInline(principal, project, bundle({ triggers: { crons: ['60 * * * *'] } })),
 		).rejects.toThrow('Cron minute must be between 0 and 59.');
@@ -316,7 +316,7 @@ describe('phase 1 functions', () => {
 		features.FUNCTIONS = false;
 		try {
 			await expect(core.uploads.deployInline(principal, project, bundle())).rejects.toThrow(
-				'Functions are not enabled on this platform (SKIFF_FEATURE_FUNCTIONS).',
+				'Functions are not enabled on this platform (YOAL_FEATURE_FUNCTIONS).',
 			);
 		} finally {
 			features.FUNCTIONS = true;
@@ -430,7 +430,7 @@ describe('phase 1 functions', () => {
 		).rejects.toThrow('Binding DB: database "nope" does not exist in this organisation.');
 	});
 
-	test('a redeploy without skiff-function.json infers modules from the previous spec', async () => {
+	test('a redeploy without yoal-function.json infers modules from the previous spec', async () => {
 		const project = await createFunctionProject('fn-inferred');
 		await core.uploads.deployInline(principal, project, bundle({ assets: { directory: 'public' } }));
 		const updated = 'export default { async fetch() { return new Response("v2"); } };';
@@ -446,7 +446,7 @@ describe('phase 1 functions', () => {
 		expect(spec?.function?.assets?.directory).toBe('public');
 	});
 
-	test('a first deploy without skiff-function.json accepts a prebuilt Worker', async () => {
+	test('a first deploy without yoal-function.json accepts a prebuilt Worker', async () => {
 		const project = await createFunctionProject('fn-no-manifest');
 		await core.secrets.set(principal, { name: 'API_KEY', value: 'secret-value', projectId: project.id });
 		await core.uploads.deployInline(principal, project, [

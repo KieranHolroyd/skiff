@@ -39,7 +39,7 @@ function domain(overrides: Partial<EmailDomainView> = {}): EmailDomainView {
 		sending: true,
 		receiving: false,
 		dkimSelector: 'skf202611',
-		records: [record(), record({ purpose: 'spf', name: 'example.com', value: 'v=spf1 include:_spf.skiff.example ~all', ok: true })],
+		records: [record(), record({ purpose: 'spf', name: 'example.com', value: 'v=spf1 include:_spf.yoal.example ~all', ok: true })],
 		lastCheckedAt: null,
 		verifiedAt: null,
 		failingSince: null,
@@ -76,7 +76,7 @@ function org(overrides: Partial<EmailOrgView> = {}): EmailOrgView {
 	};
 }
 
-describe('skif email formatting', () => {
+describe('yoal email formatting', () => {
 	test('the records table keeps the full DKIM value and marks each check', () => {
 		const table = emailRecordsTable(domain().records);
 		expect(table).toContain('A'.repeat(300));
@@ -87,10 +87,10 @@ describe('skif email formatting', () => {
 
 	test('MX records carry their priority and managed records say so', () => {
 		const table = emailRecordsTable([
-			record({ purpose: 'mx', type: 'MX', priority: 10, value: 'mx.skiff.example', managed: true, ok: true, required: false }),
+			record({ purpose: 'mx', type: 'MX', priority: 10, value: 'mx.yoal.example', managed: true, ok: true, required: false }),
 		]);
 		expect(table).toContain('MX 10');
-		expect(table).toContain('managed by Skiff');
+		expect(table).toContain('managed by Yoal');
 		expect(table).toContain('recommended');
 	});
 
@@ -99,12 +99,12 @@ describe('skif email formatting', () => {
 	});
 
 	test('status explains the sandbox and holds back rates until there is enough mail', () => {
-		const report = emailStatusReport(org(), { nodeId: null, hostnames: { submission: 'smtp.skiff.example' } });
+		const report = emailStatusReport(org(), { nodeId: null, hostnames: { submission: 'smtp.yoal.example' } });
 		expect(report).toContain('sandbox — only to your own verified domains');
 		expect(report).toContain('12 of 200');
 		expect(report).toContain('after 200 messages; 12 so far');
 		expect(report).toContain('not set up');
-		expect(report).toContain('smtp.skiff.example:587');
+		expect(report).toContain('smtp.yoal.example:587');
 	});
 
 	test('status flags rates over a threshold', () => {
@@ -118,7 +118,7 @@ describe('skif email formatting', () => {
 	});
 });
 
-describe('skif email parsing', () => {
+describe('yoal email parsing', () => {
 	test('recipients may repeat and be comma separated', () => {
 		expect(parseAddressList(['a@x.com, b@y.com', 'c@z.com', ''])).toEqual(['a@x.com', 'b@y.com', 'c@z.com']);
 	});
@@ -148,7 +148,7 @@ describe('skif email parsing', () => {
 	});
 });
 
-describe('skif email sandbox', () => {
+describe('yoal email sandbox', () => {
 	test('--volume takes whole numbers and k/m shorthands', () => {
 		expect(parseDailyVolume('500')).toBe(500);
 		expect(parseDailyVolume('10,000')).toBe(10_000);

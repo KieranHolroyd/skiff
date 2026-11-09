@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 let dir = '';
 
 beforeEach(async () => {
-	dir = await mkdtemp(join(tmpdir(), 'skiff-cli-command-'));
+	dir = await mkdtemp(join(tmpdir(), 'yoal-cli-command-'));
 });
 
 afterEach(async () => {
@@ -44,14 +44,14 @@ async function runAsync(...args: string[]): Promise<{ code: number; stdout: stri
 function childEnv(): Record<string, string | undefined> {
 	return {
 		...process.env,
-		SKIFF_CONFIG_DIR: dir,
-		SKIFF_URL: '',
-		SKIFF_TOKEN: '',
-		SKIFF_CONTENT_DOMAIN: '',
+		YOAL_CONFIG_DIR: dir,
+		YOAL_URL: '',
+		YOAL_TOKEN: '',
+		YOAL_CONTENT_DOMAIN: '',
 	};
 }
 
-describe('skif config', () => {
+describe('yoal config', () => {
 	test('sets settings, then reports them as JSON', () => {
 		expect(run('config', 'set', 'url', 'control.example.com').code).toBe(0);
 		expect(run('config', 'set', 'content-domain', 'examplecloud.com').code).toBe(0);
@@ -114,7 +114,7 @@ describe('skif config', () => {
 
 		const missing = run('config', 'set', 'url');
 		expect(missing.code).toBe(1);
-		expect(missing.stderr).toContain('Usage: skif config set');
+		expect(missing.stderr).toContain('Usage: yoal config set');
 	});
 
 	test('login records the platform and content domain the server reports', async () => {

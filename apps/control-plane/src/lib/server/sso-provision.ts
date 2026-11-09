@@ -2,12 +2,12 @@
  * JIT provisioning for SSO sign-ins (IAM.md I19, §8.3, I21).
  *
  * Better Auth's `@better-auth/sso` plugin creates the user and session. Organisation provisioning
- * in the plugin is disabled, because Skiff owns memberships, the default role and group mapping.
+ * in the plugin is disabled, because Yoal owns memberships, the default role and group mapping.
  * This callback runs on every sign-in (`provisionUserOnEveryLogin`), because IdP group membership
  * changes between sign-ins and roles follow the directory:
  *
  * - add a `member` row for the provider's organisation if the user is not one yet;
- * - the default role is `viewer`, or no membership at all when `SKIFF_SSO_DEFAULT_ROLE=none`
+ * - the default role is `viewer`, or no membership at all when `YOAL_SSO_DEFAULT_ROLE=none`
  *   (unless a group mapping applies, since then the group binding is the point);
  * - map the provider's groups claim through `sso_group_mappings` and replace the user's
  *   `source = 'sso'` group membership. Local membership rows and `source = 'scim'` rows are never
@@ -18,8 +18,8 @@
  * A missing groups claim (`undefined`) leaves the last synced membership alone. An empty claim
  * (`[]`) is a real assertion that the user is in no IdP groups and clears the synced membership.
  */
-import type { Principal } from '@skiff/contracts';
-import { groupClaimValues, groupIdsForClaims, newId } from '@skiff/core';
+import type { Principal } from '@yoal/contracts';
+import { groupClaimValues, groupIdsForClaims, newId } from '@yoal/core';
 import { rememberOrganization } from './org-membership';
 import { sqlite } from './db';
 import { core } from './core';
@@ -27,7 +27,7 @@ import { core } from './core';
 /** The role a just-provisioned SSO member gets. `none` leaves them without org access. */
 export type SsoDefaultRole = 'viewer' | 'none';
 
-const configuredRole = process.env.SKIFF_SSO_DEFAULT_ROLE?.trim().toLowerCase();
+const configuredRole = process.env.YOAL_SSO_DEFAULT_ROLE?.trim().toLowerCase();
 
 export const ssoDefaultRole: SsoDefaultRole = configuredRole === 'none' ? 'none' : 'viewer';
 
@@ -156,7 +156,7 @@ export function provisionSsoUser(input: {
 				args: {
 					orgId,
 					providerId: input.provider.providerId,
-					reason: 'SKIFF_SSO_DEFAULT_ROLE=none'
+					reason: 'YOAL_SSO_DEFAULT_ROLE=none'
 				},
 				result: 'ok'
 			});

@@ -7,12 +7,12 @@ import {
 	type DashboardPanel,
 	type DashboardSpec,
 	type ObservabilitySchema
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { compact } from './grid.js';
 import { aggregationsFor, metricColumn, newId } from './panel.js';
 
 /**
- * Starter dashboards. The definitions live in @skiff/contracts (`dashboardTemplates`), shared with
+ * Starter dashboards. The definitions live in @yoal/contracts (`dashboardTemplates`), shared with
  * the agent tools (`create_dashboard` with a template), so the UI and agents create identical
  * dashboards. Builder queries only, so they work for every user (SQL is admin-only).
  * `fitTemplate` drops whatever the running server does not have, so a template never ships a

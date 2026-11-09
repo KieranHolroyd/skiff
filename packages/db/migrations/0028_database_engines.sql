@@ -1,7 +1,7 @@
 -- More database engines (docs/DATABASES.md §17, D95). Additive only.
 -- 0008 created `databases.engine` with CHECK (engine IN ('postgres')), and SQLite cannot change a
 -- CHECK constraint without rebuilding the table, which the additive-migration rule forbids. The
--- engine therefore moves to a new, unconstrained column; the engine registry in @skiff/contracts
+-- engine therefore moves to a new, unconstrained column; the engine registry in @yoal/contracts
 -- validates it (D61), so a future engine is a data change and never another migration.
 --
 -- Existing rows are all Postgres, which is the default. The old `engine` column is no longer read

@@ -10,8 +10,8 @@
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import FormDialog from '#lib/components/yoal/FormDialog.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Collapsible from '#lib/components/ui/collapsible/index.js';
@@ -67,7 +67,7 @@
 		askConfirm({
 			title: 'Remove the R2 credentials?',
 			description:
-				'Backups stop and the keys are deleted from /etc/skiff/skiff.env. Backups already in R2 are not deleted. The dashboard restarts for a few seconds.',
+				'Backups stop and the keys are deleted from /etc/yoal/yoal.env. Backups already in R2 are not deleted. The dashboard restarts for a few seconds.',
 			confirmLabel: 'Remove',
 			tone: 'danger',
 			action: '?/removeR2'
@@ -78,7 +78,7 @@
 		askConfirm({
 			title: 'Run a restore drill now?',
 			description:
-				'Skiff restores the latest backup from R2 into a scratch directory and checks it matches the live database row for row. The dashboard and API pause for a few seconds while it compares; deployed sites keep serving.',
+				'Yoal restores the latest backup from R2 into a scratch directory and checks it matches the live database row for row. The dashboard and API pause for a few seconds while it compares; deployed sites keep serving.',
 			confirmLabel: 'Run drill',
 			action: '?/drill'
 		});
@@ -93,7 +93,7 @@
 	};
 </script>
 
-<svelte:head><title>Backups · Settings · Skiff</title></svelte:head>
+<svelte:head><title>Backups · Settings · Yoal</title></svelte:head>
 
 <SettingsHeader id="backups" />
 
@@ -138,7 +138,7 @@
 				<div class="space-y-1">
 					<dt class="text-xs text-muted-foreground">Destination</dt>
 					<dd class="font-mono text-sm break-all">
-						r2://{data.r2.values.R2_BUCKET}/skiff/sqlite
+						r2://{data.r2.values.R2_BUCKET}/yoal/sqlite
 					</dd>
 				</div>
 				<div class="space-y-1">
@@ -189,7 +189,7 @@
 					<Alert.Title>The last restore drill failed: {health.drill.reason}</Alert.Title>
 					<Alert.Description>
 						Do not assume the backup is usable. The run directory under <code
-							>/var/lib/skiff/drill</code
+							>/var/lib/yoal/drill</code
 						> keeps both fingerprints; see docs/OPS.md §8.3.
 					</Alert.Description>
 				</Alert.Root>
@@ -257,7 +257,7 @@
 			<p class="text-sm text-muted-foreground">
 				Users, sessions, projects and the audit log, as one SQLite file. Secrets inside stay
 				encrypted with the master key, which is not included (nor is <code
-					>/etc/skiff/skiff.env</code
+					>/etc/yoal/yoal.env</code
 				>). Store it somewhere safe; downloads are recorded in the audit log.
 			</p>
 			<form method="POST" action="/settings/backups/download" class="mt-4">
@@ -272,17 +272,17 @@
 		>
 			<ul class="list-disc space-y-1.5 pl-5 text-sm">
 				<li>
-					<code>/etc/skiff/master.key</code> — without it, encrypted secrets cannot be read even if the
+					<code>/etc/yoal/master.key</code> — without it, encrypted secrets cannot be read even if the
 					database restores.
 				</li>
 				<li>
-					<code>/etc/skiff/skiff.env</code> — it holds the R2 keys the restore needs to reach the backup.
+					<code>/etc/yoal/yoal.env</code> — it holds the R2 keys the restore needs to reach the backup.
 				</li>
 				<li>
 					Export both as one passphrase-encrypted recovery kit with
-					<code>sudo skiff-recovery-kit export --include-env</code>, copy it off the server, and
+					<code>sudo yoal-recovery-kit export --include-env</code>, copy it off the server, and
 					keep the passphrase apart from the file.
-					<code>skiff-recovery-kit verify &lt;file&gt;</code> checks a kit matches this server.
+					<code>yoal-recovery-kit verify &lt;file&gt;</code> checks a kit matches this server.
 				</li>
 			</ul>
 			<Collapsible.Root class="mt-3">
@@ -293,9 +293,9 @@
 				</Collapsible.Trigger>
 				<Collapsible.Content>
 					<pre
-						class="mt-2 overflow-x-auto rounded-md border bg-muted/40 p-3 font-mono text-xs">sudo skiff-restore --yes        # this server, latest backup
-sudo skiff-restore-drill        # prove a restore, change nothing
-sudo skiff-restore --yes --recovery-kit kit.age   # fresh server: key + env from the kit first</pre>
+						class="mt-2 overflow-x-auto rounded-md border bg-muted/40 p-3 font-mono text-xs">sudo yoal-restore --yes        # this server, latest backup
+sudo yoal-restore-drill        # prove a restore, change nothing
+sudo yoal-restore --yes --recovery-kit kit.age   # fresh server: key + env from the kit first</pre>
 				</Collapsible.Content>
 			</Collapsible.Root>
 		</Panel>
@@ -346,7 +346,7 @@ sudo skiff-restore --yes --recovery-kit kit.age   # fresh server: key + env from
 			</Table.Root>
 		{/if}
 		{#snippet footer()}
-			In <code>/var/lib/skiff/backups</code>. These protect against a bad update, not against losing
+			In <code>/var/lib/yoal/backups</code>. These protect against a bad update, not against losing
 			the server.
 		{/snippet}
 	</Panel>
@@ -356,7 +356,7 @@ sudo skiff-restore --yes --recovery-kit kit.age   # fresh server: key + env from
 	bind:open={configureOpen}
 	icon={CloudIcon}
 	title={configured ? 'Edit R2 settings' : 'Set up R2 backups'}
-	description="Create an R2 API token with Object Read & Write on one bucket (Cloudflare → R2 → Manage API tokens). Skiff tests the credentials before saving, then turns on backups."
+	description="Create an R2 API token with Object Read & Write on one bucket (Cloudflare → R2 → Manage API tokens). Yoal tests the credentials before saving, then turns on backups."
 	action="?/saveR2"
 	submitLabel={configured ? 'Test and save' : 'Test and turn on'}
 	size="lg"
@@ -388,7 +388,7 @@ sudo skiff-restore --yes --recovery-kit kit.age   # fresh server: key + env from
 					spellcheck={false}
 					class="font-mono"
 					value={data.r2.values.R2_BUCKET ?? ''}
-					placeholder="skiff-backups"
+					placeholder="yoal-backups"
 					aria-invalid={fieldErrors.bucket ? 'true' : undefined}
 				/>
 				{#if fieldErrors.bucket}<Field.Error>{fieldErrors.bucket}</Field.Error>{/if}
@@ -424,7 +424,7 @@ sudo skiff-restore --yes --recovery-kit kit.age   # fresh server: key + env from
 				/>
 				{#if fieldErrors.secretAccessKey}<Field.Error>{fieldErrors.secretAccessKey}</Field.Error>
 				{:else}<Field.Description
-						>Stored only in /etc/skiff/skiff.env on the server; never shown again.</Field.Description
+						>Stored only in /etc/yoal/yoal.env on the server; never shown again.</Field.Description
 					>{/if}
 			</Field.Field>
 		</div>

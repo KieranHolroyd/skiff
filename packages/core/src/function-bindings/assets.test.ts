@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { FunctionBinding } from '@skiff/contracts';
+import type { FunctionBinding } from '@yoal/contracts';
 import { resolveAssetsBinding } from './assets.ts';
 import type { BindingResolveContext } from './types.ts';
 

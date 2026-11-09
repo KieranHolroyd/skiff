@@ -1,4 +1,4 @@
-import type { TreeNode } from '@skiff/studio/protocol';
+import type { TreeNode } from '@yoal/studio/protocol';
 import { studioCall } from '../client.js';
 import { describeStudioError } from './errors.js';
 import { findItem, pathKey, toItem, type TreeItem } from './tree.js';

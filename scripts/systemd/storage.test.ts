@@ -5,21 +5,21 @@ import { join } from 'node:path';
 import { STORAGE_LINK } from './builder.ts';
 import { ensureStorageUnits, STORAGE_PATH_UNIT, STORAGE_SERVICE_UNIT, storageUnits } from './storage.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-storage-units-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-storage-units-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-describe('skiff-storage units', () => {
+describe('yoal-storage units', () => {
 	test('the service consumes the request, runs the apply as root, and both units are gated', () => {
 		const units = storageUnits();
 		const service = units[STORAGE_SERVICE_UNIT]!;
-		expect(service).toContain('ExecStartPre=/bin/rm -f /run/skiff/storage.request');
-		expect(service).toContain(`ExecStart=/opt/skiff/current/agent/${STORAGE_LINK} storage apply`);
+		expect(service).toContain('ExecStartPre=/bin/rm -f /run/yoal/storage.request');
+		expect(service).toContain(`ExecStart=/opt/yoal/current/agent/${STORAGE_LINK} storage apply`);
 		expect(service).not.toContain('User=');
 		for (const body of Object.values(units)) {
-			expect(body).toContain('ConditionPathExists=/etc/skiff/agent.env');
-			expect(body).toContain(`ConditionPathExists=/opt/skiff/current/agent/${STORAGE_LINK}`);
+			expect(body).toContain('ConditionPathExists=/etc/yoal/agent.env');
+			expect(body).toContain(`ConditionPathExists=/opt/yoal/current/agent/${STORAGE_LINK}`);
 		}
-		expect(units[STORAGE_PATH_UNIT]).toContain('PathExists=/run/skiff/storage.request');
+		expect(units[STORAGE_PATH_UNIT]).toContain('PathExists=/run/yoal/storage.request');
 	});
 
 	test('ensureStorageUnits writes once and always enables the path unit', () => {

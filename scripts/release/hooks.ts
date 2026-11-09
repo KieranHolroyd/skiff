@@ -1,15 +1,15 @@
 #!/usr/bin/env bun
 /**
- * skiff-release: hooks a release runs on itself, invoked by the stage-0 updater with the
+ * yoal-release: hooks a release runs on itself, invoked by the stage-0 updater with the
  * release's own Bun (`<release>/runtime/bun <release>/repo/scripts/release/hooks.ts <hook> …`).
  *
- * Protocol: the last stdout line is `SKIFF_HOOK_RESULT <json>` (a {@link HookVerdict}). Stage-0
+ * Protocol: the last stdout line is `YOAL_HOOK_RESULT <json>` (a {@link HookVerdict}). Stage-0
  * treats a well-formed `ok:false` verdict as the release's fault, and anything else (crash,
  * timeout, no verdict) as inconclusive, never as grounds to blocklist the release.
  *
  *   protocol                       print the protocol version and supported hooks
  *   canary --release R --scratch S --db D [--env-file F] [--master-key K] [--origin O]
- *   prepare --release R            additive skiff.env defaults, before the release first boots
+ *   prepare --release R            additive yoal.env defaults, before the release first boots
  *   converge --release R [--mode update|rollback]
  *                                  units, helper, host commands, workerd, ClickHouse: make the
  *                                  host match R (scripts/release/converge.ts)
@@ -21,7 +21,7 @@ import { HOOK_PROTOCOL, runCanary, type HookVerdict } from './canary.ts';
 /** Hooks this release implements, advertised by `protocol` so stage-0 only calls what exists. */
 export const HOOKS = ['canary', 'prepare', 'converge'] as const;
 
-export const RESULT_PREFIX = 'SKIFF_HOOK_RESULT ';
+export const RESULT_PREFIX = 'YOAL_HOOK_RESULT ';
 
 function emit(verdict: HookVerdict | Record<string, unknown>): void {
 	console.log(`${RESULT_PREFIX}${JSON.stringify(verdict)}`);
@@ -42,12 +42,12 @@ async function main(argv: string[]): Promise<number> {
 		return 0;
 	}
 	if (hook === 'canary') {
-		const etc = process.env.SKIFF_ETC_DIR ?? '/etc/skiff';
+		const etc = process.env.YOAL_ETC_DIR ?? '/etc/yoal';
 		const verdict = await runCanary({
 			release: option(argv, '--release'),
 			scratch: option(argv, '--scratch'),
 			dbPath: option(argv, '--db'),
-			envFile: option(argv, '--env-file', `${etc}/skiff.env`),
+			envFile: option(argv, '--env-file', `${etc}/yoal.env`),
 			masterKeyFile: option(argv, '--master-key', `${etc}/master.key`),
 			origin: option(argv, '--origin', '') || null,
 		});
@@ -66,7 +66,7 @@ async function main(argv: string[]): Promise<number> {
 		emit({ protocol: HOOK_PROTOCOL, ok: true, step: hook, changed: report.changed, warnings: report.warnings });
 		return 0;
 	}
-	console.error(`skiff-release: unknown hook ${hook ?? '(none)'}`);
+	console.error(`yoal-release: unknown hook ${hook ?? '(none)'}`);
 	return 64;
 }
 
@@ -74,7 +74,7 @@ if (import.meta.main) {
 	main(process.argv.slice(2)).then(
 		(code) => process.exit(code),
 		(error: unknown) => {
-			console.error(`skiff-release: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+			console.error(`yoal-release: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
 			process.exit(70);
 		},
 	);

@@ -12,7 +12,7 @@ import { asRecord, requestJson, stringValue } from './iam.ts';
  * engine. Every check lives on the server.
  */
 
-const usage = `Usage: skif pool <command> [options]
+const usage = `Usage: yoal pool <command> [options]
 
 Commands:
   list [list]                  User pools with their issuer, engine and status
@@ -23,7 +23,7 @@ Commands:
 Create options:
       --description <text>     A note shown in the list and dashboard
       --signup <mode>          invite (default) or open
-      --engine <engine>        skiff-identity (default, the only engine)
+      --engine <engine>        yoal-identity (default, the only engine)
 
 Options:
       --json                   JSON output
@@ -33,9 +33,9 @@ A pool's discovery document is public at /api/v1/user-pools/<id>/.well-known/ope
 and its keys at .../.well-known/jwks.json. A disabled pool's discovery returns 404.
 
 Examples:
-  skif pool create customer-auth --signup open
-  skif pool clients customer-auth
-  skif pool disable customer-auth`;
+  yoal pool create customer-auth --signup open
+  yoal pool clients customer-auth
+  yoal pool disable customer-auth`;
 
 export interface UserPoolView {
 	id: string;
@@ -104,7 +104,7 @@ async function listPools(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif pool [list] [--json]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal pool [list] [--json]');
 	const client = await authenticatedClient();
 	const pools = await fetchPools(client);
 	if (args.boolean('json')) {
@@ -112,7 +112,7 @@ async function listPools(argv: string[]): Promise<void> {
 		return;
 	}
 	if (pools.length === 0) {
-		console.log('No user pools yet. Create one with `skif pool create <name>`.');
+		console.log('No user pools yet. Create one with `yoal pool create <name>`.');
 		return;
 	}
 	console.log(poolTable(pools));
@@ -124,7 +124,7 @@ async function createPool(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif pool create <name> [--description <text>] [--signup invite|open] [--engine skiff-identity]');
+	rejectExtraPositionals(args, 1, 'Usage: yoal pool create <name> [--description <text>] [--signup invite|open] [--engine yoal-identity]');
 	const name = requirePositional(args, 0, `pool name.\n\n${usage}`);
 	const body: Record<string, unknown> = { name };
 	const description = args.string('description');
@@ -137,8 +137,8 @@ async function createPool(argv: string[]): Promise<void> {
 	}
 	const engine = args.string('engine');
 	if (engine) {
-		if (engine !== 'skiff-identity')
-			throw new UsageError('The only user-pool engine is skiff-identity.');
+		if (engine !== 'yoal-identity')
+			throw new UsageError('The only user-pool engine is yoal-identity.');
 		body.engine = engine;
 	}
 	const client = await authenticatedClient();
@@ -155,7 +155,7 @@ async function createPool(argv: string[]): Promise<void> {
 		});
 	console.log(`Created user pool "${pool.name}" (${pool.id}).`);
 	console.log(`Issuer ${pool.issuer}`);
-	console.log(`Add an OIDC client in Settings → Identity, or read them with \`skif pool clients ${pool.name}\`.`);
+	console.log(`Add an OIDC client in Settings → Identity, or read them with \`yoal pool clients ${pool.name}\`.`);
 }
 
 async function disablePool(argv: string[]): Promise<void> {
@@ -164,7 +164,7 @@ async function disablePool(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif pool disable <name|id>');
+	rejectExtraPositionals(args, 1, 'Usage: yoal pool disable <name|id>');
 	const value = requirePositional(args, 0, `pool name or id.\n\n${usage}`);
 	const client = await authenticatedClient();
 	const pool = resolvePool(await fetchPools(client), value);
@@ -186,7 +186,7 @@ async function listClients(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif pool clients <name|id> [--json]');
+	rejectExtraPositionals(args, 1, 'Usage: yoal pool clients <name|id> [--json]');
 	const value = requirePositional(args, 0, `pool name or id.\n\n${usage}`);
 	const client = await authenticatedClient();
 	const pool = resolvePool(await fetchPools(client), value);
@@ -238,7 +238,7 @@ export function clientTable(clients: UserPoolClientView[]): string {
 
 export function resolvePool(pools: UserPoolView[], value: string): UserPoolView {
 	const pool = pools.find((entry) => entry.id === value) ?? pools.find((entry) => entry.name === value);
-	if (!pool) throw new UsageError(`Unknown user pool "${value}". Run \`skif pool\` to see them.`);
+	if (!pool) throw new UsageError(`Unknown user pool "${value}". Run \`yoal pool\` to see them.`);
 	return pool;
 }
 
@@ -273,7 +273,7 @@ function asPool(value: unknown): UserPoolView | undefined {
 		orgId: stringValue(record.orgId) ?? '',
 		name,
 		description: stringValue(record.description) ?? '',
-		engine: stringValue(record.engine) ?? 'skiff-identity',
+		engine: stringValue(record.engine) ?? 'yoal-identity',
 		issuer: stringValue(record.issuer) ?? '',
 		signingKeyId: stringValue(record.signingKeyId) ?? null,
 		signupMode: stringValue(record.signupMode) ?? 'invite',

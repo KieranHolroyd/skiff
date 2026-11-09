@@ -1,5 +1,5 @@
 /**
- * Skiff static-assets binding service (docs/FUNCTIONS.md §4.2, §4.5, D110, FN10).
+ * Yoal static-assets binding service (docs/FUNCTIONS.md §4.2, §4.5, D110, FN10).
  *
  * A Worker that implements the Assets binding on top of workerd's `disk` service. The user Worker
  * gets a plain `service` binding named `ASSETS` pointing at this service, so

@@ -14,10 +14,10 @@
 		itemVerdicts,
 		operationActions,
 		type OperationView
-	} from '@skiff/contracts';
+	} from '@yoal/contracts';
 	import { toast } from 'svelte-sonner';
-	import Notice from '#lib/components/skiff/Notice.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import Notice from '#lib/components/yoal/Notice.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
 	import { Progress } from '#lib/components/ui/progress/index.js';
@@ -153,7 +153,7 @@
 	}
 </script>
 
-<svelte:head><title>{actionLabel(operation.action)} · Maintenance · Skiff</title></svelte:head>
+<svelte:head><title>{actionLabel(operation.action)} · Maintenance · Yoal</title></svelte:head>
 
 <div class="space-y-6">
 	<div class="flex flex-wrap items-start justify-between gap-4">

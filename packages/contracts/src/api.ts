@@ -13,7 +13,7 @@ export const projectCreateSchema = z.object({
 	placementSpec: placementSpecSchema.optional(),
 	productionAccess: z.enum(accessModes).default('public'),
 	previewAccess: z.enum(accessModes).default('platform'),
-	/** Required when a scope is `access`: the Skiff Access policy it applies. */
+	/** Required when a scope is `access`: the Yoal Access policy it applies. */
 	productionAccessPolicyId: z.string().min(1).max(100).optional(),
 	previewAccessPolicyId: z.string().min(1).max(100).optional(),
 	/** Required when either scope is `password`; each such scope stores its own copy. */
@@ -76,7 +76,7 @@ export const deploySiteSchema = z.object({
 		.boolean()
 		.optional()
 		.describe(
-			'Does not enable SPA routing; that comes from `skiff.json` `{ "spa": true }` in the deployed files. Pass false to suppress the SPA suggestion in the response.',
+			'Does not enable SPA routing; that comes from `yoal.json` `{ "spa": true }` in the deployed files. Pass false to suppress the SPA suggestion in the response.',
 		),
 });
 export type DeploySite = z.infer<typeof deploySiteSchema>;
@@ -136,7 +136,7 @@ export type Pagination = z.infer<typeof paginationSchema>;
 /**
  * Operator-editable node settings (platform admin). Identity (`id`, `mode`, token) is not editable
  * here: the edge is the first node to join and a token only changes through rotation. The slice
- * bounds match what `skiff-helper` accepts, so a saved value can always be applied.
+ * bounds match what `yoal-helper` accepts, so a saved value can always be applied.
  */
 export const nodeUpdateSchema = z
 	.object({
@@ -149,9 +149,9 @@ export const nodeUpdateSchema = z
 			.regex(/^[A-Za-z0-9.\-[\]:]+$/, 'Use host or host:port, without a scheme or path.')
 			.nullable()
 			.optional(),
-		/** `skiff-workloads.slice` memory budget (MemoryMax), in MB. */
+		/** `yoal-workloads.slice` memory budget (MemoryMax), in MB. */
 		sliceMemoryMb: z.number().int().min(32).max(65_536).optional(),
-		/** `skiff-workloads.slice` CPUWeight, relative to sibling slices (systemd default 100). */
+		/** `yoal-workloads.slice` CPUWeight, relative to sibling slices (systemd default 100). */
 		sliceCpuWeight: z.number().int().min(1).max(10_000).optional(),
 		/** Lets the node's Builder claim git builds. */
 		canBuild: z.boolean().optional(),
@@ -163,7 +163,7 @@ export const nodeUpdateSchema = z
 		zone: nodeZoneSchema.optional(),
 		/** What this node may run; removing a role in use is refused. */
 		roles: z.array(nodeRoleSchema).min(1).max(5).optional(),
-		/** Operator placement labels; `skiff.io/*` is reserved. */
+		/** Operator placement labels; `yoal.io/*` is reserved. */
 		labels: nodeLabelsSchema.optional(),
 		/** LAN address for direct peering inside one zone (C1). */
 		lanEndpoint: z.string().trim().max(253).nullable().optional(),

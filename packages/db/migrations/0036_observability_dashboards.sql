@@ -1,6 +1,6 @@
 -- Observability dashboards (D101). Additive only.
 -- A dashboard is an org resource: a title plus a JSON spec (panels, queries, variables, layout)
--- validated by `dashboardSpecSchema` in @skiff/contracts. `version` increments on every save so
+-- validated by `dashboardSpecSchema` in @yoal/contracts. `version` increments on every save so
 -- concurrent editors get a conflict instead of silently overwriting each other.
 
 CREATE TABLE IF NOT EXISTS observability_dashboards (

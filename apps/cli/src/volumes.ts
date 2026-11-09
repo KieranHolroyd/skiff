@@ -166,7 +166,7 @@ export function volumeDetails(view: AppVolumeView): string {
 	if (view.attachments.length === 0) {
 		lines.push('');
 		lines.push(
-			`Not attached. Attach it with \`skif volume attach ${view.name} --project ${view.projectSlug} --mount /var/lib/app\`.`,
+			`Not attached. Attach it with \`yoal volume attach ${view.name} --project ${view.projectSlug} --mount /var/lib/app\`.`,
 		);
 	} else {
 		lines.push('');
@@ -184,12 +184,12 @@ export function volumeDetails(view: AppVolumeView): string {
 	}
 	lines.push('');
 	if (view.snapshots.length === 0) {
-		lines.push(`No snapshots. Take one with \`skif volume snapshot ${view.name} --project ${view.projectSlug}\`.`);
+		lines.push(`No snapshots. Take one with \`yoal volume snapshot ${view.name} --project ${view.projectSlug}\`.`);
 	} else {
 		lines.push('Snapshots:');
 		lines.push(snapshotTable(view.snapshots.slice(0, 10)));
 		if (view.snapshots.length > 10)
-			lines.push(`… ${view.snapshots.length - 10} more: \`skif volume snapshots ${view.name} --project ${view.projectSlug}\``);
+			lines.push(`… ${view.snapshots.length - 10} more: \`yoal volume snapshots ${view.name} --project ${view.projectSlug}\``);
 	}
 	const warning = nearQuotaWarning(view);
 	if (warning) {

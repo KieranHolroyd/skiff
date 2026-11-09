@@ -8,7 +8,7 @@ const KINDS: ErrorPageKind[] = ['no-site', 'unknown-host', 'not-found', 'unavail
 const site: SiteCompileInput = {
 	host: 'blog.example.dev',
 	projectId: 'prj_1',
-	releasePath: '/var/lib/skiff/sites/prj_1',
+	releasePath: '/var/lib/yoal/sites/prj_1',
 	accessMode: 'public',
 	site: { spa: false, cleanUrls: true, trailingSlash: 'ignore', notFound: null },
 	redirects: [],
@@ -44,7 +44,7 @@ describe('error pages', () => {
 		expect(renderErrorPage('awaiting-deploy', { dashboardUrl: 'javascript:alert(1)' })).not.toContain('Open in dashboard');
 		const html = renderErrorPage('awaiting-deploy', { dashboardUrl: 'https://cloud.example.dev/projects/{env.SECRET}"x' });
 		expect(html).toContain('Open in dashboard');
-		expect(html).toContain('skiff deploy');
+		expect(html).toContain('yoal deploy');
 		// Caller data can never become a Caddy placeholder or break out of the attribute.
 		expect(placeholders(html)).toEqual([]);
 		expect(html).not.toContain('"x');

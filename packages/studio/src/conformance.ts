@@ -8,7 +8,7 @@
  *   describeConformance({ name: 'postgres 17', plugin, target, readOnlyTarget, fixture });
  */
 import { describe, expect, test } from 'bun:test';
-import { DEFAULT_STUDIO_LIMITS } from '@skiff/contracts';
+import { DEFAULT_STUDIO_LIMITS } from '@yoal/contracts';
 import type { StudioPlugin, StudioSession, StudioTarget } from './driver.ts';
 import { limitEvents } from './limits.ts';
 import { StudioError, type Cell, type ObjectRef, type RowChange, type SchemaChange, type StudioEvent } from './protocol.ts';

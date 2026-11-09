@@ -1,5 +1,5 @@
 import { browser } from '$app/env';
-import type { ObservabilityQueryRequest, PanelQuery, QueryVariables } from '@skiff/contracts';
+import type { ObservabilityQueryRequest, PanelQuery, QueryVariables } from '@yoal/contracts';
 import { createQuery, keepPreviousData } from '@tanstack/svelte-query';
 import { getSchema, keys, runQuery } from './api.js';
 import type { ResolvedRange } from './time.js';

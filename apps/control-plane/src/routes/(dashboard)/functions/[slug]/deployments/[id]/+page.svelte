@@ -10,8 +10,8 @@
 	import TrashIcon from '@lucide/svelte/icons/trash';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import DetailList from '#lib/components/yoal/DetailList.svelte';
+	import StatusBadge from '#lib/components/yoal/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import Panel from '../../../../_lib/Panel.svelte';
@@ -91,7 +91,7 @@
 </script>
 
 <svelte:head>
-	<title>{deployment.shortId} · {data.project.name} · Functions · Skiff</title>
+	<title>{deployment.shortId} · {data.project.name} · Functions · Yoal</title>
 </svelte:head>
 
 <div class="space-y-6">
@@ -179,7 +179,7 @@
 					<Panel title="Function snapshot" icon={CableIcon}>
 						<p class="text-sm text-muted-foreground">
 							This deployment carries no resolved function spec. It was made before the project
-							became a function, or its bundle had no skiff-function.json.
+							became a function, or its bundle had no yoal-function.json.
 						</p>
 					</Panel>
 				{/if}

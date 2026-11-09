@@ -1,4 +1,4 @@
-import { parsePushSubscription } from '@skiff/core';
+import { parsePushSubscription } from '@yoal/core';
 import { canConfigurePlatform } from '#lib/server/platform-config.js';
 import { pushStore, vapid } from '#lib/server/push.js';
 import { describeUserAgent } from '#lib/user-agent.js';

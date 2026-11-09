@@ -1,5 +1,5 @@
 import { and, eq, isNull } from 'drizzle-orm';
-import { brokers, nodes, workloadReplicas, workloads } from '@skiff/db';
+import { brokers, nodes, workloadReplicas, workloads } from '@yoal/db';
 import {
 	NODE_TASKS_CAPABILITY,
 	brokerQueueCreateInputSchema,
@@ -28,7 +28,7 @@ import {
 	type Permission,
 	type Principal,
 	type ResourceRef,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import type { ProjectRow } from './projects.ts';
@@ -101,8 +101,8 @@ const PARSERS: { [K in NodeTaskKind]: (raw: unknown) => Extract<NodeTaskSpec, { 
 	'broker.stream.deleteMessage': (raw) => brokerStreamMessageTargetSchema.parse(raw),
 	'function.invoke': (raw) => {
 		const input = functionInvokeInputSchema.parse(raw);
-		// Skiff's internal header is the shim's own; a test request never carries it.
-		const headers = Object.fromEntries(Object.entries(input.headers).filter(([name]) => name.toLowerCase() !== 'x-skiff-internal'));
+		// Yoal's internal header is the shim's own; a test request never carries it.
+		const headers = Object.fromEntries(Object.entries(input.headers).filter(([name]) => name.toLowerCase() !== 'x-yoal-internal'));
 		return { method: input.method, path: input.path, headers, ...(input.body !== undefined ? { body: input.body } : {}) };
 	},
 	'function.scheduled': (raw) => functionScheduledInputSchema.parse(raw),
@@ -355,11 +355,11 @@ function upsertStream(streams: BrokerStreamStats[], state: NodeTaskStreamState):
 		copy[index] = { ...copy[index]!, messages: state.messages, bytes: state.bytes, firstAt: state.firstAt, lastAt: state.lastAt };
 		return copy;
 	}
-	const queue = state.stream.startsWith('SKIFF_Q_') ? state.stream.slice('SKIFF_Q_'.length) : null;
+	const queue = state.stream.startsWith('YOAL_Q_') ? state.stream.slice('YOAL_Q_'.length) : null;
 	const added: BrokerStreamStats = {
 		stream: state.stream,
 		queue,
-		subjects: queue ? [`skiff.q.${queue}`] : [],
+		subjects: queue ? [`yoal.q.${queue}`] : [],
 		storage: 'file',
 		retention: queue ? 'workqueue' : 'limits',
 		messages: state.messages,

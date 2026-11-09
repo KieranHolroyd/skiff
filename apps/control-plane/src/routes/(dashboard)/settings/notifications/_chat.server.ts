@@ -1,6 +1,6 @@
 import { fail, type Actions } from '@sveltejs/kit';
-import type { PlatformConfigKey } from '@skiff/contracts';
-import { CHAT_CHANNEL_KEYS, type ChatChannel } from '@skiff/core';
+import type { PlatformConfigKey } from '@yoal/contracts';
+import { CHAT_CHANNEL_KEYS, type ChatChannel } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import { testChatChannel } from '#lib/server/platform-config.js';
 import { formBoolean, formRawString, formString } from '../../_lib/errors.js';
@@ -37,13 +37,13 @@ const env = process.env;
 function summarize(channel: ChatChannel): Pick<ChatChannelView, 'configured' | 'summary' | 'values'> {
 	switch (channel) {
 		case 'discord': {
-			const url = env.SKIFF_ALERT_DISCORD_WEBHOOK;
+			const url = env.YOAL_ALERT_DISCORD_WEBHOOK;
 			// The id is not a secret; the token after it is.
 			const id = url && /\/webhooks\/(\d+)\//.exec(url)?.[1];
 			return { configured: Boolean(url), summary: url ? `Webhook ${id ?? ''}`.trim() : null, values: {} };
 		}
 		case 'slack': {
-			const url = env.SKIFF_ALERT_SLACK_WEBHOOK;
+			const url = env.YOAL_ALERT_SLACK_WEBHOOK;
 			let host: string | null = null;
 			try {
 				host = url ? new URL(url).host : null;
@@ -53,8 +53,8 @@ function summarize(channel: ChatChannel): Pick<ChatChannelView, 'configured' | '
 			return { configured: Boolean(url), summary: host ? `Incoming webhook on ${host}` : null, values: {} };
 		}
 		case 'telegram': {
-			const chatId = env.SKIFF_ALERT_TELEGRAM_CHAT_ID;
-			const configured = Boolean(env.SKIFF_ALERT_TELEGRAM_BOT_TOKEN && chatId);
+			const chatId = env.YOAL_ALERT_TELEGRAM_CHAT_ID;
+			const configured = Boolean(env.YOAL_ALERT_TELEGRAM_BOT_TOKEN && chatId);
 			return {
 				configured,
 				summary: configured ? `Chat ${chatId}` : null,
@@ -62,8 +62,8 @@ function summarize(channel: ChatChannel): Pick<ChatChannelView, 'configured' | '
 			};
 		}
 		case 'ntfy': {
-			const url = env.SKIFF_ALERT_NTFY_URL;
-			const token = Boolean(env.SKIFF_ALERT_NTFY_TOKEN);
+			const url = env.YOAL_ALERT_NTFY_URL;
+			const token = Boolean(env.YOAL_ALERT_NTFY_TOKEN);
 			return {
 				configured: Boolean(url),
 				summary: url ? `${url}${token ? ' (with access token)' : ''}` : null,
@@ -89,7 +89,7 @@ function fieldsFor(channel: ChatChannel, data: FormData) {
 			return [
 				{
 					field: 'url',
-					key: 'SKIFF_ALERT_DISCORD_WEBHOOK' as const,
+					key: 'YOAL_ALERT_DISCORD_WEBHOOK' as const,
 					value: formString(data, 'url'),
 					secret: true,
 					required: true,
@@ -100,7 +100,7 @@ function fieldsFor(channel: ChatChannel, data: FormData) {
 			return [
 				{
 					field: 'url',
-					key: 'SKIFF_ALERT_SLACK_WEBHOOK' as const,
+					key: 'YOAL_ALERT_SLACK_WEBHOOK' as const,
 					value: formString(data, 'url'),
 					secret: true,
 					required: true,
@@ -111,7 +111,7 @@ function fieldsFor(channel: ChatChannel, data: FormData) {
 			return [
 				{
 					field: 'token',
-					key: 'SKIFF_ALERT_TELEGRAM_BOT_TOKEN' as const,
+					key: 'YOAL_ALERT_TELEGRAM_BOT_TOKEN' as const,
 					value: formRawString(data, 'token').trim(),
 					secret: true,
 					required: true,
@@ -119,7 +119,7 @@ function fieldsFor(channel: ChatChannel, data: FormData) {
 				},
 				{
 					field: 'chatId',
-					key: 'SKIFF_ALERT_TELEGRAM_CHAT_ID' as const,
+					key: 'YOAL_ALERT_TELEGRAM_CHAT_ID' as const,
 					value: formString(data, 'chatId'),
 					required: true,
 					label: 'Chat ID'
@@ -129,14 +129,14 @@ function fieldsFor(channel: ChatChannel, data: FormData) {
 			return [
 				{
 					field: 'url',
-					key: 'SKIFF_ALERT_NTFY_URL' as const,
+					key: 'YOAL_ALERT_NTFY_URL' as const,
 					value: formString(data, 'url'),
 					required: true,
 					label: 'Topic URL'
 				},
 				{
 					field: 'token',
-					key: 'SKIFF_ALERT_NTFY_TOKEN' as const,
+					key: 'YOAL_ALERT_NTFY_TOKEN' as const,
 					value: formRawString(data, 'token').trim(),
 					secret: true,
 					label: 'Access token'
@@ -159,8 +159,8 @@ export const chatActions = {
 		const { set, unset, fieldErrors } = collect(fieldsFor(channel, data));
 		if (Object.keys(fieldErrors).length) return fieldFailure(fieldErrors);
 		// A secret left blank keeps the saved value; ntfy's token can also be cleared on purpose.
-		if (channel === 'ntfy' && formBoolean(data, 'clearToken') && !set.SKIFF_ALERT_NTFY_TOKEN)
-			unset.push('SKIFF_ALERT_NTFY_TOKEN');
+		if (channel === 'ntfy' && formBoolean(data, 'clearToken') && !set.YOAL_ALERT_NTFY_TOKEN)
+			unset.push('YOAL_ALERT_NTFY_TOKEN');
 
 		const merged: Record<string, string | undefined> = {};
 		for (const key of CHAT_CHANNEL_KEYS[channel]) merged[key] = env[key];
@@ -209,7 +209,7 @@ export const chatActions = {
 			await notifier.notify({
 				key: 'test',
 				title: 'Test alert',
-				detail: `This is a test alert from Skiff, sent by ${locals.user?.email ?? principal.userId}. Real alerts look like this.`,
+				detail: `This is a test alert from Yoal, sent by ${locals.user?.email ?? principal.userId}. Real alerts look like this.`,
 				severity: 'info'
 			});
 		} catch (error) {

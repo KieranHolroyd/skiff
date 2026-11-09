@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { crc32, deflateRawSync } from 'node:zlib';
-import { desiredStateSchema } from '@skiff/contracts';
+import { desiredStateSchema } from '@yoal/contracts';
 import { extractZip, ReleaseManager, safeEntryPath } from './releases.ts';
 
 interface ZipInput {
@@ -17,7 +17,7 @@ interface ZipInput {
 const directories: string[] = [];
 
 async function tempDir(): Promise<string> {
-	const dir = await fs.mkdtemp(join(tmpdir(), 'skiff-agent-releases-'));
+	const dir = await fs.mkdtemp(join(tmpdir(), 'yoal-agent-releases-'));
 	directories.push(dir);
 	return dir;
 }

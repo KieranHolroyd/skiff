@@ -2,7 +2,7 @@
 
 Plan 21 · Decisions D89–D93
 
-Skiff runs three kinds of project: static sites, HTTP apps (process or container), and **workers**.
+Yoal runs three kinds of project: static sites, HTTP apps (process or container), and **workers**.
 A worker is a process or container with no public route and no port. It only makes outbound
 connections: a queue consumer, a chat bot, a sync job, or a CI runner.
 
@@ -16,12 +16,12 @@ the **GitHub Actions runner** template.
      repository, or organisation permission *Self-hosted runners: write* for an organisation.
    - Or a **GitHub App** with the same permission, installed on the repository or organisation. You
      need its App ID, the installation ID (from the installation URL) and a private key (`.pem`).
-2. In Skiff, open **Projects → From template → GitHub Actions runner** (or go straight to
+2. In Yoal, open **Projects → From template → GitHub Actions runner** (or go straight to
    `/new/github-actions-runner`). Fill in the owner, the repository (or choose *A whole
    organisation*), the credential, the number of runners and memory per runner. The launch plan
    beside the form shows the secrets, the memory the pool reserves and the `runs-on:` line before
    anything is created; platform admins also see which nodes have room.
-3. Skiff creates the project, stores the credential as a project secret, and deploys. Within a few
+3. Yoal creates the project, stores the credential as a project secret, and deploys. Within a few
    seconds the runners appear under **Settings → Actions → Runners** in GitHub.
 4. Use them in a workflow:
 
@@ -36,8 +36,8 @@ the **GitHub Actions runner** template.
 The same flow is available over REST:
 
 ```sh
-curl -X POST https://skiff.example.com/api/v1/templates/github-actions-runner \
-  -H "Authorization: Bearer $SKIFF_TOKEN" -H 'content-type: application/json' \
+curl -X POST https://yoal.example.com/api/v1/templates/github-actions-runner \
+  -H "Authorization: Bearer $YOAL_TOKEN" -H 'content-type: application/json' \
   -d '{"values":{"name":"CI runners","owner":"acme","repo":"api","replicas":2,"existingSecret":"ACME_RUNNER_PAT"}}'
 ```
 
@@ -64,8 +64,8 @@ GitHub ◀── generate-jitconfig ── control plane ── activation (JIT 
   it in memory and a `0400` env file. Desired state never contains it.
 - **Cleanup.** Before minting a replica's next runner, the control plane deletes that replica's
   previous registration. Deleting or purging the project deregisters whatever is left. GitHub also
-  removes offline ephemeral runners on its own. `skif runners prune` (or
-  `skif prune --only runner_registrations`) removes registrations a crash or a shrunk pool left
+  removes offline ephemeral runners on its own. `yoal runners prune` (or
+  `yoal prune --only runner_registrations`) removes registrations a crash or a shrunk pool left
   behind after `runnerRegistrationRetentionDays` (default 7, Settings → Retention & defaults);
   registrations a live workload still expects are never touched.
 - **Failures back off.** A clean exit (job done) is replaced immediately. A failed start (bad

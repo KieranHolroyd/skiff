@@ -5,7 +5,7 @@ import {
 	type EmailOrgState,
 	type EmailOrgView,
 	type EmailRecordCheck
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { Tone } from '#lib/status.js';
 
 /**

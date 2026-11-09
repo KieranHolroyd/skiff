@@ -13,7 +13,7 @@ interface Seen {
 }
 
 beforeEach(async () => {
-	dir = await mkdtemp(join(tmpdir(), 'skiff-cli-email-'));
+	dir = await mkdtemp(join(tmpdir(), 'yoal-cli-email-'));
 });
 
 afterEach(async () => {
@@ -34,7 +34,7 @@ function domain(overrides: Record<string, unknown> = {}) {
 		dkimSelector: 'skf202611',
 		records: [
 			{ purpose: 'dkim', type: 'TXT', name: 'skf202611._domainkey.example.com', value: dkimValue, required: true, ok: false, found: [], managed: false, note: null },
-			{ purpose: 'spf', type: 'TXT', name: 'example.com', value: 'v=spf1 include:_spf.skiff.example ~all', required: true, ok: true, found: ['v=spf1 include:_spf.skiff.example ~all'], managed: false, note: null },
+			{ purpose: 'spf', type: 'TXT', name: 'example.com', value: 'v=spf1 include:_spf.yoal.example ~all', required: true, ok: true, found: ['v=spf1 include:_spf.yoal.example ~all'], managed: false, note: null },
 			{ purpose: 'dmarc', type: 'TXT', name: '_dmarc.example.com', value: 'v=DMARC1; p=none', required: false, ok: false, found: [], managed: true, note: null },
 		],
 		lastCheckedAt: null,
@@ -85,11 +85,11 @@ async function cli(...args: string[]) {
 		cwd: join(import.meta.dir, '../..'),
 		env: {
 			...process.env,
-			SKIFF_CONFIG_DIR: dir,
-			SKIFF_URL: `http://127.0.0.1:${server!.port}`,
-			SKIFF_TOKEN: 'skif_test',
-			SKIFF_CONTENT_DOMAIN: '',
-			SKIFF_PROFILE: '',
+			YOAL_CONFIG_DIR: dir,
+			YOAL_URL: `http://127.0.0.1:${server!.port}`,
+			YOAL_TOKEN: 'yoal_test',
+			YOAL_CONTENT_DOMAIN: '',
+			YOAL_PROFILE: '',
 		},
 		stdin: 'ignore',
 		stdout: 'pipe',
@@ -99,7 +99,7 @@ async function cli(...args: string[]) {
 	return { code, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
 }
 
-describe('skif email', () => {
+describe('yoal email', () => {
 	test('status is the default and prints state, limits and usage', async () => {
 		serve({
 			'GET /api/v1/email': {
@@ -121,9 +121,9 @@ describe('skif email', () => {
 		expect(seen[0]).toEqual({ method: 'POST', path: '/api/v1/email/domains', body: { name: 'example.com', sending: false, autoDns: false } });
 		expect(result.stdout).toContain('Added example.com (pending).');
 		expect(result.stdout).toContain(dkimValue);
-		expect(result.stdout).toContain('Skiff created 1 record through Cloudflare: DMARC.');
+		expect(result.stdout).toContain('Yoal created 1 record through Cloudflare: DMARC.');
 		expect(result.stdout).not.toContain('_dmarc.example.com');
-		expect(result.stdout).toContain('skif email domains check example.com');
+		expect(result.stdout).toContain('yoal email domains check example.com');
 	});
 
 	test('domains add without flags leaves the server defaults alone', async () => {
@@ -261,14 +261,14 @@ describe('skif email', () => {
 				lastUsedAt: null,
 				createdAt: '2026-11-07T10:00:00.000Z',
 				password: 'pw-only-once',
-				smtp: { host: 'smtp.skiff.example', port: 587, secure: 'starttls' },
+				smtp: { host: 'smtp.yoal.example', port: 587, secure: 'starttls' },
 			},
 		});
 		const result = await cli('email', 'credentials', 'create', 'mailer', '-p', 'api', '--from', 'example.com');
 		expect(result.code).toBe(0);
 		expect(seen[0]?.body).toEqual({ name: 'mailer', project: 'api', allowedFromDomains: ['example.com'] });
 		expect(result.stdout).toContain('pw-only-once');
-		expect(result.stdout).toContain('smtp.skiff.example');
+		expect(result.stdout).toContain('smtp.yoal.example');
 		expect(result.stdout).toContain('587 (STARTTLS)');
 		expect(result.stdout).toContain('shown only once');
 	});
@@ -280,7 +280,7 @@ describe('skif email', () => {
 		});
 		const missing = await cli('email', 'attach');
 		expect(missing.code).toBe(1);
-		expect(missing.stderr).toContain('skif email attach --project <slug>');
+		expect(missing.stderr).toContain('yoal email attach --project <slug>');
 		const attached = await cli('email', 'attach', '--project', 'api', '--prefix', 'MAIL');
 		expect(attached.code).toBe(0);
 		expect(seen[0]?.body).toEqual({ envPrefix: 'MAIL' });

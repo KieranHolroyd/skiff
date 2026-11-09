@@ -1,11 +1,11 @@
 import { error, fail } from '@sveltejs/kit';
-import { hasPermission } from '@skiff/contracts';
+import { hasPermission } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import type { Actions, PageServerLoad } from './$types';
 
 /**
  * Settings → Git providers (docs/FORGES.md): the org's GitLab, Gitea and Forgejo connections, the
- * hooks Skiff created on them, and where the GitHub App stands (it has its own page).
+ * hooks Yoal created on them, and where the GitHub App stands (it has its own page).
  */
 export const load: PageServerLoad = ({ locals }) => {
 	const principal = locals.principal!;
@@ -68,7 +68,7 @@ export const actions: Actions = {
 		const id = text(await request.formData(), 'id');
 		try {
 			await core.forges.remove(locals.principal!, id);
-			return { success: 'Connection removed, with the webhooks Skiff created on the forge.' };
+			return { success: 'Connection removed, with the webhooks Yoal created on the forge.' };
 		} catch (cause) {
 			return fail(400, { message: message(cause) });
 		}
@@ -88,8 +88,8 @@ export const actions: Actions = {
 			return {
 				success:
 					hook.scope === 'namespace'
-						? `Every repository under ${hook.path} now sends its events to Skiff.`
-						: `${hook.path} now sends its events to Skiff.`
+						? `Every repository under ${hook.path} now sends its events to Yoal.`
+						: `${hook.path} now sends its events to Yoal.`
 			};
 		} catch (cause) {
 			return fail(400, { message: message(cause) });
@@ -103,7 +103,7 @@ export const actions: Actions = {
 			core.pipelines.setAutoSetup(locals.principal!, { enabled });
 			return {
 				success: enabled
-					? 'Repositories with .skiff/workflows now join Pipelines on their next push.'
+					? 'Repositories with .yoal/workflows now join Pipelines on their next push.'
 					: 'Pushes no longer add repositories to Pipelines. Add them by hand under Pipelines.'
 			};
 		} catch (cause) {

@@ -31,7 +31,7 @@ describe('uninstall.sh', () => {
 	});
 
 	test('stops and removes every unit the installer and updater write', () => {
-		const shipped = readdirSync(join(import.meta.dir, 'systemd')).filter((name) => /^skiff-.*\.(service|timer|path)$/.test(name));
+		const shipped = readdirSync(join(import.meta.dir, 'systemd')).filter((name) => /^yoal-.*\.(service|timer|path)$/.test(name));
 		const written = [
 			PRIMARY_UNIT,
 			STANDBY_UNIT,
@@ -53,7 +53,7 @@ describe('uninstall.sh', () => {
 		const units = list('UNITS');
 		for (const unit of new Set([...shipped, ...written])) expect(units).toContain(unit);
 		// The master key drop-ins and other overrides go with their directories.
-		expect(script).toContain('rm -rf /etc/systemd/system/skiff-*.service.d');
+		expect(script).toContain('rm -rf /etc/systemd/system/yoal-*.service.d');
 	});
 
 	test('removes every operator command the installer puts on the host', () => {

@@ -1,4 +1,4 @@
-# Skiff — Clustering, redundancy and high availability
+# Yoal — Clustering, redundancy and high availability
 
 Status: **plan, 2026-11-06.** The direction is **D107**, which retires D24 and the limits that
 blocked multi-node work. The mechanisms are **proposed decisions (H1–H16)**, each becoming a
@@ -6,7 +6,7 @@ D-number when its spike (§15) passes and it is built; phases are **C0–C10** (
 the target design in the present tense; the phase named in each section says when it lands. "Today"
 means verified here, "the plan" means unbuilt.
 
-**Implemented so far (2026-11-06):** C0's backend — migration 0040, the `hardware` heartbeat block, node zone/roles/labels/CPU budget, derived volume classes (disk tiers since D169), constraint-aware placement and the `GET /topology` + `GET /topology/blast-radius` API with its read-only dashboard page. C1's control-plane model and helper/agent apply path are in too (migration 0041, address allocation, peer graph, managed join fields, the desired-state `wireguard` block, root `wireguard/keygen|apply|status` verbs and peer health on the heartbeat); the served installer still requires the signed agent bundle, and real-host verification has not run. C2's data model, forwarding path, pinned self-signed mTLS and cross-node attachments for process apps are in as well (migration 0043, `node_certificates`, `service_endpoints`, the endpoint planner, desired-state endpoints/providers, the agent's Bun TCP/TLS forwarder with fingerprint pinning, and the `SERVICE_ENDPOINTS` flag covering database and private-storage attachments); the per-install CA, Caddy L4 proxy and cross-node container attachments are not. C3's share registry and dashboard page (migration 0044, CRUD, org grants), the helper's fixed NFS/SMB mount/unmount/status verbs and desired-state mounting are in (migration 0067, D143): a share mounts on chosen nodes at `/mnt/skiff-shares/<share>` with sealed SMB credentials and a read-write mount becomes a `bulk`, network disk ([STORAGE.md](./STORAGE.md) §3, D169); `backing: share` attachments, transport probes and blast-radius inheritance are not. C4's replica table, spread planner, deploy-time row population, per-node desired state and route fan-out are in behind `MULTI_NODE_REPLICAS` (migration 0045, `workload_replicas`, `planReplicas`, `RouteSpec.upstreams`); Caddy active health checks (interval `replicas.healthIntervalSeconds`) and least-conn balancing are in; rolling deploys, surge and drain are not. C8's failover controller is in as of 2026-11-07 (migration 0060 `failover_events`, `packages/core/src/failover-service.ts`): a controller lease in the control plane's own SQLite with the epoch checked inside every write, replica re-placement off a lost (`failover.enabled`) or draining node under the §8.3 rate limits, flap protection and queue expiry, ingress record-set tracking for the DNS drivers as `manual` events, and the database `decide` stage with a pluggable promotion handler; `GET /api/v1/ha/status`, `get_ha_status`, `skif ha status` and the Settings → High availability panels read it. Three-signal detection, the object-store lease, DNS writes and drills are not. C7's Postgres streaming read replicas are in as of 2026-11-07 (migration 0069): `pg_basebackup` bootstrap and streaming through an agent-served unix-socket link (local port or the primary node's pinned-mTLS provider listener), helper-managed `skiff_repl` role, `pg_hba` block and `skiff_*` slots, 30-second slot sampling for status/lag, `<P>_READ_*` env, removal with two-sided confirmation, and fenced manual promotion (`database_failovers`) that the C8 controller can drive behind `SKIFF_FEATURE_DB_AUTO_PROMOTE`; see [DATABASES.md](./DATABASES.md) §18. The rest of this document remains the plan.
+**Implemented so far (2026-11-06):** C0's backend — migration 0040, the `hardware` heartbeat block, node zone/roles/labels/CPU budget, derived volume classes (disk tiers since D169), constraint-aware placement and the `GET /topology` + `GET /topology/blast-radius` API with its read-only dashboard page. C1's control-plane model and helper/agent apply path are in too (migration 0041, address allocation, peer graph, managed join fields, the desired-state `wireguard` block, root `wireguard/keygen|apply|status` verbs and peer health on the heartbeat); the served installer still requires the signed agent bundle, and real-host verification has not run. C2's data model, forwarding path, pinned self-signed mTLS and cross-node attachments for process apps are in as well (migration 0043, `node_certificates`, `service_endpoints`, the endpoint planner, desired-state endpoints/providers, the agent's Bun TCP/TLS forwarder with fingerprint pinning, and the `SERVICE_ENDPOINTS` flag covering database and private-storage attachments); the per-install CA, Caddy L4 proxy and cross-node container attachments are not. C3's share registry and dashboard page (migration 0044, CRUD, org grants), the helper's fixed NFS/SMB mount/unmount/status verbs and desired-state mounting are in (migration 0067, D143): a share mounts on chosen nodes at `/mnt/yoal-shares/<share>` with sealed SMB credentials and a read-write mount becomes a `bulk`, network disk ([STORAGE.md](./STORAGE.md) §3, D169); `backing: share` attachments, transport probes and blast-radius inheritance are not. C4's replica table, spread planner, deploy-time row population, per-node desired state and route fan-out are in behind `MULTI_NODE_REPLICAS` (migration 0045, `workload_replicas`, `planReplicas`, `RouteSpec.upstreams`); Caddy active health checks (interval `replicas.healthIntervalSeconds`) and least-conn balancing are in; rolling deploys, surge and drain are not. C8's failover controller is in as of 2026-11-07 (migration 0060 `failover_events`, `packages/core/src/failover-service.ts`): a controller lease in the control plane's own SQLite with the epoch checked inside every write, replica re-placement off a lost (`failover.enabled`) or draining node under the §8.3 rate limits, flap protection and queue expiry, ingress record-set tracking for the DNS drivers as `manual` events, and the database `decide` stage with a pluggable promotion handler; `GET /api/v1/ha/status`, `get_ha_status`, `yoal ha status` and the Settings → High availability panels read it. Three-signal detection, the object-store lease, DNS writes and drills are not. C7's Postgres streaming read replicas are in as of 2026-11-07 (migration 0069): `pg_basebackup` bootstrap and streaming through an agent-served unix-socket link (local port or the primary node's pinned-mTLS provider listener), helper-managed `yoal_repl` role, `pg_hba` block and `yoal_*` slots, 30-second slot sampling for status/lag, `<P>_READ_*` env, removal with two-sided confirmation, and fenced manual promotion (`database_failovers`) that the C8 controller can drive behind `YOAL_FEATURE_DB_AUTO_PROMOTE`; see [DATABASES.md](./DATABASES.md) §18. The rest of this document remains the plan.
 
 Related: [DESIGN.md](./DESIGN.md) §3 and §9, [VOLUMES.md](./VOLUMES.md),
 [DATABASES.md](./DATABASES.md), [OBJECT-STORAGE.md](./OBJECT-STORAGE.md), [OPS.md](./OPS.md),
@@ -27,7 +27,7 @@ Related: [DESIGN.md](./DESIGN.md) §3 and §9, [VOLUMES.md](./VOLUMES.md),
 | C5 | Driver/policy contracts, `IngressHealth`, status API, Settings page | Probing, Cloudflare writes, full route tables, certificate distribution |
 | C6 | Lease decision logic and CAS interface | Standby, Litestream follow, epoch propagation, promotion |
 | C7 | Postgres async streaming replicas: `pg_basebackup` + streaming over the agent link, slots/WAL retention, 30 s lag sampling, `<P>_READ_*` URLs, two-sided removal, fenced manual promotion (dashboard/CLI/REST, `If-Match`), rebuild of the other replicas; overlay firewall opens the provider ranges | `sync` mode and its downgrade, `db_replica_metrics_1m` and lag alerts, the stable 22000–22999 read port, `_READ_POOL_URL`, `pg_rewind` healing (the old primary is purged instead), PITR databases, switchover, live multi-node verification |
-| C8 | Stage machine; failover controller (SQLite lease + fenced writes, replica re-placement with rate limits/flap protection/expiry, ingress record-set tracking as manual events, database decide + `registerDatabaseHandler`); `failover_events`; `/ha/status`, `get_ha_status`, `skif ha status`, Settings panels | Three-signal detection, object-store lease across hosts, DNS driver writes, self-fencing of the old primary (so the C7 promotion handler is registered only with `SKIFF_FEATURE_DB_AUTO_PROMOTE`), drills and the chaos harness |
+| C8 | Stage machine; failover controller (SQLite lease + fenced writes, replica re-placement with rate limits/flap protection/expiry, ingress record-set tracking as manual events, database decide + `registerDatabaseHandler`); `failover_events`; `/ha/status`, `get_ha_status`, `yoal ha status`, Settings panels | Three-signal detection, object-store lease across hosts, DNS driver writes, self-fencing of the old primary (so the C7 promotion handler is registered only with `YOAL_FEATURE_DB_AUTO_PROMOTE`), drills and the chaos harness |
 | C9 | Replication registry/API/UI, migration | RustFS rule execution, IAM/config recreation, promotion |
 | C10 | Engine replication capability values | Per-engine replica topology and member networking |
 
@@ -37,7 +37,7 @@ Related: [DESIGN.md](./DESIGN.md) §3 and §9, [VOLUMES.md](./VOLUMES.md),
 
 ## 0. Summary
 
-Skiff becomes a small cluster without becoming Kubernetes. Five ideas carry the plan:
+Yoal becomes a small cluster without becoming Kubernetes. Five ideas carry the plan:
 
 1. **Nodes describe their hardware; operators describe failure domains.** Hourly CPU, RAM, GPU and
    disk facts plus an operator-set zone, roles and labels let placement make one deploy-time
@@ -58,7 +58,7 @@ Skiff becomes a small cluster without becoming Kubernetes. Five ideas carry the 
 |---|---|---|
 | Nodes and control | Join tokens, per-node desired state, 10 s heartbeats, pull reconciliation (D23), memory admission (D42) | Zones, roles, labels, hardware facts, constraint placement, epoch and generation, CPU and disk budgets |
 | Attachments and replicas | Same-node only, pinned to the service's node (D56); workers only, on one node (D90) | Loopback endpoints over the overlay; HTTP replicas across nodes and zones |
-| SQLite and updates | Litestream to R2; a same-host update slot (`SKIFF_STANDBY=1`, not an HA standby) | A cross-zone standby that follows the replica and can be promoted |
+| SQLite and updates | Litestream to R2; a same-host update slot (`YOAL_STANDBY=1`, not an HA standby) | A cross-zone standby that follows the replica and can be promoted |
 | Ingress and overlay | One edge with a manual hand-off (D98); host-provisioned WireGuard | Every ingress a full edge with DNS steering; managed hubs and LAN mesh (§4) |
 | Databases | One primary per database, loopback only | Streaming replicas, promotion and read URLs |
 
@@ -106,7 +106,7 @@ or federation (D5): distant users keep zone latency, and one install has one con
 |---|---|
 | **Zone** | A failure domain: everything in it shares power, uplink and provider fate. A node belongs to exactly one. |
 | **Role** | What a node may run: `ingress`, `control`, `compute`, `data`, `build`. Placement filters on the set. |
-| **Label** | A `key=value` attribute placement matches. `skiff.io/*` is derived and read-only; operator labels are free-form. |
+| **Label** | A `key=value` attribute placement matches. `yoal.io/*` is derived and read-only; operator labels are free-form. |
 | **Disk tier** | `fast` or `bulk`, derived from the hardware and editable in Settings → Storage (§3.3, D169). Placement constraints also accept `remote` for a network disk. |
 | **HA level** | Per-resource redundancy: `L0` single, `L1` recoverable, `L2` failover, `L3` active (§8.1). Default `L0`. |
 | **Service endpoint** | A consumer-side loopback port forwarded over the overlay to a provider node (§4.3). |
@@ -152,12 +152,12 @@ Discovery is read-only and local: no package install, no container, no driver lo
 optional (absent or blind inside LXC), with `/dev/dri` and sysfs as fallbacks; missing values are
 omitted, never zero.
 
-**Validation and storage.** `hardware.v1` is a Zod schema in `@skiff/contracts`: fixed units,
+**Validation and storage.** `hardware.v1` is a Zod schema in `@yoal/contracts`: fixed units,
 non-negative integers, caps (16 GPUs, 64 disks, 32 NICs), sanitised strings and a 64 KiB bound. It
 is stored in `nodes.hardware_json` with `hardware_at`; a parse failure keeps the previous block,
 sets `hardware_error` and alerts. Derived labels are computed server-side, never operator-written:
-`skiff.io/arch`, `skiff.io/virt`, `skiff.io/gpu`, `skiff.io/gpu-count`, `skiff.io/memory-gb` and a
-sanitised `skiff.io/cpu-model`, recomputed only when the block changes.
+`yoal.io/arch`, `yoal.io/virt`, `yoal.io/gpu`, `yoal.io/gpu-count`, `yoal.io/memory-gb` and a
+sanitised `yoal.io/cpu-model`, recomputed only when the block changes.
 
 ### 3.2 What the operator sets (H2)
 
@@ -165,7 +165,7 @@ sanitised `skiff.io/cpu-model`, recomputed only when the block changes.
 |---|---|---|
 | `zone` | `default` | Lowercase `[a-z0-9-]{1,32}`; one zone per power/uplink domain |
 | `roles` | Edge: `ingress, control, compute, data`; worker: `compute, data` | At least one; `ingress` needs an address or tunnel, `control` 2 GB RAM and 10 GB free, `data` a ready disk, `build` `can_build` (D47) |
-| `labels` | none | ≤ 32, lowercase keys, `skiff.io/` reserved |
+| `labels` | none | ≤ 32, lowercase keys, `yoal.io/` reserved |
 | `lanEndpoint` | none | Private LAN address inside one zone |
 | `sliceMemoryMb` | 1024 | Cannot drop below current reservations (D42/D47) |
 | `sliceCpuWeight` | 200 | 1–10,000; lower than the platform services |
@@ -178,7 +178,7 @@ instance moves only empty. There the choices are to keep the role, delete and re
 wait for move support that does not exist yet.
 
 **Derived versus operator.** Operator-owned: the seven fields above. Derived: `hardware_json`, the
-`skiff.io/*` labels, disk tiers (until an operator sets one), the effective role set (`build` when `can_build` is true), free
+`yoal.io/*` labels, disk tiers (until an operator sets one), the effective role set (`build` when `can_build` is true), free
 budget and the HA ceiling. `nodes.mode` and `can_build` stay stored: several nodes may hold
 `ingress` but exactly one is the edge (D98 relies on the singular field and lookup in
 `packages/core/src/nodes.ts`), and `can_build` is D47's toggle with `build` as its alias. This
@@ -261,7 +261,7 @@ and the dashboard renders the same list; a refusal never collapses to "no capaci
 **Worked examples.** (1) An `L2` Postgres of 2 GiB on `fast` with `spread: zone` puts its primary
 on edge and replica on edge-b, filtering homelab as `bulk`. (2) An `L3` app with two replicas and
 `spread: zone` is refused in a one-zone fleet and gets one copy per zone in a two-zone fleet. (3) A
-GPU job matches only `skiff.io/gpu=nvidia`; score never runs. (4) An attached app before C2 is
+GPU job matches only `yoal.io/gpu=nvidia`; score never runs. (4) An attached app before C2 is
 hard-pinned to its database's node, and no failover moves a pin; it caps at `L0`/`L1`.
 
 **D41, D97 and pins.** `auto` keeps its order: static to `ingress`, apps to a worker with budget,
@@ -279,7 +279,7 @@ re-evaluated only on deploy, scale, **Rebalance** and failover.
 | Postgres, MySQL, MariaDB, MongoDB, Valkey, Redis | `data` | A `fast` disk with RAM headroom | Parity fsyncs make commit latency unpredictable; replica traffic crosses nodes |
 | RustFS | `data` | `bulk` for capacity, `fast` for small hot buckets | Objects tolerate seek latency; databases do not |
 | Builds | `build` | `can_build`, most cores, not an ingress node when another builder exists | Bursty; must not starve ingress (D47) |
-| GPU jobs | `compute` | `skiff.io/gpu=nvidia` | The label is the only proof the device is visible |
+| GPU jobs | `compute` | `yoal.io/gpu=nvidia` | The label is the only proof the device is visible |
 | Backup target | — | Prefer another zone and provider; warn when it is not | A backup in the same failure domain is not one, but D83 does not forbid it |
 | App volumes | `compute` | Pinned to the volume's node; `L1` today, `L2` snapshot shipping from C9, never `L3` (§5.4) | [VOLUMES.md](./VOLUMES.md) §14 pins a project to one node today |
 
@@ -319,7 +319,7 @@ fleet keeps that reserve.
 - **Bulk data:** an array share passed with **virtiofs** (Unraid 7) is a local `bulk` disk; the same
   share exported over NFS is a `bulk` network disk (D143). Both serve the same data; only the second
   is `remote`.
-- **GPU:** VFIO passthrough, so the VM reports `skiff.io/gpu=nvidia`; without the device the label
+- **GPU:** VFIO passthrough, so the VM reports `yoal.io/gpu=nvidia`; without the device the label
   disappears and GPU placement refuses rather than landing silently.
 - **Boot order:** VM autostart after the array starts. Mount units fail closed (D76), so a VM that
   boots before its share appears refuses to start instances instead of writing to the root disk.
@@ -464,7 +464,7 @@ refused if the CIDR overlaps `ip route` or `100.64.0.0/10` (CGNAT, Tailscale). C
 `10.88.0.0/16` and plan 23's random `/24` and `nodes.wg_address`: one field name, one CIDR.
 
 **Keys, MTU and keepalive.** `wireguard/keygen` runs on the node: the public key goes to the control
-plane, the private key to `/etc/skiff/wireguard/wg0.key` (0600 root), never to desired state, logs
+plane, the private key to `/etc/yoal/wireguard/wg0.key` (0600 root), never to desired state, logs
 or audit. The MTU is the minimum of the probed paths: probe 1360–1500 in 8-byte steps with `ping -M
 do`, subtract 80 bytes of WireGuard overhead, giving a `wg0` MTU of 1280–1420, at join and after a
 restart; a probe filtered by ICMP keeps 1420. `PersistentKeepalive=25` is set only on the dialling
@@ -476,7 +476,7 @@ side; handshake age, RTT and bytes ride the heartbeat.
 already reach (Tailscale, a VPC, a LAN), the join is refused unless a hub shares it, and that
 address becomes `private_address` with no peer list.
 
-**Firewall.** One helper-owned `inet skiff` table, applied with `nft -f` after `nft -c -f`: on
+**Firewall.** One helper-owned `inet yoal` table, applied with `nft -f` after `nft -c -f`: on
 `wg0`, established state, UDP 51820 on a hub, `:8080` from ingress `/32`s, one `tcp dport <port> ip
 saddr <consumer /32>` rule per attachment, then drop. As built, the table accepts `8080` plus the
 provider listener ranges `15432–16431` (databases, incl. replica streaming) and `19000–19999`
@@ -497,13 +497,13 @@ validating keys, `/32`s inside the CIDR, ports and an MTU of 1280–1420.
 
 ### 4.2 Agents and the control plane
 
-Today an agent has one control origin: `SKIFF_CONTROL_URL` in `/etc/skiff/agent.env`, written at
+Today an agent has one control origin: `YOAL_CONTROL_URL` in `/etc/yoal/agent.env`, written at
 join and stored in `node.json` — no endpoint list, no pin beyond the system roots, no persisted
 epoch. The endpoint list, in order: the control-plane unix socket on a node that runs it; the
 `private_address` of every `control` node, primary first; then the public platform URL. The list
 rides the heartbeat response (`controlEndpoints`). The agent tries them in order, with a 2 s connect
 timeout and a 5 s first-byte timeout, and takes the first whose epoch is at least the highest it has
-seen, writing that epoch atomically to `$SKIFF_DATA_DIR/epoch.json` before applying the state (§6.3).
+seen, writing that epoch atomically to `$YOAL_DATA_DIR/epoch.json` before applying the state (§6.3).
 
 **Backoff, pins and revocation.** Retries run 1 s, 2 s, 4 s … capped at 30 s with ±20 % jitter,
 reset on success. A `503` with code `control-fenced` is a refusal, not an answer, so the agent moves
@@ -550,7 +550,7 @@ allocator hands it out.
 ```
 
 **mTLS and authorisation.** One per-install CA issues each node a leaf at join (CN = node id, URI
-SAN `skiff://node/<id>`, 90 days); the provider requires and verifies it, so the hop is
+SAN `yoal://node/<id>`, 90 days); the provider requires and verifies it, so the hop is
 authenticated even on a bring-your-own network. That is authentication, not authorisation:
 `caddy-l4` has one client-CA setting per listener, so any node with a valid certificate would pass.
 The allowlist is nftables, one `tcp dport <port> ip saddr <consumer /32>` rule per attachment,
@@ -563,13 +563,13 @@ today resolves only because the database container carries `NetworkAlias=db-<id>
 network (`apps/helper/src/units.ts`); a remote service needs `AddHost=db-<id>:<gateway>` on the
 workload Quadlet. `DB_PORT` becomes the local port; no new DNS, because Postgres carries no SNI. If
 `caddy-l4` fails spike S1 the agent's Bun TCP forwarder takes the same ports and nftables hand-off;
-metrics are `skiff_endpoint_up{consumer,service}`, `skiff_endpoint_rtt_ms` and
-`skiff_wireguard_handshake_age_seconds{peer}`, and C1 caps the fleet at 32 nodes.
+metrics are `yoal_endpoint_up{consumer,service}`, `yoal_endpoint_rtt_ms` and
+`yoal_wireguard_handshake_age_seconds{peer}`, and C1 caps the fleet at 32 nodes.
 
 ### 4.4 Ingress → workload path
 
 Unchanged in shape: the ingress Caddy reverse-proxies to `<workload private_address>:8080` — the
-port plan 23 sets with `SKIFF_CADDY_LISTEN` — preserving `Host` and `X-Forwarded-*`. The workload
+port plan 23 sets with `YOAL_CADDY_LISTEN` — preserving `Host` and `X-Forwarded-*`. The workload
 node's Caddy matches the host and forwards to the local workload, a socket for process apps or the
 published port for containers. Today's `:443,:80` default binds every interface; C1 narrows any node
 without an ingress role to its overlay address. Each ingress carries the full route table and dials
@@ -638,15 +638,15 @@ Four layers, four failures, four recovery costs. A resource's HA level (§8.1) i
 
 | Layer | Protects against | Mechanism | RPO | RTO | Status |
 |---|---|---|---|---|---|
-| Disk | A failed drive | An mdadm array or a ZFS mirror/RAIDZ the OS assembles, used as a disk ([STORAGE.md](./STORAGE.md) §1) | 0, writes are mirrored synchronously | 0, it serves degraded until the drive is replaced | Using an assembled array exists; Skiff does not build arrays (D169) |
-| Service | A failed node | Postgres replicas (C7), bucket replication (C9), Litestream (C9 for app SQLite) | Replicas: the lag, ≈ 0 with `sync`; app SQLite: ≈ 1 s; buckets: the sync interval | Manual promote: minutes; control plane `auto`: TTL + replay ≈ 45 s (§6.3) | `skiff-litestream.service` exists for the control plane's SQLite; the app paths are planned |
+| Disk | A failed drive | An mdadm array or a ZFS mirror/RAIDZ the OS assembles, used as a disk ([STORAGE.md](./STORAGE.md) §1) | 0, writes are mirrored synchronously | 0, it serves degraded until the drive is replaced | Using an assembled array exists; Yoal does not build arrays (D169) |
+| Service | A failed node | Postgres replicas (C7), bucket replication (C9), Litestream (C9 for app SQLite) | Replicas: the lag, ≈ 0 with `sync`; app SQLite: ≈ 1 s; buckets: the sync interval | Manual promote: minutes; control plane `auto`: TTL + replay ≈ 45 s (§6.3) | `yoal-litestream.service` exists for the control plane's SQLite; the app paths are planned |
 | Zone | A failed site | The same replicas in another zone (`spread: zone`, §3.4) | As the service row, plus WAN exposure | As the service row; `L3` ingress moves in 5–10 s (§8.1) | Plan (C7–C9) |
 | Backup | Deletion, corruption, ransomware | Verified logical dumps (D83), PITR where enabled, app-volume snapshots (C9) | 24 h at the default daily policy; ≤ 1 min with PITR | Hours, dominated by download and replay | Dumps exist; PITR is flag-gated and unproven ([PITR.md](./PITR.md)); snapshots are metadata only |
 
 **Replication is not a backup**: a replica copies a `DROP TABLE` as faithfully as an insert, so
 every `L2`/`L3` data resource still needs `L1` backups. **A mechanism with no tested restore is `L1`
-at best**: "Litestream is running" is not an RPO claim until `skiff-restore` has run against that
-replica, and ROADMAP still has the Litestream → R2 round trip unticked. **Data outside Skiff's
+at best**: "Litestream is running" is not an RPO claim until `yoal-restore` has run against that
+replica, and ROADMAP still has the Litestream → R2 round trip unticked. **Data outside Yoal's
 backup path has no backup level**: a share, or a volume never restored, is `L0` however many copies
 run. No RTO here is measured; C9 records one per drill.
 
@@ -675,7 +675,7 @@ grants only; SMB `vers=3.1.1`, `ro`) with `nosuid,nodev,noexec,noatime,_netdev,n
 grant must name an existing org and stay inside the share's root.
 
 **Credentials** are write-only: sealed with the org key and written as a `0400` root file at
-`/run/skiff/shares/<id>.cred` at mount time. The workload never sees them, and the value never
+`/run/yoal/shares/<id>.cred` at mount time. The workload never sees them, and the value never
 enters desired state, the disk cache, logs, MCP or audit arguments (D18, D43, D143).
 
 **Mount lifecycle.** The helper owns the mount; the agent reports `mountStatus` and the last error.
@@ -695,37 +695,37 @@ workload whose share is not `mounted` fails to start rather than writing into an
 (D76). **Probe by transport, not by filesystem call**: a `stat` on a hard-mounted NFS share blocks
 uninterruptibly when the server is gone, so the helper opens TCP 2049/445 with a 3 s timeout every
 30 s, then `stat`s as the workload's uid, and for read-write attachments creates and deletes
-`.skiff-write-canary` every 15 minutes. A passing stat with a failing canary is a permission fault.
+`.yoal-write-canary` every 15 minutes. A passing stat with a failing canary is a permission fault.
 
 **Mount options** are fixed, never user input. NFS: `vers=4.2,hard,proto=tcp,rsize=1048576,
 wsize=1048576,actimeo=30,noatime,nosuid,nodev,noexec,_netdev,nofail,x-systemd.automount,
-x-systemd.device-timeout=30s`. SMB: `vers=3.1.1,credentials=/run/skiff/shares/<id>.cred,uid=<uid>,
+x-systemd.device-timeout=30s`. SMB: `vers=3.1.1,credentials=/run/yoal/shares/<id>.cred,uid=<uid>,
 gid=<gid>,forceuid,forcegid,file_mode=0660,dir_mode=0770,mfsymlinks`; `soft` only on read-only
 media.
 
 **Identity and mapping** is per attachment. Containers use the image's uid/gid; process workloads
 get a stable `shareUid`/`shareGid` instead of `DynamicUser=yes`, which changes uid on every restart
 and would break CIFS `uid=` (new work in C3), so SMB mounts are per (node, share, uid) with
-`forceuid,forcegid`. NFS maps numeric uid only: a Skiff-served export squashes to one `shareUid` and
+`forceuid,forcegid`. NFS maps numeric uid only: a Yoal-served export squashes to one `shareUid` and
 chowns the subdirectory on the server, while an external export must already accept the workload's
 uid. The mount root is never chowned (D78).
 
-**Subpath and read-only default.** A subpath defaults to `skiff/apps/<project>/<volume>` (VOLUMES
+**Subpath and read-only default.** A subpath defaults to `yoal/apps/<project>/<volume>` (VOLUMES
 §14) or an explicit media path; it is absolute, normalised, free of `..` and inside the org's
 prefix. Attachments start `readOnly: true`; turning it off confirms multi-writer semantics, the zone
-joining the blast radius, no Skiff backup and no `L2` in one dialog.
+joining the blast radius, no Yoal backup and no `L2` in one dialog.
 
-**Multi-writer semantics.** A share is ReadWriteMany; Skiff arbitrates nothing and holds no lease,
+**Multi-writer semantics.** A share is ReadWriteMany; Yoal arbitrates nothing and holds no lease,
 so two copies writing one file is the operator's problem and the attach form says so. Locks (NFSv4
 byte range, SMB leases) are advisory, server-held and lost when it restarts or the lease expires
 (typically 90 s), so exclusivity comes from `O_CREAT|O_EXCL` or a managed database. `rename()`
 within one export is atomic; across exports it fails with `EXDEV` and the caller copies then
-deletes. Skiff-served exports use `sync`, because `async` would acknowledge before the array holds
+deletes. Yoal-served exports use `sync`, because `async` would acknowledge before the array holds
 the data, and attribute caching hides another node's changes for up to `actimeo` (30 s here, 600 s
 for read-only media).
 
 **Quotas, backup and blast radius.** `sizeMb` is a recorded budget, not an enforced limit, unless
-the server is a managed ZFS or btrfs volume where C9 applies a dataset quota. Skiff does not back up
+the server is a managed ZFS or btrfs volume where C9 applies a dataset quota. Yoal does not back up
 share contents, so share-backed data is `L0` while compute is `L3`. A workload on a share also
 inherits the share's zone ("down if `home` is down", even with cloud replicas), and placement keeps
 read-write copies there. That caps a share-backed app at `L2`: a share's zone is always its server
@@ -737,21 +737,21 @@ grants, rotation) and a `backing: share` option on the project Volumes attach fo
 `share.mount`, `share.unmount`, `share.mount.fail`, `share.credential.rotate`. Share CRUD is
 platform-admin only; attaching needs `project:update`; MCP gets `list_shares` only.
 
-### 5.3 Skiff-served shares (H8, later)
+### 5.3 Yoal-served shares (H8, later)
 
 A `data` node with a `bulk` volume can export a directory over **NFSv4.2 on the overlay only**, so
 the homelab array becomes the shared drive for every node, the VPSes included, with the WAN latency
 caveat shown. It is C9 and unbuilt: nothing exports NFS, and nothing installs `nfs-kernel-server`.
 
 - **Export and firewall.** A new helper verb `shares.export` writes
-  `/etc/exports.d/skiff-<shareId>.exports` and runs `exportfs -ra` for `<bulk
-  volume>/skiff/shares/<shareId>`, owned by the share's `shareUid`/`shareGid`, with
+  `/etc/exports.d/yoal-<shareId>.exports` and runs `exportfs -ra` for `<bulk
+  volume>/yoal/shares/<shareId>`, owned by the share's `shareUid`/`shareGid`, with
   `rw,sync,no_subtree_check,root_squash,all_squash,anonuid=<uid>, anongid=<gid>,fsid=<id>` and a
   client list of the overlay `/32`s holding an attachment (or `ro` for a read-only grant). NFSv4
   needs only TCP 2049, so there is no rpcbind or portmapper; the nftables verb accepts 2049 on the
   overlay interface from the same `/32` set and drops it elsewhere, and both lists render from one
   desired-state object, so drift is an alert.
-- **Client mount shape.** The §5.2 unit with `10.88.0.5:/skiff/shares/<shareId>` as the source;
+- **Client mount shape.** The §5.2 unit with `10.88.0.5:/yoal/shares/<shareId>` as the source;
   `hard` by default, and a read-write mount over a home uplink warns.
 - **Performance.** Every write is a synchronous round trip, so commit latency is the WAN RTT plus
   the array's write latency: 10–30 ms over the home uplink, worse on a parity array, with metadata
@@ -768,16 +768,16 @@ caveat shown. It is C9 and unbuilt: nothing exports NFS, and nothing installs `n
 State belongs in a managed database or a bucket, and apps should stay stateless and `L3`; for the
 apps that cannot, two mechanisms are planned, both recover-and-promote rather than warm standby.
 
-**Litestream.** The plan gives an app volume `replicate: sqlite` with a database path: Skiff runs
+**Litestream.** The plan gives an app volume `replicate: sqlite` with a database path: Yoal runs
 one Litestream process beside the workload streaming the file to the object store with
 `sync-interval: 1s`, `snapshot-interval: 24h`, 168 h retention and the prefix
-`skiff/sqlite/apps/<volumeId>`. The control plane does the same for its own SQLite
-(`skiff-litestream.service`, `scripts/litestream.yml`, a 24 h snapshot, 720 h retention under
-`skiff/sqlite/`, restored by `skiff-restore`); the app path reuses it.
+`yoal/sqlite/apps/<volumeId>`. The control plane does the same for its own SQLite
+(`yoal-litestream.service`, `scripts/litestream.yml`, a 24 h snapshot, 720 h retention under
+`yoal/sqlite/`, restored by `yoal-restore`); the app path reuses it.
 
 - **Credentials** are sealed, delivered through the activation endpoint and written to a `0400` file
   beside the config; they never enter desired state or the workload's environment.
-- **Restore** follows `skiff-restore`: restore into a scratch file next to the target, run `PRAGMA
+- **Restore** follows `yoal-restore`: restore into a scratch file next to the target, run `PRAGMA
   integrity_check`, checkpoint the WAL into the file, then move it into place on the same filesystem
   so the last step is atomic. The helper does the same with the workload stopped and only then
   records `restoreVerifiedAt`; a failed restore leaves the old copy untouched.
@@ -788,9 +788,9 @@ one Litestream process beside the workload streaming the file to the object stor
   because SQLite needs POSIX locking and atomic rename. **This is `L1`, not `L2`:** a restore is a
   recovery, not a failover.
 
-**Snapshot shipping.** For an app volume holding files rather than one database, Skiff ships
+**Snapshot shipping.** For an app volume holding files rather than one database, Yoal ships
 incremental snapshots to a standby node's volume, kept at rest under
-`<mount>/skiff-shadow/<volumeId>` and never mounted by a workload.
+`<mount>/yoal-shadow/<volumeId>` and never mounted by a workload.
 
 | Mechanism | When | Increment | RPO |
 |---|---|---|---|
@@ -824,16 +824,16 @@ gets snapshot shipping (`L2` for node loss, RPO = interval); media and drop fold
 
 This table is the contract the operator reads before attaching a share and the runbooks implement.
 
-| Failure | What the workload sees | What Skiff does | What the operator does |
+| Failure | What the workload sees | What Yoal does | What the operator does |
 |---|---|---|---|
-| Share server down | Reads and writes hang in `D` state on a hard mount, `EIO` on a `soft` read-only one. Health checks fail, ingress returns 502, the app logs stop. | The 2049/445 probe fails twice and marks the mount `degraded` and the share `down`; the alert names the server and the affected workloads. Skiff does not unmount, restart or re-place anything, because none of those clears a stuck call. | Check the server's power, uplink and array. If it is coming back, wait; if not, stop the workloads, force-unmount, then re-point the share at a new server or restore from the server's own backup. |
-| Stale NFS handle (`ESTALE`) | `ESTALE` on open, read or write of a file whose inode the server no longer has. New files in the directory may work, which makes it look random. | The TCP probe passes and the stat probe returns `ESTALE`, so the mount is `degraded` with `stale_handle`, distinct from `unreachable`. Skiff does not auto-remount: a remount does not fix a handle an open process holds. | Restart the workload first, which drops cached dentries. If it recurs the export was re-created or `fsid` changed: run the share's `remount` action and re-point the export. |
-| Partition while mounted | Writes block; a read-only workload serves from cache until the attribute timeout. A partition that also cuts the node from the control plane stops the heartbeat, and the two look identical on the dashboard. | The mount goes `degraded` only if the node can still reach the server; a node isolated from everything reports nothing and is offline after 30 s. Skiff never promotes or moves a workload because of a share, and the share's zone stays in the blast radius. | Decide which side moved. If the node is isolated but healthy, restore its path; if the server is, treat it as "share server down". A hard mount may need `umount -f -l` before the workload can stop, and its `D`-state processes clear only after the mount is gone. |
+| Share server down | Reads and writes hang in `D` state on a hard mount, `EIO` on a `soft` read-only one. Health checks fail, ingress returns 502, the app logs stop. | The 2049/445 probe fails twice and marks the mount `degraded` and the share `down`; the alert names the server and the affected workloads. Yoal does not unmount, restart or re-place anything, because none of those clears a stuck call. | Check the server's power, uplink and array. If it is coming back, wait; if not, stop the workloads, force-unmount, then re-point the share at a new server or restore from the server's own backup. |
+| Stale NFS handle (`ESTALE`) | `ESTALE` on open, read or write of a file whose inode the server no longer has. New files in the directory may work, which makes it look random. | The TCP probe passes and the stat probe returns `ESTALE`, so the mount is `degraded` with `stale_handle`, distinct from `unreachable`. Yoal does not auto-remount: a remount does not fix a handle an open process holds. | Restart the workload first, which drops cached dentries. If it recurs the export was re-created or `fsid` changed: run the share's `remount` action and re-point the export. |
+| Partition while mounted | Writes block; a read-only workload serves from cache until the attribute timeout. A partition that also cuts the node from the control plane stops the heartbeat, and the two look identical on the dashboard. | The mount goes `degraded` only if the node can still reach the server; a node isolated from everything reports nothing and is offline after 30 s. Yoal never promotes or moves a workload because of a share, and the share's zone stays in the blast radius. | Decide which side moved. If the node is isolated but healthy, restore its path; if the server is, treat it as "share server down". A hard mount may need `umount -f -l` before the workload can stop, and its `D`-state processes clear only after the mount is gone. |
 | Permission change | `EACCES` on open, or on write for a read-write attachment. Reads may be fine while writes fail, or the reverse. | The canary probe, run as the workload's uid, fails while the stat probe passes, so the mount is `degraded` with `permission_denied` rather than `unreachable`, and the share page shows the last successful canary. | Fix ownership or mode on the server, or re-issue the grant. If the export now squashes to a different identity, change `shareUid`/`shareGid` and remount; never chmod the share root from the client. |
-| Full server (`ENOSPC`) | Writes fail with `ENOSPC`, partial files are left behind, and some apps corrupt their own state on a short write. | For a Skiff-served export the server node's volume metrics (D80) drive a `ha.share_full` alert at 15 % and again at 5 % free, before the workload fails. For an external share Skiff cannot see free space, so the workload's error rate is the first signal. | Free space on the server, grow the array or move the data, after finding the runaway writer: a full share is usually an app writing logs or a backup into it. |
-| Client reboot | Boot does not block (`nofail`, automount). On first access the mount either returns or its unit fails, and a workload that needs it fails to start with "share not mounted". | Mount units are re-created from the registry at boot, the helper verifies each one before a dependent workload starts, and the heartbeat reports failures. A reboot during a write loses what was not committed to the server; Skiff claims nothing about unflushed data. | Nothing, if the server was reachable. If the mount failed, check the credential file and the server's export list; the next pull retries, and the workload stays down rather than writing to an empty mountpoint. |
+| Full server (`ENOSPC`) | Writes fail with `ENOSPC`, partial files are left behind, and some apps corrupt their own state on a short write. | For a Yoal-served export the server node's volume metrics (D80) drive a `ha.share_full` alert at 15 % and again at 5 % free, before the workload fails. For an external share Yoal cannot see free space, so the workload's error rate is the first signal. | Free space on the server, grow the array or move the data, after finding the runaway writer: a full share is usually an app writing logs or a backup into it. |
+| Client reboot | Boot does not block (`nofail`, automount). On first access the mount either returns or its unit fails, and a workload that needs it fails to start with "share not mounted". | Mount units are re-created from the registry at boot, the helper verifies each one before a dependent workload starts, and the heartbeat reports failures. A reboot during a write loses what was not committed to the server; Yoal claims nothing about unflushed data. | Nothing, if the server was reachable. If the mount failed, check the credential file and the server's export list; the next pull retries, and the workload stays down rather than writing to an empty mountpoint. |
 
-**Skiff never starts a workload against a share it believes is unmounted**, and **never restarts,
+**Yoal never starts a workload against a share it believes is unmounted**, and **never restarts,
 moves or promotes a workload because of a storage failure**: both would turn a storage incident into
 a data-loss incident. §11 carries these rows under its node and zone cases; C3's exit criterion is
 the first row.
@@ -842,9 +842,9 @@ the first row.
 
 ## 6. Control plane HA
 
-Today one host runs the control plane: `skiff-control-plane.service`, SQLite at
-`/var/lib/skiff/data/skiff.db`, Litestream to the object store (OPS §6). The self-updater also starts a
-second copy of the same release on the same host with `SKIFF_STANDBY=1`, sharing the database file and
+Today one host runs the control plane: `yoal-control-plane.service`, SQLite at
+`/var/lib/yoal/data/yoal.db`, Litestream to the object store (OPS §6). The self-updater also starts a
+second copy of the same release on the same host with `YOAL_STANDBY=1`, sharing the database file and
 living for a minute; that is not an HA standby and does not survive a reboot. This section adds a remote
 warm standby with its own data directory, an object-store lease that decides which node is primary, and
 an epoch that fences everything else.
@@ -864,10 +864,10 @@ different zone (§3.5). A single-node install has neither, stays at `L1` and run
 | `joining` | `control` role set, no replica restored yet | `/readyz` returns 503 | Never |
 
 A standby serves humans, not agents: every `/api/agent/*` request to a standby or a fenced node returns
-503 with `x-skiff-role` and `x-skiff-epoch`, so agents keep cached state (D23). A node that cannot write
+503 with `x-yoal-role` and `x-yoal-epoch`, so agents keep cached state (D23). A node that cannot write
 must not renew a run lease or hand out desired state, or a singleton survives on the authority of a node
-that has already lost the right to decide. `SKIFF_CONTROL_ROLE=standby` (new, C6) marks an HA standby;
-`SKIFF_STANDBY=1` keeps its meaning for the updater's slot and the canary; a promoted standby clears
+that has already lost the right to decide. `YOAL_CONTROL_ROLE=standby` (new, C6) marks an HA standby;
+`YOAL_STANDBY=1` keeps its meaning for the updater's slot and the canary; a promoted standby clears
 both and starts the maintenance loop.
 
 **Health and cost.** `GET /readyz` (OPS §4.2.3) gains `role`, `epoch`, `lease.holder`,
@@ -883,10 +883,10 @@ more copy of the same release: `MemoryMax=1G` per unit (OPS §10), 150 MB steady
 
 | State | Mechanism | RPO | Failure mode | Verification |
 |---|---|---|---|---|
-| SQLite | Litestream from the lease holder to the object store (exists, ~1 s WAL sync); the standby restores the replica, then follows it (S2) | ≤ 1 s | Two writers to one replica path interleave generations; a standby past the 720 h retention cannot catch up | `PRAGMA integrity_check`; fingerprint compare (`scripts/skiff-db-fingerprint.ts`); replay position in `/api/v1/ha/status` |
-| Master key | Recovery kit at enrolment; the standby keeps its own copy, sealed on that host as `/etc/skiff/master.key.cred` behind `LoadCredentialEncrypted` (plaintext `master.key` 0400 root without systemd-creds) | Until the next rotation | A rotation not re-delivered leaves the standby unable to decrypt | `skiff-recovery-kit verify` (fingerprints equal); read one secret |
-| Platform config | Allowlisted `skiff.env` keys through the activation endpoint, values sealed (the OPS §4.3 shape; distribution is new) | Last saved value | Divergent R2, SMTP or alert settings on a promoted standby | Config digest in `/api/v1/ha/status`; `sha256` of the allowlisted keys |
-| Releases | Standby updates first (§6.5) | n/a | Older release, newer schema: pending migrations block promotion | `/readyz` `version` and `schema`; `skiff-update-self status` |
+| SQLite | Litestream from the lease holder to the object store (exists, ~1 s WAL sync); the standby restores the replica, then follows it (S2) | ≤ 1 s | Two writers to one replica path interleave generations; a standby past the 720 h retention cannot catch up | `PRAGMA integrity_check`; fingerprint compare (`scripts/yoal-db-fingerprint.ts`); replay position in `/api/v1/ha/status` |
+| Master key | Recovery kit at enrolment; the standby keeps its own copy, sealed on that host as `/etc/yoal/master.key.cred` behind `LoadCredentialEncrypted` (plaintext `master.key` 0400 root without systemd-creds) | Until the next rotation | A rotation not re-delivered leaves the standby unable to decrypt | `yoal-recovery-kit verify` (fingerprints equal); read one secret |
+| Platform config | Allowlisted `yoal.env` keys through the activation endpoint, values sealed (the OPS §4.3 shape; distribution is new) | Last saved value | Divergent R2, SMTP or alert settings on a promoted standby | Config digest in `/api/v1/ha/status`; `sha256` of the allowlisted keys |
+| Releases | Standby updates first (§6.5) | n/a | Older release, newer schema: pending migrations block promotion | `/readyz` `version` and `schema`; `yoal-update-self status` |
 | ClickHouse | Not replicated; optional and off by default (D101); one store per control node that installed it. The agent buffer is in memory, 5,000 minute-buckets, oldest dropped, lost on restart | Not applicable | A promoted standby with a fresh store has no hot history | `curl -s 127.0.0.1:18123/ping`; "not installed" is valid |
 
 Telemetry has no RPO: a promotion starts a visible gap. The plan adds an endpoint list (§4.2), an on-disk
@@ -894,7 +894,7 @@ spool and a gap band on the dashboard rather than pretending the history survive
 
 ### 6.3 Lease, epoch and fencing (H10)
 
-The lease is one object, `skiff/ha/control-lease.json`:
+The lease is one object, `yoal/ha/control-lease.json`:
 
 ```json
 { "epoch": 7, "holderNodeId": "nod_01JB8Q3K9X", "holderVersion": "1.4.0",
@@ -904,7 +904,7 @@ The lease is one object, `skiff/ha/control-lease.json`:
 Every write is a conditional PUT:
 
 ```
-PUT /skiff/ha/control-lease.json
+PUT /yoal/ha/control-lease.json
 Content-Type: application/json
 If-Match: "b7f1c0a2e4d9..."       # renew or take over: the ETag just read
 If-None-Match: *                   # create only; 412 when the object already exists
@@ -937,9 +937,9 @@ read, and a slow holder must not lose to a fast standby. TTL 30 s renewed every 
 
 **Fencing, and who it reaches.** Desired state carries `epoch` at the top level; the heartbeat response
 carries `{ epoch, role, leaseExpiresAt }`; the agent persists the highest epoch seen in
-`$SKIFF_DATA_DIR/epoch.json` by atomic rename before applying state, and refuses a lower one. That
+`$YOAL_DATA_DIR/epoch.json` by atomic rename before applying state, and refuses a lower one. That
 protects agents, not the dashboard. So a fenced primary refuses every non-GET with 503,
-`x-skiff-fenced: 1` and `Retry-After`, and refuses the agent-facing writes the same way — heartbeat,
+`x-yoal-fenced: 1` and `Retry-After`, and refuses the agent-facing writes the same way — heartbeat,
 desired-state pull, activation fetch, telemetry ingest, run-lease renewal. Reads stay available so
 an operator can see what happened. The run lease carries the control epoch; database fencing uses
 `primary_generation` (§9.3).
@@ -952,10 +952,10 @@ behaviour: today an R2 outage breaks new deploys while the dashboard stays writa
 ### 6.4 Reaching the active control plane
 
 The platform hostname resolves to the ingress nodes, and each ingress Caddy proxies it to the primary.
-Today that route is per-node agent configuration, not desired state: `SKIFF_PLATFORM_HOST` and
-`SKIFF_PLATFORM_UPSTREAM` are written into `agent.env` by the node bootstrap
+Today that route is per-node agent configuration, not desired state: `YOAL_PLATFORM_HOST` and
+`YOAL_PLATFORM_UPSTREAM` are written into `agent.env` by the node bootstrap
 (`scripts/install/bootstrap-node.ts`), and the installer points the edge at
-`unix//run/skiff/control.sock`. A failover therefore cannot move the upstream by changing desired state.
+`unix//run/yoal/control.sock`. A failover therefore cannot move the upstream by changing desired state.
 The plan moves it into desired state as `ingress.platformUpstreams`, a list of
 `{ node, address, priority }` rendered on every ingress node. The route health-checks `/readyz` every 5 s
 with `lb_policy first`, so the primary is preferred while it answers 200, a fenced or dead primary is
@@ -974,28 +974,28 @@ skipped within one interval, and the standby's **Promote** page stays reachable 
    synced (`timedatectl`, offset < 1 s); at least 4 GB RAM; a restore drill passed within 30 days
    (OPS §8); the second ingress record is live and holds the certificate; every agent declares `ha-epoch`
    and none is below the minimum version, or the role is refused with the failing check named.
-2. **Enrol and verify.** `skif node roles edge-b --add control`, then
-   `skif ha standby enrol --node edge-b` (it refuses on lag, backup age or clock skew). The node receives
-   the master key and platform config through the activation endpoint (0400 root), `SKIFF_CONTROL_ROLE`
-   goes into `agent.env`, and the unit restores the replica into its own `/var/lib/skiff/data`
+2. **Enrol and verify.** `yoal node roles edge-b --add control`, then
+   `yoal ha standby enrol --node edge-b` (it refuses on lag, backup age or clock skew). The node receives
+   the master key and platform config through the activation endpoint (0400 root), `YOAL_CONTROL_ROLE`
+   goes into `agent.env`, and the unit restores the replica into its own `/var/lib/yoal/data`
    (`litestream restore`, then follow), applies no migrations and reports `standby`. Check
    `curl -fsS https://control.example.com/readyz | jq '.role, .epoch, .replication'`: `standby`, the
-   primary's epoch, `lagSeconds < 1`, `canPromote: true`. Run `scripts/skiff-db-fingerprint.ts` on both
+   primary's epoch, `lagSeconds < 1`, `canPromote: true`. Run `scripts/yoal-db-fingerprint.ts` on both
    hosts and compare the JSON byte-for-byte, the check the restore drill already uses.
 3. **Promote and demote.**
 
    ```sh
-   skif ha status                            # epoch, holder, per-node epoch, lag
-   skif ha promote --expect-epoch 7          # 409 if the lease is not at 7, or canPromote is false
-   skif ha status --wait                     # every node reports epoch 8 within one heartbeat
+   yoal ha status                            # epoch, holder, per-node epoch, lag
+   yoal ha promote --expect-epoch 7          # 409 if the lease is not at 7, or canPromote is false
+   yoal ha status --wait                     # every node reports epoch 8 within one heartbeat
    ```
 
    Promotion forwards the read ETag as `If-Match`, so a stale ETag returns `412` and a mismatched
    `expectEpoch` returns `409`, instead of bumping twice. A fenced node may not demote itself. On the
-   old primary: stop `skiff-control-plane` and `skiff-litestream`, keep the data directory as
+   old primary: stop `yoal-control-plane` and `yoal-litestream`, keep the data directory as
    evidence, restore the replica at the new epoch, verify and re-enrol as a standby. Its SQLite is
    replaced, never merged.
-4. **Upgrade order.** Standby first, always: update it (`sudo skiff-update-self check`, then update); if
+4. **Upgrade order.** Standby first, always: update it (`sudo yoal-update-self check`, then update); if
    the release ships migrations, `canPromote` stays false until the schema moves. A code-only release
    then promotes the standby and updates the old primary, which rejoins as standby. A release with
    migrations takes the sealed snapshot, stops the primary, promotes the standby so it applies them as
@@ -1003,12 +1003,12 @@ skipped within one interval, and the standby's **Promote** page stays reachable 
    agents refuse a lower epoch, so a downgrade across an epoch boundary is not a supported rollback;
    switch to the other node on the previous release before any promotion.
 5. **Rebuild a lost standby.** Join a replacement (C1), add the control role, run
-   `skif ha standby enrol --repair`. It restores the replica's newest generation — not incrementally,
+   `yoal ha standby enrol --repair`. It restores the replica's newest generation — not incrementally,
    because the old local state is gone — verifies the fingerprint and follows. Past Litestream's 720 h
    retention, restore the newest logical backup and accept that RPO; the node stays `standby-behind`.
 6. **Both control nodes lost.** The lease object and the replica are in the object store, which is why
    they live there. Provision one host at the same version, import the recovery kit and run
-   `skiff-restore --yes --recovery-kit` (OPS §5.3), then `skif ha claim --from-store --expect-epoch 7`:
+   `yoal-restore --yes --recovery-kit` (OPS §5.3), then `yoal ha claim --from-store --expect-epoch 7`:
    it reads the object, CASes to 8 and stops on 412. If the object is missing it creates one with
    `If-None-Match: *` at `lastEpoch + 1`, the highest value in the restored `control_nodes` table. If a
    heartbeat then reports a higher epoch, it takes one more CAS at `reportedEpoch + 1` before answering
@@ -1030,17 +1030,17 @@ skipped within one interval, and the standby's **Promote** page stays reachable 
 | Stale primary returns | It sees a higher epoch | New primary; returning node stays fenced | None if it wrote nothing; its SQLite is discarded | Brain-heal below |
 
 **Detection.** Two nodes reporting `role: primary` with different `holderNodeId`; a non-zero
-`skiff_control_lease_conflicts_total`; mixed `skiff_agent_epoch` values; two `ha.promote` audit rows at
+`yoal_control_lease_conflicts_total`; mixed `yoal_agent_epoch` values; two `ha.promote` audit rows at
 one epoch.
 
 **Runbook.** This is the §18 detail. Do not restart either control plane: writes on the fenced side are
 already failing, which is the design working.
 
-1. Read both nodes (`curl --unix-socket /run/skiff/control.sock http://localhost/api/v1/ha/status`) and the
+1. Read both nodes (`curl --unix-socket /run/yoal/control.sock http://localhost/api/v1/ha/status`) and the
    lease object; record epoch, ETag, holder and timestamps.
 2. Pick the winner: the node whose epoch and `holderNodeId` match the object; failing that, the highest
    epoch with the newest `last_lease_seen`, never uptime.
-3. Freeze the loser: `sudo systemctl stop skiff-control-plane skiff-litestream`, then mask both units.
+3. Freeze the loser: `sudo systemctl stop yoal-control-plane yoal-litestream`, then mask both units.
 4. Confirm no double-writes: search the loser's `audit_log` for rows after the winner's epoch start and
    compare fingerprints. Empty is the expected answer, because the loser refused writes.
 5. Replace, never merge: move the loser's data directory aside, restore the replica at the winner's
@@ -1056,14 +1056,14 @@ merged, enforced by the runbook and audited. Safety rests on one strongly consis
 that acknowledges two conflicting `If-Match` writes, or two endpoints with divergent views, removes the
 foundation, which is why S3 gates C6 and why the behaviour fails closed.
 
-**Manual interventions.** Three, all root, all audited, none over MCP: `skif ha promote --force` from a
+**Manual interventions.** Three, all root, all audited, none over MCP: `yoal ha promote --force` from a
 host when the API is unavailable, with typed confirmation naming the epoch and the candidate;
-`skif ha fence <node>`, which stops serving and revokes the token; and no manual epoch edit, because
+`yoal ha fence <node>`, which stops serving and revokes the token; and no manual epoch edit, because
 the only supported raise is a CAS.
 
-**Metrics and alerts.** `skiff_control_lease_epoch`, `skiff_control_lease_age_seconds`,
-`skiff_control_role`, `skiff_control_standby_lag_seconds`, `_bytes`,
-`skiff_control_lease_conflicts_total`, `skiff_control_promotions_total` and `skiff_agent_epoch`,
+**Metrics and alerts.** `yoal_control_lease_epoch`, `yoal_control_lease_age_seconds`,
+`yoal_control_role`, `yoal_control_standby_lag_seconds`, `_bytes`,
+`yoal_control_lease_conflicts_total`, `yoal_control_promotions_total` and `yoal_agent_epoch`,
 labelled by node; the catalogue is §12. Alerts follow the OPS §7.2 shape: two primaries or an epoch
 mismatch (critical, page, this runbook); renewal failing for 10 s (warning); standby behind 60 s or
 `canPromote: false` (warning); an agent two heartbeats behind (warning); any promotion (info).
@@ -1099,7 +1099,7 @@ that payload, unreduced, on every node with the `ingress` role:
 | Static releases and download URLs | `releases[]` | Every release: edge only |
 | Share-link and session revocations | `revocations[]` | Every agent |
 | Per-project site-cookie key | `routes[].access.siteKey` | Every project's: edge only |
-| Platform route `control.<domain>` | `SKIFF_PLATFORM_HOST` / `_UPSTREAM` env | Edge only |
+| Platform route `control.<domain>` | `YOAL_PLATFORM_HOST` / `_UPSTREAM` env | Edge only |
 | TLS certificate and key | not in desired state | Edge only |
 
 - **Route table.** Each ingress renders the same config and does one atomic `POST /load`
@@ -1108,7 +1108,7 @@ that payload, unreduced, on every node with the `ingress` role:
   two older ones. Cost is disk times ingress count, so warm a node before it takes traffic.
 - **Site-cookie key.** `routes[].access.siteKey` is an HMAC of the platform secret and project id
   (`packages/core/src/config.ts`) and already travels in every route, so every ingress gets it.
-  Every control-plane host must install the same `SKIFF_SITE_COOKIE_SECRET` (§6.2); rotating it
+  Every control-plane host must install the same `YOAL_SITE_COOKIE_SECRET` (§6.2); rotating it
   signs every visitor out.
 - **Callback tokens.** Tokens are 60 s and single-use, but the redeemed-id cache is in memory today
   (`apps/agent/src/verify.ts`). The plan adds an `ingress` claim and persists the cache under the
@@ -1127,7 +1127,7 @@ The plan adds `ha.ingressDriver` (§13.2). `direct` describes today; the rest ar
 | Driver | Requirements | Detection | Failover bound | Cost and limits | Choose when |
 |---|---|---|---|---|---|
 | `direct` (today) | One ingress | Node offline alert (2 min) | None: a human repoints the record | No daemon; an edge loss is an outage until DNS is edited | One node, or an IP-only install (D105) |
-| `dns-failover` | Two or more ingress nodes in distinct zones, a Cloudflare zone and token, origins the fleet can probe | Skiff probes from the primary plus corroborating nodes | 120 s proxied (165 s single-witness), 240 s DNS-only, `auto`; manual adds human time | No daemon; no Cloudflare health checks, so detection and last-record protection are ours | The reference fleet |
+| `dns-failover` | Two or more ingress nodes in distinct zones, a Cloudflare zone and token, origins the fleet can probe | Yoal probes from the primary plus corroborating nodes | 120 s proxied (165 s single-witness), 240 s DNS-only, `auto`; manual adds human time | No daemon; no Cloudflare health checks, so detection and last-record protection are ours | The reference fleet |
 | `cloudflare-lb` | Paid Load Balancing; origins reachable from Cloudflare | Cloudflare health monitors | Monitor interval and retries, set to meet the target | Paid add-on; Cloudflare owns the decision and adds config surface | Many ingress nodes, or weak probe vantage points |
 | `cloudflare-tunnel` | `cloudflared` per ingress as connectors of one tunnel; no public origin | Cloudflare connector health | Seconds | 30–40 MB per node; Cloudflare terminates TLS; 100 MB body cap; no origin to probe | Behind CGNAT or without a public IP |
 
@@ -1136,7 +1136,7 @@ Both zones are already orange-cloud, so it adds no daemon; proxied failover work
 algorithm:
 
 1. **Observe.** The primary probes every ingress every 10 s:
-   `GET https://<address>/.well-known/skiff/health` with the probed node's SNI and Host, 3 s
+   `GET https://<address>/.well-known/yoal/health` with the probed node's SNI and Host, 3 s
    timeout, 200 is success. New in C5, it is unauthenticated and targets the origin address, not
    Cloudflare. Nodes with a public path also probe and report in the heartbeat; silence is not
    evidence of failure.
@@ -1162,7 +1162,7 @@ are firewalled to Cloudflare ranges or all ingress is tunnelled, the origin prob
 through Cloudflare, or pick a driver that fails over inside it.
 
 **Cloudflare plan limits that matter.** The Free plan has no health checks and no load balancing, so
-detection and decision are Skiff's. Proxied request bodies are capped at 100 MB, which already
+detection and decision are Yoal's. Proxied request bodies are capped at 100 MB, which already
 applies to public S3 routes; the API allows 1,200 requests per 5 minutes, far above a 30 s
 reconcile. The token needs `Zone:DNS:Edit` and is held by the control plane and the ACME holder
 (§7.3). A proxied name with several A records is not a documented failover API; whether Cloudflare
@@ -1178,7 +1178,7 @@ certificate (D31). The agent probes each certificate every 6 h and alerts at 14 
 and every verified custom domain; custom domains grow with tenants, so per-ingress issuance would
 multiply the duplicate risk and the key copies.
 
-- **ACME lease.** `skiff/ha/acme-lease.json` in the platform object store, separate from the control
+- **ACME lease.** `yoal/ha/acme-lease.json` in the platform object store, separate from the control
   lease: `{holderNodeId, expiresAt, generation}`, 600 s TTL renewed every 120 s. Only the holder
   runs the ACME issuer; if it dies another ingress takes the lease. Renewal starts 30 days before
   expiry and retries every 6 h, so a slow issuance does not lose the lease.
@@ -1212,7 +1212,7 @@ multiply the duplicate risk and the key copies.
 
 - Two or more `ingress` nodes in distinct zones, converged: current `actualStateVersion`,
   `caddyOk` true, every release present, the same certificate fingerprint everywhere.
-- Every probing node reaches every ingress at `/.well-known/skiff/health` over the public path; if
+- Every probing node reaches every ingress at `/.well-known/yoal/health` over the public path; if
   not, the driver runs `single-witness`.
 - Cloudflare zone connected, token with `Zone:DNS:Edit` and `Zone:Zone:Read`, records
   exported, managed names identified, TTL 60 s.
@@ -1249,9 +1249,9 @@ multiply the duplicate risk and the key copies.
 
 | Signal | Shows | Alert |
 |---|---|---|
-| `skiff_ingress_probe_success{node,observer}` | Per-observer reachability | Warn when observers disagree for 60 s |
-| `skiff_ingress_dns_state{node}` | `present`, `suspect`, `removed`, `damping` | Page on removal; warn when one ingress remains or the driver is `single-witness` |
-| `skiff_node_cert_expiry_timestamp_seconds{node,host}` | Certificate expiry (exists) | 14 d warn, 3 d page |
+| `yoal_ingress_probe_success{node,observer}` | Per-observer reachability | Warn when observers disagree for 60 s |
+| `yoal_ingress_dns_state{node}` | `present`, `suspect`, `removed`, `damping` | Page on removal; warn when one ingress remains or the driver is `single-witness` |
+| `yoal_node_cert_expiry_timestamp_seconds{node,host}` | Certificate expiry (exists) | 14 d warn, 3 d page |
 
 **Common failure modes.**
 
@@ -1260,7 +1260,7 @@ multiply the duplicate risk and the key copies.
 | 525/526 on some requests after adding a node | Certificate missing or different there | Remove from DNS, distribute, compare fingerprints, re-add |
 | Half of requests 404 or 503 after adding a node | Record added before routes or releases converged | Remove, wait for `actualStateVersion` and `releases[]`, re-add |
 | Sites and dashboard down after the edge fails | Control plane died with the ingress; manual mode needs a promote | Reach the standby directly, promote, then DNS |
-| Everyone signed out after a promotion | `SKIFF_SITE_COOKIE_SECRET` differs on the new primary | Restore the same `skiff.env` from the recovery kit |
+| Everyone signed out after a promotion | `YOAL_SITE_COOKIE_SECRET` differs on the new primary | Restore the same `yoal.env` from the recovery kit |
 | Callbacks fail with 403 after a failover | The token was node-bound and redeemed elsewhere | Expected; sign in again |
 
 ---
@@ -1361,7 +1361,7 @@ are in §12. Health, policy and retries are §8.6.
 
 **Status (2026-11-07, C8 controller).** Built in `packages/core/src/failover-service.ts`, ticked every
 `controlPlane.renewSeconds` (capped at a third of `leaseTtlSeconds`) by the primary control plane; a
-`SKIFF_STANDBY=1` process never ticks. Differences from the plan above:
+`YOAL_STANDBY=1` process never ticks. Differences from the plan above:
 
 - **Switch, not per resource.** The trigger is fleet-wide `failover.enabled` (off by default) plus
   `replicas.failoverGraceSeconds` (120 s) of silence since the last heartbeat; per-resource
@@ -1519,7 +1519,7 @@ every other purpose, and its replicas serve until moved.
 ### 8.6 Health, readiness and load balancing
 
 Today the agent makes one probe per workload: an HTTP `GET` on `healthPath` over loopback or the
-socket, 2 s per attempt every 500 ms for up to 30 s (`SKIFF_WORKLOAD_HEALTH_TIMEOUT_MS`). The result
+socket, 2 s per attempt every 500 ms for up to 30 s (`YOAL_WORKLOAD_HEALTH_TIMEOUT_MS`). The result
 sets `running` or `starting` and does not gate traffic. Databases get a TCP engine handshake
 (`probeDatabasePort`); a worker is healthy when its unit is active (D89). Caddy has one upstream per
 route and no health configuration.
@@ -1553,14 +1553,14 @@ and a retry duplicates it. The branded page and the error-route fallback exist t
 C2 test that a `POST` is never replayed. Nothing is retried after a response has begun streaming, and
 nothing is retried across a WebSocket upgrade.
 
-**Sticky sessions.** `sticky: 'cookie'` uses Caddy's `lb_policy cookie` with `skiff_affinity`
+**Sticky sessions.** `sticky: 'cookie'` uses Caddy's `lb_policy cookie` with `yoal_affinity`
 (`Secure`, `HttpOnly`, `SameSite=Lax`) for apps that hold a session in memory. It costs even load: one
 client sticks to one copy, and a retirement re-pins every client on its next response. It is never
 used for databases.
 
 **Observability.** The agent reports each replica's last probe result, the time since it changed and
 its ejection count in the heartbeat; each ingress node reports per-upstream request, error and latency
-counters as `skiff_upstream_*` (§12). The resource page shows a probe timeline beside the deploy
+counters as `yoal_upstream_*` (§12). The resource page shows a probe timeline beside the deploy
 history. Alerts fire on a ready-but-ejected copy for over 2 min, on a workload with no ready copy for
 30 s, and on an ingress whose upstream set is smaller than its level requires.
 
@@ -1572,8 +1572,8 @@ Status: **partly built.** Postgres async streaming replicas and fenced manual pr
 DATABASES §18 is the as-built description). Where this section differs, the build is: the
 walreceiver reaches its primary through an agent-served unix socket bind-mounted read-only into the
 replica container (not a C2 endpoint, which a container cannot reach), the slot is
-`skiff_<replica id>`, a same-node replica is allowed for read scaling but never promoted, `sync` is
-refused, the `pg_hba` rule is `host replication skiff_repl all scram-sha-256` (the source address
+`yoal_<replica id>`, a same-node replica is allowed for read scaling but never promoted, `sync` is
+refused, the `pg_hba` rule is `host replication yoal_repl all scram-sha-256` (the source address
 behind the loopback publish is the container gateway, not a fixed endpoint address), and the
 fence is "leave the old node's desired state, confirmed by its heartbeat" rather than the
 object-store lease, so automatic promotion is opt-in. `pg_rewind`, `db_replica_metrics_1m`, lag
@@ -1583,16 +1583,16 @@ database (§8.1, §13 for its shape).
 ### 9.1 Engine capability
 
 The engine registry (D95) gains `replication: 'none' | 'streaming' | 'native-cluster'`. `streaming`
-means Skiff runs the replicas and orchestrates promotion; `native-cluster` means the engine owns
-membership and election and Skiff renders configuration and watches it. Surfaces hide what an engine
+means Yoal runs the replicas and orchestrates promotion; `native-cluster` means the engine owns
+membership and election and Yoal renders configuration and watches it. Surfaces hide what an engine
 lacks, and `L2` is refused when the value is `none`.
 
 | Engine | Mode | Read URLs | Failover | RPO / RTO | Phase |
 |---|---|---|---|---|---|
-| Postgres 16/17 | `streaming`, 1–2 replicas, async or `ANY 1` sync | `<P>_READ_URL`, `_READ_POOL_URL`, `_READ_URLS` | Skiff; manual C7, `auto` C8 | async = lag ≤ 1 s; sync = 0 / 90 s target, 2 min budget | C7, C8 |
-| MySQL 8.4/9.7, MariaDB 11.4/11.8 | `streaming`, GTID async | none | Skiff, manual only | lag ≈ 1 s / ≈ 10 min, operator-led | C10 |
+| Postgres 16/17 | `streaming`, 1–2 replicas, async or `ANY 1` sync | `<P>_READ_URL`, `_READ_POOL_URL`, `_READ_URLS` | Yoal; manual C7, `auto` C8 | async = lag ≤ 1 s; sync = 0 / 90 s target, 2 min budget | C7, C8 |
+| MySQL 8.4/9.7, MariaDB 11.4/11.8 | `streaming`, GTID async | none | Yoal, manual only | lag ≈ 1 s / ≈ 10 min, operator-led | C10 |
 | MongoDB 8.0/9.0 | `native-cluster`, 3 voting members | `<P>_URI` already lists all members | the engine's election | 0 for `w:majority,j:true` / 10–30 s | C10 |
-| Valkey 9.1/8.1, Redis 8.10/8.8 | `streaming`, primary + async replicas, no Sentinel | none | Skiff, manual | AOF ≤ 1 s plus lag / ≈ 5 min | C10 |
+| Valkey 9.1/8.1, Redis 8.10/8.8 | `streaming`, primary + async replicas, no Sentinel | none | Yoal, manual | AOF ≤ 1 s plus lag / ≈ 5 min | C10 |
 
 Postgres is the only engine with a zero-RPO option, and `sync` needs two replicas in different zones to be
 worth anything (§9.2); spike S6 keeps it off the homelab WAN pair. MongoDB needs three nodes, since a
@@ -1610,11 +1610,11 @@ disk when the primary is on one; D169).
 
 **Bootstrap.** The helper verb `POST /v1/workloads/:id/replica/init` fills an empty data directory with
 `pg_basebackup -D /data/pgdata -X stream -c fast -R --checkpoint=fast --max-rate=50M` against the primary,
-through the same L4 endpoint a consumer uses, as `skiff_repl` with `sslmode=verify-full`. `-R` writes
+through the same L4 endpoint a consumer uses, as `yoal_repl` with `sslmode=verify-full`. `-R` writes
 `primary_conninfo` and `standby.signal`, so nothing is hand-edited; with PITR on, the source is
 `pgbackrest --stanza=<id> restore`, still blocked by the missing PITR image (PITR.md).
 
-**Slots and WAL retention.** One physical slot per replica, `skiff_<dbid8>_<node8>`, with
+**Slots and WAL retention.** One physical slot per replica, `yoal_<dbid8>_<node8>`, with
 `max_wal_senders = max_replication_slots = 10`, `wal_keep_size = 512MB` and
 `max_slot_wal_keep_size = 2GB` by default (operator range 512MB–16GB). The cap protects the primary's disk:
 a replica down longer than the cap generates is a rebuild, never a resume, and a slot whose `wal_status`
@@ -1630,7 +1630,7 @@ the agent counts failed acknowledgements from `pg_stat_replication` and after `s
 `synchronous_standby_names`, records `durability_effective = 'async'` and raises the alert on its next
 heartbeat.
 
-**Lag.** Two sampler queries as `skiff_monitor`, whose `pg_monitor` grant already covers both:
+**Lag.** Two sampler queries as `yoal_monitor`, whose `pg_monitor` grant already covers both:
 `pg_stat_replication` on the primary (state, LSN positions, the three lag intervals, `sync_state`), and the
 replica's `pg_is_in_recovery()`, replay LSN and replay timestamp. New `db_replica_metrics_1m`, keyed by
 `(database_id, replica_id, bucket)` with the same TTL and rollup, carries `state`, `lag_bytes` (`sent_lsn -
@@ -1652,7 +1652,7 @@ only under PITR), `hot_standby=on`, `wal_receiver_timeout=wal_sender_timeout=60s
 connect_timeout=10`, and `initdb --data-checksums` for new databases from C7 so `pg_rewind` works; older
 databases get `wal_log_hints=on` until a major upgrade or move re-creates them (OPS §4.2.5). Disk is
 `1.3 × size` on the replica node, whose IOPS class must match, and each WAL sender costs a few MB of RSS.
-`skiff_repl` is `LOGIN REPLICATION`, its password is sealed on the row and fetched at activation, and
+`yoal_repl` is `LOGIN REPLICATION`, its password is sealed on the row and fetched at activation, and
 `pg_hba` allows it only from the endpoint address for `replication`; streaming crosses the overlay inside the
 mTLS endpoint path (§4.3), no port is public (D56), and an app credential cannot promote. Limits: two
 replicas; none cascading in C7; none across a major version; none for a PITR database until its image gap
@@ -1662,7 +1662,7 @@ closes.
 
 The control-plane primary orchestrates, one state machine per database, persisted in `database_failovers`
 (database, from/to generation, state, chosen replica, evidence, timestamps, actor) so a promoted control
-plane resumes at the same state. Skiff adds neither Patroni plus etcd/Consul nor pg_auto_failover.
+plane resumes at the same state. Yoal adds neither Patroni plus etcd/Consul nor pg_auto_failover.
 
 The machine is `steady → suspect → confirmed → fenced → promoted → repointed → healing → steady`, with
 `failed` reachable from any step. `suspect` starts the detection budget and records which signals agree;
@@ -1685,7 +1685,7 @@ nothing to promote to, so page and restore or move the database.
 one whose slot is `lost`; more than 64 MB or 60 s behind needs `accept_data_loss: true`, else 409.
 
 **Fence, then promote. Order is not negotiable.** Each database with `failover: auto` holds
-`skiff/ha/db/<id>.json`, `{ generation, holderNodeId, expiresAt }`, renewed every 5 s with a 15 s TTL — the
+`yoal/ha/db/<id>.json`, `{ generation, holderNodeId, expiresAt }`, renewed every 5 s with a 15 s TTL — the
 same conditional-PUT mechanism as §6.3, gated by spike S3. Promotion acquires it at `generation + 1`; the
 old primary stops when it cannot renew for one TTL, and immediately when it reads a higher generation. With
 the object store unreachable nobody can be promoted. The generation also rides desired state, so a
@@ -1709,7 +1709,7 @@ typical against the 2-minute budget, which is what §8.1's `L2` row carries.
 **Control plane, manual promote and D97.** If the control-plane primary and the database primary share the
 failed node, the control-plane failover runs first (§6.3) and the two RTOs add. Promote is
 `POST /databases/:name/promote` (`If-Match: <primary_generation>`, `{ acceptDataLoss? }`, `confirm:
-true`), `skif db replica promote`, or the dashboard behind a typed confirmation;
+true`), `yoal db replica promote`, or the dashboard behind a typed confirmation;
 never MCP. Switchover drains the primary first: checkpoint, stop, wait for `replay_lsn =
 pg_current_wal_lsn()`, promote — zero lost commits, refused when the gap is non-zero. Both audit
 `database.failover.*` and page on `ha.replica_down`, `ha.slot_lost`, `ha.sync_downgraded` and `ha.fenced`
@@ -1741,7 +1741,7 @@ registered yet (the read-replica work, C7, plugs in here), so database failover 
 | ClickHouse | Nothing: it is not a managed engine but the optional telemetry store (D101) | Any HA; when installed each control node keeps its own store and promotion loses the hot history (§6.2) |
 
 The blocker is the provider-side listener, not the engine. A database container reaches a peer only through
-the `skiff-workloads` network alias, and §4.3's provider listener is overlay-bound behind a per-peer
+the `yoal-workloads` network alias, and §4.3's provider listener is overlay-bound behind a per-peer
 nftables allowlist: the member container has no host-network access and no route to the overlay, so it
 cannot open the member port. C10 extends it: each member publishes a per-peer port on its own loopback
 **and** an alias on the org network, and the provider accepts that port only from the member nodes' overlay
@@ -1798,7 +1798,7 @@ for 1 s after a write in this session". Publish `max_connections` (Postgres defa
 Preconditions: the database is `L2` with a healthy replica, a verified `L1` backup exists, the mode is
 known, and there is a way to reach the host or dashboard that does not depend on the failed node (§18).
 
-1. **Detect and confirm.** Read the alert and `GET /api/v1/databases/:name/replicas` (or `skif db replica
+1. **Detect and confirm.** Read the alert and `GET /api/v1/databases/:name/replicas` (or `yoal db replica
    list`): state, `replay_lsn`, `lag_seconds`, `primary_generation`, node online? Apply §9.3's rule.
 2. **Check the control plane.** If it is down too, run its runbook first (§18).
 3. **Decide.** With `auto` and 3+ data nodes, watch it complete. With `manual`, or two nodes, decide between
@@ -1809,7 +1809,7 @@ known, and there is a way to reach the host or dashboard that does not depend on
    stopped; if not, lease expiry is the fence.
 6. **Promote** with `If-Match` on the generation, and `accept_data_loss` when the gap exceeds 64 MB or 60 s.
 7. **Verify writes and replication.** `pg_is_in_recovery()` returns `false`; write and read back a
-   `skiff_canary` row; `pg_stat_replication` and `database_replicas` agree that the survivors stream.
+   `yoal_canary` row; `pg_stat_replication` and `database_replicas` agree that the survivors stream.
 8. **Re-point.** Confirm every consumer map updated (`GET /topology`), then watch 5xx for 5 minutes; restart
    the pooler only if it never reconnects.
 9. **Heal.** Rewind, start with `-R`, wait for `streaming`; on failure purge and bootstrap, never a merge.
@@ -1853,7 +1853,7 @@ Multi-drive alone is the disk layer of §5.1, not an HA level.
 
 ### 10.2 Bucket replication
 
-**As built (2026-11-07), Skiff moves the objects itself**: RustFS's bucket replication would dial the
+**As built (2026-11-07), Yoal moves the objects itself**: RustFS's bucket replication would dial the
 target from inside the source container, which cannot reach a private instance on another node
 (D56). One node's agent runs each rule as a scheduled copy pass through the peer node's gateway with
 a key scoped to the replicated buckets; that is the "scheduled sync" fallback below, `L1` with the
@@ -1912,7 +1912,7 @@ apps (D97), while from C2 the app keeps `127.0.0.1:<port>`; and **multipart uplo
 
 ### 10.3 The platform object store
 
-Skiff's own artifacts live in **R2**, external to every node and already highly available: releases,
+Yoal's own artifacts live in **R2**, external to every node and already highly available: releases,
 uploads, telemetry Parquet, Litestream replicas and database dumps (D83). It is not a
 `storage_instances` resource and never becomes one. If R2 is unreachable, new deploys (DESIGN §9) and
 backups fail and Litestream stalls, while serving continues (D23); under §6.3 the control plane also
@@ -1924,7 +1924,7 @@ is acknowledged when the primary succeeds, secondaries are fed by a retry queue,
 the primary with the secondary as fallback. Backups come first (D83 dumps, storage sync copies),
 because those are needed when R2 itself is the casualty.
 
-**Why it is not managed by Skiff.** A managed instance may be an `ObjectStore` target only, never
+**Why it is not managed by Yoal.** A managed instance may be an `ObjectStore` target only, never
 canonical ([OBJECT-STORAGE.md](./OBJECT-STORAGE.md) §10): a deploy needs artifacts from the store
 (DESIGN §9), so the store cannot depend on a workload that deploy repairs; storage instances are
 org-owned, soft-deleted and purged (D69), while platform artifacts must outlive any org; and the
@@ -1994,30 +1994,30 @@ budget is what makes it achievable.
 |---|---|---|---|---|---|---|
 | `edge` lost | lease expires at `edge-b` in 30 s, takeover at 40 s; `Node offline` page at 2 min | public ingress, dashboard, `L0` on `edge`, SQLite writes | standby promotes (≈45 s), then `dns-failover` withdraws `edge` after a 45 s hold-down; `L2`/`L3` copies serve | promote, then point the record at `edge-b` (§18) | ≈120 s proxied (165 s single-witness), 240 s DNS-only `auto`; 10–20 min manual. RPO 0 stateless, ≤1 s SQLite | `chaos/kill-edge` |
 | `edge-b` lost | heartbeat stops; page 2 min | second ingress, the standby, its replicas | paths re-route to `edge`; nothing to promote | repair, rejoin, re-seed the standby | seconds for ingress; hours for its `L0` | `chaos/kill-edge-b` |
-| `homelab` offline | page 2 min; `skiff_volume_up` 0 | `home`-only apps, shares it serves, bulk RustFS, builds | `L3` elsewhere continues; routes return the branded 503; builds queue | repair; mounts fail closed (D76); re-run builds | seconds replicated, hours `L0`; builds wait | `chaos/zone-home` |
+| `homelab` offline | page 2 min; `yoal_volume_up` 0 | `home`-only apps, shares it serves, bulk RustFS, builds | `L3` elsewhere continues; routes return the branded 503; builds queue | repair; mounts fail closed (D76); re-run builds | seconds replicated, hours `L0`; builds wait | `chaos/zone-home` |
 | `linux-box` offline | page 2 min | build capacity, replicas it held | re-placement only under `failover: auto`; builds queue | none unless it held a singleton | seconds for `L3`; builds wait | `chaos/kill-linux-box` |
 | A whole zone (`cloud-a`, `home`) | the rows above, at once | control primary and ingress if `cloud-a`; shares, builds and bulk if `home` | promotion, then steering, then database failover | operate from the survivor (§18) | 3–5 min auto for `cloud-a`; hours for `home` | `drill/zone-loss` |
-| A WireGuard hub | `skiff_wireguard_handshake_age_seconds{peer}` > 180 s | cross-zone overlay traffic through that hub | peers use the other hub; LAN pairs unaffected | repair; the helper re-applies peers | seconds with two hubs; total with one | `chaos/kill-hub` |
+| A WireGuard hub | `yoal_wireguard_handshake_age_seconds{peer}` > 180 s | cross-zone overlay traffic through that hub | peers use the other hub; LAN pairs unaffected | repair; the helper re-applies peers | seconds with two hubs; total with one | `chaos/kill-hub` |
 | Control-plane primary process | `/readyz` fails; no renewal for 20 s; no `Node offline` page | dashboard, REST, MCP, maintenance loop, deploys | the standby takes the lease at 40 s and promotes (≈45 s total) | restart the unit, then demote the loser (§18) | ≤1 min auto; RPO ≤1 s | `chaos/kill-control-process` |
 | Control-plane standby | its heartbeat stops; `ha.standby_behind` | the failover target and the warm SQLite copy | primary keeps serving; `canPromote` stays false | re-enrol; wait for a full replay before calling it ready | none now; failover unavailable until repaired | `chaos/kill-standby` |
-| Partition between the control planes | a lease CAS returns 409 or 412, or two `primary` roles are seen (`skiff_control_lease_conflicts_total`) | split brain; agents on a stale epoch | the loser fences at 20 s and the winner cannot take the lease before 40 s, so no instant has two writers; agents follow the highest epoch; singletons fence on the run lease | compare `/api/v1/ha/status` on both, stop the loser's Litestream, replace its SQLite, never merge (§18) | up to ~40 s of write unavailability; heal 10–30 min | `chaos/partition-a-b` |
+| Partition between the control planes | a lease CAS returns 409 or 412, or two `primary` roles are seen (`yoal_control_lease_conflicts_total`) | split brain; agents on a stale epoch | the loser fences at 20 s and the winner cannot take the lease before 40 s, so no instant has two writers; agents follow the highest epoch; singletons fence on the run lease | compare `/api/v1/ha/status` on both, stop the loser's Litestream, replace its SQLite, never merge (§18) | up to ~40 s of write unavailability; heal 10–30 min | `chaos/partition-a-b` |
 | Object store unreachable | two failed lease reads or writes; `ha.object_store_unavailable` | deploys, uploads, backups, drills, promotion | no promotion; the primary fences after 20 s without a successful renewal; sites and reads keep serving | restore R2 access; if prolonged, accept read-only or break-glass | none: fail closed. RPO unaffected | `chaos/r2-unavailable` |
 | DNS or Cloudflare | Cloudflare API 4xx/5xx on reconcile; `ha.dns_update_failing`; probe of `control.<domain>` fails | new steering only; existing records keep serving | retry with backoff; hold the record set; never remove the last healthy record | edit the record, change driver, or pin one ingress with `direct` | 0 for serving; steering frozen | `chaos/cf-api-403` |
-| Certificate renewal | `TLS certificate expiring` at 14 d and 3 d (today); `skiff_node_cert_expiry_timestamp_seconds` | HTTPS on ingress; mTLS once a node certificate expires | the `acme` lease holder (§7.3) retries DNS-01; followers fetch from it; warn every sweep | re-issue with a fresh token, or install a Cloudflare Origin CA certificate | hours while days remain; outage once expired | `chaos/cert-expiry` |
-| Failed control-plane upgrade | canary or bake verdict (D99); agent more than one release behind | the release only; the old one serves | the updater reverts inside the bake window; a migrated release restores its sealed bundle | `skiff-update-self rollback` or `recover`; a downgrade across an epoch is refused while any agent holds one (§20) | 2–10 min. RPO 0 code, last Litestream position for migrations | `chaos/upgrade-crash` |
+| Certificate renewal | `TLS certificate expiring` at 14 d and 3 d (today); `yoal_node_cert_expiry_timestamp_seconds` | HTTPS on ingress; mTLS once a node certificate expires | the `acme` lease holder (§7.3) retries DNS-01; followers fetch from it; warn every sweep | re-issue with a fresh token, or install a Cloudflare Origin CA certificate | hours while days remain; outage once expired | `chaos/cert-expiry` |
+| Failed control-plane upgrade | canary or bake verdict (D99); agent more than one release behind | the release only; the old one serves | the updater reverts inside the bake window; a migrated release restores its sealed bundle | `yoal-update-self rollback` or `recover`; a downgrade across an epoch is refused while any agent holds one (§20) | 2–10 min. RPO 0 code, last Litestream position for migrations | `chaos/upgrade-crash` |
 | Stalled deploy or rollout | `pending`/`building` past its bound (10 min for a build, D45); no version change | the new version does not go live; the old one serves | the rollout stops at the last healthy step; the operation is marked `interrupted` (§8.5) | cancel, retry, roll the pointer back, or move off the failed node | 0: the old version serves. RPO 0 | `chaos/deploy-stall` |
 | Database primary | its agent reports `up=0` twice (60 s); node offline past `db_failover_grace` (30 s); the third-node probe fails, or with no third node the replica's receiver stops for 60 s (§9.3) | writes to that database and every attached app | manual by default; with `failover: auto`, fence at `generation + 1`, then promote the replica with the highest `replay_lsn` | promote, re-point, `pg_rewind` or a base backup (§18) | 90 s target, 2 min budget auto; 5–15 min manual. RPO = async lag, usually <1 s; 0 with `sync` | `chaos/db-primary-kill` |
 | Database replica | not `streaming` for 60 s; lag >30 s or 256 MB for 2 min; slot `lost` at once | redundancy reduced; a `sync` quorum if it was the only replica | the slot's WAL cap protects the primary; `sync` drops to `async` after 30 s, with `ha.sync_downgraded` | re-add the replica; check its disk and volume | none; protection reduced | `chaos/db-replica-kill` |
-| Storage node | `skiff_storage_up` 0; page 2 min | the S3 API for that instance and its consumers | none: C9 promotion is operator-gated (§10.2); `L0` returns 503 | promote the secondary, re-point the endpoint at the replica, re-enable replication and verify the newest objects | seconds to minutes. RPO = replication lag or sync interval | `chaos/storage-node-kill` |
+| Storage node | `yoal_storage_up` 0; page 2 min | the S3 API for that instance and its consumers | none: C9 promotion is operator-gated (§10.2); `L0` returns 503 | promote the secondary, re-point the endpoint at the replica, re-enable replication and verify the newest objects | seconds to minutes. RPO = replication lag or sync interval | `chaos/storage-node-kill` |
 | Share server | the share's mount is gone; every attached workload fails closed (D76) | every workload mounting it, on every node | none; a share has one export (H7) | repair the export; mounts re-attach on the next converge | hours. RPO = the last accepted write | `chaos/share-server-down` |
-| One disk in a mirror | `skiff_volume_up == 0`; the degraded-array alert (D80) | nothing until a second disk fails in the window | alert only; rebuilding is not automated | replace and rebuild; watch for a second fault | 0 / 0 while the mirror holds | `chaos/disk-fault` |
+| One disk in a mirror | `yoal_volume_up == 0`; the degraded-array alert (D80) | nothing until a second disk fails in the window | alert only; rebuilding is not automated | replace and rebuild; watch for a second fault | 0 / 0 while the mirror holds | `chaos/disk-fault` |
 | Operator error (`DROP TABLE`, wrong prune, wrong promote) | `5xx spike after promote` (today); error rate; the audit diff | data loss, a workload on the wrong node, or a demotion of the healthy side | destructive actions are typed-confirmed and soft-deleted (D29, D54); promote carries `If-Match` | restore to a new database from `L1` or PITR; treat a wrong promote as a partition (§18) | minutes to hours. RPO = PITR point or backup interval | `drill/drop-table` |
 
 ### 11.3 Ordering rules
 
 **Promotion before steering**: only a lease holder may withdraw a record, so the `edge` row is
 promotion *then* removal. **A fenced primary is unreachable to agents but readable to humans**: 503
-with `x-skiff-fenced: 1` for every non-GET and for heartbeat, desired state, activation and run-lease
+with `x-yoal-fenced: 1` for every non-GET and for heartbeat, desired state, activation and run-lease
 renewal, while dashboard reads continue. **No instant has two writers**: writes stop at 20 s, the
 standby cannot take the lease before 40 s. Only the lease holder replicates SQLite, a fenced primary
 never resumes automatically, and `failover: auto` is refused unless self-fencing is on.
@@ -2067,10 +2067,10 @@ admin's own dashboard session, never an API key, an OAuth token or MCP (`canAdmi
 
 ### 12.2 REST
 
-Base `https://<platformOrigin>/api/v1`, session cookie or `skif_…` bearer, `Origin` on every
+Base `https://<platformOrigin>/api/v1`, session cookie or `yoal_…` bearer, `Origin` on every
 mutation (API.md); the HA routes mount at `/api/v1/ha/`, the path every runbook uses. New routes keep
 the existing error shape and add `412 precondition_failed` for a stale `If-Match` and `503` with
-`x-skiff-fenced: 1` when a caller reaches a primary that lost the lease.
+`x-yoal-fenced: 1` when a caller reaches a primary that lost the lease.
 
 | Method | Path | Permission | Notes | Status |
 |---|---|---|---|---|
@@ -2097,22 +2097,22 @@ returns `409` instead of bumping twice, and `dryRun` returns the checks it would
 
 ### 12.3 CLI
 
-`skif` and `skiff` are the same binary (D33/D40). Exit codes are the existing ones: 0 all succeeded,
+`yoal` is the CLI (D33/D40). Exit codes are the existing ones: 0 all succeeded,
 1 failed, refused or cancelled, 3 partial for batch verbs. Every command takes `--json`.
 
 | Command | What it does | Status |
 |---|---|---|
-| `skif status`, `skif topology [--node <id>] [--blast-radius]` | fleet health; the Topology page in text | Today / plan (C0) |
-| `skif ha status [--events <n>]`, `skif ha promote --expect-epoch 7 [--dry-run]` | today: the failover controller (lease, lost nodes, database candidates, recent events); plan: per-node lag, `--wait` and promotion with a precondition | `status` today (C8); the rest plan (C6) |
-| `skif ha standby enrol --node edge-b`, `skif ha claim --from-store --expect-epoch 7`, `skif ha fence <node>` | enrolment, disaster claim, and the root break-glass actions (§6.5) | Plan (C6) |
-| `skif ha drill <kind>` | run a drill and print the measured RTO/RPO | Plan (C8) |
-| `skif node list\|show`, `skif node edit <node> --zone cloud-b --role ingress,control`, `skif node drain\|resume` | hardware, roles, zone, labels; drain modes and cancellation (C0, C4) | Plan |
-| `skif db replica list\|add\|remove`, `skif db promote\|switchover`, `skif share add\|list\|remove\|attach\|detach`, `skif cert status\|rotate` | replicas, failover, shares and certificates | Plan (C7, C3, C5) |
+| `yoal status`, `yoal topology [--node <id>] [--blast-radius]` | fleet health; the Topology page in text | Today / plan (C0) |
+| `yoal ha status [--events <n>]`, `yoal ha promote --expect-epoch 7 [--dry-run]` | today: the failover controller (lease, lost nodes, database candidates, recent events); plan: per-node lag, `--wait` and promotion with a precondition | `status` today (C8); the rest plan (C6) |
+| `yoal ha standby enrol --node edge-b`, `yoal ha claim --from-store --expect-epoch 7`, `yoal ha fence <node>` | enrolment, disaster claim, and the root break-glass actions (§6.5) | Plan (C6) |
+| `yoal ha drill <kind>` | run a drill and print the measured RTO/RPO | Plan (C8) |
+| `yoal node list\|show`, `yoal node edit <node> --zone cloud-b --role ingress,control`, `yoal node drain\|resume` | hardware, roles, zone, labels; drain modes and cancellation (C0, C4) | Plan |
+| `yoal db replica list\|add\|remove`, `yoal db promote\|switchover`, `yoal share add\|list\|remove\|attach\|detach`, `yoal cert status\|rotate` | replicas, failover, shares and certificates | Plan (C7, C3, C5) |
 
-`skiff-ha promote|demote` on the host does not exist today; the tools on the host are
-`skiff-update-self` and `skiff-restore`, and `skif ha` is the CLI. Break-glass is
-`skif ha promote --force` from a root shell: it takes the epoch it expects to replace, prints the lease and the candidate's lag,
-requires the node name typed, and writes `/var/lib/skiff/ha/break-glass.log` for the promoted
+`yoal-ha promote|demote` on the host does not exist today; the tools on the host are
+`yoal-update-self` and `yoal-restore`, and `yoal ha` is the CLI. Break-glass is
+`yoal ha promote --force` from a root shell: it takes the epoch it expects to replace, prints the lease and the candidate's lag,
+requires the node name typed, and writes `/var/lib/yoal/ha/break-glass.log` for the promoted
 control plane to import into `audit_log`.
 
 ### 12.4 MCP
@@ -2145,19 +2145,19 @@ a subsection cannot break a link in an incident.
 |---|---|---|---|
 | `ha.lease_lost` / `ha.lease_contested` / `ha.control_clock_skew` | no renewal for 20 s / a CAS 409 or 412 twice or two `primary` roles / offset from the store's `Date` header over 5 s | critical | stop mutating; compare `/api/v1/ha/status`; fix time sync before promoting again |
 | `ha.object_store_unavailable` | two consecutive lease reads or writes fail | critical | check R2 credentials and status; expect fencing |
-| `ha.standby_behind` | `skiff_control_standby_lag_seconds` > 5 s for 1 min, or the replica is missing | warning | `canPromote` is false; fix replication or re-seed |
+| `ha.standby_behind` | `yoal_control_standby_lag_seconds` > 5 s for 1 min, or the replica is missing | warning | `canPromote` is false; fix replication or re-seed |
 | `ha.replica_down` / `ha.replica_lag` | not `streaming` 60 s / lag > 30 s or 256 MB for 2 min | critical / warning | re-add the replica; check disk, network and the slot cap |
 | `ha.slot_lost` | a replica's slot reaches `wal_status = lost` | critical | bootstrap the replica again; a `lost` slot cannot be resumed (§9.2) |
 | `ha.fenced` | a database or control node is fenced at a new generation | critical | read `/api/v1/ha/status`, confirm the old primary stopped, then heal (§18.8) |
 | `ha.sync_downgraded` | `sync` configured but `durability_effective` is `async` | critical | the RPO just changed; restore the quorum or accept async |
 | `ha.effective_below_target` / `ha.spread_degraded` | effective level below configured for 5 min / replicas share a forbidden domain | warning | repair, Rebalance, or re-declare the level |
 | `ha.backup_missing` / `ha.backup_same_zone` | stateful `L2`/`L3` without a verified `L1` / target in the data's zone | warning | take and verify a backup; accept the risk knowingly |
-| `ha.endpoint_down` / `ha.wg_handshake_stale` | `skiff_endpoint_up` 0 for 2 min / `skiff_wireguard_handshake_age_seconds{peer}` > 180 s | critical / warning | check the provider, the overlay path and the hub |
-| `ha.share_full` | a Skiff-served share is below 15 %, then 5 %, free | warning / critical | free space on the server; find the runaway writer (§5.5) |
+| `ha.endpoint_down` / `ha.wg_handshake_stale` | `yoal_endpoint_up` 0 for 2 min / `yoal_wireguard_handshake_age_seconds{peer}` > 180 s | critical / warning | check the provider, the overlay path and the hub |
+| `ha.share_full` | a Yoal-served share is below 15 %, then 5 %, free | warning / critical | free space on the server; find the runaway writer (§5.5) |
 | `ha.dns_update_failing` / `ha.drill_failed` | the Cloudflare reconcile is failing / a drill was missed | warning / critical | check the token; fix the recovery path today |
 | `ha.failover_performed` | an automatic promotion or re-placement ran | info | read the record and close the incident |
 
-The notifier is not exempt: `skiff-alert@.service` runs where it was triggered, so a down node cannot
+The notifier is not exempt: `yoal-alert@.service` runs where it was triggered, so a down node cannot
 send its own page. The plan adds a dead-man's switch on a host that is not the primary,
 probing `/api/v1/status` every minute with a `project:read` key and alerting after five failures.
 
@@ -2212,7 +2212,7 @@ an org owner.
 ## 13. Data model changes
 
 Everything lands in the control plane's one SQLite database (D9). `packages/db/src/index.ts` applies
-each file in `packages/db/migrations` once, records it in `skiff_migrations`, and has no down path;
+each file in `packages/db/migrations` once, records it in `yoal_migrations`, and has no down path;
 `packages/db/src/schema.ts` mirrors the tables in Drizzle. Every change below is additive: new
 tables, and new nullable or defaulted columns. The migration numbers are the next free sequence
 (0040 onward as this is written); a branch that lands first renames its file before merge. Each entry
@@ -2256,7 +2256,7 @@ alias.
 | `hardware_json`, `hardware_at`, `hardware_error` | TEXT NULL, INTEGER NULL, TEXT NULL | — | NULL until the first C0 heartbeat |
 | `lan_endpoint` | TEXT NULL | — | NULL; set by the operator |
 | `private_address` | TEXT NULL | unique partial `nodes_private_address_idx` | NULL; join fills it in C1 |
-| `private_cidr`, `wg_public_key`, `network_mode` | TEXT NULL | — | NULL; `network_mode` is `skiff` or `external`, NULL = legacy host-provisioned |
+| `private_cidr`, `wg_public_key`, `network_mode` | TEXT NULL | — | NULL; `network_mode` is `yoal` or `external`, NULL = legacy host-provisioned |
 | `cpu_budget_millis` | INTEGER NULL | — | NULL; derived from `hardware.cores × 1000` |
 
 `node_volumes` (the disk registry) gained `class` and `class_override` in C0 (migration 0040);
@@ -2265,14 +2265,14 @@ D169 replaced them with `tier` (`fast`\|`bulk`) and `tier_set`, carried over fro
 (§4.3, §7.3).
 
 `settings` is the existing `key`/`value`/`updated_at` table, unused by HA today: platform config lives
-in `/etc/skiff/skiff.env` via `skiff-platform-config` (verified). This is the canonical catalogue of
+in `/etc/yoal/yoal.env` via `yoal-platform-config` (verified). This is the canonical catalogue of
 `ha.*` keys; §7.2, §20.1 and §20.4 read these names. Keys: `ha.mode` (`single` | `active-passive`;
 `single` is the default and the disabled state, `off` is a legacy alias for `single`, and
 `active-active` is refused), `ha.ingressDriver` (`direct`), `ha.autoFailover` (`false`),
 `ha.placementGraceSeconds` (`120`), `ha.dbFailoverGraceSeconds` (`30`), `ha.syncTimeoutSeconds`
 (`30`), `ha.promoteHoldSeconds` (`40`), `ha.drillSchedule` (`0 4 1 * *`), `ha.minAgentVersion` (the
 C6 release), `ha.epochFloorVersion` (the first release that served this install an epoch above zero)
-and `overlay.cidr` (`10.88.0.0/22`); JSON scalars validated in `@skiff/contracts`, missing = default,
+and `overlay.cidr` (`10.88.0.0/22`); JSON scalars validated in `@yoal/contracts`, missing = default,
 audited as `ha.setting`. `ha.mode` is per install; `control_nodes.role` is per node.
 
 ### 13.3 Workloads, placement and replicas
@@ -2385,7 +2385,7 @@ interface WireguardPeer {
 }
 interface DesiredStateAdditions {
   epoch?: number;                                      // C6, gated by `ha-epoch`
-  wireguard?: { mode: 'skiff' | 'external'; address: string; mtu: number; peers: WireguardPeer[] };
+  wireguard?: { mode: 'yoal' | 'external'; address: string; mtu: number; peers: WireguardPeer[] };
   serviceEndpoints?: (ServiceEndpoint & { upstream: { nodeId: string; address: string; port: number } })[];
   runLeases?: { leaseId: string; workloadId: string; epoch: number; expiresAt: string; renewAfterSeconds: number }[];
   ingress?: { platformUpstreams: { nodeId: string; address: string; priority: number }[]; certificateGeneration: number };
@@ -2406,7 +2406,7 @@ declares it.
 | Capability | Gates | Without it |
 |---|---|---|
 | `ha-epoch` | `epoch` and the heartbeat epoch | No `control` role, no `L2`/`L3` placement; HA enablement refused |
-| `wg-mesh` | `wireguard` | No Skiff overlay; bring-your-own network only |
+| `wg-mesh` | `wireguard` | No Yoal overlay; bring-your-own network only |
 | `l4-endpoints` | `serviceEndpoints` | No cross-node attachment; same-node only |
 | `ha-run-lease` | `runLeases` | No singleton |
 | `ha-workload-replicas` | Cross-node replicas | Single-node replicas only, as D90 today |
@@ -2421,7 +2421,7 @@ here before anywhere else.
    stored copy, and an empty list means unknown, not "supports everything".
 2. **Require.** Enabling HA, adding `control` or placing `L2`/`L3` lists every eligible node and refuses
    with the node name and the missing capability; the minimum version is one constant in
-   `@skiff/contracts`, set at the C6 release.
+   `@yoal/contracts`, set at the C6 release.
 3. **Degrade.** A node without a capability is excluded from the placement, not handed partial state.
 4. **Refuse, do not hope.** Mixed-version fleets are **not** fenced: a pre-epoch agent that can reach a
    deposed primary keeps converging cached state, so it must never hold a control role or an HA
@@ -2469,17 +2469,17 @@ and other work keeps landing, so a hard-coded number here would be wrong by the 
 
 | Phase | Goal and scope | Deliverables and primary files | Migration, flag, depends |
 |---|---|---|---|
-| **C0** | Hardware facts and derived labels, zone/roles/labels editing, volume classes (disk tiers since D169), `PlacementSpec` filter and score with explained refusals, CPU budget, read-only Topology and blast radius | `hardware.v1`, `PATCH /nodes/:id` fields, class sweep, `GET /topology`, `/topology/blast-radius`; `packages/contracts/src/{agent,node,features}.ts`, `packages/core/src/{nodes,placement,volumes}.ts`, `apps/agent/src/{stats,main}.ts`, `apps/control-plane/src/routes/(dashboard)/{nodes,topology}` | `NNN1_nodes_topology.sql`, `NNN2_placement.sql`, `NNN3_volume_class.sql`; `SKIFF_FEATURE_PLACEMENT_SPEC`; none |
-| **C1** | Plan 23's single hub generalised to hubs plus a LAN mesh; one-command join; `private_address`; peer health; external networks unchanged | Helper `wireguard/{keygen,apply,peers,status}` and `network/{allow,probe-mtu}`, join exchange, install script; new `apps/helper/src/{wireguard,network}.ts`, `apps/agent/src/join.ts`, `packages/core/src/nodes.ts`, `scripts/install/{main.ts,node.sh}` | `NNN4_private_network.sql`; `SKIFF_FEATURE_MANAGED_OVERLAY`; C0 |
-| **C2** | Per-install CA, mTLS, loopback consumer port and overlay provider listener, cross-node database and private-storage attachments; S1 picks `caddy-l4` or the Bun forwarder | `node_certificates`, `service_endpoints`, port allocation, one nftables rule per attachment; `packages/contracts/src/{agent,database}.ts`, `packages/core/src/{databases,storage-instances}.ts`, `apps/agent/src/{caddy-config,caddy}.ts`, `docker/node/Dockerfile` | `NNN5_node_certificates.sql`, `NNN6_service_endpoints.sql`; `SKIFF_FEATURE_SERVICE_ENDPOINTS`; C1, S1 |
-| **C3** | `shares` resource, on-demand NFS/SMB mounts, `backing: share`, credential refs, blast-radius inheritance | Share CRUD and grants, mount lifecycle and probes, credential handoff, Shares page; new `packages/core/src/shares.ts`, `packages/contracts/src/{app-volume,agent}.ts`, `apps/helper/src/shares.ts` | `NNN7_shares.sql`; `SKIFF_FEATURE_CLUSTER_SHARES`; C0, C1 |
-| **C4** | HTTP and worker replicas across nodes, hard spread, health-checked balancing, rolling deploys, cordon/drain, singletons; `failover: auto` stored and refused until C8 | `workload_replicas`, `run_leases`, route fan-out, rollout and drain state machine, singleton fence; `packages/contracts/src/workload.ts`, `packages/core/src/{workloads,placement,scheduler}.ts`, `apps/agent/src/{caddy-config,runtime}.ts` | `NNN8_replicas_and_leases.sql`; `SKIFF_FEATURE_MULTI_NODE_REPLICAS`; C0, C2 |
-| **C5** | Every ingress a full edge, shared cookie key, node-bound callback tokens, `dns-failover`, certificates issued once and distributed; owns the shared lease client | Full route table per ingress, `ingress_certificates`, probe quorum, last-record protection, hold-down; `packages/core/src/{domains,maintenance}.ts`, new `packages/core/src/ha-lease.ts`, `apps/agent/src/caddy-config.ts` | `NNN9_ingress_certificates.sql`; `SKIFF_FEATURE_INGRESS_HA`; C1, S3, S4 |
-| **C6** | Standby enrolment, Litestream follow, master-key and config distribution, lease and epoch, fencing, proxied control hostname, manual promote | `control_nodes`, `ha_drills`, `controlEndpoints`, persisted agent epoch, 503 fence on every agent route, Promote; `packages/core/src/{nodes,maintenance}.ts`, new `packages/core/src/control-ha.ts`, `apps/agent/src/{state,main}.ts` | `NNN10_control_nodes.sql`; `SKIFF_FEATURE_CONTROL_STANDBY`; C5, S2, S3 |
-| **C7** | Postgres streaming replicas, slots and WAL caps, lag metrics, read URLs, manual promote and switchover, replica-based moves; two-node fleets hold and page | `database_replicas`, `database_failovers`, failover state machine, helper replica verbs, `db_replica_metrics_1m`, read endpoint; `packages/core/src/{databases,database-metrics-sql}.ts`, `packages/contracts/src/{database,agent}.ts`, `apps/agent/src/database-stats.ts` | `NNN11_database_replicas.sql`; `SKIFF_FEATURE_DB_REPLICAS`; C2, C6, S6 |
-| **C8** | Automatic failover for the control plane and Postgres, three-signal detection, mandatory self-fencing, and the chaos harness that must exist first | Decision matrix, self-fencing, rate limits, `ha_drills` with measured RTO/RPO, multi-container fault harness; `packages/core/src/{control-ha,databases}.ts`, `apps/control-plane/src/routes/api/v1/ha`, `tests/e2e/chaos/**` | No schema change; `SKIFF_FEATURE_AUTO_FAILOVER`; C4, C6, C7 |
-| **C9** | RustFS bucket replication and manual promote, Litestream for SQLite app volumes, snapshot shipping, Skiff-served NFS; S5 gates replication | `storage_replication`, replication metrics, promote with object verification, Litestream unit, snapshot protocol, export verb; `packages/core/src/storage-{instances,metrics-sql}.ts`, `apps/agent/src/storage-apply.ts`, `apps/helper/src/volumes.ts` | `NNN12_storage_replication.sql`; `SKIFF_FEATURE_STORAGE_REPLICATION`; C2, C6, S5 |
-| **C10** | MongoDB replica sets, Valkey/Redis replicas, MySQL/MariaDB GTID replicas, each behind its own engine flag; gated on a provider-side member port in §4.3 | Engine replication capability, member placement by zone, member ports, per-engine drills; `packages/contracts/src/database.ts`, `packages/core/src/databases.ts`, `apps/helper/src/units.ts` | No schema change; `SKIFF_FEATURE_ENGINE_MONGODB`, `SKIFF_FEATURE_ENGINE_VALKEY`, `SKIFF_FEATURE_ENGINE_MYSQL`; C7, C8, member-port decision |
+| **C0** | Hardware facts and derived labels, zone/roles/labels editing, volume classes (disk tiers since D169), `PlacementSpec` filter and score with explained refusals, CPU budget, read-only Topology and blast radius | `hardware.v1`, `PATCH /nodes/:id` fields, class sweep, `GET /topology`, `/topology/blast-radius`; `packages/contracts/src/{agent,node,features}.ts`, `packages/core/src/{nodes,placement,volumes}.ts`, `apps/agent/src/{stats,main}.ts`, `apps/control-plane/src/routes/(dashboard)/{nodes,topology}` | `NNN1_nodes_topology.sql`, `NNN2_placement.sql`, `NNN3_volume_class.sql`; `YOAL_FEATURE_PLACEMENT_SPEC`; none |
+| **C1** | Plan 23's single hub generalised to hubs plus a LAN mesh; one-command join; `private_address`; peer health; external networks unchanged | Helper `wireguard/{keygen,apply,peers,status}` and `network/{allow,probe-mtu}`, join exchange, install script; new `apps/helper/src/{wireguard,network}.ts`, `apps/agent/src/join.ts`, `packages/core/src/nodes.ts`, `scripts/install/{main.ts,node.sh}` | `NNN4_private_network.sql`; `YOAL_FEATURE_MANAGED_OVERLAY`; C0 |
+| **C2** | Per-install CA, mTLS, loopback consumer port and overlay provider listener, cross-node database and private-storage attachments; S1 picks `caddy-l4` or the Bun forwarder | `node_certificates`, `service_endpoints`, port allocation, one nftables rule per attachment; `packages/contracts/src/{agent,database}.ts`, `packages/core/src/{databases,storage-instances}.ts`, `apps/agent/src/{caddy-config,caddy}.ts`, `docker/node/Dockerfile` | `NNN5_node_certificates.sql`, `NNN6_service_endpoints.sql`; `YOAL_FEATURE_SERVICE_ENDPOINTS`; C1, S1 |
+| **C3** | `shares` resource, on-demand NFS/SMB mounts, `backing: share`, credential refs, blast-radius inheritance | Share CRUD and grants, mount lifecycle and probes, credential handoff, Shares page; new `packages/core/src/shares.ts`, `packages/contracts/src/{app-volume,agent}.ts`, `apps/helper/src/shares.ts` | `NNN7_shares.sql`; `YOAL_FEATURE_CLUSTER_SHARES`; C0, C1 |
+| **C4** | HTTP and worker replicas across nodes, hard spread, health-checked balancing, rolling deploys, cordon/drain, singletons; `failover: auto` stored and refused until C8 | `workload_replicas`, `run_leases`, route fan-out, rollout and drain state machine, singleton fence; `packages/contracts/src/workload.ts`, `packages/core/src/{workloads,placement,scheduler}.ts`, `apps/agent/src/{caddy-config,runtime}.ts` | `NNN8_replicas_and_leases.sql`; `YOAL_FEATURE_MULTI_NODE_REPLICAS`; C0, C2 |
+| **C5** | Every ingress a full edge, shared cookie key, node-bound callback tokens, `dns-failover`, certificates issued once and distributed; owns the shared lease client | Full route table per ingress, `ingress_certificates`, probe quorum, last-record protection, hold-down; `packages/core/src/{domains,maintenance}.ts`, new `packages/core/src/ha-lease.ts`, `apps/agent/src/caddy-config.ts` | `NNN9_ingress_certificates.sql`; `YOAL_FEATURE_INGRESS_HA`; C1, S3, S4 |
+| **C6** | Standby enrolment, Litestream follow, master-key and config distribution, lease and epoch, fencing, proxied control hostname, manual promote | `control_nodes`, `ha_drills`, `controlEndpoints`, persisted agent epoch, 503 fence on every agent route, Promote; `packages/core/src/{nodes,maintenance}.ts`, new `packages/core/src/control-ha.ts`, `apps/agent/src/{state,main}.ts` | `NNN10_control_nodes.sql`; `YOAL_FEATURE_CONTROL_STANDBY`; C5, S2, S3 |
+| **C7** | Postgres streaming replicas, slots and WAL caps, lag metrics, read URLs, manual promote and switchover, replica-based moves; two-node fleets hold and page | `database_replicas`, `database_failovers`, failover state machine, helper replica verbs, `db_replica_metrics_1m`, read endpoint; `packages/core/src/{databases,database-metrics-sql}.ts`, `packages/contracts/src/{database,agent}.ts`, `apps/agent/src/database-stats.ts` | `NNN11_database_replicas.sql`; `YOAL_FEATURE_DB_REPLICAS`; C2, C6, S6 |
+| **C8** | Automatic failover for the control plane and Postgres, three-signal detection, mandatory self-fencing, and the chaos harness that must exist first | Decision matrix, self-fencing, rate limits, `ha_drills` with measured RTO/RPO, multi-container fault harness; `packages/core/src/{control-ha,databases}.ts`, `apps/control-plane/src/routes/api/v1/ha`, `tests/e2e/chaos/**` | No schema change; `YOAL_FEATURE_AUTO_FAILOVER`; C4, C6, C7 |
+| **C9** | RustFS bucket replication and manual promote, Litestream for SQLite app volumes, snapshot shipping, Yoal-served NFS; S5 gates replication | `storage_replication`, replication metrics, promote with object verification, Litestream unit, snapshot protocol, export verb; `packages/core/src/storage-{instances,metrics-sql}.ts`, `apps/agent/src/storage-apply.ts`, `apps/helper/src/volumes.ts` | `NNN12_storage_replication.sql`; `YOAL_FEATURE_STORAGE_REPLICATION`; C2, C6, S5 |
+| **C10** | MongoDB replica sets, Valkey/Redis replicas, MySQL/MariaDB GTID replicas, each behind its own engine flag; gated on a provider-side member port in §4.3 | Engine replication capability, member placement by zone, member ports, per-engine drills; `packages/contracts/src/database.ts`, `packages/core/src/databases.ts`, `apps/helper/src/units.ts` | No schema change; `YOAL_FEATURE_ENGINE_MONGODB`, `YOAL_FEATURE_ENGINE_VALKEY`, `YOAL_FEATURE_ENGINE_MYSQL`; C7, C8, member-port decision |
 
 | Phase | Exit criteria and demo | Rollback | Risks | Estimate and gating tests |
 |---|---|---|---|---|
@@ -2519,7 +2519,7 @@ any `auto` mode reaches a user.
 
 ### Rules that hold across phases
 
-1. One flag per phase, `SKIFF_FEATURE_<NAME>` registered in `packages/contracts/src/features.ts`;
+1. One flag per phase, `YOAL_FEATURE_<NAME>` registered in `packages/contracts/src/features.ts`;
    off stops the control plane rendering the fields, it does not make the agent forget them.
 2. Every phase carries a single-node regression gate: flag off, one node, the same routes and
    behaviour.
@@ -2567,7 +2567,7 @@ handshake risk, and S6 exercises the overlay in passing.
 | # | Method | Fallback | Effort, blocks, owner |
 |---|---|---|---|
 | S1 | Two containers on the overlay, Postgres 17 on the provider, `caddy-l4` on the consumer, one connection held open for 14 days, 50 idle connections, one full-config PUT every 60 s for 24 h. | The agent's Bun TCP forwarder on the same ports with the same nftables hand-off: about 10–15 MB more RSS per node, and the peer-certificate check in our code rather than in Caddy (§4.3). | 2 days plus a 14-day soak. Blocks C2. Owner: network path; root on two VMs. |
-| S2 | Start by running row 6 of [SPIKES.md](./SPIKES.md). Then a control-plane-sized database (a live `skiff.db` copy with 200k audit rows) replicated by the unit's own `litestream replicate`, a follower in its own data directory, 50 transactions/s, a 60 s network cut, `kill -9` during a write, and `scripts/skiff-db-fingerprint.ts` compared before and after. | `litestream restore` into a staging file every 60 s and an atomic swap: the control-plane RPO becomes the interval, and promotion waits for the last swap to finish. | 3 days. Blocks C6. Owner: storage; R2 credentials and a second host. |
+| S2 | Start by running row 6 of [SPIKES.md](./SPIKES.md). Then a control-plane-sized database (a live `yoal.db` copy with 200k audit rows) replicated by the unit's own `litestream replicate`, a follower in its own data directory, 50 transactions/s, a 60 s network cut, `kill -9` during a write, and `scripts/yoal-db-fingerprint.ts` compared before and after. | `litestream restore` into a staging file every 60 s and an atomic swap: the control-plane RPO becomes the interval, and promotion waits for the last swap to finish. | 3 days. Blocks C6. Owner: storage; R2 credentials and a second host. |
 | S3 | A harness against R2 and every S3 target in use, plus a proxy that delays one response by 5 s: 10,000 CAS attempts at 200 writers for 60 s, an unconditional PUT against a held `If-Match`, and a comparison of the store's `Date` header with a synced clock. | **Fail closed, and retire the old fallback.** Two control nodes can both hold a local lease, and a tiebreaker needs the same conditional write that just failed, so that is not a lease. Without a CAS there is no automatic promotion: control-plane promotion is manual after stopping the old primary's units (§6.6), C8 ships without automatic control-plane failover, and the database (§9.3) and ACME (§7.3) leases lose their arbiter too. | 2 days. Blocks C6 and the `auto` modes of C8. Owner: platform; store credentials. |
 | S4 | Two ingress hosts on a staging domain: issue once and distribute, force five renewals in a week, run the certmagic S3-storage variant beside it, cut the control plane for 6 h during a renewal window, and reload with 1,000 keep-alive connections open. | Cloudflare Origin CA when every name is proxied (15 years, no ACME, trusted only by Cloudflare's edge), or per-ingress ACME. The second multiplies key copies and duplicate-certificate risk and caps DNS-only installs at one ingress, because C5 cannot serve a name from a second node without a certificate. | 4 days. Blocks C5. Owner: PKI and DNS; a Cloudflare zone and a second ingress host. |
 | S5 | Two four-drive instances in two zones, 1 TB of mixed object sizes, 50 writes/s for 24 h, a 10-minute break, a restart of each side, a bucket added while the first replicates, delete markers and object lock exercised, RSS measured on both. | Scheduled sync every 15 min: `L1` with a 15-minute RPO, not `L2`. A fifteen-minute-old copy is a restore, not a failover, so the `L2` replica row in §8.1 does not apply to it. | 5 days. Blocks C9. Owner: storage; two hosts with four drives each. |
@@ -2619,15 +2619,15 @@ last column reads "next free" in every row on purpose (§16.2).
 
 | # | Proposal | Acceptance signal | Phase | Spike | D when built |
 |---|---|---|---|---|---|
-| H1 | Nodes report hardware facts; `skiff.io/*` labels are derived and read-only. | Every node reports `hardware.v1`; a write to a `skiff.io/*` label is refused 422 naming the fact. | C0 | — | next free |
+| H1 | Nodes report hardware facts; `yoal.io/*` labels are derived and read-only. | Every node reports `hardware.v1`; a write to a `yoal.io/*` label is refused 422 naming the fact. | C0 | — | next free |
 | H2 | Zones, roles and labels are operator-set; `mode` and `can_build` stay stored and are surfaced as roles/labels. | Adding `data` changes the next placement with no restart; removing a role in use is 409 listing the pinned resources. | C0 | — | next free |
 | H3 | Volumes have a class (`fast`/`bulk`/`remote`), derived and overridable. | Class is derived per volume, an override survives a rescan and a restart, and `volumeClass: fast` refuses a `bulk` volume by name. | C0 | — | next free |
 | H4 | Placement is a constraint spec filtered and scored once, at deploy time, with explained refusals; no continuous scheduler. | A refusal returns `placement_refused` with one reason per node and never "no capacity"; the same input on an unchanged fleet picks the same node. | C0 | — | next free |
 | H5 | The overlay is hubs plus LAN mesh, computed by the control plane and applied by the helper. | Killing one hub leaves every pair reachable within 30 s, and LAN traffic increments no hub counter. | C1 | — | next free |
 | H6 | Cross-node services are reached through loopback endpoints on the consumer node (L4 plus mTLS over the overlay); failover is an upstream change. | An app reaches a database on another node at `127.0.0.1:<port>`, `ss -ltn` shows no public listener, and a re-point needs no app restart. | C2 | S1 | next free |
 | H7 | Shares are platform resources mounted on demand, multi-writer by opt-in, and add their zone to a workload's blast radius. | A share mounts read-only into two workloads on two nodes, fails closed when the server goes, and appears in both blast radii. | C3 | — | next free |
-| H8 | Skiff can export a `bulk` volume over NFS on the overlay only. | `exportfs` lists the overlay CIDR only, an off-overlay mount is refused, and no public address answers. | C9 | — | next free |
-| H9 | The control plane is active–passive: one primary, warm standbys following Litestream. | Standby replay lag ≤ 5 s; promote in ≤ 45 s with every agent on the new epoch; the old primary answers writes 503 with `x-skiff-fenced`. | C6 | S2 | next free |
+| H8 | Yoal can export a `bulk` volume over NFS on the overlay only. | `exportfs` lists the overlay CIDR only, an off-overlay mount is refused, and no public address answers. | C9 | — | next free |
+| H9 | The control plane is active–passive: one primary, warm standbys following Litestream. | Standby replay lag ≤ 5 s; promote in ≤ 45 s with every agent on the new epoch; the old primary answers writes 503 with `x-yoal-fenced`. | C6 | S2 | next free |
 | H10 | An object-store lease plus an epoch on all desired state; agents refuse lower epochs; a primary that cannot renew becomes read-only. | 200 concurrent CAS attempts produce one holder; 20 s without renewal means no writes; a lower epoch in desired state is refused. | C6 | S3 | next free |
 | H11 | Every ingress node is a full edge, with a shared site-cookie key and node-bound callback tokens. | Power off `edge`; every static site and `L3` app answers through `edge-b` within the driver's bound, and a cookie set by one is accepted by the other. | C5 | S4 | next free |
 | H12 | Ingress steering is a driver: `direct`, `dns-failover`, `cloudflare-lb`, `cloudflare-tunnel`. | Observe-only for 24 h logs the exact record diff and writes nothing; the last healthy record is never withdrawn; one ingress refuses to enable. | C5 (`dns-failover`); the other two after C10 | S4 | next free |
@@ -2680,11 +2680,11 @@ fails.
 
 | Asset | Lives in | Why it matters |
 |---|---|---|
-| Master key (KEK) | `/etc/skiff/master.key.cred` sealed with `systemd-creds` (or `master.key` 0400 root) as a systemd credential; one copy per control node | It unwraps every org DEK, the node CA key and the sealed config. One host with it is the install. |
+| Master key (KEK) | `/etc/yoal/master.key.cred` sealed with `systemd-creds` (or `master.key` 0400 root) as a systemd credential; one copy per control node | It unwraps every org DEK, the node CA key and the sealed config. One host with it is the install. |
 | Org DEKs and secrets | SQLite, wrapped by the KEK | Every stored and deployment secret, and every database credential. |
-| Platform state and credentials | `skiff.db`; R2, Cloudflare, SES and GitHub credentials in `skiff.env` and `agent.env`, 0640 root:skiff | Every org and audit row, plus releases, backups, DNS and build sources. Losing DNS loses every hostname at once. |
-| The lease object | `skiff/ha/control-lease.json` in R2 | Who may write the control plane. Forging it chooses the writer. |
-| Node and ingress key material | Node disks; `nodes.token_hash`; the peer list; a sealed copy in SQLite | A node's token, leaf and WireGuard key, and the wildcard certificate key with `SKIFF_SITE_COOKIE_SECRET`. |
+| Platform state and credentials | `yoal.db`; R2, Cloudflare, SES and GitHub credentials in `yoal.env` and `agent.env`, 0640 root:yoal | Every org and audit row, plus releases, backups, DNS and build sources. Losing DNS loses every hostname at once. |
+| The lease object | `yoal/ha/control-lease.json` in R2 | Who may write the control plane. Forging it chooses the writer. |
+| Node and ingress key material | Node disks; `nodes.token_hash`; the peer list; a sealed copy in SQLite | A node's token, leaf and WireGuard key, and the wildcard certificate key with `YOAL_SITE_COOKIE_SECRET`. |
 | Managed data | Data nodes, RustFS buckets, D83 dumps, the Litestream replica | Tenant data at rest, and the only copy of some of it. |
 | Signing keys and the audit log | GitHub Actions secret and the bundle in R2; `audit_log` in SQLite | The root code path onto every node, and the only account of who did what. |
 
@@ -2720,18 +2720,18 @@ and certificate, and loses only the right to be believed. Never use the epoch as
 
 | Threat | Preconditions | Impact | Mitigation | Residual | Detection |
 |---|---|---|---|---|---|
-| Node compromise | root or code execution on a non-control node | its own secrets and its attachments' plaintext; it can answer its consumers wrongly | D26/D43 (unprivileged agent, fixed verbs), D87 (restarts are desired-state generations), per-attachment `/32`, activation-time secrets, no node token in workloads (D93) | it reads what it serves, and a poisoned answer looks like an app bug | `skiff_agent_epoch` moving with no promote, `ha.endpoint_down`, unexpected helper verbs; token rotation (D86) evicts it |
+| Node compromise | root or code execution on a non-control node | its own secrets and its attachments' plaintext; it can answer its consumers wrongly | D26/D43 (unprivileged agent, fixed verbs), D87 (restarts are desired-state generations), per-attachment `/32`, activation-time secrets, no node token in workloads (D93) | it reads what it serves, and a poisoned answer looks like an app bug | `yoal_agent_epoch` moving with no promote, `ha.endpoint_down`, unexpected helper verbs; token rotation (D86) evicts it |
 | Control-plane compromise | code execution there, or a platform-admin session | master key, CA key, lease and every DEK: the install | D26 sandboxing, session-only fleet mutations (DESIGN §6.2), no mutation over MCP (D53), owner second factor (D10), audit | nothing contains it; network rules are irrelevant once it is the writer | `ha.promote` with no matching operation, an epoch no human bumped, fingerprint drift |
 | Object-store compromise | a leaked R2 key, or the Cloudflare account | the lease (choosing the writer), the SQLite replica, releases, backups | bucket-scoped token (OPS §2.3), CAS plus epoch (H10), agents refuse a lower epoch, fingerprints before any restore | a forged lease plus any `control` node is a takeover, and backups can be deleted | a holder change with no `ha.promote` row, ETag churn, R2 access logs, a fingerprint mismatch |
-| DNS or Cloudflare compromise | the DNS token (in `agent.env` on every ingress) or account takeover | redirect or impersonate any site, remove records, issue certificates for the zone via DNS-01 | token scoped to `Zone:DNS:Edit` on one zone, never in desired state; proxied origins hide the origin IP (D8); Origin CA option (H13) | impersonation is invisible from inside Skiff; watching certificate transparency is manual and unbuilt | `ha.dns_update_failing`, an unexpected record set, a certificate mismatch at the probe (§7.4) |
+| DNS or Cloudflare compromise | the DNS token (in `agent.env` on every ingress) or account takeover | redirect or impersonate any site, remove records, issue certificates for the zone via DNS-01 | token scoped to `Zone:DNS:Edit` on one zone, never in desired state; proxied origins hide the origin IP (D8); Origin CA option (H13) | impersonation is invisible from inside Yoal; watching certificate transparency is manual and unbuilt | `ha.dns_update_failing`, an unexpected record set, a certificate mismatch at the probe (§7.4) |
 | Supply-chain compromise | a malicious release, dependency, image or Caddy plugin | root code on every node | signed releases verified on the node (D99), the helper derives the image (D61), pinned Bun, Caddy and plugin versions (OPS §13) | a stolen signing key, or the pinned registries; OS packages are the operator's | a signature verification failure, an unexpected version, an update nobody requested |
 | Tenant isolation failure | a deploy, a container escape, a scoping bug | another org's secrets or data | per-workload units and cgroups, no capabilities, read-only root, `InaccessiblePaths`, secret scoping (D88), never the node token in a workload (D93) | a shared kernel: container-grade isolation, not VM-grade | audit review, an unexpected endpoint, a helper refusal, an error spike after a deploy |
 | Secret leakage | a bug, a mis-scoped surface, an app printing its env, a log capture | use of that credential within its scope | envelope encryption (D18), write-only secrets, injection at activation (D43/D66), audited reveals (D58/D67), key-name redaction in audit arguments | redaction matches `secret\|password\|token\|key\|authorization`, so an oddly named field leaks; log drain forwards app stdout by design | `database.credentials.reveal`, `storage.key.reveal`, `cli.login`; use from an unexpected node is not detected |
-| Overlay sniffing or MITM | a peer's private key, or a compromised hub | plaintext of node-to-node traffic | per-peer WireGuard keys, mTLS on the endpoint hop (§4.3), TLS pinning for agent-to-control, a hub relays overlay only (nftables) | a stolen node key makes the overlay readable, which is why mTLS is not optional | `skiff_wg_handshake_age_seconds`, an unknown peer key, a certificate mismatch |
+| Overlay sniffing or MITM | a peer's private key, or a compromised hub | plaintext of node-to-node traffic | per-peer WireGuard keys, mTLS on the endpoint hop (§4.3), TLS pinning for agent-to-control, a hub relays overlay only (nftables) | a stolen node key makes the overlay readable, which is why mTLS is not optional | `yoal_wg_handshake_age_seconds`, an unknown peer key, a certificate mismatch |
 | Replay | capture of a token or request | a duplicated mutation, a second singleton start, a redeemed callback | one-time join tokens (1 h), one-time CLI codes (5 min, hashed, single use), epoch plus `If-Match`, `Idempotency-Key`, 60 s site tokens | the agent's used-token cache is in memory, so a restart forgets redemptions inside the 60 s window | duplicate audit rows for one operation; no dedupe alert exists today |
 | Denial of service | any internet client | ingress saturation, quota exhaustion, a stalled maintenance loop | Cloudflare proxying fronts the origin and caps a proxied body at 100 MB; API keys 100,000 requests a day; the assistant 12 a minute; `MemoryMax` and `TasksMax` per unit | no per-IP ingress rate limit exists today, so a layer-7 flood on one site degrades its node; volumetric DDoS is out of scope | the `traffic_1m` 5xx and request rate, node load, a probe that stops answering |
 | Insider access | a legitimate owner or platform admin | any mutation they hold, promote and reveal included | platform admin distinct from org owner (D9), session-only fleet actions, typed confirmation and soft delete (D29/D54), audit with reason | a platform admin is trusted by design, and host root can edit `audit_log` | `ha.*` and `*.reveal` rows, `ha.failover_performed`, a second admin reading the trail |
-| Physical access | the machine, its disk, or the provider's console | the master key and CA key on a control node's disk; every secret if both are taken | `master.key` 0400 root, `systemd-creds` (TPM2 where available), the recovery kit offline, wipe with evidence at decommission, KEK rotation when a control node leaves | Skiff provides no disk encryption, so a powered-off control node is an offline target and the VPS console is outside our control | node offline then a lease expiry; a returning node is refused (§6.6); the theft itself is invisible |
+| Physical access | the machine, its disk, or the provider's console | the master key and CA key on a control node's disk; every secret if both are taken | `master.key` 0400 root, `systemd-creds` (TPM2 where available), the recovery kit offline, wipe with evidence at decommission, KEK rotation when a control node leaves | Yoal provides no disk encryption, so a powered-off control node is an offline target and the VPS console is outside our control | node offline then a lease expiry; a returning node is refused (§6.6); the theft itself is invisible |
 
 ### 17.5 Security invariants
 
@@ -2741,7 +2741,7 @@ and certificate, and loses only the right to be believed. Never use the epoch as
 | I2 | No managed data port is public | D56, per-`/32` nftables rules, the consumer-side loopback endpoint | an external scan finds 80/443 and, on a hub, UDP 51820 |
 | I3 | One control-plane writer per epoch; a fenced node writes nothing | lease CAS and epoch (§6.3); 503 for every non-GET on a fenced node | `chaos/partition-a-b`: no instant with two writers, no epoch regression |
 | I4 | No fleet or data-plane mutation over MCP | D53; `canAdministerPlatform` is session-only (§12.4) | no write tool exists for a node, a control role, a database role, a certificate or the lease |
-| I5 | Root work only through the helper's fixed verbs | D26/D43; socket `root:skiff` 0660 | no host shell verb exists (the D127 console shell runs inside a project's own container); `systemd-analyze security` on every unit |
+| I5 | Root work only through the helper's fixed verbs | D26/D43; socket `root:yoal` 0660 | no host shell verb exists (the D127 console shell runs inside a project's own container); `systemd-analyze security` on every unit |
 | I6 | Every reveal, role change, promote and certificate issue is attributable | `audit_log` with actor, surface, epoch and reason (§12.6) | an action with no row fails the §19 suite |
 | I7 | A removed node holds no route | token revoked, peer and `/32` removed, certificate expiry as the outer bound (§4.5) | a removed node's key cannot handshake and its leaf opens nothing |
 | I8 | A tenant reaches only its own org's attachments and secrets | secret scoping (D88), per-attachment `/32`, per-workload units | a two-org fixture reaches its own services and nothing else |
@@ -2759,21 +2759,21 @@ is whatever the table holds; failed sign-in is a journal line, not a row; and re
 so the structural rule matters more than the filter — a secret must never be an argument. The plan adds the
 chain, a daily NDJSON export (FEATURE-RESEARCH P1), the `ha.*` and `node.*` rows of §12.6, and `security.*`
 rows for certificate issuance, token rotation and a refused overlay connection. Audit is not a paging path:
-`skiff-alert@.service` runs on the host that failed, so §12.5 adds a dead-man's switch.
+`yoal-alert@.service` runs on the host that failed, so §12.5 adds a dead-man's switch.
 
 ### 17.7 Keys and certificates
 
 | Asset | Generated | Stored | Lifetime | Rotation | Revocation |
 |---|---|---|---|---|---|
-| Master key (KEK) | installer, 32 random bytes | `master.key.cred` sealed with `systemd-creds` (TPM2 + host key, else host key; plaintext `master.key` 0400 root without systemd-creds), loaded as a credential; one copy per control node, sealed on that node | until rotated | `sudo skiff-rotate-master-key` on the primary (OPS §11); re-delivery to standbys is C6 work | none; the recovery kit is the way back |
+| Master key (KEK) | installer, 32 random bytes | `master.key.cred` sealed with `systemd-creds` (TPM2 + host key, else host key; plaintext `master.key` 0400 root without systemd-creds), loaded as a credential; one copy per control node, sealed on that node | until rotated | `sudo yoal-rotate-master-key` on the primary (OPS §11); re-delivery to standbys is C6 work | none; the recovery kit is the way back |
 | Org DEKs | control plane, at org creation | SQLite, wrapped by the KEK | until re-wrapped | re-wrapped in the KEK rotation's transaction | org delete |
 | Node CA, ECDSA P-256 | control plane at install (C2) | sealed with the master key in SQLite | 10 years | a second CA as `nextCaPem`, the old trusted until its last leaf expires | replace the CA |
 | Node leaf certificate | the node's key pair and CSR at join | node disk; serial in SQLite | 90 days, renewed at 60 | re-issue to a re-keyed node | removing the node removes its `/32` and peer; expiry is the bound |
 | WireGuard peer key | helper `keygen` (C1); by hand today | private key 0600 root on the node; public key in desired state | node lifetime | re-key on rebuild | peer removal |
 | Ingress TLS key | ACME DNS-01 by the `acme` lease holder (H13) | sealed in SQLite, distributed through activation | 90 days, renewed with 30 left | renewal; every ingress holds the same key | reissue retires the old key |
-| Session and cookie secrets | installer: `BETTER_AUTH_SECRET` 48 bytes, `SKIFF_SITE_COOKIE_SECRET` 32 bytes | `skiff.env` on control and ingress nodes | until rotated | replace and restart; sessions or cookies are invalidated | replace |
+| Session and cookie secrets | installer: `BETTER_AUTH_SECRET` 48 bytes, `YOAL_SITE_COOKIE_SECRET` 32 bytes | `yoal.env` on control and ingress nodes | until rotated | replace and restart; sessions or cookies are invalidated | replace |
 | Node and join tokens | control plane; only hashes stored | `nodes.token_hash`, `node_join_tokens` | until rotated; a join token is 1 h, single use | `POST /nodes/:id/rotate-token` | rotate or delete the node |
-| Provider and replication credentials | operator (R2, Cloudflare, SES); control plane (replication, sealed with the org key) | `skiff.env` / `agent.env`; SQLite, fetched at activation | until rotated | rotate in the provider; staged rotation (D86) | revoke in the provider; drop the role |
+| Provider and replication credentials | operator (R2, Cloudflare, SES); control plane (replication, sealed with the org key) | `yoal.env` / `agent.env`; SQLite, fetched at activation | until rotated | rotate in the provider; staged rotation (D86) | revoke in the provider; drop the role |
 
 Generate on the node what must never travel — the WireGuard key and the leaf's key — and seal everything else
 with the KEK, delivering it only through activation. Removing a control node rotates the master key, because
@@ -2785,13 +2785,13 @@ every DEK was decryptable on it; a failed rotation keeps the old key until the n
 |---|---|---|
 | Key exposure | the master key, CA key, ingress key or an R2 credential is seen by the wrong party | rotate before repair: node tokens, leaves, CA, then the KEK (OPS §11); rebuild rather than clean in place |
 | Integrity | two primaries, a lease holder nobody promoted, an epoch that moved without a person | treat it as a partition and follow §6.6; never restart either control plane |
-| Node compromise | a workload escape, a stolen node token, an unexpected helper call | `skif ha fence <node>` (C6), rotate its token, remove its peer and `/32`, rebuild with a new identity |
+| Node compromise | a workload escape, a stolen node token, an unexpected helper call | `yoal ha fence <node>` (C6), rotate its token, remove its peer and `/32`, rebuild with a new identity |
 | Data exposure | one tenant reaches another's rows | stop the workload, preserve evidence, rotate every secret of the affected org, review the audit window |
 | Supply chain | a release or image nobody asked for | stop the updater, keep the previous release, verify signatures, rebuild from a known-good bundle |
 
 The order is preserve, contain, rotate, rebuild, notify, review — restarting first destroys the evidence of
 whether data diverged. Collect `ha/status` from both control nodes with the lease ETag, the lease object, the
-`audit_log` slice, the journals, a fingerprint and `/var/lib/skiff/ha/break-glass.log`. Notification is thin by
+`audit_log` slice, the journals, a fingerprint and `/var/lib/yoal/ha/break-glass.log`. Notification is thin by
 design: one operator and one org are the normal case, and a data-loss decision needs a second person (§9.3).
 
 ### 17.9 Out of scope
@@ -2806,14 +2806,14 @@ security of the homelab or the provider's datacentre.
 
 ## 18. Operations runbooks
 
-Fourteen procedures, each naming its surface: **dashboard** (session only), **`skif`** (remote), or **root on
+Fourteen procedures, each naming its surface: **dashboard** (session only), **`yoal`** (remote), or **root on
 the host** (§18.14). REST paths omit `/api/v1`, and every runbook ends in the audit trail (§12.6).
 
 ### 18.1 Add a node
 
 **When** new hardware, or a replacement with a new identity (§3.9). **Before** power and a name.
 **Time** 10–20 min. **Risk** low.
-1. `POST /nodes/join-token`, install the agent (OPS §3.2), then `skiff-agent join` with the token.
+1. `POST /nodes/join-token`, install the agent (OPS §3.2), then `yoal-agent join` with the token.
 2. Wait for `online` and the §3.9 checks, including the `ha-epoch` and `l4-endpoints` capabilities.
 3. `PATCH /nodes/:id` with `{ zone, roles, labels }` (C0); confirm `eligible` and one deploy.
 
@@ -2846,7 +2846,7 @@ the host** (§18.14). REST paths omit `/api/v1`, and every runbook ends in the a
 1. Drain (§18.3); promote off it (§18.5), move the ACME lease (§7.4), hand the edge over (D98).
 2. Leave every `synchronous_standby_names` quorum before removing it (refusals: §3.9).
 3. `POST /nodes/:id/rotate-token`, then `DELETE /nodes/:id`.
-4. A control node takes the KEK with it: rotate it (OPS §11), then `sudo skiff-uninstall --purge --yes`.
+4. A control node takes the KEK with it: rotate it (OPS §11), then `sudo yoal-uninstall --purge --yes`.
 
 **Verify** the token fails, the peer cannot handshake, no replica names it. **Roll back** none; re-add anew.
 
@@ -2854,10 +2854,10 @@ the host** (§18.14). REST paths omit `/api/v1`, and every runbook ends in the a
 
 **When** the primary is dead in `manual` mode, or a planned hand-off. **Before** `canPromote: true` and a
 route that does not use the failed node. **Time** 1–5 min. **Risk** critical. Mechanism §6.3, table §6.6.
-1. `skif ha status` (C6) or `GET /ha/status`: note the epoch, the holder and each replay lag.
-2. `skif ha promote --expect-epoch <n>`; it sends the read ETag as `If-Match`, so a stale ETag is a
+1. `yoal ha status` (C6) or `GET /ha/status`: note the epoch, the holder and each replay lag.
+2. `yoal ha promote --expect-epoch <n>`; it sends the read ETag as `If-Match`, so a stale ETag is a
    412 and a wrong `--expect-epoch` is a 409.
-3. `skif ha status --wait` until every node reports the new epoch, and confirm singletons moved.
+3. `yoal ha status --wait` until every node reports the new epoch, and confirm singletons moved.
 
 **Verify** one `primary`, every agent on the new epoch, a write. **Roll back** none; see §18.8.
 
@@ -2875,7 +2875,7 @@ route that does not use the failed node. **Time** 1–5 min. **Risk** critical. 
 
 **When** planned maintenance, a node drain, or a major-version move. **Before** a caught-up replica, a
 quiet write period and `database:update`. **Time** 1–2 min. **Risk** medium.
-1. `POST /databases/:name/switchover` with `{ node, expectedGeneration }`, or `skif db switchover`.
+1. `POST /databases/:name/switchover` with `{ node, expectedGeneration }`, or `yoal db switchover`.
 2. It waits for `replay_lsn = pg_current_wal_lsn()`, refuses a non-zero gap; the old node becomes a replica.
 
 **Verify** zero lost commits, replication from the new primary, consumers re-pointed.
@@ -2885,9 +2885,9 @@ quiet write period and `database:update`. **Time** 1–2 min. **Risk** medium.
 
 **When** two `primary` roles, `ha.lease_contested`, two `ha.promote` rows at one epoch, or mixed epochs.
 **Before** root on both hosts and the lease ETag. **Time** 30–60 min. **Risk** critical. Table: §6.6.
-1. Read both: `curl --unix-socket /run/skiff/control.sock http://localhost/api/v1/ha/status`.
+1. Read both: `curl --unix-socket /run/yoal/control.sock http://localhost/api/v1/ha/status`.
 2. Pick the winner by matching epoch and `holderNodeId`, else the highest epoch with the newest lease.
-3. Freeze the loser: `sudo systemctl stop skiff-control-plane skiff-litestream`, then mask both units.
+3. Freeze the loser: `sudo systemctl stop yoal-control-plane yoal-litestream`, then mask both units.
 4. Compare its `audit_log` and fingerprint, then replace — never merge — by restoring the replica at the
    winner's epoch and re-enrolling it as a standby.
 
@@ -2909,8 +2909,8 @@ partitioned, and surviving replicas exist. **Time** 20 min stateless, hours with
 
 **When** data loss, corruption, a failed upgrade, or a lost control-plane host. **Before** the newest backup.
 **Time** 15–60 min. **Risk** high. Restore to new, never in place.
-1. `sudo skiff-restore --yes [--from <replica>] [--recovery-kit <file>]`; reverts on a failed check.
-2. Raise the epoch before serving: `skif ha claim --from-store --expect-epoch <n>`, or §6.5's CAS.
+1. `sudo yoal-restore --yes [--from <replica>] [--recovery-kit <file>]`; reverts on a failed check.
+2. Raise the epoch before serving: `yoal ha claim --from-store --expect-epoch <n>`, or §6.5's CAS.
 3. A managed database: restore the D83 dump into a **new** database and re-attach, then fingerprint both.
 
 **Verify** `PRAGMA integrity_check` is `ok`, fingerprints match, the epoch exceeds every agent's.
@@ -2922,8 +2922,8 @@ partitioned, and surviving replicas exist. **Time** 20 min stateless, hours with
 **Time** 5 min for TLS, 30–60 for the KEK. **Risk** high for the KEK.
 1. Least privileged first: `POST /nodes/:id/rotate-token`, then re-key a leaving node (§4.5).
 2. Ingress TLS: `POST /ha/certificates/rotate` (C5), or let the `acme` holder renew and distribute it.
-3. Application secrets: replace `BETTER_AUTH_SECRET` or `SKIFF_SITE_COOKIE_SECRET` and restart (§7.1).
-4. Master key last: `sudo skiff-rotate-master-key` (OPS §11.2), then re-export the recovery kit.
+3. Application secrets: replace `BETTER_AUTH_SECRET` or `YOAL_SITE_COOKIE_SECRET` and restart (§7.1).
+4. Master key last: `sudo yoal-rotate-master-key` (OPS §11.2), then re-export the recovery kit.
 
 **Verify** a secret-backed deployment activates, one fingerprint everywhere, a matching recovery kit.
 **Roll back** keep the previous key for one window (OPS §11.3).
@@ -2944,7 +2944,7 @@ verified backup. **Time** 10–20 min. **Risk** medium: you lose the failover ta
 **When** monthly for control promotion, ingress loss and restore; quarterly for zone loss, object store down
 and split brain (§12.7). **Before** a window, a scratch target and the real key. **Time** 30–60 min.
 **Risk** medium: it exercises production paths.
-1. `skif ha drill <kind>` (C8) scripts it; until then follow the matching runbook with scratch names.
+1. `yoal ha drill <kind>` (C8) scripts it; until then follow the matching runbook with scratch names.
 2. Use the real lease, epoch bump and promotion — a drill key proves nothing — measure each stage against
    §11.1, write the `ha_drills` row with RTO and RPO, and tear down.
 
@@ -2956,10 +2956,10 @@ and split brain (§12.7). **Before** a window, a scratch target and the real key
 **When** the dashboard and API are unreachable, or a promote is needed with no session. **Before** root on a
 host, key-only SSH (OPS §12) and a second person for anything lossy. **Time** 5–15 min. **Risk** critical.
 1. Reach a host without the failed node: WireGuard SSH, else the console or the path recorded in §7.4.
-2. Read the state: `curl --unix-socket /run/skiff/control.sock http://localhost/api/v1/ha/status`.
-3. `sudo skif ha promote --force --expect-epoch <n>` (C6); it prints the lease and candidate lag, requires
-   the node name typed, and appends to `/var/lib/skiff/ha/break-glass.log`.
-4. If no control plane can run, `sudo skiff-restore --yes --recovery-kit <file>` and `skif ha claim` (§6.5).
+2. Read the state: `curl --unix-socket /run/yoal/control.sock http://localhost/api/v1/ha/status`.
+3. `sudo yoal ha promote --force --expect-epoch <n>` (C6); it prints the lease and candidate lag, requires
+   the node name typed, and appends to `/var/lib/yoal/ha/break-glass.log`.
+4. If no control plane can run, `sudo yoal-restore --yes --recovery-kit <file>` and `yoal ha claim` (§6.5).
 
 **Verify** one primary, the action in `audit_log` with actor and reason, every agent on the new epoch.
 **Roll back** none: record what was done and review it.
@@ -2973,7 +2973,7 @@ singleton. This section fixes what a pass means, how faults are injected, the la
 each phase clears and the evidence that outlives the run.
 
 The tree has `bun test`, `tests/e2e/managed-data.e2e.ts`, `tests/rest.e2e.ts`, `tests/mcp-oauth.e2e.ts`,
-the monthly restore drill and `scripts/skiff-db-fingerprint.ts`, but no chaos harness, no multi-node lab
+the monthly restore drill and `scripts/yoal-db-fingerprint.ts`, but no chaos harness, no multi-node lab
 and no systemd lane in CI. The layers, in gate order: unit and contract in `bun test` on every push,
 with `packages/contracts` as the contract; integration with two control planes and a real agent against
 real Postgres and RustFS; the systemd layer, which hosted runners cannot provide honestly; then chaos,
@@ -3037,7 +3037,7 @@ artefacts. VMs for node loss; containers for everything else, and those are what
 | Clock skew | `libfaketime` on the control-plane process, or a VM RTC offset | Store-clock authority, `ha.control_clock_skew` |
 | Disk full | Loopback ext4 at the data dir, filled with `fallocate` | Fail-closed writes, slot caps, Litestream behaviour |
 | Object-store loss | `s3lab` returns 412, 500, 501, delay or divergent ETags | CAS semantics, fencing at 20 s, no promotion |
-| Crash mid-promotion | `SKIFF_FAULT_AT=promote:after-cas`, inert unless `SKIFF_FAULT_INJECTION=1` | Recovery from the worst intermediate state |
+| Crash mid-promotion | `YOAL_FAULT_AT=promote:after-cas`, inert unless `YOAL_FAULT_INJECTION=1` | Recovery from the worst intermediate state |
 
 Certificate expiry, DNS and stepped clocks reuse the same rig (a 10-minute lab CA, a stub resolver, a
 step during a lease write). The record says what each cannot fake: page cache survives `kill -9`, a
@@ -3066,11 +3066,11 @@ hypervisor stop is not a provider partition, and the crash hook is a test seam.
 - `test` (exists) gains the HA unit and contract suites, so they cannot rot in a side job.
 - `ha-integration` (new): two control planes, `s3lab`, Postgres and RustFS on `ubuntu-latest`, about 10
   minutes, on `apps/**`, `packages/core/**`, `tests/ha/**` and every `main` push.
-- `ha-chaos` (new): a self-hosted runner labelled `skiff-lab` running the VM lane; nightly, on dispatch
+- `ha-chaos` (new): a self-hosted runner labelled `yoal-lab` running the VM lane; nightly, on dispatch
   and on a `v*` tag, uploading the record, journals and fingerprints for 14 days; `ha-soak` is weekly.
 - `publish.yml` requires `test` and `ha-integration`; enabling an installer default or an `auto` mode
   needs a green chaos run in the release notes, the gate §16.2 demands. Secrets are a dedicated
-  `skiff-ha-lab` bucket and zone; a run that finds a production token fails.
+  `yoal-ha-lab` bucket and zone; a run that finds a production token fails.
 
 1. **Flake policy: no retries on invariant tests.** A second-attempt pass is a flake and fails the gate; retrying is
    how a split-brain test becomes green. Timing asserts 125% of §11.1 and publishes the measurement.
@@ -3107,7 +3107,7 @@ cannot complete everywhere it might place it), degrade (the node is ineligible f
 | Capability | Added by | Gates | Refusal when absent |
 |---|---|---|---|
 | `ha-epoch` | C6 | Control standby, `auto`, L2 and above | Placement excluded; enrolment refused |
-| `wg-mesh` | C1 | Skiff-managed overlay membership | The node runs as `external` |
+| `wg-mesh` | C1 | Yoal-managed overlay membership | The node runs as `external` |
 | `l4-endpoints` | C2 | Cross-node attachments, both directions | Refused, or the consumer stays pinned |
 | `ha-run-lease` | C4 | `singleton: true` | The singleton is pinned to a capable node |
 | `ha-workload-replicas` | C4 | Replicas beyond one node | Single-node replicas only |
@@ -3143,9 +3143,9 @@ it a gate.
 
 ### 20.3 Feature flags
 
-Flags follow OPS §2.5: `SKIFF_FEATURE_<NAME>` in `/etc/skiff/skiff.env`, read once at startup, default
+Flags follow OPS §2.5: `YOAL_FEATURE_<NAME>` in `/etc/yoal/yoal.env`, read once at startup, default
 off. Two exceptions define §14's "Default after" row. C0, C1 and C2 ship **enabled** on a multi-node
-install, because nothing later works without them; `SKIFF_FEATURE_MULTI_NODE_REPLICAS` is enabled only
+install, because nothing later works without them; `YOAL_FEATURE_MULTI_NODE_REPLICAS` is enabled only
 for `L3` workloads created after C4, while existing `L0`/`L1` resources keep it off. Every other flag
 starts off and is turned on per resource in the §20.6 order. On a multi-node install the set joins the
 config digest in `/api/v1/ha/status` (§6.2), because a standby that promotes with a different set
@@ -3154,24 +3154,24 @@ remove something is §20.5.
 
 | Flag | Phase | Gates | Turning it off |
 |---|---|---|---|
-| `SKIFF_FEATURE_PLACEMENT_SPEC` | C0 | Placement classes, topology and blast-radius views | Placement falls back to `edge`/`auto`; the rows stay inert |
-| `SKIFF_FEATURE_MANAGED_OVERLAY` | C1 | Managed WireGuard; `external` nodes ignore it | Peers stay until the next reconcile |
-| `SKIFF_FEATURE_SERVICE_ENDPOINTS` | C2 | Consumer endpoints, cross-node attachments | Attachments stop rendering; apps fail |
-| `SKIFF_FEATURE_CLUSTER_SHARES` | C3 | The share resource and on-demand mounts | Mounts stay until unused |
-| `SKIFF_FEATURE_MULTI_NODE_REPLICAS` | C4 | Replicas beyond one node, drain, `singleton` | Copies stay; no new placement |
-| `SKIFF_FEATURE_INGRESS_HA` | C5 | Steering driver, certificate distribution | The record set is left; `direct` is the fallback |
-| `SKIFF_FEATURE_CONTROL_STANDBY` | C6 | Enrolment, lease, epoch | Refused while an epoch is held |
-| `SKIFF_FEATURE_DB_REPLICAS` | C7 | Replica creation and failover | Replicas stream; promotion is unavailable |
-| `SKIFF_FEATURE_AUTO_FAILOVER` | C8 | The `auto` modes of §6.3, §8.3, §9.3 | Falls back to `manual` |
-| `SKIFF_FEATURE_STORAGE_REPLICATION` | C9 | Replication, Litestream, snapshot shipping | Replication stops; bytes remain |
-| `SKIFF_FEATURE_ENGINE_MONGODB`, `_VALKEY`, `_MYSQL` | C10 | Per-engine member replication and member ports | The engine runs `L0`; no member port |
+| `YOAL_FEATURE_PLACEMENT_SPEC` | C0 | Placement classes, topology and blast-radius views | Placement falls back to `edge`/`auto`; the rows stay inert |
+| `YOAL_FEATURE_MANAGED_OVERLAY` | C1 | Managed WireGuard; `external` nodes ignore it | Peers stay until the next reconcile |
+| `YOAL_FEATURE_SERVICE_ENDPOINTS` | C2 | Consumer endpoints, cross-node attachments | Attachments stop rendering; apps fail |
+| `YOAL_FEATURE_CLUSTER_SHARES` | C3 | The share resource and on-demand mounts | Mounts stay until unused |
+| `YOAL_FEATURE_MULTI_NODE_REPLICAS` | C4 | Replicas beyond one node, drain, `singleton` | Copies stay; no new placement |
+| `YOAL_FEATURE_INGRESS_HA` | C5 | Steering driver, certificate distribution | The record set is left; `direct` is the fallback |
+| `YOAL_FEATURE_CONTROL_STANDBY` | C6 | Enrolment, lease, epoch | Refused while an epoch is held |
+| `YOAL_FEATURE_DB_REPLICAS` | C7 | Replica creation and failover | Replicas stream; promotion is unavailable |
+| `YOAL_FEATURE_AUTO_FAILOVER` | C8 | The `auto` modes of §6.3, §8.3, §9.3 | Falls back to `manual` |
+| `YOAL_FEATURE_STORAGE_REPLICATION` | C9 | Replication, Litestream, snapshot shipping | Replication stops; bytes remain |
+| `YOAL_FEATURE_ENGINE_MONGODB`, `_VALKEY`, `_MYSQL` | C10 | Per-engine member replication and member ports | The engine runs `L0`; no member port |
 
 ### 20.4 Migration order and rollback
 
 1. **Schema only**: additive tables and columns (§13), no behaviour change, snapshot restores.
 2. **Dual-emit**: `placement` text plus `placement_json`, `epoch: 0`, `mode` and `can_build` unchanged.
 3. **Agent floor**: every agent through D99, control nodes first; capabilities on every heartbeat.
-4. **Standby**: `SKIFF_FEATURE_CONTROL_STANDBY` on, enrol, replay current, fingerprint equal (§6.5).
+4. **Standby**: `YOAL_FEATURE_CONTROL_STANDBY` on, enrol, replay current, fingerprint equal (§6.5).
 5. **Manual promote** in a window, every agent on the new epoch, then demote.
 6. **`auto` on one resource** with a recorded drill, then widen by zone, then resource.
 
@@ -3179,7 +3179,7 @@ Only step 1 is irreversible; it ships with the snapshot and preflight OPS §4.2.
 
 | Rollback | Mechanism | Allowed when | Cost |
 |---|---|---|---|
-| Code | `skiff-update-self rollback` | The previous release knows every applied migration | Seconds; data untouched |
+| Code | `yoal-update-self rollback` | The previous release knows every applied migration | Seconds; data untouched |
 | Schema | `rollback --restore-db` or the sealed bundle | Always, with a stated loss window | Writes since the switch |
 | HA configuration | The §20.5 off-sequence | Always | Capacity drops; replicas keep data |
 | A promotion | Promote again, at a new epoch | Always | Never restore the old primary's SQLite |
@@ -3189,7 +3189,7 @@ one, so a pre-C6 release cannot serve that fleet — the dashboard works and eve
 `settings.ha.epochFloorVersion` records the first release that served this install an epoch above zero;
 preflight refuses a downgrade below it, and `rollback` exits 1 with the reason. `--force` does not
 bypass the floor. The way back is a re-enrolment: restore the control plane, stop every agent, delete
-`$SKIFF_DATA_DIR/epoch.json`, re-enrol, and accept the restored SQLite as the source of truth; §18
+`$YOAL_DATA_DIR/epoch.json`, re-enrol, and accept the restored SQLite as the source of truth; §18
 carries it as a procedure. Code-only releases inside the epoch-aware range roll back normally.
 
 Data rollback is separate: dropping a replica, detaching an endpoint or disabling the standby leaves
@@ -3201,23 +3201,23 @@ promotion, never by a file restore.
 1. `failover: auto` → `manual` fleet-wide; let in-flight re-placement finish or expire (10 min, §8.3).
 2. Drain the standby, then disable it: `mode: single`, the lease released, the epoch frozen.
 3. Drop database replicas one at a time after a final backup; the primary is not restarted.
-4. Detach cross-node attachments and disable `SKIFF_FEATURE_SERVICE_ENDPOINTS`, then drop the extra
-   ingress record and disable `SKIFF_FEATURE_INGRESS_HA`; consumers are re-activated on the provider's
+4. Detach cross-node attachments and disable `YOAL_FEATURE_SERVICE_ENDPOINTS`, then drop the extra
+   ingress record and disable `YOAL_FEATURE_INGRESS_HA`; consumers are re-activated on the provider's
    node.
 5. Remove `control` and `ingress` from the second node and decommission it (§3.9).
 
 The residual is stated on the page: one control plane after step 2, one copy of each database after step
 3. Turning HA off never turns a backup off, and never deletes a replica's data without an explicit purge.
 
-- **Control nodes** update with `skiff-update-self`, standby first, primary after it reports healthy and
+- **Control nodes** update with `yoal-update-self`, standby first, primary after it reports healthy and
   with no promotion in flight. **Ingress** and **data** nodes update from the dashboard (D99), one at a
   time, an ingress withdrawn from steering first and a data node never the only `sync` replica.
   **Compute and build** nodes update in batches, never mid-build and never mid-rollout.
 - A release with migrations cannot follow that order, because a standby never migrates while following
   (§6.5): snapshot, stop the primary, promote the standby so it migrates as the only writer, update the
   old primary, rejoin it as standby, repeat for a third control node.
-- Two standbys are not the same: `SKIFF_STANDBY=1` is the updater's same-host slot (OPS §4.1),
-  `SKIFF_CONTROL_ROLE=standby` is the HA follower (§6.1). A promoted HA standby clears both; an updater
+- Two standbys are not the same: `YOAL_STANDBY=1` is the updater's same-host slot (OPS §4.1),
+  `YOAL_CONTROL_ROLE=standby` is the HA follower (§6.1). A promoted HA standby clears both; an updater
   slot never takes the lease.
 
 ### 20.6 Rolling this onto a live fleet
@@ -3245,11 +3245,11 @@ Steps 2, 5 and 7 change the failure modes; steps 3, 4 and 8 change what happens 
 | Field | Deprecated in | Removed when | Replaced by |
 |---|---|---|---|
 | `placement` text | C0 | Every agent reads `PlacementSpec` (C2) | `placement_json` |
-| `SKIFF_FEATURE_DB_CONSOLE` | Already, D96 | Ignored with a startup warning today | `SKIFF_FEATURE_DB_STUDIO` |
+| `YOAL_FEATURE_DB_CONSOLE` | Already, D96 | Ignored with a startup warning today | `YOAL_FEATURE_DB_STUDIO` |
 
-Adoption is measured, not claimed: `skiff_ha_mode`, `skiff_ha_level{kind,level}`,
-`skiff_ha_effective_below_target`, `skiff_agent_capability{capability,version}` and
-`skiff_ha_drill_age_seconds{kind}`, beside §6.6's lease series and §9.2's replicas. Settings → High
+Adoption is measured, not claimed: `yoal_ha_mode`, `yoal_ha_level{kind,level}`,
+`yoal_ha_effective_below_target`, `yoal_agent_capability{capability,version}` and
+`yoal_ha_drill_age_seconds{kind}`, beside §6.6's lease series and §9.2's replicas. Settings → High
 availability shows five numbers: agents at the floor, resources at L2 or above, control nodes with
 `canPromote`, drills green in 30 days, and resources whose effective level equals the configured one.
 
@@ -3365,7 +3365,7 @@ per-database agent whose failure mode is a second authority over promotion. pg_a
 with a monitor Postgres, still deciding promotion outside the control plane that owns desired state; an
 etcd or Consul lease store is the same cost for one object. The chosen design puts the decision in the
 control plane and the authority in a per-database lease (§9.3), reusing what the control plane needs
-anyway, and accepts that Skiff owns the state machine and must test it (§19). LiteFS is the closest
+anyway, and accepts that Yoal owns the state machine and must test it (§19). LiteFS is the closest
 control-plane alternative, rejected because it still needs a lease to decide the writer plus a FUSE
 mount on every node. Consensus on every write (rqlite, dqlite, Kine) is the cost §1 rejects; the 40 s
 write gap during a partition is the cheaper trade at this scale.

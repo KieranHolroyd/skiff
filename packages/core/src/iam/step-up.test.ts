@@ -2,19 +2,19 @@ import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
+import { createDb } from '@yoal/db';
 import {
 	STEP_UP_WINDOW_MS,
 	StepUpRequiredError,
 	type Principal,
 	type StepUpVerification,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { createCore, type Core } from '../index.ts';
 import { LocalObjectStore } from '../object-store.ts';
 import { buildPrincipal } from '../orgs.ts';
 import { stepUpEnabled } from './step-up.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-step-up-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-step-up-'));
 const opened = createDb({ path: ':memory:' });
 const org = { type: 'org' } as const;
 let now = Date.parse('2026-11-08T12:00:00Z');
@@ -78,21 +78,21 @@ beforeEach(() => {
 	`);
 	core = open();
 	// The suite drives the flag explicitly; `bun test` and headless runs leave it unset.
-	delete process.env.SKIFF_STEP_UP;
+	delete process.env.YOAL_STEP_UP;
 });
 
 afterAll(() => {
-	delete process.env.SKIFF_STEP_UP;
+	delete process.env.YOAL_STEP_UP;
 	opened.sqlite.close();
 	rmSync(dir, { recursive: true, force: true });
 });
 
 describe('step-up enforcement flag', () => {
-	test('is off unless SKIFF_STEP_UP=1', () => {
+	test('is off unless YOAL_STEP_UP=1', () => {
 		expect(stepUpEnabled({})).toBe(false);
-		expect(stepUpEnabled({ SKIFF_STEP_UP: '0' })).toBe(false);
-		expect(stepUpEnabled({ SKIFF_STEP_UP: 'true' })).toBe(false);
-		expect(stepUpEnabled({ SKIFF_STEP_UP: '1' })).toBe(true);
+		expect(stepUpEnabled({ YOAL_STEP_UP: '0' })).toBe(false);
+		expect(stepUpEnabled({ YOAL_STEP_UP: 'true' })).toBe(false);
+		expect(stepUpEnabled({ YOAL_STEP_UP: '1' })).toBe(true);
 	});
 
 	test('with the flag off, a window permission needs no verification', () => {
@@ -100,7 +100,7 @@ describe('step-up enforcement flag', () => {
 	});
 
 	test('with the flag on, a window permission without verification is denied', () => {
-		process.env.SKIFF_STEP_UP = '1';
+		process.env.YOAL_STEP_UP = '1';
 		const error = caught(() =>
 			core.ctx.iam.require(principal(), 'database:credentials', org),
 		);
@@ -112,7 +112,7 @@ describe('step-up enforcement flag', () => {
 
 describe('step-up window', () => {
 	beforeEach(() => {
-		process.env.SKIFF_STEP_UP = '1';
+		process.env.YOAL_STEP_UP = '1';
 	});
 
 	test('a fresh verification of the strongest class is allowed', () => {
@@ -147,7 +147,7 @@ describe('step-up window', () => {
 
 describe('step-up levels', () => {
 	beforeEach(() => {
-		process.env.SKIFF_STEP_UP = '1';
+		process.env.YOAL_STEP_UP = '1';
 	});
 
 	test('always asks every time, even with a fresh verification', () => {

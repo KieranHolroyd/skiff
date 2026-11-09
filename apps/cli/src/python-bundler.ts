@@ -1,5 +1,5 @@
 /**
- * Bundle a Python Worker for Skiff Functions (D121, docs/FUNCTIONS.md §4.3).
+ * Bundle a Python Worker for Yoal Functions (D121, docs/FUNCTIONS.md §4.3).
  *
  * Python Workers are not compiled: the bundle is the Python source next to the entry module plus
  * the packages vendored into `python_modules/` by `pywrangler sync`. This follows Wrangler's
@@ -117,7 +117,7 @@ export async function bundlePythonWorker(
 	modules.sort((a, b) => a.name.localeCompare(b.name));
 	if (modules.length > PYTHON_MAX_MODULES)
 		throw new CliError(
-			`This Python Worker has ${modules.length} files; Skiff Functions load at most ${PYTHON_MAX_MODULES}. Trim python_modules/ (drop unused packages) or deploy the app as a process app instead.`,
+			`This Python Worker has ${modules.length} files; Yoal Functions load at most ${PYTHON_MAX_MODULES}. Trim python_modules/ (drop unused packages) or deploy the app as a process app instead.`,
 			{ code: 'bundle_too_large' },
 		);
 	log(`Python Worker: ${modules.length} modules (${modules.filter((module) => module.name.startsWith(`${PYTHON_VENDOR_DIR}/`)).length} vendored).`);

@@ -1,6 +1,6 @@
-import type { SearchEntry } from '@skiff/docs';
-import { enhanceDiagrams } from '@skiff/docs/diagrams';
-import { searchDocs, type SearchHit } from '@skiff/docs/search';
+import type { SearchEntry } from '@yoal/docs';
+import { enhanceDiagrams } from '@yoal/docs/diagrams';
+import { searchDocs, type SearchHit } from '@yoal/docs/search';
 
 /**
  * Progressive enhancement for the static docs: everything works without it except search.
@@ -14,7 +14,7 @@ document.querySelector('[data-theme-toggle]')?.addEventListener('click', () => {
 	const dark = !document.documentElement.classList.contains('dark');
 	document.documentElement.classList.toggle('dark', dark);
 	try {
-		localStorage.setItem('skiff-docs-theme', dark ? 'dark' : 'light');
+		localStorage.setItem('yoal-docs-theme', dark ? 'dark' : 'light');
 	} catch {
 		// Private mode: the choice lasts for this page only.
 	}

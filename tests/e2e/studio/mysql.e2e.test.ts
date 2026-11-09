@@ -3,9 +3,9 @@
  * suite plus engine-specific checks, against disposable `mysql:8.4` and `mariadb:11.8`
  * containers (and `mysql:9.7` / `mariadb:11.4` when those images are already present).
  *
- *   SKIFF_E2E_STUDIO=1 SKIFF_E2E_ENGINE=docker bun test tests/e2e/studio/mysql.e2e.test.ts
+ *   YOAL_E2E_STUDIO=1 YOAL_E2E_ENGINE=docker bun test tests/e2e/studio/mysql.e2e.test.ts
  *
- * Without `SKIFF_E2E_STUDIO=1` it registers one skipped test, so the root `bun test` stays fast.
+ * Without `YOAL_E2E_STUDIO=1` it registers one skipped test, so the root `bun test` stays fast.
  *
  * Conformance runs twice per engine: read-only sessions on the owner credential (the interim
  * reality until track G lands), and on a `SELECT, SHOW VIEW` principal (the Phase 3 one).
@@ -29,7 +29,7 @@ import { ContainerRuntime, detectEngine, freePort, waitFor } from '../lib/contai
 const ROW_COUNT = 250;
 const ROOT_PASSWORD = 'root-pw';
 const OWNER = { user: 'app', password: 'owner p@ss:/?' };
-const READER = { user: 'skiff_studio_ro', password: 'reader-pw' };
+const READER = { user: 'yoal_studio_ro', password: 'reader-pw' };
 const TABLE = 'studio_items';
 const VIEW = 'studio_item_names';
 const NO_KEY = 'studio_nokey';
@@ -89,12 +89,12 @@ function errorOf(events: StudioEvent[]): Extract<StudioEvent, { t: 'error' }> | 
 	return events.find((e): e is Extract<StudioEvent, { t: 'error' }> => e.t === 'error');
 }
 
-if (process.env.SKIFF_E2E_STUDIO !== '1') {
-	test.skip('mysql/mariadb studio e2e (set SKIFF_E2E_STUDIO=1 to run)', () => {});
+if (process.env.YOAL_E2E_STUDIO !== '1') {
+	test.skip('mysql/mariadb studio e2e (set YOAL_E2E_STUDIO=1 to run)', () => {});
 } else {
 	setDefaultTimeout(60_000);
 	const engine = await detectEngine();
-	if (!engine) throw new Error('SKIFF_E2E_STUDIO=1 needs Podman or Docker (or set SKIFF_E2E_ENGINE).');
+	if (!engine) throw new Error('YOAL_E2E_STUDIO=1 needs Podman or Docker (or set YOAL_E2E_ENGINE).');
 	const probe = new ContainerRuntime(engine, tmpdir());
 	const hasImage = async (image: string) =>
 		(await probe.exec(['image', 'inspect', image], { check: false, timeoutMs: 30_000 })).code === 0;

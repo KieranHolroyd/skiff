@@ -51,7 +51,7 @@ export type GithubRunnerAuthMethod = (typeof githubRunnerAuthMethods)[number];
  *   runners: write" on the organisation (a classic token needs `repo` / `admin:org`).
  * - `app`: a GitHub App installed on the repository or organisation with the same permission.
  *   The control plane signs a JWT with the private key and exchanges it for an installation token.
- * - `installation`: Skiff's own GitHub App (Settings → GitHub, D165). The org's linked installation
+ * - `installation`: Yoal's own GitHub App (Settings → GitHub, D165). The org's linked installation
  *   on `owner` is used; nothing is stored on the project.
  */
 export const githubRunnerAuthSchema = z.discriminatedUnion('method', [
@@ -69,7 +69,7 @@ export type GithubRunnerAuth = z.infer<typeof githubRunnerAuthSchema>;
 export const githubRunnerScopes = ['repo', 'org'] as const;
 export type GithubRunnerScope = (typeof githubRunnerScopes)[number];
 
-/** Labels every Skiff runner carries; GitHub does not add OS labels to JIT runners on its own. */
+/** Labels every Yoal runner carries; GitHub does not add OS labels to JIT runners on its own. */
 export const GITHUB_RUNNER_BASE_LABELS = ['self-hosted', 'linux'] as const;
 
 export const githubRunnerSchema = z

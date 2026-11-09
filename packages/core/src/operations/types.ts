@@ -5,7 +5,7 @@ import type {
 	Principal,
 	PruneCategory,
 	PruneScope,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { BlueprintOperationParams } from '../blueprints.ts';
 import type { CoreContext } from '../context.ts';
 

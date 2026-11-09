@@ -3,7 +3,7 @@
  * installed as an app (or any browser an owner turned push on in).
  *
  * No SDK: the payload is encrypted with RFC 8291 (`aes128gcm`, RFC 8188) and every request is
- * signed with a VAPID JWT (RFC 8292), both with `node:crypto`, so `scripts/skiff-alert.ts` can use
+ * signed with a VAPID JWT (RFC 8292), both with `node:crypto`, so `scripts/yoal-alert.ts` can use
  * it too while the control plane is down. Subscriptions live in `push_subscriptions` (migration
  * 0037); the push service answering 404/410 means the browser dropped it, so the row is deleted.
  */
@@ -307,7 +307,7 @@ export class PushSubscriptionStore {
 /** The payload for a platform alert. */
 export function alertPushPayload(alert: { key: string; title: string; detail: string; severity: 'info' | 'warning' | 'critical' }, now = Date.now()): PushPayload {
 	return {
-		title: alert.severity === 'info' ? `Skiff: ${alert.title}` : `Skiff ${alert.severity}: ${alert.title}`,
+		title: alert.severity === 'info' ? `Yoal: ${alert.title}` : `Yoal ${alert.severity}: ${alert.title}`,
 		body: alert.detail,
 		tag: alert.key,
 		url: '/',
@@ -331,7 +331,7 @@ export async function deliverPush(
 	options: { fetch?: typeof fetch } = {},
 ): Promise<PushDeliveryResult> {
 	const result: PushDeliveryResult = { sent: 0, removed: 0, failures: [] };
-	// Bookkeeping is best effort: scripts/skiff-alert.ts may only have a read-only database.
+	// Bookkeeping is best effort: scripts/yoal-alert.ts may only have a read-only database.
 	const record = (write: () => unknown) => {
 		try {
 			write();

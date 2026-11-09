@@ -1,6 +1,6 @@
-import { auditLog } from '@skiff/db';
+import { auditLog } from '@yoal/db';
 import { desc, eq, and, gte, lt, lte, or, type SQL } from 'drizzle-orm';
-import type { Principal } from '@skiff/contracts';
+import type { Principal } from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { ValidationError } from './errors.ts';
 import { newId } from './util.ts';
@@ -45,7 +45,7 @@ export class AuditService {
 			.run();
 
 		// IAM.md §7.1 actor columns (migration 0081). Written separately because the drizzle table
-		// in @skiff/db has not picked the columns up yet; the common path (no credential / no
+		// in @yoal/db has not picked the columns up yet; the common path (no credential / no
 		// acting-for) skips the second statement entirely.
 		const actedFor = principal?.actingFor;
 		const credentialId = principal?.keyId ?? principal?.credential ?? null;
@@ -134,7 +134,7 @@ function actorTypeFor(kind: Principal['kind'] | undefined): 'user' | 'apiKey' | 
 	return 'system';
 }
 
-/** A stored audit row. `credentialId` / `actingForType` / `actingForId` (IAM.md §7.1) appear here once @skiff/db's schema includes migration 0081. */
+/** A stored audit row. `credentialId` / `actingForType` / `actingForId` (IAM.md §7.1) appear here once @yoal/db's schema includes migration 0081. */
 export type AuditEntry = typeof auditLog.$inferSelect;
 
 export type AuditListOptions = {

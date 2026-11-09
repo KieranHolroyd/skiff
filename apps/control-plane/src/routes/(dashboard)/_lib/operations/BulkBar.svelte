@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { OperationActionInfo } from '@skiff/contracts';
+	import type { OperationActionInfo } from '@yoal/contracts';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import XIcon from '@lucide/svelte/icons/x';
 	import { Button } from '#lib/components/ui/button/index.js';

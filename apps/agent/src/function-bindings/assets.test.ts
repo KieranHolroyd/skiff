@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { FunctionRuntimeBinding, WorkloadDesired } from '@skiff/contracts';
+import type { FunctionRuntimeBinding, WorkloadDesired } from '@yoal/contracts';
 import { renderAssetsBinding, resolveAssetsDirectory } from './assets.ts';
 
 const RELEASE_DIR = '/data/sites/prj_1/releases/abc123';

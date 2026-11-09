@@ -1,7 +1,7 @@
-# Node.js on Skiff
+# Node.js on Yoal
 
 A dependency-free Node.js server deployed as a **process app** with `engine: "node"` (D125). It
-calls `server.listen(PORT)` like any Node app. Nothing in it knows about Skiff or systemd: with
+calls `server.listen(PORT)` like any Node app. Nothing in it knows about Yoal or systemd: with
 socket activation on, the node's preload moves that `listen()` onto the socket systemd passes, so
 the app scales to zero after five idle minutes and starts again on the next request.
 
@@ -17,7 +17,7 @@ The installer puts the pinned Node.js LTS on every node by default (`--no-node` 
 node installed before that, the next update adds it, or run:
 
 ```sh
-sudo /opt/skiff/runtime/bin/bun /opt/skiff/current/repo/scripts/install/node.ts
+sudo /opt/yoal/runtime/bin/bun /opt/yoal/current/repo/scripts/install/node.ts
 ```
 
 The node then advertises `process-node`, and only such nodes are offered Node apps.
@@ -29,15 +29,15 @@ Create a project with runtime **process**, then open **Runtime → Configure run
 after** to `300`. Or send `workload.json` to the API:
 
 ```sh
-curl -X PUT "https://$SKIFF_HOST/api/v1/projects/node-demo/workload" \
-  -H "Authorization: Bearer $SKIFF_TOKEN" -H 'Content-Type: application/json' \
+curl -X PUT "https://$YOAL_HOST/api/v1/projects/node-demo/workload" \
+  -H "Authorization: Bearer $YOAL_TOKEN" -H 'Content-Type: application/json' \
   --data @workload.json
 ```
 
 ## 3. Deploy
 
 ```sh
-skif deploy --project node-demo
+yoal deploy --project node-demo
 ```
 
 ## Frameworks
@@ -50,5 +50,5 @@ skif deploy --project node-demo
 - Ship dependencies in the release (bundle them, or deploy a standalone build): the node does not
   run `npm install`.
 - With socket activation on, do not use `npm start` or `node --run start` as the command. Both
-  start the app without the socket, so Skiff refuses them. Leave Command blank or run the server
+  start the app without the socket, so Yoal refuses them. Leave Command blank or run the server
   directly. With socket activation off they work, and the app listens on `PORT`.

@@ -28,18 +28,18 @@ import { VAPID_PRIVATE_KEY_ENV, VAPID_PUBLIC_KEY_ENV, ensureVapidKeys } from '..
 import { readEnvFile, writeEnvFile } from '../install/env-file.ts';
 import { CLICKHOUSE_PATHS, clickhouseInstalled, ensureClickHouse, restartClickHouse, uninstallClickHouse } from '../systemd/clickhouse.ts';
 
-export const CONTROL_PLANE = 'skiff-control-plane.service';
-export const AGENT = 'skiff-agent.service';
-export const LITESTREAM_UNIT = 'skiff-litestream.service';
-export const DRILL_SERVICE = 'skiff-restore-drill.service';
-export const DRILL_TIMER = 'skiff-restore-drill.timer';
+export const CONTROL_PLANE = 'yoal-control-plane.service';
+export const AGENT = 'yoal-agent.service';
+export const LITESTREAM_UNIT = 'yoal-litestream.service';
+export const DRILL_SERVICE = 'yoal-restore-drill.service';
+export const DRILL_TIMER = 'yoal-restore-drill.timer';
 /** Same set the installer writes (scripts/install/main.ts BACKUP_UNITS). */
-export const BACKUP_UNITS = [LITESTREAM_UNIT, DRILL_SERVICE, DRILL_TIMER, 'skiff-alert@.service'];
+export const BACKUP_UNITS = [LITESTREAM_UNIT, DRILL_SERVICE, DRILL_TIMER, 'yoal-alert@.service'];
 /** Same wrappers the installer writes (scripts/install/main.ts RELEASE_COMMANDS). */
 export const RELEASE_COMMANDS: Array<{ name: string; script: string; runner: 'sh' | 'bun' }> = [
-	{ name: 'skiff-restore', script: 'repo/scripts/restore.sh', runner: 'sh' },
-	{ name: 'skiff-restore-drill', script: 'repo/scripts/skiff-restore-drill.sh', runner: 'sh' },
-	{ name: 'skiff-alert', script: 'repo/scripts/skiff-alert.ts', runner: 'bun' },
+	{ name: 'yoal-restore', script: 'repo/scripts/restore.sh', runner: 'sh' },
+	{ name: 'yoal-restore-drill', script: 'repo/scripts/yoal-restore-drill.sh', runner: 'sh' },
+	{ name: 'yoal-alert', script: 'repo/scripts/yoal-alert.ts', runner: 'bun' },
 ];
 
 /** sha256 of the upstream release tarballs, pinned so a compromised download cannot run as root. */
@@ -74,7 +74,7 @@ export interface Layout {
 	clickhouseDataDir?: string;
 	/** The edge agent's env (D105 domain changes rewrite it); absent on control-plane-only installs. */
 	agentEnvFile?: string;
-	/** Where a Cloudflare DNS-01 token from the dashboard is written (root:skiff 0640). */
+	/** Where a Cloudflare DNS-01 token from the dashboard is written (root:yoal 0640). */
 	cloudflareTokenFile?: string;
 }
 
@@ -97,8 +97,8 @@ export interface Host {
 	 */
 	platformAnswers(origin: string): Promise<boolean>;
 	writeStatus(status: PlatformConfigStatus): void;
-	/** Files the helper writes into /etc/skiff are root:skiff 0640. */
-	chownRootSkiff(path: string): void;
+	/** Files the helper writes into /etc/yoal are root:yoal 0640. */
+	chownRootYoal(path: string): void;
 }
 
 export class RequestError extends Error {}
@@ -262,15 +262,15 @@ export class PlatformConfigHelper {
 		}
 		const r2Required = PLATFORM_CONFIG_REQUIRED.backups;
 		const r2Complete = r2Required.every((key) => env.get(key));
-		if (request.section === 'backups' && env.get('SKIFF_OBJECT_STORE') === 'r2' && !r2Complete)
-			return this.finish('rejected', 'Release artifacts are stored in R2 (SKIFF_OBJECT_STORE=r2), so the R2 credentials cannot be removed.');
+		if (request.section === 'backups' && env.get('YOAL_OBJECT_STORE') === 'r2' && !r2Complete)
+			return this.finish('rejected', 'Release artifacts are stored in R2 (YOAL_OBJECT_STORE=r2), so the R2 credentials cannot be removed.');
 		if (changed.length === 0) return this.finish('unchanged', 'Nothing changed; the settings already match.', []);
 
 		const previous = `${envFile}.previous`;
 		copyFileSync(envFile, previous);
-		this.host.chownRootSkiff(previous);
+		this.host.chownRootYoal(previous);
 		writeEnvFile(envFile, env);
-		this.host.chownRootSkiff(envFile);
+		this.host.chownRootYoal(envFile);
 		this.host.log(`updated ${changed.join(', ')} in ${envFile}`);
 
 		let backupsNote = '';
@@ -317,7 +317,7 @@ export class PlatformConfigHelper {
 		const agentEnvFile = this.layout.agentEnvFile && existsSync(this.layout.agentEnvFile) ? this.layout.agentEnvFile : null;
 		const controlBefore = readEnvFile(envFile);
 		const tokenFile =
-			[controlBefore.get('SKIFF_CLOUDFLARE_TOKEN_FILE'), this.layout.cloudflareTokenFile ?? CLOUDFLARE_TOKEN_FILE].find(
+			[controlBefore.get('YOAL_CLOUDFLARE_TOKEN_FILE'), this.layout.cloudflareTokenFile ?? CLOUDFLARE_TOKEN_FILE].find(
 				(path): path is string => Boolean(path),
 			)!;
 		const tokenExists = existsSync(tokenFile);
@@ -336,24 +336,24 @@ export class PlatformConfigHelper {
 		if (tokenChanged) changed.push('cloudflare-token');
 		if (changed.length === 0) return this.finish('unchanged', 'Nothing changed; the domains already match.', []);
 
-		const oldOrigin = controlBefore.get('SKIFF_PLATFORM_ORIGIN') ?? '';
+		const oldOrigin = controlBefore.get('YOAL_PLATFORM_ORIGIN') ?? '';
 		const newOrigin = platformOriginFor(next);
 		const backups: Array<[string, string]> = [[envFile, `${envFile}.previous`]];
 		if (agentEnvFile) backups.push([agentEnvFile, `${agentEnvFile}.previous`]);
 		if (tokenChanged && tokenBefore !== null) backups.push([tokenFile, `${tokenFile}.previous`]);
 		for (const [file, copy] of backups) copyFileSync(file, copy);
-		this.host.chownRootSkiff(`${envFile}.previous`);
+		this.host.chownRootYoal(`${envFile}.previous`);
 
 		if (tokenChanged) {
 			mkdirSync(dirname(tokenFile), { recursive: true });
 			writeFileSync(`${tokenFile}.tmp`, `${request.cloudflareToken}
 `, { mode: 0o640 });
 			renameSync(`${tokenFile}.tmp`, tokenFile);
-			// The agent (user skiff) reads it and hands it to Caddy.
-			this.host.chownRootSkiff(tokenFile);
+			// The agent (user yoal) reads it and hands it to Caddy.
+			this.host.chownRootYoal(tokenFile);
 		}
 		writeEnvFile(envFile, control);
-		this.host.chownRootSkiff(envFile);
+		this.host.chownRootYoal(envFile);
 		if (agentEnvFile && agent) writeEnvFile(agentEnvFile, agent);
 		this.host.log(`domains: ${oldOrigin || '(none)'} → ${newOrigin}, content ${next.contentDomain}`);
 
@@ -362,7 +362,7 @@ export class PlatformConfigHelper {
 		if (verified)
 			return this.finish(
 				'applied',
-				`Skiff is now at ${newOrigin} and sites at *.${next.contentDomain}. Sign in again at the new address.`,
+				`Yoal is now at ${newOrigin} and sites at *.${next.contentDomain}. Sign in again at the new address.`,
 				changed,
 			);
 
@@ -410,9 +410,9 @@ export class PlatformConfigHelper {
 		const previous = `${envFile}.previous`;
 		if (added) {
 			copyFileSync(envFile, previous);
-			this.host.chownRootSkiff(previous);
+			this.host.chownRootYoal(previous);
 			writeEnvFile(envFile, env);
-			this.host.chownRootSkiff(envFile);
+			this.host.chownRootYoal(envFile);
 			this.host.log(`added ${VAPID_PUBLIC_KEY_ENV} and ${VAPID_PRIVATE_KEY_ENV} to ${envFile}`);
 		}
 		const changed = added ? [VAPID_PUBLIC_KEY_ENV, VAPID_PRIVATE_KEY_ENV] : [];
@@ -475,15 +475,15 @@ export class PlatformConfigHelper {
 	private async installTelemetryFlow(): Promise<PlatformConfigStatus> {
 		this.progress({ phase: 'installing', message: 'Downloading and starting ClickHouse (about 240 MB; this can take a few minutes)' });
 		const result = await this.ensureClickHouse();
-		if (!result.ok) return this.finish('error', `ClickHouse could not be installed: ${result.warning ?? 'it did not start'}. See journalctl -u skiff-clickhouse.`);
+		if (!result.ok) return this.finish('error', `ClickHouse could not be installed: ${result.warning ?? 'it did not start'}. See journalctl -u yoal-clickhouse.`);
 		this.progress({ phase: 'restarting', message: 'Restarting the control plane to connect to ClickHouse' });
 		if (await this.restartControlPlane())
 			return this.finish('applied', 'The telemetry store is installed. Traffic charts and dashboards fill in as agents report (about a minute).', result.envAdded);
-		return this.finish('error', 'ClickHouse is running, but the control plane did not come back after the restart. Check journalctl -u skiff-control-plane.', result.envAdded);
+		return this.finish('error', 'ClickHouse is running, but the control plane did not come back after the restart. Check journalctl -u yoal-control-plane.', result.envAdded);
 	}
 
 	/**
-	 * Write the memory ceiling to skiff.env, regenerate config.xml, users.xml and the unit, and
+	 * Write the memory ceiling to yoal.env, regenerate config.xml, users.xml and the unit, and
 	 * restart ClickHouse. If it does not answer, the previous env file is put back and applied again.
 	 * The control plane does not read this setting, so it is not restarted.
 	 */
@@ -503,9 +503,9 @@ export class PlatformConfigHelper {
 		const previous = `${envFile}.previous`;
 		if (changed.length) {
 			copyFileSync(envFile, previous);
-			this.host.chownRootSkiff(previous);
+			this.host.chownRootYoal(previous);
 			writeEnvFile(envFile, env);
-			this.host.chownRootSkiff(envFile);
+			this.host.chownRootYoal(envFile);
 			this.host.log(`set ${TELEMETRY_MEMORY_ENV}=${next ?? '(default)'} in ${envFile}`);
 		}
 		this.progress({ phase: 'restarting', message: `Restarting ClickHouse with a ${label} memory ceiling`, changed });
@@ -525,7 +525,7 @@ export class PlatformConfigHelper {
 			recovered ? 'reverted' : 'error',
 			recovered
 				? `ClickHouse did not start with a ${label} ceiling (${result.warning ?? 'no answer'}), so the previous setting was restored.`
-				: `ClickHouse did not start with the new or the previous memory ceiling. Check journalctl -u skiff-clickhouse.`,
+				: `ClickHouse did not start with the new or the previous memory ceiling. Check journalctl -u yoal-clickhouse.`,
 			changed,
 		);
 	}
@@ -549,7 +549,7 @@ export class PlatformConfigHelper {
 	/** Stop and remove ClickHouse (data only when asked), then restart the control plane without it. */
 	private async removeTelemetryFlow(purgeData: boolean): Promise<PlatformConfigStatus> {
 		const paths = this.clickhousePaths();
-		const envHas = [...readEnvFile(paths.envFile).keys()].some((key) => key.startsWith('SKIFF_CLICKHOUSE_'));
+		const envHas = [...readEnvFile(paths.envFile).keys()].some((key) => key.startsWith('YOAL_CLICKHOUSE_'));
 		if (!clickhouseInstalled(paths.systemdDir) && !envHas && !purgeData)
 			return this.finish('unchanged', 'The telemetry store is not installed.');
 		this.progress({ phase: 'applying', message: purgeData ? 'Removing ClickHouse and its data' : 'Removing ClickHouse' });
@@ -562,7 +562,7 @@ export class PlatformConfigHelper {
 		this.progress({ phase: 'restarting', message: 'Restarting the control plane' });
 		const kept = purgeData ? '' : ` Stored telemetry is kept in ${paths.dataDir} for a reinstall.`;
 		if (await this.restartControlPlane()) return this.finish('applied', `The telemetry store is removed.${kept}`, removed);
-		return this.finish('error', 'ClickHouse is removed, but the control plane did not come back after the restart. Check journalctl -u skiff-control-plane.', removed);
+		return this.finish('error', 'ClickHouse is removed, but the control plane did not come back after the restart. Check journalctl -u yoal-control-plane.', removed);
 	}
 
 	// ---------------------------------------------------------------- backups
@@ -639,7 +639,7 @@ export class PlatformConfigHelper {
 		const { host } = this;
 		if (host.run(['sh', '-c', 'command -v sqlite3'], { allowFailure: true }).stdout.trim()) return;
 		if (!host.run(['sh', '-c', 'command -v apt-get'], { allowFailure: true }).stdout.trim()) {
-			host.log('warning: sqlite3 is not installed; skiff-restore and the restore drill need it');
+			host.log('warning: sqlite3 is not installed; yoal-restore and the restore drill need it');
 			return;
 		}
 		host.run(['env', 'DEBIAN_FRONTEND=noninteractive', 'apt-get', 'install', '-y', '--no-install-recommends', 'sqlite3'], { allowFailure: true });
@@ -652,7 +652,7 @@ export class PlatformConfigHelper {
 		if (current !== null && current.includes('${R2_BUCKET}')) return;
 		if (current !== null) copyFileSync(target, `${target}.bak`);
 		copyFileSync(join(this.layout.sourceDir, 'scripts', 'litestream.yml'), `${target}.tmp`);
-		this.host.chownRootSkiff(`${target}.tmp`);
+		this.host.chownRootYoal(`${target}.tmp`);
 		renameSync(`${target}.tmp`, target);
 	}
 
@@ -662,7 +662,7 @@ export class PlatformConfigHelper {
 			const path = join(sbinDir, command.name);
 			const exec = command.runner === 'sh' ? `/bin/sh "$release/${command.script}"` : `${bunBin} "$release/${command.script}"`;
 			const script = `#!/bin/sh
-# Installed by Skiff: runs ${command.script} from the active Skiff release.
+# Installed by Yoal: runs ${command.script} from the active Yoal release.
 for release in ${optDir}/current ${optDir}/previous; do
 	if [ -f "$release/${command.script}" ]; then
 		exec ${exec} "$@"

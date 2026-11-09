@@ -1,5 +1,5 @@
 {
-	"name": "@skiff/helper",
+	"name": "@yoal/helper",
 	"private": true,
 	"version": "0.1.0",
 	"type": "module",
@@ -8,7 +8,7 @@
 		"dev": "bun --watch src/main.ts",
 		"check": "tsc -p . --noEmit",
 		"test": "bun test",
-		"build": "bun build --compile --outfile dist/skiff-helper src/main.ts"
+		"build": "bun build --compile --outfile dist/yoal-helper src/main.ts"
 	},
 	"engines": {
 		"bun": ">=1.4"

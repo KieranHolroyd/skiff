@@ -7,7 +7,7 @@ import {
 	jobCreateSchema,
 	projectCreateSchema,
 	storageCreateSchema,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { arr, live, obj, pick, str, type ImportContext, type Item } from './context.ts';
 
 /**
@@ -40,7 +40,7 @@ export function planSecrets(ctx: ImportContext, which: 'org' | 'projects'): void
 		const value = ctx.options.secrets[label];
 		if (value === undefined) {
 			plan.skip({ key, section: 'secrets', kind: 'secret', name: label }, 'no value supplied (--secrets)');
-			plan.manualStep('secrets', label, `Set the value: skif secret… or pass ${label}=… in --secrets and import again`);
+			plan.manualStep('secrets', label, `Set the value: yoal secret… or pass ${label}=… in --secrets and import again`);
 			return;
 		}
 		const type = secret.type === 'env' ? 'env' : 'secret';
@@ -91,7 +91,7 @@ export function planProjects(ctx: ImportContext): void {
 				plan.manualStep('projects', `${slug} ${scope}`, `Was password-protected${project[passwordSet] ? '' : ' (no password set)'}; imported as platform-only. Set a new password in the project's access settings`);
 		}
 		if (project.runtime !== 'static' && !existing)
-			plan.manualStep('projects', slug, project.runtime === 'function' ? 'Deploy the function bundle again (skif deploy); its code and bindings are not in the export' : 'Deploy the app (no deployments are imported)');
+			plan.manualStep('projects', slug, project.runtime === 'function' ? 'Deploy the function bundle again (yoal deploy); its code and bindings are not in the export' : 'Deploy the app (no deployments are imported)');
 		else if (project.runtime === 'static' && !existing) plan.manualStep('projects', slug, 'Deploy the site (no deployments are imported)');
 
 		for (const env of arr(project.environments)) {
@@ -312,7 +312,7 @@ export function planProjectSettings(ctx: ImportContext): void {
 			const input = appVolumeCreateSchema.parse(pick(volume, ['name', 'sizeMb', 'singleWriter']));
 			plan.create({ ...step, dependsOn: [key] }, () => core.appVolumes.create(principal, ctx.requireProject(slug), input));
 			for (const attachment of arr(volume.attachments))
-				plan.manualStep('projects', `${slug}/${name}`, `After the first deploy, attach it: skif volume attach ${slug} ${name} --mount ${String(attachment.mountPath)}${attachment.readOnly ? ' --read-only' : ''}${attachment.environment && attachment.environment !== 'production' ? ` --environment ${String(attachment.environment)}` : ''}. It starts empty`);
+				plan.manualStep('projects', `${slug}/${name}`, `After the first deploy, attach it: yoal volume attach ${slug} ${name} --mount ${String(attachment.mountPath)}${attachment.readOnly ? ' --read-only' : ''}${attachment.environment && attachment.environment !== 'production' ? ` --environment ${String(attachment.environment)}` : ''}. It starts empty`);
 		}
 
 		for (const domain of arr(project.domains)) {

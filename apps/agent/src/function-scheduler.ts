@@ -7,7 +7,7 @@ import {
 	type FunctionRuntimeSpec,
 	type WorkloadDesired,
 	type WorkloadStatus,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { HelperApi } from './helper-client.ts';
 import { probeWorkloadHealth } from './runtime.ts';
 import { atomicWriteFile } from './state.ts';
@@ -22,9 +22,9 @@ import { atomicWriteFile } from './state.ts';
  *   The socket unit keeps listening (`RemoveOnStop=yes` is on the socket, not the service), so the
  *   next request cold-starts the host through socket activation. `0` means always on.
  * - **Runaway watchdog**: every `watchdogIntervalMs` each running host is probed at
- *   `/__skiff/health`; three consecutive misses restart it, then it is left alone for a cooldown.
+ *   `/__yoal/health`; three consecutive misses restart it, then it is left alone for a cooldown.
  * - **Cron**: `triggers.crons` fire on the node by POSTing to the shim's internal
- *   `/__skiff/scheduled` over the host socket. A persisted cursor keeps one run per occurrence and
+ *   `/__yoal/scheduled` over the host socket. A persisted cursor keeps one run per occurrence and
  *   never replays a backlog after a restart.
  *
  * Everything is dependency-injected (helper, clock, sleep, fetch, probe) so the whole class runs in
@@ -175,7 +175,7 @@ export class FunctionScheduler {
 		}
 
 		// Process apps that scale to zero (D121) share the idle sweep, never the watchdog or cron:
-		// those are workerd-specific (the shim's `/__skiff/*` routes).
+		// those are workerd-specific (the shim's `/__yoal/*` routes).
 		const idleTargets: IdleTarget[] = functions.map((workload) => ({
 			workload,
 			idleStopSeconds: workload.function.idleStopSeconds,
@@ -377,13 +377,13 @@ export class FunctionScheduler {
 		// same name `probeWorkloadHealth` dials.
 		const socketPath = `${this.socketDir}/${workload.id}.sock`;
 		try {
-			const response = await this.doFetch('http://localhost/__skiff/scheduled', {
+			const response = await this.doFetch('http://localhost/__yoal/scheduled', {
 				method: 'POST',
 				unix: socketPath,
 				headers: {
 					[FUNCTION_INTERNAL_HEADER]: FUNCTION_INTERNAL_VALUE,
-					'x-skiff-cron': cron,
-					'x-skiff-scheduled-time': String(due),
+					'x-yoal-cron': cron,
+					'x-yoal-scheduled-time': String(due),
 				},
 				signal: AbortSignal.any([signal, AbortSignal.timeout(CRON_TIMEOUT_MS)]),
 			});

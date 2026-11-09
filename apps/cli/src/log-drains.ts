@@ -1,6 +1,6 @@
 /**
  * Log drains and the audit log (DESIGN §8): the wire types the CLI reads and pure formatting for
- * `skif log-drain` and `skif audit`. Types mirror `packages/contracts/src/log-drain.ts` and the
+ * `yoal log-drain` and `yoal audit`. Types mirror `packages/contracts/src/log-drain.ts` and the
  * `audit_log` row; the CLI bundle stays free of runtime dependencies (D40), so keep them in sync.
  * The server validates everything.
  */
@@ -134,7 +134,7 @@ export function logDrainDetails(drain: LogDrainView): string {
 	const field = (label: string, value: string) => lines.push(`${label.padEnd(10)}  ${value}`);
 	const delivery = drain.delivery;
 	field('Drain', `${drain.id} (${drain.name})`);
-	field('Kind', drain.kind === 'otlp' ? 'OTLP/HTTP JSON' : `webhook, ${drain.format ?? 'ndjson'}${drain.signed ? ', signed (X-Skiff-Signature)' : ''}`);
+	field('Kind', drain.kind === 'otlp' ? 'OTLP/HTTP JSON' : `webhook, ${drain.format ?? 'ndjson'}${drain.signed ? ', signed (X-Yoal-Signature)' : ''}`);
 	field('URL', drain.url);
 	field('Forwards', scope(drain));
 	if (drain.headerNames.length) field('Headers', `${drain.headerNames.join(', ')} (values hidden)`);

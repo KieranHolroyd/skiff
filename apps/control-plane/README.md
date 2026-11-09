@@ -1,6 +1,6 @@
-# @skiff/control-plane
+# @yoal/control-plane
 
-The Skiff control plane: dashboard, REST API v1, MCP server (OAuth 2.1), Better Auth, and the
+The Yoal control plane: dashboard, REST API v1, MCP server (OAuth 2.1), Better Auth, and the
 SQLite state store and the ClickHouse telemetry store. It runs on Bun behind Caddy over a unix socket.
 
 See the root [`README.md`](../../README.md) for the architecture and the full dev quickstart, and
@@ -9,22 +9,22 @@ See the root [`README.md`](../../README.md) for the architecture and the full de
 ## Scripts
 
 ```sh
-bun run dev      # vite dev (set SKIFF_DEV_PASSWORD_LOGIN=1 for headless tests)
+bun run dev      # vite dev (set YOAL_DEV_PASSWORD_LOGIN=1 for headless tests)
 bun run build    # adapter-bun production bundle
 bun run check    # svelte-check + TypeScript
 bun run test     # unit tests only (e2e files are run explicitly)
 bun run create-user you@example.com "Your Name" [--password …] [--org <slug> --role <role>]
 ```
 
-A fresh database (without `SKIFF_DEV_PASSWORD_LOGIN`/`SKIFF_OPEN_SIGNUP`) sends `/login` to the
+A fresh database (without `YOAL_DEV_PASSWORD_LOGIN`/`YOAL_OPEN_SIGNUP`) sends `/login` to the
 setup wizard at `/setup`; the dev server logs the link (`[setup] … /setup?token=…`) on start and
-keeps the token in `$SKIFF_DATA_DIR/setup-token` (D102).
+keeps the token in `$YOAL_DATA_DIR/setup-token` (D102).
 
-`create-user` writes straight to `$SKIFF_DATA_DIR/skiff.db` (default `.data`), bypassing the
+`create-user` writes straight to `$YOAL_DATA_DIR/yoal.db` (default `.data`), bypassing the
 invite-only gate. Use it for local development or to recover an install whose owner is locked out. Start the server once
 first so the auth tables exist. The password is prompted for (hidden) unless `--password` is
 given; piped stdin also works. Sign in with that email and password; owners then add a passkey or
-authenticator app (`SKIFF_DEV_PASSWORD_LOGIN=1` skips that for local development).
+authenticator app (`YOAL_DEV_PASSWORD_LOGIN=1` skips that for local development).
 
 ## End-to-end tests
 
@@ -32,12 +32,12 @@ Run against a dev server with a **fresh** data dir (tests create fixed slugs):
 
 ```sh
 rm -rf .data-test
-SKIFF_DEV_PASSWORD_LOGIN=1 SKIFF_DATA_DIR=.data-test \
-SKIFF_PLATFORM_ORIGIN=http://localhost:5173 SKIFF_CONTENT_DOMAIN=localhost \
+YOAL_DEV_PASSWORD_LOGIN=1 YOAL_DATA_DIR=.data-test \
+YOAL_PLATFORM_ORIGIN=http://localhost:5173 YOAL_CONTENT_DOMAIN=localhost \
 BETTER_AUTH_SECRET=dev-secret-0123456789abcdef0123456789 bun run dev -- --port 5173
 
-SKIFF_BASE=http://localhost:5173 bun tests/rest.e2e.ts
-SKIFF_BASE=http://localhost:5173 bun tests/mcp-oauth.e2e.ts
+YOAL_BASE=http://localhost:5173 bun tests/rest.e2e.ts
+YOAL_BASE=http://localhost:5173 bun tests/mcp-oauth.e2e.ts
 ```
 
 The REST test covers the full deploy pipeline, presigned uploads, nodes/desired state, share
@@ -46,9 +46,9 @@ consent, scope step-up, elicitation and the 2025-era dashboard hand-off.
 
 ## Key modules
 
-- `src/lib/server/core.ts` — constructs the shared service layer (`@skiff/core`).
+- `src/lib/server/core.ts` — constructs the shared service layer (`@yoal/core`).
 - `src/lib/server/principal.ts` — session/API-key/MCP token → `Principal` (role ∩ scopes).
 - `src/lib/server/mcp.ts` — every v1 tool; all call the service layer.
 - `src/routes/api/v1/[...path]/+server.ts` — REST router.
 - `src/routes/api/agent/[...path]/+server.ts` — desired-state long-poll, heartbeat, telemetry.
-- `src/routes/_skiff/site-login/+server.ts` — protected-site login and share-link redemption.
+- `src/routes/_yoal/site-login/+server.ts` — protected-site login and share-link redemption.

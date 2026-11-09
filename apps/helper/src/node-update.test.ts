@@ -9,7 +9,7 @@ import { createHandler, type HelperRuntime } from './server.ts';
 import { compareVersions, NodeUpdateError, NodeUpdater, parseNodeUpdateRequest } from './node-update.ts';
 import { ValidationError } from './validate.ts';
 
-const REPO = 'owner/skiff';
+const REPO = 'owner/yoal';
 const COMMIT = 'a'.repeat(40);
 const keys = generateKeyPairSync('ed25519');
 const privatePem = keys.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
@@ -22,10 +22,10 @@ let restarts: number;
 
 function paths() {
 	return {
-		agentBinary: join(root, 'opt/skiff/current/agent/skiff-agent'),
-		helperBinary: join(root, 'opt/skiff/helper/skiff-helper'),
-		releaseLink: join(root, 'opt/skiff/current'),
-		workDir: join(root, 'var/lib/skiff-helper/node-update'),
+		agentBinary: join(root, 'opt/yoal/current/agent/yoal-agent'),
+		helperBinary: join(root, 'opt/yoal/helper/yoal-helper'),
+		releaseLink: join(root, 'opt/yoal/current'),
+		workDir: join(root, 'var/lib/yoal-helper/node-update'),
 	};
 }
 
@@ -39,10 +39,10 @@ function publish(input: {
 	manifestVersion?: string;
 } = {}) {
 	const version = input.version ?? '0.8.0';
-	const members = input.members ?? { 'skiff-agent': `agent ${version}`, 'skiff-helper': `helper ${version}` };
-	const src = mkdtempSync(join(tmpdir(), 'skiff-node-src-'));
+	const members = input.members ?? { 'yoal-agent': `agent ${version}`, 'yoal-helper': `helper ${version}` };
+	const src = mkdtempSync(join(tmpdir(), 'yoal-node-src-'));
 	for (const [name, body] of Object.entries(members)) writeFileSync(join(src, name), body);
-	const file = `skiff-node-${version}-linux-amd64.tar.gz`;
+	const file = `yoal-node-${version}-linux-amd64.tar.gz`;
 	const archive = join(src, file);
 	execFileSync('tar', ['-czf', archive, '-C', src, ...Object.keys(members)]);
 	const bytes = readFileSync(archive);
@@ -93,7 +93,7 @@ function updater(currentVersion = '0.7.15') {
 const read = (path: string) => readFileSync(path, 'utf8');
 
 beforeEach(async () => {
-	root = mkdtempSync(join(tmpdir(), 'skiff-node-update-'));
+	root = mkdtempSync(join(tmpdir(), 'yoal-node-update-'));
 	files = new Map();
 	restarts = 0;
 	const { agentBinary, helperBinary } = paths();
@@ -137,7 +137,7 @@ describe('node update (D99)', () => {
 	});
 
 	test('a bundle with anything besides the two binaries is refused', async () => {
-		publish({ members: { 'skiff-agent': 'a', 'skiff-helper': 'h', 'evil.sh': 'x' } });
+		publish({ members: { 'yoal-agent': 'a', 'yoal-helper': 'h', 'evil.sh': 'x' } });
 		await expect(updater().update({ version: '0.8.0', repo: REPO })).rejects.toThrow(/must contain exactly/);
 		expect(read(paths().agentBinary)).toBe('agent old');
 	});
@@ -153,16 +153,16 @@ describe('node update (D99)', () => {
 		expect(read(paths().agentBinary)).toBe('agent old');
 	});
 
-	test('refuses a control-plane release layout (skiff-update-self owns it)', async () => {
+	test('refuses a control-plane release layout (yoal-update-self owns it)', async () => {
 		const { releaseLink } = paths();
-		const release = join(root, 'opt/skiff/releases/r1');
+		const release = join(root, 'opt/yoal/releases/r1');
 		await fs.mkdir(join(release, 'agent'), { recursive: true });
-		writeFileSync(join(release, 'agent/skiff-agent'), 'agent release');
+		writeFileSync(join(release, 'agent/yoal-agent'), 'agent release');
 		await fs.rm(releaseLink, { recursive: true });
 		await fs.symlink(release, releaseLink);
 		publish();
-		await expect(updater().update({ version: '0.8.0', repo: REPO })).rejects.toThrow(/skiff-update-self/);
-		expect(read(join(release, 'agent/skiff-agent'))).toBe('agent release');
+		await expect(updater().update({ version: '0.8.0', repo: REPO })).rejects.toThrow(/yoal-update-self/);
+		expect(read(join(release, 'agent/yoal-agent'))).toBe('agent release');
 	});
 
 	test('validates the request strictly', () => {

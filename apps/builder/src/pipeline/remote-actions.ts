@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { createWriteStream, existsSync } from 'node:fs';
 import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import type { PipelineActionManifest, PipelineActionRef } from '@skiff/contracts';
-import { parseActionManifest } from '@skiff/contracts';
+import type { PipelineActionManifest, PipelineActionRef } from '@yoal/contracts';
+import { parseActionManifest } from '@yoal/contracts';
 
 /**
  * Composite and JavaScript actions (WP4): where `uses:` is not a built-in, the step runner fetches
@@ -22,7 +22,7 @@ export const MAX_ACTION_ARCHIVE_BYTES = 200 * 1024 * 1024;
 /** Nested `uses:` inside composite actions, as on GitHub. */
 export const MAX_ACTION_DEPTH = 10;
 const MAX_MANIFEST_BYTES = 1024 * 1024;
-const COMPLETE_MARKER = '.skiff-action-complete';
+const COMPLETE_MARKER = '.yoal-action-complete';
 const FULL_SHA = /^[0-9a-f]{40}$/i;
 
 type RemoteRef = Extract<PipelineActionRef, { kind: 'remote' }>;
@@ -141,7 +141,7 @@ async function readManifest(dir: string, root: string, uses: string): Promise<Pi
 	const dockerfile = existsSync(join(dir, 'Dockerfile'));
 	throw new ActionResolveError(
 		dockerfile
-			? `${uses} is a Docker action (Dockerfile, no action.yml), which Skiff Pipelines cannot run; use the GitHub runner pool (docs/RUNNERS.md)`
+			? `${uses} is a Docker action (Dockerfile, no action.yml), which Yoal Pipelines cannot run; use the GitHub runner pool (docs/RUNNERS.md)`
 			: `Can't find action.yml or action.yaml for ${uses}`,
 	);
 }
@@ -210,7 +210,7 @@ export class ActionResolver {
 		if (!isFullSha(ref.ref)) options.log?.(`Notice: ${name} is not pinned to a full commit SHA; a SHA is safer against a moved tag.`);
 		const url = actionTarballUrl(ref, this.options.baseUrl);
 		options.log?.(`Download action repository '${name}'`);
-		const headers: Record<string, string> = { 'user-agent': 'skiff-pipelines' };
+		const headers: Record<string, string> = { 'user-agent': 'yoal-pipelines' };
 		if (options.token) headers.authorization = `token ${options.token}`;
 		const fetcher = this.options.fetch ?? fetch;
 		let response: Response;

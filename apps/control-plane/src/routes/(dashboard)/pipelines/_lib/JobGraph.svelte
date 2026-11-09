@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { PipelineJobView } from '@skiff/contracts';
+	import type { PipelineJobView } from '@yoal/contracts';
 	import StateIcon from './StateIcon.svelte';
 	import { elapsed } from './status.js';
 

@@ -1,5 +1,5 @@
 {
-	"name": "@skiff/builder",
+	"name": "@yoal/builder",
 	"private": true,
 	"version": "0.1.0",
 	"type": "module",
@@ -9,10 +9,10 @@
 		"start": "bun src/main.ts",
 		"check": "tsc -p . --noEmit",
 		"test": "bun test",
-		"build": "bun build --compile --outfile dist/skiff-builder src/main.ts"
+		"build": "bun build --compile --outfile dist/yoal-builder src/main.ts"
 	},
 	"dependencies": {
-		"@skiff/contracts": "workspace:*",
+		"@yoal/contracts": "workspace:*",
 		"fflate": "^0.8.3"
 	},
 	"engines": {

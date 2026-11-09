@@ -4,10 +4,10 @@ import { LSBLK, parseLsblk, type LsblkNode } from './volumes.ts';
 import { defaultRunner, type CommandRunner } from './wireguard.ts';
 
 /**
- * Disks Skiff mounts (docs/STORAGE.md §3, §3.1).
+ * Disks Yoal mounts (docs/STORAGE.md §3, §3.1).
  *
  * The control plane asks for a filesystem UUID and a name; the helper mounts that filesystem at
- * `/mnt/skiff-disks/<name>` with fixed options, a path the volume inventory reports so the disk
+ * `/mnt/yoal-disks/<name>` with fixed options, a path the volume inventory reports so the disk
  * turns ready once it is mounted. It never formats anything and never takes a device path
  * from the wire: before every mount it re-reads `lsblk` and refuses unless exactly one device
  * carries the UUID, that device is unmounted, holds nothing, and has the expected filesystem type
@@ -36,7 +36,7 @@ export interface DiskMounterOptions {
 	runner?: CommandRunner;
 }
 
-export const DEFAULT_DISK_ROOT = '/mnt/skiff-disks';
+export const DEFAULT_DISK_ROOT = '/mnt/yoal-disks';
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/;
 const UUID_PATTERN = /^[A-Fa-f0-9-]{4,64}$/;

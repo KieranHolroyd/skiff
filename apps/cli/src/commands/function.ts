@@ -18,7 +18,7 @@ import { authenticatedClient } from './common.ts';
 
 /** Test tools for function projects (D124). They run on the function's node; the server validates. */
 
-const usage = `Usage: skif function <command> [options]
+const usage = `Usage: yoal function <command> [options]
 
 Commands:
   invoke <project> [path]      Send one test request to the function (default GET /)
@@ -44,9 +44,9 @@ Both commands exit 1 when the function answers with an error: a non-2xx status f
 status 400 or more or a thrown error for cron.
 
 Examples:
-  skif function invoke api /health
-  skif fn invoke api /users -X POST -H 'content-type: application/json' -d '{"name":"Ada"}'
-  skif fn cron api '*/5 * * * *'`;
+  yoal function invoke api /health
+  yoal fn invoke api /users -X POST -H 'content-type: application/json' -d '{"name":"Ada"}'
+  yoal fn cron api '*/5 * * * *'`;
 
 const baseFlags: FlagSpec = {
 	json: { type: 'boolean' },
@@ -104,7 +104,7 @@ async function invokeFunction(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	const line = 'Usage: skif function invoke <project> [path] [-X <method>] [-H "Name: value"] [-d <body>]';
+	const line = 'Usage: yoal function invoke <project> [path] [-X <method>] [-H "Name: value"] [-d <body>]';
 	rejectExtraPositionals(args, 2, line);
 	const project = requirePositional(args, 0, `project.\n\n${line}`);
 	const path = normalizeRequestPath(args.positionals[1]);
@@ -143,7 +143,7 @@ async function runCron(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	const line = "Usage: skif function cron <project> '<cron>'";
+	const line = "Usage: yoal function cron <project> '<cron>'";
 	if (args.positionals.length > 2)
 		throw new UsageError(`Quote the cron expression so the shell passes it as one argument.\n\n${line}`);
 	const project = requirePositional(args, 0, `project.\n\n${line}`);

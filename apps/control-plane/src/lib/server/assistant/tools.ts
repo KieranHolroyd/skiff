@@ -1,12 +1,12 @@
 import * as z from 'zod';
-import { assistantGuideSchema, type AssistantGuide, type Principal } from '@skiff/contracts';
-import { visibleTools, type SkiffToolDefinition } from '../mcp';
+import { assistantGuideSchema, type AssistantGuide, type Principal } from '@yoal/contracts';
+import { visibleTools, type YoalToolDefinition } from '../mcp';
 import { GUIDE_TOOL } from './constants';
 import { needsConfirmation, validateToolArgs } from './confirm-policy';
 import type { ProviderTool } from './provider';
 
 /**
- * The bridge between Skiff's MCP tool catalog and the assistant's model. Tool names, schemas and
+ * The bridge between Yoal's MCP tool catalog and the assistant's model. Tool names, schemas and
  * behaviour are the MCP ones; only the transport differs. `guide_user` is the one assistant-only
  * tool: it drives the dashboard tour instead of touching the platform.
  */
@@ -59,7 +59,7 @@ function summary(text: string, isError: boolean): string {
  */
 export function assistantTools(principal: Principal): AssistantTool[] {
 	const definitions = visibleTools(principal);
-	const tools: AssistantTool[] = definitions.map((definition: SkiffToolDefinition) => ({
+	const tools: AssistantTool[] = definitions.map((definition: YoalToolDefinition) => ({
 		name: definition.name,
 		title: definition.config.title ?? definition.name.replaceAll('_', ' '),
 		description: definition.config.description ?? '',

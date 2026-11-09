@@ -12,7 +12,7 @@ import {
 	storageAttachments,
 	storageInstances,
 	workloads,
-} from '@skiff/db';
+} from '@yoal/db';
 import {
 	limits,
 	orgQuotaSchema,
@@ -21,7 +21,7 @@ import {
 	type OrgQuota,
 	type ProjectQuotaFields,
 	type QuotaField,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { featureEnabled } from './config.ts';
 import { QuotaError } from './errors.ts';
@@ -56,7 +56,7 @@ interface CountableRow {
  *
  * Counts and storage budgets are **reserved** values (a database's configured `storageMb`), not the
  * latest sampled size, so a lagging metric can never let a create slip past a hard limit. The
- * `UsageService` reports actual sizes for display. `SKIFF_FEATURE_QUOTAS` defaults on; disabling it
+ * `UsageService` reports actual sizes for display. `YOAL_FEATURE_QUOTAS` defaults on; disabling it
  * makes `get()` return unlimited, preserving the pre-plan behaviour.
  */
 export class QuotaService {

@@ -275,14 +275,14 @@ export class LocalObjectStore implements ObjectStore {
 	async testConnection(): Promise<ObjectStoreTestResult> {
 		const started = Date.now();
 		const checks: ObjectStoreTestChecks = { head: false, put: false, list: false, delete: false };
-		const key = `skiff/healthcheck/${randomUUID()}.txt`;
+		const key = `yoal/healthcheck/${randomUUID()}.txt`;
 		try {
 			await mkdir(this.root, { recursive: true });
 			checks.head = (await stat(this.root)).isDirectory();
-			const data = new TextEncoder().encode(`skiff connection test ${new Date().toISOString()}\n`);
+			const data = new TextEncoder().encode(`yoal connection test ${new Date().toISOString()}\n`);
 			await this.putStream(key, bytesAsStream(data), 'text/plain', data.byteLength);
 			checks.put = true;
-			for await (const object of this.list('skiff/healthcheck/')) {
+			for await (const object of this.list('yoal/healthcheck/')) {
 				if (object.key === key) {
 					checks.list = true;
 					break;
@@ -315,7 +315,7 @@ export interface S3Options {
 	/** Path-style (`endpoint/bucket/key`) or virtual-hosted (`bucket.endpoint/key`). Defaults true. */
 	forcePathStyle?: boolean;
 	/**
-	 * Key prefix owned by this store (`skiff/backups`). Callers keep using relative keys; the store
+	 * Key prefix owned by this store (`yoal/backups`). Callers keep using relative keys; the store
 	 * adds the prefix to every operation and strips it from listed keys.
 	 */
 	prefix?: string;
@@ -510,7 +510,7 @@ export class S3ObjectStore implements ObjectStore {
 	async testConnection(): Promise<ObjectStoreTestResult> {
 		const started = Date.now();
 		const checks: ObjectStoreTestChecks = { head: false, put: false, list: false, delete: false };
-		const key = `skiff/healthcheck/${randomUUID()}.txt`;
+		const key = `yoal/healthcheck/${randomUUID()}.txt`;
 		let versioning: boolean | null = null;
 		let objectLock: boolean | null = null;
 		try {
@@ -527,10 +527,10 @@ export class S3ObjectStore implements ObjectStore {
 			} catch {
 				// Versioning is a nice-to-have; a key without GetBucketVersioning still backs up.
 			}
-			const data = new TextEncoder().encode(`skiff connection test ${new Date().toISOString()}\n`);
+			const data = new TextEncoder().encode(`yoal connection test ${new Date().toISOString()}\n`);
 			await this.putStream(key, bytesAsStream(data), 'text/plain', data.byteLength);
 			checks.put = true;
-			for await (const object of this.list('skiff/healthcheck/')) {
+			for await (const object of this.list('yoal/healthcheck/')) {
 				if (object.key === key) {
 					checks.list = true;
 					break;
@@ -554,7 +554,7 @@ export class S3ObjectStore implements ObjectStore {
 	}
 }
 
-/** R2 is an S3 endpoint. Kept as an alias/config path so existing `SKIFF_OBJECT_STORE=r2` installs work. */
+/** R2 is an S3 endpoint. Kept as an alias/config path so existing `YOAL_OBJECT_STORE=r2` installs work. */
 export class R2ObjectStore extends S3ObjectStore {
 	constructor(options: R2Options) {
 		const { accountId, endpoint, ...rest } = options;

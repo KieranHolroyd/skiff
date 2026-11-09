@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { formatCommand, parseDuration, runExitCode, splitCommand, type JobRunView } from '../jobs.ts';
 
-/** `skif jobs` and `skif run` against a fake control plane (plan 09). */
+/** `yoal jobs` and `yoal run` against a fake control plane (plan 09). */
 
 let dir = '';
 let server: ReturnType<typeof Bun.serve> | undefined;
@@ -16,7 +16,7 @@ interface Seen {
 }
 
 beforeEach(async () => {
-	dir = await mkdtemp(join(tmpdir(), 'skiff-cli-jobs-'));
+	dir = await mkdtemp(join(tmpdir(), 'yoal-cli-jobs-'));
 });
 
 afterEach(async () => {
@@ -78,11 +78,11 @@ async function cli(...args: string[]) {
 		cwd: join(import.meta.dir, '../..'),
 		env: {
 			...process.env,
-			SKIFF_CONFIG_DIR: dir,
-			SKIFF_URL: `http://127.0.0.1:${server!.port}`,
-			SKIFF_TOKEN: 'skif_test',
-			SKIFF_CONTENT_DOMAIN: '',
-			SKIFF_PROFILE: '',
+			YOAL_CONFIG_DIR: dir,
+			YOAL_URL: `http://127.0.0.1:${server!.port}`,
+			YOAL_TOKEN: 'yoal_test',
+			YOAL_CONTENT_DOMAIN: '',
+			YOAL_PROFILE: '',
 		},
 		stdin: 'ignore',
 		stdout: 'pipe',
@@ -115,7 +115,7 @@ describe('helpers', () => {
 	});
 });
 
-describe('skif run', () => {
+describe('yoal run', () => {
 	test('posts the argv, streams output to stdout/stderr and exits with the command’s status', async () => {
 		let polls = 0;
 		const routes = {
@@ -156,7 +156,7 @@ describe('skif run', () => {
 	});
 });
 
-describe('skif jobs', () => {
+describe('yoal jobs', () => {
 	const job = {
 		id: 'job_1',
 		projectSlug: 'shop',

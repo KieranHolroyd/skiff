@@ -30,14 +30,14 @@ type Identity = Awaited<ReturnType<ApiClient['whoami']>>;
 export async function loginCommand(argv: string[]): Promise<void> {
 	const args = parseArgs(argv, flags);
 	if (args.boolean('help')) {
-		console.log(`Usage: skif login [--url <platform>] [--no-browser] [--token <api-key>]
+		console.log(`Usage: yoal login [--url <platform>] [--no-browser] [--token <api-key>]
 
 Sign in through the browser (default):
-  skif login
-  skif login --no-browser
+  yoal login
+  yoal login --no-browser
 
-Or store an API key created in the Skiff dashboard:
-  skif login --url https://control.example.com --token <key>
+Or store an API key created in the Yoal dashboard:
+  yoal login --url https://control.example.com --token <key>
 
 Options:
   -u, --url <platform>   Control-plane URL (default: the profile's saved URL)
@@ -51,17 +51,17 @@ Options:
 Browser sign-in approves the CLI in the dashboard and stores a new API key.
 Login keeps the URL and content domain already saved for the selected profile,
 and records the platform and content domain the server reports. Credentials are
-saved to ~/.config/skiff/config.json with mode 0600.
+saved to ~/.config/yoal/config.json with mode 0600.
 
 Environment: ${URL_ENV} and ${TOKEN_ENV} override the stored config. When ${TOKEN_ENV}
-is set, \`skif login\` stores that key instead of opening the browser (use --web or
+is set, \`yoal login\` stores that key instead of opening the browser (use --web or
 --no-browser to force browser sign-in). ${PROFILE_ENV} selects the profile when
 --profile is not given.`);
 		return;
 	}
 	if (args.positionals.length > 0)
 		throw new UsageError(
-			'Usage: skif login [--profile <name>] [--url <platform>] [--no-browser] [--token <api-key>]',
+			'Usage: yoal login [--profile <name>] [--url <platform>] [--no-browser] [--token <api-key>]',
 		);
 
 	const tokenFlag = args.string('token');
@@ -71,8 +71,8 @@ is set, \`skif login\` stores that key instead of opening the browser (use --web
 	if (wantsWeb && tokenFlag)
 		throw new UsageError('Use either browser sign-in or --token, not both.');
 
-	// Browser approval is the default. An explicit --token, or SKIFF_TOKEN for CI, opts into
-	// key login; --web / --no-browser force the browser flow even when SKIFF_TOKEN is set.
+	// Browser approval is the default. An explicit --token, or YOAL_TOKEN for CI, opts into
+	// key login; --web / --no-browser force the browser flow even when YOAL_TOKEN is set.
 	const envToken = wantsWeb ? undefined : process.env[TOKEN_ENV]?.trim() || undefined;
 	const tokenInput = tokenFlag ?? envToken;
 
@@ -100,7 +100,7 @@ is set, \`skif login\` stores that key instead of opening the browser (use --web
 		baseUrl: url,
 		token: token.trim(),
 		origin: platformOrigin(url),
-		userAgent: 'skif-cli',
+		userAgent: 'yoal-cli',
 	});
 	const identity = await client.whoami();
 	// Trust the server's canonical origin (e.g. after logging in through an IP).
@@ -158,7 +158,7 @@ async function loginWithBrowser(
 		baseUrl: savedUrl,
 		token: result.token,
 		origin: platformOrigin(savedUrl),
-		userAgent: 'skif-cli',
+		userAgent: 'yoal-cli',
 	}).whoami();
 
 	printLogin({
@@ -217,7 +217,7 @@ function printLogin(input: {
 	console.log(`Org    ${orgLabel}`);
 	if (contentDomain) console.log(`Sites  ${contentDomain}`);
 	console.log(`Key    saved to ${path} (mode 0600)`);
-	console.log('Note   `skif logout` removes the key but keeps the URL and domains.');
+	console.log('Note   `yoal logout` removes the key but keeps the URL and domains.');
 	if (process.env[URL_ENV] || process.env[TOKEN_ENV] || process.env[CONTENT_DOMAIN_ENV])
 		console.log(
 			`Note   ${URL_ENV}/${TOKEN_ENV}/${CONTENT_DOMAIN_ENV} are set and will override the stored config.`,

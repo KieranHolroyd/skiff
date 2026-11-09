@@ -5,7 +5,7 @@ import {
 	platformPoliciesUpdateSchema,
 	type PlatformPolicies,
 	type Principal,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { CoreError, ValidationError } from './errors.ts';
 

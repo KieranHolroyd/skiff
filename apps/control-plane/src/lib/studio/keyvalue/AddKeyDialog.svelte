@@ -1,6 +1,6 @@
 <script lang="ts">
-	import type { RowChange } from '@skiff/studio/protocol';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import type { RowChange } from '@yoal/studio/protocol';
+	import Notice from '#lib/components/yoal/Notice.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Dialog from '#lib/components/ui/dialog/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';

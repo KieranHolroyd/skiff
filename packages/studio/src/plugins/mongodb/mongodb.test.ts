@@ -268,7 +268,7 @@ describe('apply preparation and connection', () => {
 		expect(connectionUrl({ host: '127.0.0.1', port: 27017, database: 'app', user: 'u@x', password: 'p:/?#@' })).toBe(
 			'mongodb://u%40x:p%3A%2F%3F%23%40@127.0.0.1:27017/app?authSource=admin',
 		);
-		expect(clientOptions({ tls: null })).toMatchObject({ maxPoolSize: 3, appName: 'skiff-studio', directConnection: true });
+		expect(clientOptions({ tls: null })).toMatchObject({ maxPoolSize: 3, appName: 'yoal-studio', directConnection: true });
 		expect(clientOptions({ tls: { caPem: null } })).toMatchObject({ tls: true, tlsAllowInvalidCertificates: true });
 	});
 

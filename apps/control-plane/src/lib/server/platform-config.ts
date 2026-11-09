@@ -22,8 +22,8 @@ import {
 	type PlatformConfigStatus,
 	type Principal,
 	type RestoreDrillStatus
-} from '@skiff/contracts';
-import type { DomainSettings } from '@skiff/contracts';
+} from '@yoal/contracts';
+import type { DomainSettings } from '@yoal/contracts';
 import {
 	EmailNotifier,
 	R2ObjectStore,
@@ -34,14 +34,14 @@ import {
 	webhookNotifierFor,
 	type ChatChannel,
 	type TwilioOptions
-} from '@skiff/core';
+} from '@yoal/core';
 import { localRestartPending, localSettingsEnabled, saveLocalSettings } from './local-settings';
 import { canManagePlatform } from './self-update';
 
 /**
  * Dashboard side of platform settings (docs/OPS.md §4.3). This process is unprivileged and cannot
- * write `/etc/skiff/skiff.env`; it validates, then drops a request for the root helper
- * (`skiff-platform-config`), which validates again, applies it and restarts the control plane.
+ * write `/etc/yoal/yoal.env`; it validates, then drops a request for the root helper
+ * (`yoal-platform-config`), which validates again, applies it and restarts the control plane.
  * Settings are read back from this process's own environment, which is the env file as of the
  * last (re)start.
  */
@@ -60,15 +60,15 @@ export const OWNER_ONLY_MESSAGE = 'Only the owner can change email, backup and a
 
 const env = process.env;
 const paths = {
-	requestFile: env.SKIFF_CONFIG_REQUEST_FILE ?? PLATFORM_CONFIG_DEFAULTS.requestFile,
-	statusFile: env.SKIFF_CONFIG_STATUS_FILE ?? PLATFORM_CONFIG_DEFAULTS.statusFile,
-	pathUnit: env.SKIFF_CONFIG_PATH_UNIT ?? PLATFORM_CONFIG_DEFAULTS.pathUnit,
-	releaseMeta: env.SKIFF_RELEASE_META ?? SELF_UPDATE_DEFAULTS.releaseMeta,
-	drillStatus: join(env.SKIFF_RESTORE_DRILL_DIR ?? '/var/lib/skiff/drill', 'status.json'),
+	requestFile: env.YOAL_CONFIG_REQUEST_FILE ?? PLATFORM_CONFIG_DEFAULTS.requestFile,
+	statusFile: env.YOAL_CONFIG_STATUS_FILE ?? PLATFORM_CONFIG_DEFAULTS.statusFile,
+	pathUnit: env.YOAL_CONFIG_PATH_UNIT ?? PLATFORM_CONFIG_DEFAULTS.pathUnit,
+	releaseMeta: env.YOAL_RELEASE_META ?? SELF_UPDATE_DEFAULTS.releaseMeta,
+	drillStatus: join(env.YOAL_RESTORE_DRILL_DIR ?? '/var/lib/yoal/drill', 'status.json'),
 	litestreamBin: PLATFORM_CONFIG_DEFAULTS.litestreamBin,
-	litestreamConfig: env.SKIFF_LITESTREAM_CONFIG ?? PLATFORM_CONFIG_DEFAULTS.litestreamConfig,
-	backupsDir: join(dirname(env.SKIFF_DATA_DIR ?? '/var/lib/skiff/data'), 'backups'),
-	dbPath: join(env.SKIFF_DATA_DIR ?? '.data', 'skiff.db')
+	litestreamConfig: env.YOAL_LITESTREAM_CONFIG ?? PLATFORM_CONFIG_DEFAULTS.litestreamConfig,
+	backupsDir: join(dirname(env.YOAL_DATA_DIR ?? '/var/lib/yoal/data'), 'backups'),
+	dbPath: join(env.YOAL_DATA_DIR ?? '.data', 'yoal.db')
 };
 
 /**
@@ -185,31 +185,31 @@ export function currentSection(section: PlatformConfigSection): SectionView {
 					env.R2_ACCOUNT_ID && env.R2_BUCKET && env.R2_ACCESS_KEY_ID && env.R2_SECRET_ACCESS_KEY
 				)
 			: section === 'email'
-				? Boolean(env.SKIFF_SMTP_HOST)
+				? Boolean(env.YOAL_SMTP_HOST)
 				: section === 'sms'
 					? Boolean(
-							env.SKIFF_TWILIO_ACCOUNT_SID && env.SKIFF_TWILIO_AUTH_TOKEN && env.SKIFF_TWILIO_FROM
+							env.YOAL_TWILIO_ACCOUNT_SID && env.YOAL_TWILIO_AUTH_TOKEN && env.YOAL_TWILIO_FROM
 						)
 					: section === 'assistant'
 						? Boolean(
-								env.SKIFF_ASSISTANT_BASE_URL &&
-								env.SKIFF_ASSISTANT_MODEL &&
-								env.SKIFF_ASSISTANT_DISABLED !== '1'
+								env.YOAL_ASSISTANT_BASE_URL &&
+								env.YOAL_ASSISTANT_MODEL &&
+								env.YOAL_ASSISTANT_DISABLED !== '1'
 							)
 						: Boolean(
-								env.SKIFF_ALERT_WEBHOOK ||
-									env.SKIFF_ALERT_EMAIL ||
-									env.SKIFF_ALERT_SMS ||
-									env.SKIFF_ALERT_DISCORD_WEBHOOK ||
-									env.SKIFF_ALERT_SLACK_WEBHOOK ||
-									(env.SKIFF_ALERT_TELEGRAM_BOT_TOKEN && env.SKIFF_ALERT_TELEGRAM_CHAT_ID) ||
-									env.SKIFF_ALERT_NTFY_URL
+								env.YOAL_ALERT_WEBHOOK ||
+									env.YOAL_ALERT_EMAIL ||
+									env.YOAL_ALERT_SMS ||
+									env.YOAL_ALERT_DISCORD_WEBHOOK ||
+									env.YOAL_ALERT_SLACK_WEBHOOK ||
+									(env.YOAL_ALERT_TELEGRAM_BOT_TOKEN && env.YOAL_ALERT_TELEGRAM_CHAT_ID) ||
+									env.YOAL_ALERT_NTFY_URL
 							);
 	return { values, secretsSet, configured };
 }
 
 /** Artifacts live in R2 too, so its credentials cannot be removed (and a new bucket hides old releases). */
-export const artifactsInR2 = (env.SKIFF_OBJECT_STORE ?? 'local') === 'r2';
+export const artifactsInR2 = (env.YOAL_OBJECT_STORE ?? 'local') === 'r2';
 
 // ---------------------------------------------------------------- host health
 
@@ -360,7 +360,7 @@ export interface LocalSnapshot {
 	createdAt: string;
 }
 
-/** Snapshots the installer, updater and restore keep under /var/lib/skiff/backups. */
+/** Snapshots the installer, updater and restore keep under /var/lib/yoal/backups. */
 export function localSnapshots(): LocalSnapshot[] {
 	try {
 		return readdirSync(paths.backupsDir)
@@ -397,18 +397,18 @@ export interface BackupHealth {
 
 export async function backupHealth({ force = false } = {}): Promise<BackupHealth> {
 	const states = await unitStates([
-		'skiff-litestream.service',
-		'skiff-restore-drill.timer',
-		'skiff-restore-drill.service'
+		'yoal-litestream.service',
+		'yoal-restore-drill.timer',
+		'yoal-restore-drill.service'
 	]);
-	const litestream = states?.['skiff-litestream.service'] ?? null;
+	const litestream = states?.['yoal-litestream.service'] ?? null;
 	const enabled = litestream ? litestream.enabled === 'enabled' : false;
 	return {
 		litestreamInstalled: existsSync(paths.litestreamBin),
 		litestream,
-		drillTimer: states?.['skiff-restore-drill.timer'] ?? null,
+		drillTimer: states?.['yoal-restore-drill.timer'] ?? null,
 		drillRunning: ['active', 'activating'].includes(
-			states?.['skiff-restore-drill.service']?.active ?? ''
+			states?.['yoal-restore-drill.service']?.active ?? ''
 		),
 		replication: enabled ? await replication({ force }) : null,
 		drill: readDrillStatus(),
@@ -446,8 +446,8 @@ export async function testR2(options: {
 	endpoint?: string;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
 	const store = new R2ObjectStore(options);
-	const key = `skiff/healthcheck/${randomUUID()}.txt`;
-	const body = new TextEncoder().encode(`skiff connection test ${new Date().toISOString()}\n`);
+	const key = `yoal/healthcheck/${randomUUID()}.txt`;
+	const body = new TextEncoder().encode(`yoal connection test ${new Date().toISOString()}\n`);
 	try {
 		await withTimeout(store.put(key, body, 'text/plain'), 10_000);
 		const read = await withTimeout(store.get(key), 10_000);
@@ -486,7 +486,7 @@ export async function testSmtp(
 			new EmailNotifier(transport, to).notify({
 				title: 'Test email',
 				detail:
-					'Skiff can send email with these settings. Sign-in links, invitations and alerts will use them.',
+					'Yoal can send email with these settings. Sign-in links, invitations and alerts will use them.',
 				severity: 'info'
 			}),
 			20_000
@@ -506,11 +506,11 @@ export async function testWebhook(
 			webhookNotifierFor(url, { secret }).notify({
 				key: 'test',
 				title: 'Test alert',
-				detail: 'This is a test alert from Skiff. Real alerts look like this.',
+				detail: 'This is a test alert from Yoal. Real alerts look like this.',
 				severity: 'info',
 				status: 'firing',
-				...(env.SKIFF_PLATFORM_ORIGIN
-					? { url: `${env.SKIFF_PLATFORM_ORIGIN.replace(/\/$/, '')}/alerts` }
+				...(env.YOAL_PLATFORM_ORIGIN
+					? { url: `${env.YOAL_PLATFORM_ORIGIN.replace(/\/$/, '')}/alerts` }
 					: {}),
 				labels: {}
 			}),
@@ -538,7 +538,7 @@ export async function testChatChannel(
 			notifier.notify({
 				key: 'test',
 				title: 'Test alert',
-				detail: `This is a test alert from Skiff, sent by ${sentBy}. Real alerts look like this.`,
+				detail: `This is a test alert from Yoal, sent by ${sentBy}. Real alerts look like this.`,
 				severity: 'info'
 			}),
 			15_000
@@ -570,7 +570,7 @@ export async function testSms(
 		await withTimeout(
 			new SmsNotifier(new TwilioSmsTransport(options), to).notify({
 				title: 'Test alert',
-				detail: 'Skiff can text you. Real alerts look like this.',
+				detail: 'Yoal can text you. Real alerts look like this.',
 				severity: 'info'
 			}),
 			20_000

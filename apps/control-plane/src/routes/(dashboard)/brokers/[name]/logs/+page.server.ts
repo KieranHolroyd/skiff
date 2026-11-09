@@ -1,6 +1,6 @@
 import { error } from '@sveltejs/kit';
-import { CoreError } from '@skiff/core';
-import { hasPermission, type BrokerView, type ServiceLogQueryResult } from '@skiff/contracts';
+import { CoreError } from '@yoal/core';
+import { hasPermission, type BrokerView, type ServiceLogQueryResult } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import { brokerCan } from '../../_lib/forms.server.js';
 import type { PageServerLoad } from './$types';

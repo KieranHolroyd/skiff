@@ -3,13 +3,13 @@ import { join } from 'node:path';
 import { ValidationError } from './validate.ts';
 
 /**
- * The helper's email verbs (docs/EMAIL.md §3.2). `skiff-mail` runs as the agent's user without
+ * The helper's email verbs (docs/EMAIL.md §3.2). `yoal-mail` runs as the agent's user without
  * access to Caddy's storage, so the helper copies the submission host's certificate out of it.
  * Only `smtp.*`/`mx.*` names are accepted: a compromised agent must not be able to pull the
  * wildcard site certificate's key this way.
  */
 
-export const MAIL_UNIT = 'skiff-mail.service';
+export const MAIL_UNIT = 'yoal-mail.service';
 const MAIL_HOST = /^(smtp|mx|mx\d)\.(?!-)[a-z0-9-]{1,63}(\.(?!-)[a-z0-9-]{1,63})+$/;
 
 export function assertMailHost(value: unknown): string {
@@ -21,7 +21,7 @@ export function assertMailHost(value: unknown): string {
 export interface MailTlsOptions {
 	/** Caddy's data dir; certificates live under `<dir>/certificates/<issuer>/<host>/`. */
 	caddyDataDir: string;
-	/** Where `skiff-mail` reads `cert.pem` + `key.pem`. */
+	/** Where `yoal-mail` reads `cert.pem` + `key.pem`. */
 	outDir: string;
 	/** A path owned by the agent's user; the copies get its uid/gid. */
 	ownerFrom: string;

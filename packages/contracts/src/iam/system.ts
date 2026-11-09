@@ -3,7 +3,7 @@
  *
  * A system principal is in-process: it never reaches a surface and proves nothing. Instead of
  * borrowing an org owner's permissions, each one gets the fixed, least-privilege set its flow
- * uses. The permissions here are the whole grant; `buildSystemPrincipal` in `@skiff/core` copies
+ * uses. The permissions here are the whole grant; `buildSystemPrincipal` in `@yoal/core` copies
  * them verbatim rather than capping them by a role.
  *
  * Add a name only when a call site needs one, and grant exactly what that path checks.

@@ -1,11 +1,11 @@
 import * as z from 'zod';
 
 /**
- * Skiff's GitHub App (docs/GITHUB.md, D163–D166).
+ * Yoal's GitHub App (docs/GITHUB.md, D163–D166).
  *
- * One App per Skiff install, registered by a platform admin (one click through GitHub's manifest
+ * One App per Yoal install, registered by a platform admin (one click through GitHub's manifest
  * flow, or by pasting an existing App's credentials). Each GitHub account that installs it is
- * linked to one Skiff organisation; from then on that organisation's git builds, pipelines,
+ * linked to one Yoal organisation; from then on that organisation's git builds, pipelines,
  * runners and registry trusts use the installation instead of hand-made webhooks and tokens:
  *
  * - events arrive on one App webhook, so no per-project or per-repository webhook is needed;
@@ -41,7 +41,7 @@ export type GithubAppPermission = keyof typeof GITHUB_APP_PERMISSIONS;
 
 export const GITHUB_APP_EVENTS = ['push', 'pull_request'] as const;
 
-/** What each Skiff feature needs from an installation, for the dashboard's "missing" hints. */
+/** What each Yoal feature needs from an installation, for the dashboard's "missing" hints. */
 export const GITHUB_FEATURE_PERMISSIONS: Record<string, Partial<Record<GithubAppPermission, 'read' | 'write'>>> = {
 	clone: { contents: 'read' },
 	statuses: { statuses: 'write' },
@@ -80,11 +80,11 @@ export function githubAppManifest(options: GithubAppManifestOptions) {
 	return {
 		name: options.name,
 		url: origin,
-		description: 'Deploys and CI for this Skiff install.',
+		description: 'Deploys and CI for this Yoal install.',
 		hook_attributes: { url: `${origin}/api/webhooks/github-app`, active: true },
 		redirect_url: `${origin}/settings/github/created`,
 		// With `request_oauth_on_install`, GitHub sends the installing user to the FIRST callback URL
-		// with an OAuth code (no setup URL), so Skiff can check they can really see the installation
+		// with an OAuth code (no setup URL), so Yoal can check they can really see the installation
 		// before linking it. Better Auth's GitHub sign-in reuses the same client and second URL.
 		callback_urls: [`${origin}/settings/github/installed`, `${origin}/api/auth/callback/github`],
 		request_oauth_on_install: true,
@@ -152,7 +152,7 @@ export interface GithubAppView {
 	/** Platform admins only. */
 	clientId: string | null;
 	hasClientSecret: boolean;
-	/** `manifest` (created from Skiff) or `manual` (credentials pasted). */
+	/** `manifest` (created from Yoal) or `manual` (credentials pasted). */
 	source: 'manifest' | 'manual' | null;
 	/** Absolute URL of the App webhook receiver. */
 	webhookUrl: string;
@@ -176,7 +176,7 @@ export interface GithubInstallationView {
 	/** Manifest permissions this installation has not granted. */
 	missingPermissions: GithubAppPermission[];
 	suspended: boolean;
-	/** The Skiff organisation it is linked to; null while unclaimed (platform admins see these). */
+	/** The Yoal organisation it is linked to; null while unclaimed (platform admins see these). */
 	orgId: string | null;
 	orgName?: string | null;
 	/** `https://github.com/settings/installations/<id>` (or the organisation's equivalent). */

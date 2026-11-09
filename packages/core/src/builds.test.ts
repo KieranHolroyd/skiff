@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { zipSync } from 'fflate';
-import { createDb, builds, releases } from '@skiff/db';
+import { createDb, builds, releases } from '@yoal/db';
 import { eq } from 'drizzle-orm';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
@@ -12,7 +12,7 @@ import { LocalObjectStore } from './object-store.ts';
 import { CLAIM_TTL_MS } from './builds.ts';
 import type { Core } from './index.ts';
 
-const dir = mkdtempSync(join(tmpdir(), 'skiff-builds-'));
+const dir = mkdtempSync(join(tmpdir(), 'yoal-builds-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 let clock = Date.now();

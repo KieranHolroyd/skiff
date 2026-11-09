@@ -1,5 +1,5 @@
 import { error } from '@sveltejs/kit';
-import { CoreError, randomToken, userPoolCsrfCookieName } from '@skiff/core';
+import { CoreError, randomToken, userPoolCsrfCookieName } from '@yoal/core';
 import { core } from '#lib/server/core.js';
 import { platformOrigin } from '#lib/server/config.js';
 import type { LayoutServerLoad } from './$types';

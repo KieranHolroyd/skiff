@@ -2,37 +2,37 @@
  * Builder configuration (D3). Everything comes from the environment so the compiled daemon can
  * be dropped into a systemd unit with an EnvironmentFile:
  *
- *   SKIFF_CONTROL_URL   control-plane origin, no trailing slash
- *   SKIFF_NODE_TOKEN    token for a node marked `can_build`
- *   SKIFF_BUILD_DIR     scratch root for clones and artifacts
+ *   YOAL_CONTROL_URL   control-plane origin, no trailing slash
+ *   YOAL_NODE_TOKEN    token for a node marked `can_build`
+ *   YOAL_BUILD_DIR     scratch root for clones and artifacts
  *
- * Optional: `SKIFF_GIT_TOKEN` for private HTTPS repositories (never logged), sent only to the
- * hosts in `SKIFF_GIT_TOKEN_HOSTS` (comma-separated, default `github.com`); `SKIFF_GIT_SSH_KEY`
+ * Optional: `YOAL_GIT_TOKEN` for private HTTPS repositories (never logged), sent only to the
+ * hosts in `YOAL_GIT_TOKEN_HOSTS` (comma-separated, default `github.com`); `YOAL_GIT_SSH_KEY`
  * (a root-only private key file) for SSH repository URLs, with an optional pinned
- * `SKIFF_GIT_SSH_KNOWN_HOSTS`; and `SKIFF_BUILDER_SYSTEMD=false` to force direct execution on a
+ * `YOAL_GIT_SSH_KNOWN_HOSTS`; and `YOAL_BUILDER_SYSTEMD=false` to force direct execution on a
  * development workstation.
  *
- * On a node, `skiff-builder.service` runs `skiff-agent builder` with the agent's own
- * `/etc/skiff/agent.env`, so every enrolled node can build once an admin turns the role on (D47).
- * Builds then run as `SKIFF_BUILDER_USER` (default `skiff-build`) in a sandboxed transient unit.
+ * On a node, `yoal-builder.service` runs `yoal-agent builder` with the agent's own
+ * `/etc/yoal/agent.env`, so every enrolled node can build once an admin turns the role on (D47).
+ * Builds then run as `YOAL_BUILDER_USER` (default `yoal-build`) in a sandboxed transient unit.
  *
- * Pipelines (docs/PIPELINES.md) run from the same daemon: `SKIFF_PIPELINES=false` turns them off;
- * `SKIFF_PIPELINE_POLL_MS` (3000), `SKIFF_PIPELINE_MAX_JOBS` (1), `SKIFF_PIPELINE_LABELS` (extra
- * comma-separated labels), `SKIFF_PIPELINE_ISOLATION` (`auto` default, `container`, or `sandbox`),
- * `SKIFF_PIPELINE_CONTAINER_DRIVER` (`helper` default; `podman` runs Podman from this daemon, for
- * development only), `SKIFF_HELPER_SOCKET` (skiff-helper's socket, as for the agent),
- * `SKIFF_PIPELINE_STEP_BINARY` (a binary accepting `pipeline-step <job.json>`; not used through the helper),
- * `SKIFF_PIPELINE_CONTROL_URL` (the control plane as a job container reaches it) and
- * `SKIFF_PIPELINE_RUNNER_NAME` (`runner.name`, default the hostname) tune them.
+ * Pipelines (docs/PIPELINES.md) run from the same daemon: `YOAL_PIPELINES=false` turns them off;
+ * `YOAL_PIPELINE_POLL_MS` (3000), `YOAL_PIPELINE_MAX_JOBS` (1), `YOAL_PIPELINE_LABELS` (extra
+ * comma-separated labels), `YOAL_PIPELINE_ISOLATION` (`auto` default, `container`, or `sandbox`),
+ * `YOAL_PIPELINE_CONTAINER_DRIVER` (`helper` default; `podman` runs Podman from this daemon, for
+ * development only), `YOAL_HELPER_SOCKET` (yoal-helper's socket, as for the agent),
+ * `YOAL_PIPELINE_STEP_BINARY` (a binary accepting `pipeline-step <job.json>`; not used through the helper),
+ * `YOAL_PIPELINE_CONTROL_URL` (the control plane as a job container reaches it) and
+ * `YOAL_PIPELINE_RUNNER_NAME` (`runner.name`, default the hostname) tune them.
  */
 
 import { existsSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { isShellSafePath } from './command.ts';
 
-/** Toolchains a build can find: Skiff's own Bun first, then the system's. */
+/** Toolchains a build can find: Yoal's own Bun first, then the system's. */
 export const DEFAULT_BUILD_PATH =
-	'/opt/skiff/current/runtime/bin:/opt/skiff/runtime/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
+	'/opt/yoal/current/runtime/bin:/opt/yoal/runtime/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 
 export interface BuilderConfig {
 	controlUrl: string;
@@ -64,7 +64,7 @@ export interface BuilderConfig {
 	buildPath: string;
 	/** How long to wait before asking again while this node does not have the Builder role. */
 	idlePollMs: number;
-	/** Claim pipeline jobs as well as git builds (`SKIFF_PIPELINES`, default on). */
+	/** Claim pipeline jobs as well as git builds (`YOAL_PIPELINES`, default on). */
 	pipelinesEnabled: boolean;
 	pipelinePollMs: number;
 	/** Pipeline jobs run at once on this node. */
@@ -74,24 +74,24 @@ export interface BuilderConfig {
 	/**
 	 * `container` (Podman, W5) or `sandbox` (systemd-run / direct, no `container:` or `services:`).
 	 * With `pipelineIsolationMode: 'auto'` this is provisional until the pipeline loop has asked
-	 * skiff-helper what it can do (`chooseIsolation`).
+	 * yoal-helper what it can do (`chooseIsolation`).
 	 */
 	pipelineIsolation: PipelineIsolation;
-	/** What the operator asked for (`SKIFF_PIPELINE_ISOLATION`, default `auto`). */
+	/** What the operator asked for (`YOAL_PIPELINE_ISOLATION`, default `auto`). */
 	pipelineIsolationMode: PipelineIsolationMode;
-	/** Who runs Podman in `container` isolation: skiff-helper's fixed verbs, or (development) this daemon. */
+	/** Who runs Podman in `container` isolation: yoal-helper's fixed verbs, or (development) this daemon. */
 	pipelineContainerDriver: 'helper' | 'podman';
-	/** skiff-helper's control socket (`SKIFF_HELPER_SOCKET`, the agent's default). */
+	/** yoal-helper's control socket (`YOAL_HELPER_SOCKET`, the agent's default). */
 	helperSocket: string;
 	/** Explicit step-runner binary; null derives it from the running executable. */
 	pipelineStepBinary: string | null;
 	/**
-	 * Control-plane URL as a job sees it (`SKIFF_PIPELINE_CONTROL_URL`, default `controlUrl`). A
+	 * Control-plane URL as a job sees it (`YOAL_PIPELINE_CONTROL_URL`, default `controlUrl`). A
 	 * container has its own network namespace, so a loopback URL that works for the daemon does not
 	 * work from inside a job.
 	 */
 	pipelineControlUrl: string;
-	/** `runner.name` in jobs (`SKIFF_PIPELINE_RUNNER_NAME`, default the hostname). */
+	/** `runner.name` in jobs (`YOAL_PIPELINE_RUNNER_NAME`, default the hostname). */
 	pipelineRunnerName: string;
 }
 
@@ -121,7 +121,7 @@ function positiveInt(env: Env, name: string, fallback: number): number {
 	return Math.floor(value);
 }
 
-function truthy(value: string | undefined, name = 'SKIFF_BUILDER_SYSTEMD'): boolean | null {
+function truthy(value: string | undefined, name = 'YOAL_BUILDER_SYSTEMD'): boolean | null {
 	if (value === undefined || !value.trim()) return null;
 	const normalized = value.trim().toLowerCase();
 	if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
@@ -146,14 +146,14 @@ export const hostProbe: HostProbe = {
 	exists: (path) => existsSync(path),
 };
 
-/** `SKIFF_PIPELINE_ISOLATION`: `container`, `sandbox`, or `auto` (the default). */
+/** `YOAL_PIPELINE_ISOLATION`: `container`, `sandbox`, or `auto` (the default). */
 export function resolvePipelineIsolation(explicit: string | undefined): PipelineIsolationMode {
 	const value = explicit?.trim().toLowerCase() || 'auto';
 	if (value === 'container' || value === 'sandbox' || value === 'auto') return value;
-	throw new ConfigError('SKIFF_PIPELINE_ISOLATION must be container, sandbox or auto');
+	throw new ConfigError('YOAL_PIPELINE_ISOLATION must be container, sandbox or auto');
 }
 
-/** What skiff-helper's `GET /v1/pipeline/capabilities` reported (null: it did not answer). */
+/** What yoal-helper's `GET /v1/pipeline/capabilities` reported (null: it did not answer). */
 export interface HelperCapabilitiesLike {
 	podman: string | null;
 	runtimes: Array<'runc' | 'runsc' | 'kata'>;
@@ -171,7 +171,7 @@ export interface IsolationChoice {
 }
 
 /**
- * The effective isolation. Containers start through skiff-helper (W5), so they no longer need any
+ * The effective isolation. Containers start through yoal-helper (W5), so they no longer need any
  * capability on the Builder unit: `auto` is `container` whenever the helper answers, Podman works,
  * the `containers` subuid range is in place, the step runner exists and the helper derives job
  * directories from this daemon's own build directory; otherwise `sandbox`. An explicit
@@ -187,23 +187,23 @@ export function chooseIsolation(input: {
 	probe: Pick<HostProbe, 'platform' | 'isRoot' | 'has'>;
 }): IsolationChoice {
 	const { mode, caps } = input;
-	if (mode === 'sandbox') return { isolation: 'sandbox', runtimes: [], reason: 'SKIFF_PIPELINE_ISOLATION=sandbox' };
+	if (mode === 'sandbox') return { isolation: 'sandbox', runtimes: [], reason: 'YOAL_PIPELINE_ISOLATION=sandbox' };
 	if (input.driver === 'podman') {
 		const podman = input.probe.platform === 'linux' && input.probe.isRoot && input.probe.has('podman');
 		if (mode === 'container' || podman)
-			return { isolation: 'container', runtimes: ['runc'], reason: 'Podman run by the Builder itself (SKIFF_PIPELINE_CONTAINER_DRIVER=podman)' };
+			return { isolation: 'container', runtimes: ['runc'], reason: 'Podman run by the Builder itself (YOAL_PIPELINE_CONTAINER_DRIVER=podman)' };
 		return { isolation: 'sandbox', runtimes: [], reason: 'no rootful Podman for the podman driver' };
 	}
 	let problem: string | null = null;
-	if (!caps) problem = `skiff-helper did not answer (${input.capsError ?? 'unreachable'})`;
-	else if (!caps.podman) problem = 'skiff-helper reports no working Podman';
-	else if (!caps.userns) problem = 'skiff-helper could not set up the containers subuid range';
-	else if (!caps.stepBinary) problem = 'skiff-helper has no step runner (agent binary)';
+	if (!caps) problem = `yoal-helper did not answer (${input.capsError ?? 'unreachable'})`;
+	else if (!caps.podman) problem = 'yoal-helper reports no working Podman';
+	else if (!caps.userns) problem = 'yoal-helper could not set up the containers subuid range';
+	else if (!caps.stepBinary) problem = 'yoal-helper has no step runner (agent binary)';
 	else if (caps.buildsRoot !== input.buildDir)
-		problem = `skiff-helper puts job directories under ${caps.buildsRoot}, but this Builder uses ${input.buildDir}`;
+		problem = `yoal-helper puts job directories under ${caps.buildsRoot}, but this Builder uses ${input.buildDir}`;
 	if (!problem) {
 		const runtimes = caps!.runtimes.includes('runc') ? caps!.runtimes : (['runc', ...caps!.runtimes] as IsolationChoice['runtimes']);
-		return { isolation: 'container', runtimes, reason: `skiff-helper with Podman ${caps!.podman}` };
+		return { isolation: 'container', runtimes, reason: `yoal-helper with Podman ${caps!.podman}` };
 	}
 	if (mode === 'container') return { isolation: 'container', runtimes: caps?.runtimes.length ? caps.runtimes : ['runc'], reason: `explicit container, but ${problem}` };
 	return { isolation: 'sandbox', runtimes: [], reason: problem };
@@ -217,7 +217,7 @@ function pipelineLabelList(value: string | undefined): string[] {
 		.map((label) => label.trim().toLowerCase())
 		.filter(Boolean);
 	for (const label of labels)
-		if (!LABEL.test(label)) throw new ConfigError(`SKIFF_PIPELINE_LABELS has an invalid label "${label.slice(0, 64)}"`);
+		if (!LABEL.test(label)) throw new ConfigError(`YOAL_PIPELINE_LABELS has an invalid label "${label.slice(0, 64)}"`);
 	return labels;
 }
 
@@ -249,7 +249,7 @@ function gitTokenHosts(value: string | undefined): string[] {
 		.filter(Boolean);
 	for (const host of hosts)
 		if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/.test(host))
-			throw new ConfigError(`SKIFF_GIT_TOKEN_HOSTS has an invalid host "${host}"`);
+			throw new ConfigError(`YOAL_GIT_TOKEN_HOSTS has an invalid host "${host}"`);
 	return hosts;
 }
 
@@ -263,56 +263,56 @@ function sshPath(env: Env, name: string): string | null {
 }
 
 export function loadConfig(env: Env = process.env, probe: HostProbe = hostProbe): BuilderConfig {
-	const controlUrl = required(env, 'SKIFF_CONTROL_URL').replace(/\/+$/, '');
+	const controlUrl = required(env, 'YOAL_CONTROL_URL').replace(/\/+$/, '');
 	let parsed: URL;
 	try {
 		parsed = new URL(controlUrl);
 	} catch {
-		throw new ConfigError('SKIFF_CONTROL_URL must be an absolute URL');
+		throw new ConfigError('YOAL_CONTROL_URL must be an absolute URL');
 	}
 	if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:')
-		throw new ConfigError('SKIFF_CONTROL_URL must use http or https');
+		throw new ConfigError('YOAL_CONTROL_URL must use http or https');
 
-	const explicitSystemd = truthy(env.SKIFF_BUILDER_SYSTEMD);
+	const explicitSystemd = truthy(env.YOAL_BUILDER_SYSTEMD);
 	const available = process.platform === 'linux' && Boolean(Bun.which('systemd-run'));
 	const systemd = explicitSystemd ?? available;
-	const rawUser = env.SKIFF_BUILDER_USER?.trim();
+	const rawUser = env.YOAL_BUILDER_USER?.trim();
 	const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
 	// Only root can start a unit as another user; never run user code as root by default.
 	const buildUser =
-		rawUser === 'none' || rawUser === '' ? null : rawUser ?? (systemd && isRoot ? 'skiff-build' : null);
+		rawUser === 'none' || rawUser === '' ? null : rawUser ?? (systemd && isRoot ? 'yoal-build' : null);
 	if (buildUser && !/^[a-z_][a-z0-9_-]{0,31}$/.test(buildUser))
-		throw new ConfigError('SKIFF_BUILDER_USER must be a plain system user name');
-	if (buildUser && !systemd) throw new ConfigError('SKIFF_BUILDER_USER needs systemd-run (SKIFF_BUILDER_SYSTEMD)');
+		throw new ConfigError('YOAL_BUILDER_USER must be a plain system user name');
+	if (buildUser && !systemd) throw new ConfigError('YOAL_BUILDER_USER needs systemd-run (YOAL_BUILDER_SYSTEMD)');
 	if (isRoot && !buildUser)
-		throw new ConfigError('Refusing to run builds as root; set SKIFF_BUILDER_USER and enable systemd-run');
+		throw new ConfigError('Refusing to run builds as root; set YOAL_BUILDER_USER and enable systemd-run');
 	return {
 		controlUrl,
-		nodeToken: required(env, 'SKIFF_NODE_TOKEN'),
-		buildDir: required(env, 'SKIFF_BUILD_DIR'),
-		gitToken: env.SKIFF_GIT_TOKEN?.trim() || null,
-		gitTokenHosts: gitTokenHosts(env.SKIFF_GIT_TOKEN_HOSTS),
-		gitSshKey: sshPath(env, 'SKIFF_GIT_SSH_KEY'),
-		gitSshKnownHosts: sshPath(env, 'SKIFF_GIT_SSH_KNOWN_HOSTS'),
-		pollMs: positiveInt(env, 'SKIFF_BUILDER_POLL_MS', 5_000),
+		nodeToken: required(env, 'YOAL_NODE_TOKEN'),
+		buildDir: required(env, 'YOAL_BUILD_DIR'),
+		gitToken: env.YOAL_GIT_TOKEN?.trim() || null,
+		gitTokenHosts: gitTokenHosts(env.YOAL_GIT_TOKEN_HOSTS),
+		gitSshKey: sshPath(env, 'YOAL_GIT_SSH_KEY'),
+		gitSshKnownHosts: sshPath(env, 'YOAL_GIT_SSH_KNOWN_HOSTS'),
+		pollMs: positiveInt(env, 'YOAL_BUILDER_POLL_MS', 5_000),
 		systemd,
-		timeoutSeconds: positiveInt(env, 'SKIFF_BUILDER_TIMEOUT_SECONDS', 600),
-		memoryMax: env.SKIFF_BUILDER_MEMORY_MAX?.trim() || '2G',
-		cpuQuota: env.SKIFF_BUILDER_CPU_QUOTA?.trim() || '200%',
+		timeoutSeconds: positiveInt(env, 'YOAL_BUILDER_TIMEOUT_SECONDS', 600),
+		memoryMax: env.YOAL_BUILDER_MEMORY_MAX?.trim() || '2G',
+		cpuQuota: env.YOAL_BUILDER_CPU_QUOTA?.trim() || '200%',
 		buildUser,
-		buildPath: env.SKIFF_BUILDER_PATH?.trim() || DEFAULT_BUILD_PATH,
-		idlePollMs: positiveInt(env, 'SKIFF_BUILDER_IDLE_POLL_MS', 30_000),
-		pipelinesEnabled: truthy(env.SKIFF_PIPELINES, 'SKIFF_PIPELINES') ?? true,
-		pipelinePollMs: positiveInt(env, 'SKIFF_PIPELINE_POLL_MS', 3_000),
-		pipelineMaxJobs: Math.min(positiveInt(env, 'SKIFF_PIPELINE_MAX_JOBS', 1), 64),
-		pipelineLabels: pipelineLabelList(env.SKIFF_PIPELINE_LABELS),
-		pipelineIsolation: resolvePipelineIsolation(env.SKIFF_PIPELINE_ISOLATION) === 'container' ? 'container' : 'sandbox',
-		pipelineIsolationMode: resolvePipelineIsolation(env.SKIFF_PIPELINE_ISOLATION),
-		pipelineContainerDriver: containerDriver(env.SKIFF_PIPELINE_CONTAINER_DRIVER),
-		helperSocket: helperSocket(env.SKIFF_HELPER_SOCKET),
-		pipelineStepBinary: stepBinary(env.SKIFF_PIPELINE_STEP_BINARY),
-		pipelineControlUrl: httpUrl(env.SKIFF_PIPELINE_CONTROL_URL, 'SKIFF_PIPELINE_CONTROL_URL') ?? controlUrl,
-		pipelineRunnerName: env.SKIFF_PIPELINE_RUNNER_NAME?.trim().slice(0, 100) || hostname(),
+		buildPath: env.YOAL_BUILDER_PATH?.trim() || DEFAULT_BUILD_PATH,
+		idlePollMs: positiveInt(env, 'YOAL_BUILDER_IDLE_POLL_MS', 30_000),
+		pipelinesEnabled: truthy(env.YOAL_PIPELINES, 'YOAL_PIPELINES') ?? true,
+		pipelinePollMs: positiveInt(env, 'YOAL_PIPELINE_POLL_MS', 3_000),
+		pipelineMaxJobs: Math.min(positiveInt(env, 'YOAL_PIPELINE_MAX_JOBS', 1), 64),
+		pipelineLabels: pipelineLabelList(env.YOAL_PIPELINE_LABELS),
+		pipelineIsolation: resolvePipelineIsolation(env.YOAL_PIPELINE_ISOLATION) === 'container' ? 'container' : 'sandbox',
+		pipelineIsolationMode: resolvePipelineIsolation(env.YOAL_PIPELINE_ISOLATION),
+		pipelineContainerDriver: containerDriver(env.YOAL_PIPELINE_CONTAINER_DRIVER),
+		helperSocket: helperSocket(env.YOAL_HELPER_SOCKET),
+		pipelineStepBinary: stepBinary(env.YOAL_PIPELINE_STEP_BINARY),
+		pipelineControlUrl: httpUrl(env.YOAL_PIPELINE_CONTROL_URL, 'YOAL_PIPELINE_CONTROL_URL') ?? controlUrl,
+		pipelineRunnerName: env.YOAL_PIPELINE_RUNNER_NAME?.trim().slice(0, 100) || hostname(),
 	};
 }
 
@@ -332,18 +332,18 @@ function httpUrl(value: string | undefined, name: string): string | null {
 function stepBinary(value: string | undefined): string | null {
 	const path = value?.trim();
 	if (!path) return null;
-	if (!isShellSafePath(path)) throw new ConfigError('SKIFF_PIPELINE_STEP_BINARY must be an absolute path of plain characters');
+	if (!isShellSafePath(path)) throw new ConfigError('YOAL_PIPELINE_STEP_BINARY must be an absolute path of plain characters');
 	return path;
 }
 
 function containerDriver(value: string | undefined): 'helper' | 'podman' {
 	const driver = value?.trim().toLowerCase() || 'helper';
-	if (driver !== 'helper' && driver !== 'podman') throw new ConfigError('SKIFF_PIPELINE_CONTAINER_DRIVER must be helper or podman');
+	if (driver !== 'helper' && driver !== 'podman') throw new ConfigError('YOAL_PIPELINE_CONTAINER_DRIVER must be helper or podman');
 	return driver;
 }
 
 function helperSocket(value: string | undefined): string {
-	const path = value?.trim() || '/run/skiff-helper/helper.sock';
-	if (!isShellSafePath(path)) throw new ConfigError('SKIFF_HELPER_SOCKET must be an absolute path of plain characters');
+	const path = value?.trim() || '/run/yoal-helper/helper.sock';
+	if (!isShellSafePath(path)) throw new ConfigError('YOAL_HELPER_SOCKET must be an absolute path of plain characters');
 	return path;
 }

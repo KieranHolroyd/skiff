@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
-import { canAdministerPlatform, canViewPlatform } from '@skiff/contracts';
+import { canAdministerPlatform, canViewPlatform } from '@yoal/contracts';
 import { buildPrincipal, isPlatformAdminUser, isRole, memberChangeError, resolveMembership } from './orgs.ts';
 
 function authDb() {

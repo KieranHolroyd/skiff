@@ -8,12 +8,12 @@ import { confirmOrRefuse } from './run-operation.ts';
 
 /**
  * Service accounts (docs/IAM.md I13, §7.2; docs/API.md §Service accounts). An account is an
- * org-owned machine principal with a stable `sa_…` id. Keys are minted with `skif key` or
- * `skif sa keys create`, and `skif sa token` mints a short impersonation token. Every check lives
+ * org-owned machine principal with a stable `sa_…` id. Keys are minted with `yoal key` or
+ * `yoal sa keys create`, and `yoal sa token` mints a short impersonation token. Every check lives
  * on the server; this is a thin client over `/api/v1/service-accounts`.
  */
 
-const usage = `Usage: skif sa <command> [options]
+const usage = `Usage: yoal sa <command> [options]
 
 Commands:
   list [list]                  Service accounts, their owner group and whether they are disabled
@@ -47,18 +47,18 @@ Global options:
   -h, --help                   Show this help
 
 A service account is bound to roles like any other principal:
-  skif iam bind serviceAccount:<id> deployer --scope project:<id>
+  yoal iam bind serviceAccount:<id> deployer --scope project:<id>
 Disabling is the normal off-switch; delete only works once nothing is bound to it.
 An impersonation token carries the account's bindings and is audited; it is not a standing key.
 
 Examples:
-  skif sa create ci-bot --description "GitHub Actions"
-  skif sa token ci-bot --ttl 30m
-  skif sa keys create ci-bot ci --expires 90d
-  skif sa keys list ci-bot
-  skif key create ci --service-account ci-bot --expires 90d
-  skif sa disable ci-bot
-  skif sa list`;
+  yoal sa create ci-bot --description "GitHub Actions"
+  yoal sa token ci-bot --ttl 30m
+  yoal sa keys create ci-bot ci --expires 90d
+  yoal sa keys list ci-bot
+  yoal key create ci --service-account ci-bot --expires 90d
+  yoal sa disable ci-bot
+  yoal sa list`;
 
 export interface ServiceAccountView {
 	id: string;
@@ -146,7 +146,7 @@ async function listServiceAccounts(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 0, 'Usage: skif sa [list] [--json]');
+	rejectExtraPositionals(args, 0, 'Usage: yoal sa [list] [--json]');
 	const client = await authenticatedClient();
 	const accounts = await fetchServiceAccounts(client);
 	if (args.boolean('json')) {
@@ -154,7 +154,7 @@ async function listServiceAccounts(argv: string[]): Promise<void> {
 		return;
 	}
 	if (accounts.length === 0) {
-		console.log('No service accounts yet. Create one with `skif sa create <name>`.');
+		console.log('No service accounts yet. Create one with `yoal sa create <name>`.');
 		return;
 	}
 	console.log(serviceAccountTable(accounts));
@@ -166,7 +166,7 @@ async function createServiceAccount(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif sa create <name> [--description <text>] [--owner-group <id>]');
+	rejectExtraPositionals(args, 1, 'Usage: yoal sa create <name> [--description <text>] [--owner-group <id>]');
 	const name = requirePositional(args, 0, `service account name.\n\n${usage}`);
 	const body: Record<string, unknown> = { name };
 	const description = args.string('description');
@@ -186,8 +186,8 @@ async function createServiceAccount(argv: string[]): Promise<void> {
 			details: raw,
 		});
 	console.log(`Created service account "${account.name}" (${account.id}).`);
-	console.log(`Bind it with: skif iam bind serviceAccount:${account.id} <role> --scope org`);
-	console.log(`Mint a key with: skif key create <name> --service-account ${account.name}`);
+	console.log(`Bind it with: yoal iam bind serviceAccount:${account.id} <role> --scope org`);
+	console.log(`Mint a key with: yoal key create <name> --service-account ${account.name}`);
 }
 
 async function setDisabled(argv: string[], disabled: boolean): Promise<void> {
@@ -197,7 +197,7 @@ async function setDisabled(argv: string[], disabled: boolean): Promise<void> {
 		return;
 	}
 	const action = disabled ? 'disable' : 'enable';
-	rejectExtraPositionals(args, 1, `Usage: skif sa ${action} <name|id>`);
+	rejectExtraPositionals(args, 1, `Usage: yoal sa ${action} <name|id>`);
 	const value = requirePositional(args, 0, `service account name or id.\n\n${usage}`);
 	const client = await authenticatedClient();
 	const account = resolveServiceAccount(await fetchServiceAccounts(client), value);
@@ -222,7 +222,7 @@ async function deleteServiceAccount(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif sa delete <name|id> [--yes]');
+	rejectExtraPositionals(args, 1, 'Usage: yoal sa delete <name|id> [--yes]');
 	const value = requirePositional(args, 0, `service account name or id.\n\n${usage}`);
 	const client = await authenticatedClient();
 	const account = resolveServiceAccount(await fetchServiceAccounts(client), value);
@@ -252,7 +252,7 @@ async function issueToken(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif sa token <name|id> [--ttl <duration>] [--audience <aud>]');
+	rejectExtraPositionals(args, 1, 'Usage: yoal sa token <name|id> [--ttl <duration>] [--audience <aud>]');
 	const value = requirePositional(args, 0, `service account name or id.\n\n${usage}`);
 	const ttl = parseTokenTtl(args.string('ttl'));
 	const body: Record<string, unknown> = { ttl };
@@ -310,7 +310,7 @@ async function listServiceAccountKeys(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif sa keys [list] <name|id> [--json]');
+	rejectExtraPositionals(args, 1, 'Usage: yoal sa keys [list] <name|id> [--json]');
 	const value = requirePositional(args, 0, `service account name or id.\n\n${usage}`);
 	const client = await authenticatedClient();
 	const account = resolveServiceAccount(await fetchServiceAccounts(client), value);
@@ -320,7 +320,7 @@ async function listServiceAccountKeys(argv: string[]): Promise<void> {
 		return;
 	}
 	if (keys.length === 0) {
-		console.log(`No keys for ${account.name}. Mint one with \`skif sa keys create ${account.name} <key>\`.`);
+		console.log(`No keys for ${account.name}. Mint one with \`yoal sa keys create ${account.name} <key>\`.`);
 		return;
 	}
 	console.log(serviceAccountKeyTable(keys));
@@ -332,7 +332,7 @@ async function createServiceAccountKey(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 2, 'Usage: skif sa keys create <name|id> <key> [options]');
+	rejectExtraPositionals(args, 2, 'Usage: yoal sa keys create <name|id> <key> [options]');
 	const value = requirePositional(args, 0, `service account name or id.\n\n${usage}`);
 	const name = requirePositional(args, 1, `key name.\n\n${usage}`);
 	const body: Record<string, unknown> = { name };
@@ -379,7 +379,7 @@ async function revokeServiceAccountKey(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif sa keys revoke <key-id> --service-account <name|id> [--yes]');
+	rejectExtraPositionals(args, 1, 'Usage: yoal sa keys revoke <key-id> --service-account <name|id> [--yes]');
 	const keyId = requirePositional(args, 0, `key id.\n\n${usage}`);
 	const accountValue = args.string('service-account');
 	if (!accountValue)
@@ -417,7 +417,7 @@ export function parseTokenTtl(value: string | undefined, now = Date.now()): numb
 	return seconds;
 }
 
-/** `--cidr a,b --cidr c` into a deduplicated list, matching `skif key create`. */
+/** `--cidr a,b --cidr c` into a deduplicated list, matching `yoal key create`. */
 export function parseCidrs(values: string[]): string[] {
 	const cidrs = values
 		.flatMap((value) => value.split(','))
@@ -427,7 +427,7 @@ export function parseCidrs(values: string[]): string[] {
 	return [...new Set(cidrs)];
 }
 
-/** The API takes a TTL in seconds; `--expires` accepts the same durations as `skif sa token`. */
+/** The API takes a TTL in seconds; `--expires` accepts the same durations as `yoal sa token`. */
 export function parseExpiresInSeconds(value: string, now = Date.now()): number {
 	return Math.max(1, Math.round((parseExpiry(value, now) - now) / 1000));
 }
@@ -465,7 +465,7 @@ export function serviceAccountTable(accounts: ServiceAccountView[]): string {
 	return renderTable(['ID', 'NAME', 'STATE', 'OWNER', 'DESCRIPTION', 'CREATED'], rows);
 }
 
-/** Resolve an account by exact id or name, so both `skif sa disable sa_…` and `… ci-bot` work. */
+/** Resolve an account by exact id or name, so both `yoal sa disable sa_…` and `… ci-bot` work. */
 export function resolveServiceAccount(
 	accounts: ServiceAccountView[],
 	value: string,
@@ -473,7 +473,7 @@ export function resolveServiceAccount(
 	const account =
 		accounts.find((entry) => entry.id === value) ?? accounts.find((entry) => entry.name === value);
 	if (!account)
-		throw new UsageError(`Unknown service account "${value}". Run \`skif sa\` to see them.`);
+		throw new UsageError(`Unknown service account "${value}". Run \`yoal sa\` to see them.`);
 	return account;
 }
 

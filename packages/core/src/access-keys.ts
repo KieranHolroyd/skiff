@@ -1,15 +1,15 @@
 /**
- * Access keys in a Skiff table (IAM.md I14, §4, §7.2, §12).
+ * Access keys in a Yoal table (IAM.md I14, §4, §7.2, §12).
  *
  * A key belongs to one org and one principal: a user or a service account (`sa_…`). The raw
- * `skif_…` key is returned exactly once, from `create`; only its hash is stored. The
- * `prefix` (`skif_`) and `start` (the first eight visible characters) are kept so a key can be
+ * `yoal_…` key is returned exactly once, from `create`; only its hash is stored. The
+ * `prefix` (`yoal_`) and `start` (the first eight visible characters) are kept so a key can be
  * recognised in the list without revealing it.
  *
- * Hash format decision (spike S1, answered): new Skiff keys are `skif_` + 43 base64url characters
+ * Hash format decision (spike S1, answered): new Yoal keys are `yoal_` + 43 base64url characters
  * and are stored as `sha256(raw)` lowercase hex (`hash_scheme = 'sha256'`, 64 chars).
  *
- * Better Auth 1.7.15's `@better-auth/api-key` generates `skif_` + 64 ASCII letters
+ * Better Auth 1.7.15's `@better-auth/api-key` generates `yoal_` + 64 ASCII letters
  * (`defaultKeyLength = 64`, alphabet `a-z`/`A-Z`) and its `defaultKeyHasher` stores
  * `base64url(sha256(raw))` without padding (43 chars). Its `apikey.key` column is already that
  * hash. Because its format is distinguishable but not self-describing, migrated rows keep the
@@ -31,13 +31,13 @@ import {
 	isPermission,
 	type Permission,
 	type Principal,
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { ForbiddenError, NotFoundError, ValidationError } from './errors.ts';
 import { newId, parseJson, randomToken, sha256Hex } from './util.ts';
 
-/** The visible prefix of every Skiff access key. */
-export const ACCESS_KEY_PREFIX = 'skif_';
+/** The visible prefix of every Yoal access key. */
+export const ACCESS_KEY_PREFIX = 'yoal_';
 
 /** How a `access_keys.hash` value was produced. New rows always use `sha256`. */
 export type AccessKeyHashScheme = 'sha256' | 'better-auth';

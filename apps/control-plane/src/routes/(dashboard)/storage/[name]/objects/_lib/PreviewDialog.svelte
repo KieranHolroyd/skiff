@@ -7,7 +7,7 @@
 	import FileWarningIcon from '@lucide/svelte/icons/file-warning';
 	import LinkIcon from '@lucide/svelte/icons/link';
 	import MusicIcon from '@lucide/svelte/icons/music';
-	import type { StorageObject } from '@skiff/contracts';
+	import type { StorageObject } from '@yoal/contracts';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Dialog from '#lib/components/ui/dialog/index.js';
 	import { Spinner } from '#lib/components/ui/spinner/index.js';

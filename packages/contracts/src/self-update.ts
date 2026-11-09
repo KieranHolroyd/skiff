@@ -3,7 +3,7 @@
  *
  * The control plane runs unprivileged and sandboxed, so it cannot update (or restart) itself.
  * Instead it drops `requestFile`; a systemd path unit notices and starts
- * `skiff-update-self.service` as root, which deletes the request, runs the updater and keeps
+ * `yoal-update-self.service` as root, which deletes the request, runs the updater and keeps
  * `statusFile` current. The request carries no data the updater trusts: it is only a trigger,
  * and the updater re-checks the version on GitHub itself. The exceptions are the install method
  * and the release channel: allowlisted enums written to sidecar files (see
@@ -13,18 +13,18 @@
  */
 
 export const SELF_UPDATE_DEFAULTS = {
-	/** Written by the control plane (skiff-owned directory). */
-	requestFile: '/var/lib/skiff/update/request',
-	/** Written by the updater (root-owned directory, group skiff can read). */
-	statusFile: '/var/lib/skiff-update/status.json',
+	/** Written by the control plane (yoal-owned directory). */
+	requestFile: '/var/lib/yoal/update/request',
+	/** Written by the updater (root-owned directory, group yoal can read). */
+	statusFile: '/var/lib/yoal-update/status.json',
 	/** JSON Lines progress log written by the updater; tailed by the dashboard. */
-	logFile: '/var/lib/skiff-update/update.log',
+	logFile: '/var/lib/yoal-update/update.log',
 	/** Its presence means dashboard-triggered updates are wired up on this host. */
-	pathUnit: '/etc/systemd/system/skiff-update-self.path',
+	pathUnit: '/etc/systemd/system/yoal-update-self.path',
 	/** Release metadata of the active release (repo/ref the updater pulls from). */
-	releaseMeta: '/opt/skiff/current/meta.json',
-	/** The host's release channel, persisted by the updater (root:skiff 0640, group-readable). */
-	channelFile: '/var/lib/skiff-update/channel',
+	releaseMeta: '/opt/yoal/current/meta.json',
+	/** The host's release channel, persisted by the updater (root:yoal 0640, group-readable). */
+	channelFile: '/var/lib/yoal-update/channel',
 } as const;
 
 /**
@@ -196,7 +196,7 @@ export const SELF_UPDATE_LOG_LINES = 400;
 
 export type SelfUpdateLogLevel = 'info' | 'warn' | 'error' | 'command' | 'output' | 'phase';
 
-/** One line of `/var/lib/skiff-update/update.log` (JSON Lines on disk). */
+/** One line of `/var/lib/yoal-update/update.log` (JSON Lines on disk). */
 export interface SelfUpdateLogLine {
 	/** ISO timestamp written by the updater. */
 	at: string;

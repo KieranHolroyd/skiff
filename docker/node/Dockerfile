@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# Skiff node image: the agent plus the Caddy binary it drives, in one container.
+# Yoal node image: the agent plus the Caddy binary it drives, in one container.
 # This serves the agent's static release path (agent release cache + Caddy); the
 # tier-2/3 systemd workloads still require a host install.
 #
@@ -22,7 +22,7 @@ RUN case "$TARGETARCH" in \
       *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
     esac && \
     bun build --compile --minify --target=bun-linux-$target \
-      apps/agent/src/main.ts --outfile /out/skiff-agent
+      apps/agent/src/main.ts --outfile /out/yoal-agent
 
 FROM --platform=$BUILDPLATFORM caddy:${CADDY_VERSION}-builder AS caddy
 ARG CADDY_VERSION
@@ -43,38 +43,38 @@ RUN case "$TARGETARCH" in \
 
 FROM debian:bookworm-slim
 
-ARG SKIFF_VERSION=dev
+ARG YOAL_VERSION=dev
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
- && groupadd --gid 10001 skiff \
- && useradd --uid 10001 --gid skiff --home-dir /var/lib/skiff \
-      --no-create-home --shell /usr/sbin/nologin skiff \
- && mkdir -p /var/lib/skiff/agent /var/lib/skiff/caddy/data /var/lib/skiff/caddy/config \
-      /run/skiff /etc/caddy \
- && chown -R skiff:skiff /var/lib/skiff /run/skiff
+ && groupadd --gid 10001 yoal \
+ && useradd --uid 10001 --gid yoal --home-dir /var/lib/yoal \
+      --no-create-home --shell /usr/sbin/nologin yoal \
+ && mkdir -p /var/lib/yoal/agent /var/lib/yoal/caddy/data /var/lib/yoal/caddy/config \
+      /run/yoal /etc/caddy \
+ && chown -R yoal:yoal /var/lib/yoal /run/yoal
 
-COPY --from=agent /out/skiff-agent /opt/skiff/skiff-agent
-COPY --from=caddy /out/caddy /opt/skiff/caddy
-COPY docker/node/entrypoint.sh /usr/local/bin/skiff-node
-COPY docker/node/skiff.Caddyfile /etc/caddy/skiff.Caddyfile
+COPY --from=agent /out/yoal-agent /opt/yoal/yoal-agent
+COPY --from=caddy /out/caddy /opt/yoal/caddy
+COPY docker/node/entrypoint.sh /usr/local/bin/yoal-node
+COPY docker/node/yoal.Caddyfile /etc/caddy/yoal.Caddyfile
 
-RUN chmod 0755 /opt/skiff/skiff-agent /opt/skiff/caddy /usr/local/bin/skiff-node
+RUN chmod 0755 /opt/yoal/yoal-agent /opt/yoal/caddy /usr/local/bin/yoal-node
 
-USER skiff
+USER yoal
 
 # The agent defaults; the controller is set at deploy time.
 ENV NODE_ENV=production \
-    HOME=/var/lib/skiff \
-    XDG_DATA_HOME=/var/lib/skiff/caddy/data \
-    XDG_CONFIG_HOME=/var/lib/skiff/caddy/config \
-    SKIFF_DATA_DIR=/var/lib/skiff/agent \
-    SKIFF_AGENT_VERSION=${SKIFF_VERSION} \
-    SKIFF_CADDY_ADMIN_SOCKET=/run/skiff/caddy-admin.sock \
-    SKIFF_AGENT_SOCKET=/run/skiff/agent.sock \
-    SKIFF_CERT_PROBE_ADDR=off
+    HOME=/var/lib/yoal \
+    XDG_DATA_HOME=/var/lib/yoal/caddy/data \
+    XDG_CONFIG_HOME=/var/lib/yoal/caddy/config \
+    YOAL_DATA_DIR=/var/lib/yoal/agent \
+    YOAL_AGENT_VERSION=${YOAL_VERSION} \
+    YOAL_CADDY_ADMIN_SOCKET=/run/yoal/caddy-admin.sock \
+    YOAL_AGENT_SOCKET=/run/yoal/agent.sock \
+    YOAL_CERT_PROBE_ADDR=off
 
 EXPOSE 8080
 
-ENTRYPOINT ["/usr/local/bin/skiff-node"]
+ENTRYPOINT ["/usr/local/bin/yoal-node"]

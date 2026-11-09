@@ -1,11 +1,11 @@
 /**
  * MongoDB studio plugin end-to-end (plan 22, Phase 2 track C): the shared conformance suite plus
  * document-specific checks, against a disposable `mongo:8.0` (and `mongo:9.0` when the image is
- * present). Mirrors Skiff: a standalone `mongod`, users in the `admin` auth database.
+ * present). Mirrors Yoal: a standalone `mongod`, users in the `admin` auth database.
  *
- *   SKIFF_E2E_STUDIO=1 SKIFF_E2E_ENGINE=docker bun test tests/e2e/studio/mongodb.e2e.test.ts
+ *   YOAL_E2E_STUDIO=1 YOAL_E2E_ENGINE=docker bun test tests/e2e/studio/mongodb.e2e.test.ts
  *
- * Without `SKIFF_E2E_STUDIO=1` it registers one skipped test, so the root `bun test` stays fast.
+ * Without `YOAL_E2E_STUDIO=1` it registers one skipped test, so the root `bun test` stays fast.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { collect, describeConformance, rowsOf } from '../../../packages/studio/src/conformance.ts';
 import type { StudioSession, StudioTarget } from '../../../packages/studio/src/driver.ts';
 import { mongodbPlugin } from '../../../packages/studio/src/plugins/mongodb/index.ts';
-// `mongodb` and `@skiff/contracts` resolve only inside packages/studio.
+// `mongodb` and `@yoal/contracts` resolve only inside packages/studio.
 import { BSON, DEFAULT_STUDIO_LIMITS, MongoClient } from '../../../packages/studio/src/plugins/mongodb/test-support.ts';
 import { StudioError, type Cell, type StudioEvent } from '../../../packages/studio/src/protocol.ts';
 import { ContainerRuntime, detectEngine, freePort, waitFor } from '../lib/containers.ts';
@@ -22,7 +22,7 @@ import { ContainerRuntime, detectEngine, freePort, waitFor } from '../lib/contai
 const ROW_COUNT = 250;
 const ROOT = { user: 'root', password: 'root-pw' };
 const OWNER = { user: 'app_owner', password: 'owner p@ss:/?' };
-const READER = { user: 'skiff_studio_ro', password: 'reader-pw' };
+const READER = { user: 'yoal_studio_ro', password: 'reader-pw' };
 const COLLECTION = 'studio_items';
 const VIEW = 'studio_item_names';
 
@@ -50,11 +50,11 @@ interface Instance {
 	name: string;
 }
 
-if (process.env.SKIFF_E2E_STUDIO !== '1') {
-	test.skip('mongodb studio e2e (set SKIFF_E2E_STUDIO=1 to run)', () => {});
+if (process.env.YOAL_E2E_STUDIO !== '1') {
+	test.skip('mongodb studio e2e (set YOAL_E2E_STUDIO=1 to run)', () => {});
 } else {
 	const engine = await detectEngine();
-	if (!engine) throw new Error('SKIFF_E2E_STUDIO=1 needs Podman or Docker (or set SKIFF_E2E_ENGINE).');
+	if (!engine) throw new Error('YOAL_E2E_STUDIO=1 needs Podman or Docker (or set YOAL_E2E_ENGINE).');
 	const probe = new ContainerRuntime(engine, tmpdir());
 	const hasImage = async (image: string) =>
 		(await probe.exec(['image', 'inspect', image], { check: false, timeoutMs: 30_000 })).code === 0;
@@ -89,7 +89,7 @@ if (process.env.SKIFF_E2E_STUDIO !== '1') {
 	};
 
 	beforeAll(async () => {
-		tempDir = await mkdtemp(join(tmpdir(), 'skiff-studio-mongo-'));
+		tempDir = await mkdtemp(join(tmpdir(), 'yoal-studio-mongo-'));
 		runtime = new ContainerRuntime(engine, tempDir);
 		const network = `studio-mongo-net-${runtime.runId}`;
 		await runtime.createNetwork(network);
@@ -124,7 +124,7 @@ if (process.env.SKIFF_E2E_STUDIO !== '1') {
 				);
 				const admin = client! as MongoClient;
 				admins.set(instance.name, admin);
-				// Skiff's shape: users live in `admin`, scoped to the app database.
+				// Yoal's shape: users live in `admin`, scoped to the app database.
 				await admin.db('admin').command({ createUser: OWNER.user, pwd: OWNER.password, roles: [{ role: 'readWrite', db: 'app' }] });
 				await admin.db('admin').command({ createUser: READER.user, pwd: READER.password, roles: [{ role: 'read', db: 'app' }] });
 				const app = admin.db('app');
@@ -373,7 +373,7 @@ if (process.env.SKIFF_E2E_STUDIO !== '1') {
 					const lingering = async () =>
 						(
 							await admin
-								.aggregate([{ $currentOp: { allUsers: true } }, { $match: { 'command.comment': { $regex: '^skiff-studio:' } } }])
+								.aggregate([{ $currentOp: { allUsers: true } }, { $match: { 'command.comment': { $regex: '^yoal-studio:' } } }])
 								.toArray()
 						).length;
 					const controller = new AbortController();

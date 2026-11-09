@@ -1,6 +1,6 @@
 /**
  * Managed object storage (docs/OBJECT-STORAGE.md): the wire types the CLI reads, and pure
- * formatting and parsing for `skif storage`. Types mirror `packages/contracts/src/object-storage.ts`;
+ * formatting and parsing for `yoal storage`. Types mirror `packages/contracts/src/object-storage.ts`;
  * the CLI bundle stays free of runtime dependencies (D40), so keep them in sync.
  */
 import { readFileSync } from 'node:fs';
@@ -241,7 +241,7 @@ export function defaultGrants(view: Pick<StorageView, 'name' | 'buckets'>): Stor
 	if (buckets.length === 1) return [{ bucket: buckets[0]!.name, mode: 'read-write' }];
 	if (buckets.length === 0)
 		throw new UsageError(
-			`Storage "${view.name}" has no buckets yet. Create one first: skif storage buckets create ${view.name} <bucket>`,
+			`Storage "${view.name}" has no buckets yet. Create one first: yoal storage buckets create ${view.name} <bucket>`,
 		);
 	throw new UsageError(
 		`Storage "${view.name}" has ${buckets.length} buckets (${buckets.map((bucket) => bucket.name).join(', ')}). ` +
@@ -312,7 +312,7 @@ export function bucketTable(buckets: StorageBucketView[]): string {
 	);
 }
 
-/** The `skif storage info` report. */
+/** The `yoal storage info` report. */
 export function storageDetails(view: StorageView): string {
 	const lines: string[] = [];
 	const field = (label: string, value: string) => lines.push(`${label.padEnd(10)}  ${value}`);
@@ -334,7 +334,7 @@ export function storageDetails(view: StorageView): string {
 
 	lines.push('');
 	if (view.buckets.length === 0) {
-		lines.push(`Buckets: none. Create one with \`skif storage buckets create ${view.name} <bucket>\`.`);
+		lines.push(`Buckets: none. Create one with \`yoal storage buckets create ${view.name} <bucket>\`.`);
 	} else {
 		lines.push(`Buckets${view.statsAt ? ` (as of ${formatTime(view.statsAt)})` : ''}:`);
 		lines.push(bucketTable(view.buckets));
@@ -342,7 +342,7 @@ export function storageDetails(view: StorageView): string {
 
 	lines.push('');
 	if (view.attachments.length === 0) {
-		lines.push(`Attached projects: none. Attach one with \`skif storage attach ${view.name} --project <slug>\`.`);
+		lines.push(`Attached projects: none. Attach one with \`yoal storage attach ${view.name} --project <slug>\`.`);
 	} else {
 		lines.push('Attached projects:');
 		lines.push(
@@ -392,7 +392,7 @@ export function storageKeyEnv(key: StorageKeyReveal, endpoint: string, region: s
 
 /**
  * The root key as dotenv lines, named like an attachment's variables. `AWS` (the default) is what
- * the AWS CLI and SDKs read, so `set -a; eval "$(skif storage credentials media)"; set +a` works.
+ * the AWS CLI and SDKs read, so `set -a; eval "$(yoal storage credentials media)"; set +a` works.
  */
 export function credentialsEnv(credentials: StorageCredentials, prefix = 'AWS'): string {
 	const entries: Array<[string, string]> = [
@@ -492,7 +492,7 @@ export function parseObjectLock(value: string): BucketObjectLock {
 	return { mode: match[1]!.toLowerCase() as BucketObjectLock['mode'], retainDays: days };
 }
 
-/** The one-line summary `skif storage bucket config` prints without --json. */
+/** The one-line summary `yoal storage bucket config` prints without --json. */
 export function bucketConfigDetails(bucket: StorageBucketView): string {
 	const lines: string[] = [];
 	const field = (label: string, value: string) => lines.push(`${label.padEnd(16)}  ${value}`);

@@ -1,7 +1,7 @@
 -- Managed user pools (IAM.md I26–I29, §11.2). Additive only.
 --
 -- A user pool is an org resource, like a database: a hosted OIDC provider for one app's end
--- users. This migration stores the pool and its OIDC clients only. The native `skiff-identity`
+-- users. This migration stores the pool and its OIDC clients only. The native `yoal-identity`
 -- engine (I27) will own users, sessions, passwords and the hosted sign-in pages in its own
 -- process and SQLite file; the control plane deliberately keeps no user rows here.
 --
@@ -28,9 +28,9 @@ CREATE TABLE IF NOT EXISTS user_pools (
   -- A slug, unique per org (IAM.md §4).
   name TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
-  -- The engine seam (I27). `skiff-identity` ships first; the column stays unconstrained so a
+  -- The engine seam (I27). `yoal-identity` ships first; the column stays unconstrained so a
   -- later Keycloak or Authentik entry is a registry change, not a migration.
-  engine TEXT NOT NULL DEFAULT 'skiff-identity',
+  engine TEXT NOT NULL DEFAULT 'yoal-identity',
   issuer TEXT NOT NULL,
   signing_key_id TEXT,
   -- invite | open

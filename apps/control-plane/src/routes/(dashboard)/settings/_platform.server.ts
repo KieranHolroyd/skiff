@@ -4,7 +4,7 @@ import {
 	type PlatformConfigKey,
 	type PlatformConfigSection,
 	type Principal
-} from '@skiff/contracts';
+} from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
 import {
 	OWNER_ONLY_MESSAGE,
@@ -79,7 +79,7 @@ export function queueConfig(locals: App.Locals, body: Body, success: string) {
 	if (availability === 'local' && body.action === 'domains')
 		return fail(409, {
 			message:
-				'A dev server takes its domains from SKIFF_PLATFORM_ORIGIN and SKIFF_CONTENT_DOMAIN. Change them there and restart it.'
+				'A dev server takes its domains from YOAL_PLATFORM_ORIGIN and YOAL_CONTENT_DOMAIN. Change them there and restart it.'
 		});
 	if (availability === 'local') {
 		// Dev server: no root helper; save to .data/platform-settings.json (see local-settings.ts).
@@ -109,7 +109,7 @@ export function queueConfig(locals: App.Locals, body: Body, success: string) {
 	if (availability === 'not-enabled')
 		return fail(409, {
 			message:
-				'Dashboard settings are not enabled on this host yet. Run `sudo skiff-update-self check` on the server once.'
+				'Dashboard settings are not enabled on this host yet. Run `sudo yoal-update-self check` on the server once.'
 		});
 	if (configInFlight())
 		return fail(409, {
