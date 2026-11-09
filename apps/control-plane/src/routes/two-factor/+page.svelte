@@ -7,7 +7,7 @@
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import SmartphoneIcon from '@lucide/svelte/icons/smartphone';
 	import { authClient } from '#lib/auth-client.js';
-	import AuthShell from '#lib/components/skiff/AuthShell.svelte';
+	import AuthSplitShell from '#lib/components/skiff/AuthSplitShell.svelte';
 	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
@@ -45,6 +45,13 @@
 				backupCodes: result.backupCodes ?? []
 			};
 	});
+
+	const fieldInput =
+		'h-11 rounded-xl border-border/80 bg-muted/30 px-3.5 text-[0.95rem] shadow-none transition-colors focus-visible:border-brand/60 focus-visible:ring-brand/20';
+	const primaryButton =
+		'h-11 w-full rounded-xl bg-brand font-semibold text-[#141a2a] shadow-lg shadow-brand/20 transition-colors hover:bg-brand/90 focus-visible:ring-brand/40 disabled:opacity-60';
+	const secondaryButton =
+		'h-11 w-full rounded-xl border-border/80 bg-background/70 font-medium shadow-none hover:bg-muted/50';
 
 	const heading = $derived(
 		data.mode === 'challenge'
@@ -106,11 +113,11 @@
 	<title>Two-factor verification · Skiff</title>
 </svelte:head>
 
-<AuthShell eyebrow="Second factor" title={heading} description={intro}>
+<AuthSplitShell eyebrow="Second factor" title={heading} description={intro}>
 	<div class="space-y-5">
 		{#if data.mode === 'challenge'}
 			{#if data.hasPasskey}
-				<Button size="lg" class="h-10 w-full" disabled={pending} onclick={usePasskey}>
+				<Button size="lg" class={primaryButton} disabled={pending} onclick={usePasskey}>
 					<FingerprintIcon aria-hidden="true" />
 					Verify with a passkey
 				</Button>
@@ -140,15 +147,15 @@
 								autocomplete="one-time-code"
 								maxlength={7}
 								placeholder="123 456"
-								class="h-10 font-mono tracking-widest"
+								class="{fieldInput} h-12 text-center font-mono text-lg tracking-[0.3em]"
 								required
 							/>
 						</Field.Field>
 						<Button
 							type="submit"
-							variant={data.hasPasskey ? 'secondary' : 'default'}
+							variant={data.hasPasskey ? 'outline' : 'default'}
 							size="lg"
-							class="h-10 w-full"
+							class={data.hasPasskey ? secondaryButton : primaryButton}
 							disabled={pending}
 						>
 							<SmartphoneIcon aria-hidden="true" />
@@ -175,16 +182,16 @@
 								id="backup-code"
 								name="code"
 								autocomplete="off"
-								class="h-10 font-mono"
+								class="{fieldInput} font-mono"
 								required
 							/>
 							<Field.Description>Each backup code works once.</Field.Description>
 						</Field.Field>
 						<Button
 							type="submit"
-							variant="secondary"
+							variant="outline"
 							size="lg"
-							class="h-10 w-full"
+							class={secondaryButton}
 							disabled={pending}
 						>
 							<KeyRoundIcon aria-hidden="true" />
@@ -204,7 +211,7 @@
 			{#if data.mode === 'enrol'}
 				<Button
 					size="lg"
-					class="h-10 w-full"
+					class={primaryButton}
 					disabled={pending || passkeySupported === false}
 					onclick={addPasskey}
 				>
@@ -230,7 +237,7 @@
 						>An authenticator app is already set up for this account.</Alert.Description
 					>
 				</Alert.Root>
-				<Button variant="outline" class="w-full" href={data.redirect}>Continue</Button>
+				<Button variant="outline" class={secondaryButton} href={data.redirect}>Continue</Button>
 			{:else if !enrolment}
 				<form
 					method="POST"
@@ -246,7 +253,7 @@
 								name="password"
 								type="password"
 								autocomplete="current-password"
-								class="h-10"
+								class={fieldInput}
 								required
 							/>
 							<Field.Description>Confirms it’s you before adding the app.</Field.Description>
@@ -256,7 +263,7 @@
 						type="submit"
 						variant={data.mode === 'enrol' ? 'outline' : 'default'}
 						size="lg"
-						class="h-10 w-full"
+						class={data.mode === 'enrol' ? secondaryButton : primaryButton}
 						disabled={pending}
 					>
 						<SmartphoneIcon aria-hidden="true" />
@@ -307,11 +314,11 @@
 									autocomplete="one-time-code"
 									maxlength={7}
 									placeholder="123 456"
-									class="h-10 font-mono tracking-widest"
+									class="{fieldInput} h-12 text-center font-mono text-lg tracking-[0.3em]"
 									required
 								/>
 							</Field.Field>
-							<Button type="submit" size="lg" class="h-10 w-full" disabled={pending}
+							<Button type="submit" size="lg" class={primaryButton} disabled={pending}
 								>Verify and finish</Button
 							>
 						</form>
@@ -336,4 +343,4 @@
 			<button type="button" class="underline underline-offset-4" onclick={signOut}>Sign out</button>
 		{/if}
 	{/snippet}
-</AuthShell>
+</AuthSplitShell>

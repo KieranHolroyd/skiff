@@ -160,7 +160,7 @@
 	bind:open={inviteOpen}
 	icon={UserPlusIcon}
 	title="Invite a guest to this project"
-	description="They get an email with a link to join. On acceptance they can sign in to Skiff and see this project only."
+	description="They get an email with a link to join. On acceptance they can sign in and see this project only."
 	action="?/inviteGuest"
 	submitLabel="Send invitation"
 	size="sm"

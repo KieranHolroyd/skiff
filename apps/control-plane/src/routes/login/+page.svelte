@@ -6,9 +6,10 @@
 	import FingerprintIcon from '@lucide/svelte/icons/fingerprint';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import LogInIcon from '@lucide/svelte/icons/log-in';
+	import MailIcon from '@lucide/svelte/icons/mail';
 	import SmartphoneIcon from '@lucide/svelte/icons/smartphone';
 	import { authClient } from '#lib/auth-client.js';
-	import AuthShell from '#lib/components/skiff/AuthShell.svelte';
+	import AuthSplitShell from '#lib/components/skiff/AuthSplitShell.svelte';
 	import GitHubMark from '#lib/components/skiff/GitHubMark.svelte';
 	import ForgeMark from '#lib/components/skiff/ForgeMark.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
@@ -38,6 +39,13 @@
 	// svelte-ignore state_referenced_locally
 	const destination = data.redirect;
 
+	const fieldInput =
+		'h-11 rounded-xl border-border/80 bg-muted/30 px-3.5 text-[0.95rem] shadow-none transition-colors focus-visible:border-brand/60 focus-visible:ring-brand/20';
+	const primaryButton =
+		'h-11 w-full rounded-xl bg-brand font-semibold text-[#141a2a] shadow-lg shadow-brand/20 transition-colors hover:bg-brand/90 focus-visible:ring-brand/40 disabled:opacity-60';
+	const secondaryButton =
+		'h-11 w-full justify-start gap-3 rounded-xl border-border/80 bg-background/70 px-4 font-medium shadow-none hover:bg-muted/50';
+
 	/** After sign-in the OAuth provider may hand back a URL to resume an authorize flow. */
 	function continueTo(result: unknown) {
 		const next = (result as { url?: string; redirect?: boolean } | null)?.url;
@@ -66,10 +74,9 @@
 		}
 		pending = true;
 		try {
-			const response = await fetch(
-				`/api/v1/sso/resolve?email=${encodeURIComponent(address)}`,
-				{ headers: { accept: 'application/json' } }
-			);
+			const response = await fetch(`/api/v1/sso/resolve?email=${encodeURIComponent(address)}`, {
+				headers: { accept: 'application/json' }
+			});
 			const resolved = response.ok
 				? ((await response.json()) as { provider?: { id: string } | null })
 				: null;
@@ -187,12 +194,12 @@
 </script>
 
 <svelte:head>
-	<title>Sign in · Skiff</title>
+	<title>Sign into your cloud</title>
 </svelte:head>
 
-<AuthShell
-	eyebrow="Invite only"
-	title={step === 'code' ? 'Enter your code' : 'Sign in to Skiff'}
+<AuthSplitShell
+	eyebrow={step === 'code' ? 'Second factor' : 'Invite only'}
+	title={step === 'code' ? 'Enter your code' : 'Sign into your cloud'}
 	description={step === 'code'
 		? useBackup
 			? 'Use one of the backup codes you saved when you set up the authenticator app.'
@@ -202,7 +209,7 @@
 			: 'No account? Ask an organisation owner for an invitation.'}
 >
 	{#if step === 'code'}
-		<form class="space-y-3" onsubmit={verifyCode}>
+		<form class="space-y-4" onsubmit={verifyCode}>
 			<Field.Field>
 				<Field.Label for="code">{useBackup ? 'Backup code' : 'Authenticator code'}</Field.Label>
 				<Input
@@ -211,21 +218,21 @@
 					inputmode={useBackup ? 'text' : 'numeric'}
 					autocomplete="one-time-code"
 					placeholder={useBackup ? '' : '123 456'}
-					class="h-10 font-mono tracking-widest"
+					class="{fieldInput} h-12 text-center font-mono text-lg tracking-[0.3em]"
 					required
 				/>
 			</Field.Field>
-			<Button type="submit" size="lg" class="h-10 w-full" disabled={pending}>
+			<Button type="submit" size="lg" class={primaryButton} disabled={pending}>
 				{#if useBackup}<KeyRoundIcon aria-hidden="true" />{:else}<SmartphoneIcon
 						aria-hidden="true"
 					/>{/if}
-				Verify
+				Verify and continue
 			</Button>
 		</form>
-		<div class="mt-3 flex justify-between text-xs text-muted-foreground">
+		<div class="mt-4 flex items-center justify-between gap-3 text-xs text-muted-foreground">
 			<button
 				type="button"
-				class="underline-offset-4 hover:underline"
+				class="underline-offset-4 hover:text-foreground hover:underline"
 				onclick={() => {
 					useBackup = !useBackup;
 					code = '';
@@ -236,7 +243,7 @@
 			</button>
 			<button
 				type="button"
-				class="underline-offset-4 hover:underline"
+				class="shrink-0 underline-offset-4 hover:text-foreground hover:underline"
 				onclick={() => {
 					step = 'methods';
 					code = '';
@@ -245,7 +252,7 @@
 			>
 		</div>
 	{:else if step === 'email'}
-		<form class="space-y-3" onsubmit={startSignIn}>
+		<form class="space-y-4" onsubmit={startSignIn}>
 			<Field.Field>
 				<Field.Label for="email">Email address</Field.Label>
 				<Input
@@ -253,7 +260,7 @@
 					type="email"
 					autocomplete="username"
 					placeholder="you@example.com"
-					class="h-10"
+					class={fieldInput}
 					bind:value={email}
 					required
 				/>
@@ -261,68 +268,77 @@
 					We use the domain to find your organisation's sign-in method.
 				</Field.Description>
 			</Field.Field>
-			<Button type="submit" size="lg" class="h-10 w-full" disabled={pending}>
+			<Button type="submit" size="lg" class={primaryButton} disabled={pending}>
 				<LogInIcon aria-hidden="true" />
 				Continue
 			</Button>
 		</form>
 	{:else}
 		<div
-			class="mb-4 flex items-center justify-between gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm"
+			class="mb-5 flex items-center justify-between gap-3 rounded-xl border border-border/70 bg-muted/30 py-2 pr-2 pl-2.5"
 		>
-			<span class="truncate font-medium">{email}</span>
+			<div class="flex min-w-0 items-center gap-2.5">
+				<span
+					class="grid size-7 shrink-0 place-items-center rounded-lg bg-background text-xs font-semibold uppercase shadow-xs"
+				>
+					{email.slice(0, 1)}
+				</span>
+				<span class="truncate text-sm font-medium">{email}</span>
+			</div>
 			<button
 				type="button"
-				class="shrink-0 text-xs text-muted-foreground underline-offset-4 hover:underline"
+				class="shrink-0 rounded-lg px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
 				onclick={changeEmail}>Change</button
 			>
 		</div>
-		<form class="space-y-3" onsubmit={signInWithPassword}>
+		<form class="space-y-4" onsubmit={signInWithPassword}>
 			<input type="hidden" name="email" value={email} />
 			<Field.Field>
 				<div class="flex items-baseline justify-between gap-2">
 					<Field.Label for="password">Password</Field.Label>
 					<a
-						class="text-xs text-muted-foreground underline-offset-4 hover:underline"
-						href={resolve('/forgot-password')}
-						>Forgot password?</a
+						class="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+						href={resolve('/forgot-password')}>Forgot password?</a
 					>
 				</div>
 				<Input
 					id="password"
 					type="password"
 					autocomplete="current-password"
-					class="h-10"
+					class={fieldInput}
 					bind:value={password}
 					required
 				/>
 			</Field.Field>
-			<Button type="submit" size="lg" class="h-10 w-full" disabled={pending}>
+			<Button type="submit" size="lg" class={primaryButton} disabled={pending}>
 				<LogInIcon aria-hidden="true" />
 				Sign in
 			</Button>
 			<button
 				type="button"
-				class="text-xs text-muted-foreground underline-offset-4 hover:underline"
+				class="mx-auto flex items-center gap-1.5 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
 				disabled={pending}
 				onclick={sendMagicLink}
 			>
-				No password, or prefer a link? Email me a sign-in link
+				<MailIcon class="size-3.5" aria-hidden="true" />
+				Email me a sign-in link instead
 			</button>
 		</form>
 
 		{#if passkeys || data.github || data.gitlab}
 			<div class="my-6 flex items-center gap-3" aria-hidden="true">
 				<span class="h-px flex-1 bg-border"></span>
-				<span class="text-xs font-medium text-muted-foreground">or</span>
+				<span class="text-[11px] font-medium tracking-wide text-muted-foreground uppercase"
+					>or continue with</span
+				>
 				<span class="h-px flex-1 bg-border"></span>
 			</div>
-			<div class="space-y-3">
+			<div class="space-y-2.5">
 				{#if passkeys}
 					<Button
 						size="lg"
 						variant="outline"
-						class="h-10 w-full"
+						class={secondaryButton}
 						disabled={pending}
 						onclick={signInWithPasskey}
 					>
@@ -334,7 +350,7 @@
 					<Button
 						size="lg"
 						variant="outline"
-						class="h-10 w-full"
+						class={secondaryButton}
 						disabled={pending}
 						onclick={signInWithGitHub}
 					>
@@ -346,7 +362,7 @@
 					<Button
 						size="lg"
 						variant="outline"
-						class="h-10 w-full"
+						class={secondaryButton}
 						disabled={pending}
 						onclick={signInWithGitLab}
 					>
@@ -358,10 +374,10 @@
 		{/if}
 	{/if}
 
-	{#if error}<Alert.Root variant="destructive" class="mt-5"
+	{#if error}<Alert.Root variant="destructive" class="mt-6"
 			><CircleAlertIcon /><Alert.Description>{error}</Alert.Description></Alert.Root
 		>{/if}
-	{#if notice}<Alert.Root variant="success" class="mt-5"
+	{#if notice}<Alert.Root variant="success" class="mt-6"
 			><CircleCheckIcon /><Alert.Description class="break-words">{notice}</Alert.Description
 			></Alert.Root
 		>{/if}
@@ -369,4 +385,4 @@
 	{#snippet footer()}
 		Signed-in sessions can be reviewed and revoked at any time under Settings → Account.
 	{/snippet}
-</AuthShell>
+</AuthSplitShell>
