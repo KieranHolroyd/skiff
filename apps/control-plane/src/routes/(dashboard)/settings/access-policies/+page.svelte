@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { AccessPolicy, AccessPolicyRule } from '@skiff/contracts';
+	import type { AccessPolicy, AccessPolicyRule, AccessServiceToken } from '@skiff/contracts';
 	import { untrack } from 'svelte';
 	import { enhance, type SubmitFunction } from '$app/forms';
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
@@ -21,8 +21,11 @@
 	import SettingsHeader from '../_lib/SettingsHeader.svelte';
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import { notify, runAction } from '#lib/actions.js';
+	import { formatRelative } from '../../_lib/format.js';
 	import { rulesToText } from './_lib/rules.js';
 	import type { PageProps } from './$types';
+
+	type PolicyWithTokens = AccessPolicy & { serviceTokens: AccessServiceToken[] };
 
 	let { data }: PageProps = $props();
 
@@ -34,7 +37,8 @@
 	let rulesText = $state('');
 
 	let tokenOpen = $state(false);
-	let tokenPolicy = $state<AccessPolicy | null>(null);
+	let tokenPolicy = $state<PolicyWithTokens | null>(null);
+	let tokenName = $state('');
 	let tokenHeader = $state('X-Skiff-Access-Token');
 	let tokenSecret = $state('');
 	let tokenError = $state('');
@@ -45,6 +49,7 @@
 		if (!tokenOpen) {
 			tokenSecret = '';
 			tokenError = '';
+			tokenName = '';
 		}
 	});
 
@@ -79,8 +84,9 @@
 		rulesOpen = true;
 	}
 
-	function openServiceToken(policy: AccessPolicy) {
+	function openServiceToken(policy: PolicyWithTokens) {
 		tokenPolicy = policy;
+		tokenName = '';
 		tokenHeader = 'X-Skiff-Access-Token';
 		tokenSecret = '';
 		tokenError = '';
@@ -118,6 +124,18 @@
 			tone: 'danger',
 			action: '?/revokeServiceToken',
 			fields: { id: policy.id, idx: String(rule.idx) },
+		});
+	}
+
+	function revokeMachineToken(policy: PolicyWithTokens, token: AccessServiceToken) {
+		askConfirm({
+			title: `Revoke the “${token.name}” machine token?`,
+			description:
+				'The machine stops working within seconds, and existing Skiff Access cookies for this policy are signed out.',
+			confirmLabel: 'Revoke machine token',
+			tone: 'danger',
+			action: '?/revokeServiceToken',
+			fields: { id: policy.id, tokenId: token.id },
 		});
 	}
 
@@ -239,7 +257,7 @@
 						</div>
 						<div class="flex flex-wrap gap-1">
 							<Button variant="ghost" size="xs" onclick={() => openServiceToken(policy)}>
-								<KeyRoundIcon class="size-3.5" />Service token
+								<KeyRoundIcon class="size-3.5" />Machine token
 							</Button>
 							<Button variant="ghost" size="xs" onclick={() => toggle(policy)}>
 								{policy.enabled ? 'Disable' : 'Enable'}
@@ -292,6 +310,58 @@
 								{/each}
 							</ol>
 						{/if}
+
+						<div class="mt-4 border-t pt-3">
+							<div class="flex flex-wrap items-center justify-between gap-2">
+								<h3 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+									Machines
+								</h3>
+								<Button variant="ghost" size="xs" onclick={() => openServiceToken(policy)}>
+									<PlusIcon class="size-3.5" />New machine token
+								</Button>
+							</div>
+							{#if policy.serviceTokens.length === 0}
+								<p class="mt-1 text-xs text-muted-foreground">
+									No named machine tokens. Create one for a CI job or webhook; its secret is shown
+									once.
+								</p>
+							{:else}
+								<ul class="mt-1 divide-y text-xs">
+									{#each policy.serviceTokens as token (token.id)}
+										<li
+											class="flex flex-wrap items-center justify-between gap-2 py-2"
+											class:opacity-60={token.revokedAt !== null}
+										>
+											<div class="min-w-0">
+												<p class="font-medium">{token.name}</p>
+												<p class="font-mono text-muted-foreground">
+													{token.header.toLowerCase()}
+												</p>
+											</div>
+											<div class="flex flex-wrap items-center gap-2">
+												<span class="text-muted-foreground">
+													{token.lastUsedAt
+														? `Last used ${formatRelative(token.lastUsedAt)}`
+														: 'Never used'}
+												</span>
+												<Badge variant={token.revokedAt !== null ? 'outline' : 'info'}>
+													{token.revokedAt !== null ? 'revoked' : 'active'}
+												</Badge>
+												{#if token.revokedAt === null}
+													<Button
+														variant="ghost"
+														size="xs"
+														onclick={() => revokeMachineToken(policy, token)}
+													>
+														Revoke
+													</Button>
+												{/if}
+											</div>
+										</li>
+									{/each}
+								</ul>
+							{/if}
+						</div>
 					</Card.Content>
 				</Card.Root>
 			{/each}
@@ -364,10 +434,11 @@
 		<Dialog.Header>
 			<Dialog.Title class="flex items-center gap-2">
 				<KeyRoundIcon class="size-4 text-muted-foreground" />
-				Service token for {tokenPolicy?.name ?? 'policy'}
+				Machine token for {tokenPolicy?.name ?? 'policy'}
 			</Dialog.Title>
 			<Dialog.Description>
-				A machine sends this header pair. Only the SHA-256 of the value is stored in the policy.
+				A machine sends this header pair. Only the SHA-256 of the value is stored; last use is
+				reported by the edge.
 			</Dialog.Description>
 		</Dialog.Header>
 		{#if tokenSecret}
@@ -379,7 +450,7 @@
 				</div>
 				<p class="text-xs text-muted-foreground">
 					Send it as <code class="font-mono">{tokenHeader.toLowerCase()}: {tokenSecret}</code>. Revoke it
-					from the policy's rule list when it should stop working.
+					from this policy's machine list when it should stop working.
 				</p>
 				<Dialog.Footer>
 					<Dialog.Close>
@@ -392,6 +463,20 @@
 		{:else}
 			<form method="POST" action="?/serviceToken" use:enhance={createServiceToken} class="grid gap-4">
 				<input type="hidden" name="id" value={tokenPolicy?.id ?? ''} />
+				<Field.Field>
+					<Field.Label for="token-name">Name</Field.Label>
+					<Input
+						id="token-name"
+						name="name"
+						bind:value={tokenName}
+						required
+						maxlength={80}
+						placeholder="GitHub Actions deploy"
+					/>
+					<Field.Description>
+						A human name so this machine can be recognised in the list.
+					</Field.Description>
+				</Field.Field>
 				<Field.Field>
 					<Field.Label for="token-header">Header name</Field.Label>
 					<Input

@@ -12,8 +12,10 @@
  *   because that is the shape the plugin's OIDC client reads. It never leaves the server;
  * - a SAML provider copies its public certificate list, entry point, SP entity id and (when set)
  *   the IdP Single Logout Service, plus the sealed SP signing key that lets the plugin sign
- *   AuthnRequests and logout messages. SP key material lives in `settings` (`sso-sp.ts`), not in
- *   the plugin row: the row is rebuilt from it on every sync;
+ *   AuthnRequests and logout messages. When assertion encryption is enabled it also opens the
+ *   separate sealed SP encryption key and publishes its certificate in the SP metadata. SP key
+ *   material lives in `settings` (`sso-sp.ts`), not in the plugin row: the row is rebuilt from it
+ *   on every sync;
  *
  * `domainVerification` stays off in the plugin: Skiff proves domain ownership itself
  * (`sso_domains`, the daily `skiff-verify=` TXT check) and only routes a verified domain to an IdP.
@@ -40,6 +42,14 @@ const spKeys = new SsoSpKeyStore({
 	sqlite,
 	secrets: core.ctx.secrets,
 	now: () => core.ctx.now()
+});
+
+/** A separate key pair and certificate for encrypted assertions. Never the signing key. */
+const spEncryptionKeys = new SsoSpKeyStore({
+	sqlite,
+	secrets: core.ctx.secrets,
+	now: () => core.ctx.now(),
+	purpose: 'encryption'
 });
 
 interface ProviderRow {
@@ -69,6 +79,8 @@ interface ProviderRow {
 	sp_entity_id: string | null;
 	audience: string | null;
 	want_assertions_signed: number;
+	/** 1 when the IdP encrypts assertions to the provider's separate SP encryption certificate. */
+	want_assertions_encrypted: number;
 	identifier_format: string | null;
 	enabled: number;
 	created_by: string;
@@ -121,7 +133,9 @@ function certificateList(row: ProviderRow): string[] {
 	}
 	return normalizeSamlCertificates([
 		row.cert ?? '',
-		...(Array.isArray(extras) ? extras.filter((value): value is string => typeof value === 'string') : [])
+		...(Array.isArray(extras)
+			? extras.filter((value): value is string => typeof value === 'string')
+			: [])
 	]);
 }
 
@@ -138,6 +152,12 @@ function certificateList(row: ProviderRow): string[] {
  * generator has no certificate input. IdP certificates are public; a rollover keeps the old and new
  * IdP certificates trusted at the same time, and the previous SP certificate is published in the
  * metadata for its overlap window.
+ *
+ * Assertion encryption uses a *separate* key pair. The plugin decrypts with
+ * `spMetadata.encPrivateKey`; the matching certificate is published with `use="encryption"` only
+ * when the provider's toggle is on. This key is read with `require`, never generated here: when the
+ * toggle is on but the sealed key is missing or unreadable, the caller deletes the plugin row and
+ * sign-in fails closed rather than trusting a certificate the IdP has never imported.
  */
 function samlConfig(row: ProviderRow): string {
 	const spEntityId = row.sp_entity_id?.trim() || ssoSamlMetadataUrl(platformOrigin, row.id);
@@ -148,11 +168,21 @@ function samlConfig(row: ProviderRow): string {
 	const spCertificates = spKey.previousCertificate
 		? [spKey.certificatePem, spKey.previousCertificate]
 		: [spKey.certificatePem];
+	const wantAssertionsEncrypted = row.want_assertions_encrypted === 1;
+	// A stale key from an older toggle state must not linger once the row says encryption is off.
+	if (!wantAssertionsEncrypted) spEncryptionKeys.remove(row.id);
+	const spEncryptionKey = wantAssertionsEncrypted ? spEncryptionKeys.require(row.id) : null;
+	const encryptionCertificates = spEncryptionKey
+		? spEncryptionKey.previousCertificate
+			? [spEncryptionKey.certificatePem, spEncryptionKey.previousCertificate]
+			: [spEncryptionKey.certificatePem]
+		: undefined;
 	const spMetadata = ssoSamlSpMetadataXml({
 		entityId: spEntityId,
 		acsUrl: ssoSamlAcsUrl(platformOrigin, row.id),
 		sloUrl: ssoSamlSloUrl(platformOrigin, row.id),
 		certificates: spCertificates,
+		encryptionCertificates,
 		wantAssertionsSigned: row.want_assertions_signed === 1,
 		identifierFormat: row.identifier_format
 	});
@@ -183,8 +213,15 @@ function samlConfig(row: ProviderRow): string {
 				? [{ Binding: ssoSamlSloBindingUri(sloBinding), Location: sloUrl }]
 				: undefined
 		},
-		// Custom metadata: entity id, ACS URL, signing certificate and SLO endpoint in one document.
-		spMetadata: { entityID: spEntityId, metadata: spMetadata },
+		// Custom metadata: entity id, ACS URL, signing certificate, encryption certificate (only
+		// when enabled) and SLO endpoint in one document.
+		spMetadata: {
+			entityID: spEntityId,
+			metadata: spMetadata,
+			isAssertionEncrypted: wantAssertionsEncrypted,
+			// The plugin decrypts an EncryptedAssertion with this key. Absent when the toggle is off.
+			...(spEncryptionKey ? { encPrivateKey: spEncryptionKey.privateKeyPem } : {})
+		},
 		mapping: {
 			email: row.claim_email,
 			name: row.claim_name,

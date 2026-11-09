@@ -60,6 +60,11 @@
 {#if data.magicError}
 	<div class="pool-error">That sign-in link is invalid or has expired. Request a new one below.</div>
 {/if}
+{#if data.oauthError}
+	<div class="pool-error">
+		Social sign-in could not be completed. Try again, or use another method below.
+	</div>
+{/if}
 {#if error}
 	<div class="pool-error">{error}</div>
 {/if}
@@ -92,10 +97,26 @@
 		<a href={`/pool/${data.pool.id}/login`}>Use a different account</a>
 	</div>
 {:else}
+	{#if data.socialProviders.length > 0}
+		<div class="pool-social">
+			{#each data.socialProviders as provider (provider.provider)}
+				<form method="POST" action="?/oauth">
+					<input type="hidden" name="csrf" value={data.csrf} />
+					<input type="hidden" name="provider" value={provider.provider} />
+					<input type="hidden" name="return_to" value={data.returnTo ?? ''} />
+					<button class="pool-submit social-button" type="submit">
+						Continue with {provider.label}
+					</button>
+				</form>
+			{/each}
+		</div>
+	{/if}
 	{#if supported}
 		<button class="pool-submit passkey-button" type="button" onclick={usePasskey} disabled={busy}>
 			{busy ? 'Waiting for your passkey…' : 'Sign in with a passkey'}
 		</button>
+	{/if}
+	{#if data.socialProviders.length > 0 || supported}
 		<div class="pool-divider"><span>or use your email</span></div>
 	{/if}
 
@@ -162,6 +183,19 @@
 		background: #fff;
 		color: var(--pool-primary);
 		border: 1px solid var(--pool-primary);
+	}
+	.pool-social {
+		display: grid;
+		gap: 0.5rem;
+		margin-bottom: 0.85rem;
+	}
+	.social-button {
+		background: #fff;
+		color: #111827;
+		border: 1px solid #d1d5db;
+	}
+	.social-button:hover {
+		background: #f9fafb;
 	}
 	.mfa-intro {
 		font-size: 0.85rem;

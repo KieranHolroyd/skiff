@@ -19,6 +19,55 @@ export type UserPoolEngineId = (typeof userPoolEngines)[number];
 export const userPoolSignupModes = ['invite', 'open'] as const;
 export type UserPoolSignupMode = (typeof userPoolSignupModes)[number];
 
+/** Social identity providers a pool may offer on its hosted sign-in page (IAM.md §11.2). */
+export const userPoolOAuthProviders = ['google', 'github', 'microsoft', 'apple'] as const;
+export type UserPoolOAuthProvider = (typeof userPoolOAuthProviders)[number];
+
+export const userPoolOAuthProviderLabels: Record<UserPoolOAuthProvider, string> = {
+	google: 'Google',
+	github: 'GitHub',
+	microsoft: 'Microsoft',
+	apple: 'Apple'
+};
+
+/**
+ * Admin input for one provider. `clientSecret` is write-only: omit it to keep the sealed secret
+ * already stored, send it to rotate. `scopes` replace the stored list; an empty list means the
+ * provider's defaults. `enabled` controls whether the hosted page shows the button.
+ */
+export const userPoolOAuthProviderConfigSchema = z.object({
+	clientId: z.string().trim().min(1).max(512),
+	clientSecret: z.string().trim().min(1).max(8192).optional(),
+	scopes: z.array(z.string().trim().min(1).max(100)).max(20).optional(),
+	enabled: z.boolean().optional()
+});
+export type UserPoolOAuthProviderConfig = z.input<typeof userPoolOAuthProviderConfigSchema>;
+
+/**
+ * One provider as Settings lists it. The client id is public (it travels in the authorization
+ * URL); the secret never is, so `secretConfigured` is all a view says about it.
+ */
+export interface UserPoolOAuthProviderView {
+	poolId: string;
+	provider: UserPoolOAuthProvider;
+	label: string;
+	/** Empty until the provider is configured. */
+	clientId: string;
+	secretConfigured: boolean;
+	scopes: string[];
+	enabled: boolean;
+	configured: boolean;
+	/** The exact redirect URI to register with the provider, derived from the pool id. */
+	callbackUrl: string;
+	createdAt: number | null;
+}
+
+/** The public half of one enabled provider, for the hosted sign-in page. */
+export interface UserPoolSocialProviderView {
+	provider: UserPoolOAuthProvider;
+	label: string;
+}
+
 /** A pool name is a slug, unique within the org. The issuer uses the id, so names can repeat. */
 export const userPoolNameSchema = z
 	.string()

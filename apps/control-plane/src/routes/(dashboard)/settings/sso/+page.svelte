@@ -65,11 +65,18 @@
 			spEntityId: string | null;
 			audience: string | null;
 			wantAssertionsSigned: boolean;
+			wantAssertionsEncrypted: boolean;
 			identifierFormat: string | null;
 			certificates: string[];
 			sloUrl: string | null;
 			sloBinding: 'redirect' | 'post';
 			spSigning: {
+				certificate: string;
+				previousCertificate: string | null;
+				createdAt: number;
+				previousPublishedUntil: number | null;
+			} | null;
+			spEncryption: {
 				certificate: string;
 				previousCertificate: string | null;
 				createdAt: number;
@@ -162,6 +169,7 @@
 		audience: '',
 		identifierFormat: '',
 		wantAssertionsSigned: true,
+		wantAssertionsEncrypted: false,
 		sloUrl: '',
 		sloBinding: 'redirect' as 'redirect' | 'post'
 	});
@@ -244,6 +252,7 @@
 			audience: '',
 			identifierFormat: '',
 			wantAssertionsSigned: true,
+			wantAssertionsEncrypted: false,
 			sloUrl: '',
 			sloBinding: 'redirect'
 		};
@@ -293,6 +302,7 @@
 					audience: provider.saml?.audience ?? '',
 					identifierFormat: provider.saml?.identifierFormat ?? '',
 					wantAssertionsSigned: provider.saml?.wantAssertionsSigned ?? true,
+					wantAssertionsEncrypted: provider.saml?.wantAssertionsEncrypted ?? false,
 					sloUrl: provider.saml?.sloUrl ?? '',
 					sloBinding: provider.saml?.sloBinding ?? 'redirect'
 				};
@@ -349,6 +359,17 @@
 				'New AuthnRequests and logout messages are signed with the new key. The previous certificate stays in the SP metadata for 30 days, so update the IdP before then.',
 			confirmLabel: 'Rotate key',
 			action: '?/rotateSpKey',
+			fields: { providerId: provider.id }
+		});
+	}
+
+	function rotateSpEncryptionKey(provider: ProviderView) {
+		askConfirm({
+			title: `Rotate the SP encryption key for ${provider.name}?`,
+			description:
+				'New assertions are decrypted with the new key. The previous certificate stays in the SP metadata for 30 days, so import the new certificate at the IdP before then; until it is imported, assertions encrypted to the old certificate still decrypt.',
+			confirmLabel: 'Rotate encryption key',
+			action: '?/rotateSpEncryptionKey',
 			fields: { providerId: provider.id }
 		});
 	}
@@ -549,6 +570,10 @@
 										{/if}
 										· SP signing
 										<span class="font-mono">{provider.saml?.spSigning ? 'on' : 'off'}</span>
+										· Encrypt assertions
+										<span class="font-mono"
+											>{provider.saml?.wantAssertionsEncrypted ? 'on' : 'off'}</span
+										>
 									</p>
 									<div class="mt-0.5 flex items-center gap-1">
 										<p class="truncate text-xs text-muted-foreground">
@@ -611,6 +636,11 @@
 												<DropdownMenu.Item onSelect={() => rotateSpKey(provider)}>
 													<RefreshCwIcon />Rotate SP signing key
 												</DropdownMenu.Item>
+												{#if provider.saml?.wantAssertionsEncrypted}
+													<DropdownMenu.Item onSelect={() => rotateSpEncryptionKey(provider)}>
+														<RefreshCwIcon />Rotate SP encryption key
+													</DropdownMenu.Item>
+												{/if}
 											{/if}
 											<DropdownMenu.Separator />
 											<DropdownMenu.Item
@@ -633,8 +663,8 @@
 			<span>
 				An OIDC client secret is write-only: it is sealed with this organisation's key and never
 				returned. IdP SAML signing certificates are public, and the IdP holds their private keys.
-				Skiff's own SP private key is sealed with the platform key; only its certificate is
-				published. {#if !data.canManage}Org owners and admins manage SSO.{/if}
+				Skiff's own SP signing and encryption private keys are sealed with the platform key; only
+				their certificates are published. {#if !data.canManage}Org owners and admins manage SSO.{/if}
 			</span>
 		{/snippet}
 	</Panel>
@@ -1425,8 +1455,7 @@
 									rows={6}
 									class="mt-1 w-full resize-none rounded border bg-background px-1.5 py-0.5 font-mono text-xs"
 									value={editing.saml.spSigning.certificate}
-									aria-label="SP signing certificate"
-								></textarea>
+									aria-label="SP signing certificate"></textarea>
 								<div class="mt-1 flex flex-wrap items-center gap-1">
 									<CopyButton
 										value={editing.saml.spSigning.certificate}
@@ -1460,9 +1489,66 @@
 								{/if}
 							{:else}
 								<p class="mt-1 text-xs text-muted-foreground">
-									Skiff generates an RSA key and self-signed certificate when the provider is
-									saved. AuthnRequests and logout messages are signed from then on, and the
-									certificate appears here for the IdP.
+									Skiff generates an RSA key and self-signed certificate when the provider is saved.
+									AuthnRequests and logout messages are signed from then on, and the certificate
+									appears here for the IdP.
+								</p>
+							{/if}
+						</div>
+						<div>
+							<p class="text-xs font-medium">SP encryption certificate</p>
+							{#if editing?.saml?.wantAssertionsEncrypted && editing.saml.spEncryption}
+								<textarea
+									readonly
+									rows={6}
+									class="mt-1 w-full resize-none rounded border bg-background px-1.5 py-0.5 font-mono text-xs"
+									value={editing.saml.spEncryption.certificate}
+									aria-label="SP encryption certificate"></textarea>
+								<div class="mt-1 flex flex-wrap items-center gap-1">
+									<CopyButton
+										value={editing.saml.spEncryption.certificate}
+										iconOnly
+										label="Copy SP encryption certificate"
+									/>
+									<span class="text-xs text-muted-foreground">
+										Encrypt assertions: on · created {formatRelative(
+											editing.saml.spEncryption.createdAt
+										)}
+									</span>
+								</div>
+								<p class="mt-1 text-xs text-muted-foreground">
+									Import this certificate at the IdP and turn on assertion encryption there. It is a
+									separate key from the signing certificate and advertises RSA-OAEP.
+								</p>
+								{#if editing.saml.spEncryption.previousCertificate && editing.saml.spEncryption.previousPublishedUntil}
+									<p class="mt-1 text-xs text-muted-foreground">
+										The previous encryption certificate is also published until {formatDateTime(
+											editing.saml.spEncryption.previousPublishedUntil
+										)} so the IdP can be updated. Copy it:
+									</p>
+									<div class="mt-1 flex items-center gap-1">
+										<code
+											class="min-w-0 flex-1 truncate rounded bg-background px-1.5 py-0.5 font-mono text-xs"
+											title={editing.saml.spEncryption.previousCertificate}
+											>{editing.saml.spEncryption.previousCertificate.slice(0, 64)}…</code
+										>
+										<CopyButton
+											value={editing.saml.spEncryption.previousCertificate}
+											iconOnly
+											label="Copy previous SP encryption certificate"
+										/>
+									</div>
+								{/if}
+							{:else if saml.wantAssertionsEncrypted}
+								<p class="mt-1 text-xs text-muted-foreground">
+									Skiff generates a separate RSA key and certificate when you save. Import the
+									certificate at the IdP afterwards, then rotate it with “Rotate SP encryption key”
+									when it changes.
+								</p>
+							{:else}
+								<p class="mt-1 text-xs text-muted-foreground">
+									Turn on “Encrypt assertions” below to generate a separate encryption key. The
+									certificate is then published here and in the SP metadata for the IdP to import.
 								</p>
 							{/if}
 						</div>
@@ -1542,13 +1628,13 @@
 							class="font-mono text-xs"
 						/>
 						<Field.Description>
-							One PEM block per certificate. During an IdP rollover, add the new certificate next
-							to the old one, then remove the old one after the IdP stops using it. Public
-							material; the private key stays at the IdP.{#if editing?.certificateCount} This
-							provider trusts {editing.certificateCount} certificate{editing.certificateCount ===
-							1
-								? ''
-								: 's'}.{/if}
+							One PEM block per certificate. During an IdP rollover, add the new certificate next to
+							the old one, then remove the old one after the IdP stops using it. Public material;
+							the private key stays at the IdP.{#if editing?.certificateCount}
+								This provider trusts {editing.certificateCount} certificate{editing.certificateCount ===
+								1
+									? ''
+									: 's'}.{/if}
 						</Field.Description>
 					</Field.Field>
 					<Field.Field>
@@ -1669,6 +1755,22 @@
 							<Field.Description>
 								Reject an assertion the IdP did not sign. Keep this on unless the IdP cannot sign
 								responses.
+							</Field.Description>
+						</Field.Field>
+						<Field.Field orientation="horizontal">
+							<Checkbox
+								id="sso-saml-encrypted"
+								name="samlWantAssertionsEncrypted"
+								value="true"
+								bind:checked={saml.wantAssertionsEncrypted}
+							/>
+							<Field.Label for="sso-saml-encrypted" class="font-medium">
+								Encrypt assertions
+							</Field.Label>
+							<Field.Description>
+								Publish a separate SP encryption certificate and ask the IdP to encrypt assertions
+								to it. Import the certificate at the IdP before turning this on. Skiff fails closed
+								if the sealed key is missing.
 							</Field.Description>
 						</Field.Field>
 						<div class="grid gap-4 sm:grid-cols-2">

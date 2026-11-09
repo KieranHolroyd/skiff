@@ -39,24 +39,43 @@
  * last accepted step is a replay guard, and recovery codes are stored only as SHA-256 hashes and
  * shown once. Groups are the pool's own rows; their names travel as the `groups` claim.
  *
- * TODO(I27): social login, email OTP, breached-password checks, lockout, suspicious sign-in mail,
- * import/export and the identity process remain for a later slice.
+ * Social login is the OAuth authorization-code flow against Google, GitHub, Microsoft and Apple.
+ * `state` and the PKCE verifier are kept server-side and consumed once; the provider's verified
+ * email is the only value used to find or create a pool user, and an address the provider does not
+ * mark verified is never linked. Provider client secrets are sealed like every other pool secret.
+ *
+ * TODO(I27): email OTP, breached-password checks, lockout, suspicious sign-in mail, import/export
+ * and the identity process remain for a later slice.
  */
 import { createRequire } from 'node:module';
-import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import {
+	createHash,
+	createHmac,
+	createPublicKey,
+	randomBytes,
+	timingSafeEqual,
+	verify as verifySignature
+} from 'node:crypto';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type {
-	UserPoolGroupMemberView,
-	UserPoolGroupView,
-	UserPoolPasskeyAuthenticationChallenge,
-	UserPoolPasskeyAuthenticationOptionsJSON,
-	UserPoolPasskeyRegistrationChallenge,
-	UserPoolPasskeyRegistrationOptionsJSON,
-	UserPoolPasskeyView,
-	UserPoolRecoveryCodes,
-	UserPoolTotpEnrolment,
-	UserPoolTotpStatus
+import {
+	userPoolOAuthProviderConfigSchema,
+	userPoolOAuthProviderLabels,
+	userPoolOAuthProviders,
+	type UserPoolGroupMemberView,
+	type UserPoolGroupView,
+	type UserPoolOAuthProvider,
+	type UserPoolOAuthProviderConfig,
+	type UserPoolOAuthProviderView,
+	type UserPoolPasskeyAuthenticationChallenge,
+	type UserPoolPasskeyAuthenticationOptionsJSON,
+	type UserPoolPasskeyRegistrationChallenge,
+	type UserPoolPasskeyRegistrationOptionsJSON,
+	type UserPoolPasskeyView,
+	type UserPoolRecoveryCodes,
+	type UserPoolSocialProviderView,
+	type UserPoolTotpEnrolment,
+	type UserPoolTotpStatus
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
 import {
@@ -115,6 +134,13 @@ export const USER_POOL_TOTP_DIGITS = 6;
 export const USER_POOL_RECOVERY_CODE_COUNT = 10;
 /** How many pending MFA challenges one process will remember before it drops the oldest. */
 export const USER_POOL_MFA_CHALLENGE_CAP = 10_000;
+
+/** Social login: the provider round trip is short lived, and both legs are rate limited. */
+export const USER_POOL_OAUTH_STATE_TTL_SECONDS = 10 * 60;
+export const USER_POOL_OAUTH_START_LIMIT = 40;
+export const USER_POOL_OAUTH_CALLBACK_LIMIT = 30;
+/** How many outstanding provider round trips one process will remember before dropping the oldest. */
+export const USER_POOL_OAUTH_STATE_CAP = 10_000;
 
 /** The hosted page each kind of mail points at. */
 export type UserPoolMailPurpose = 'verify_email' | 'magic_link' | 'password_reset' | 'invite';
@@ -214,6 +240,33 @@ export interface UserPoolSignInResult extends UserPoolSessionContext {
 	mfaToken?: string;
 	/** When the MFA challenge expires, present only when `mfaRequired` is true. */
 	mfaExpiresAt?: number;
+}
+
+/** The result of starting a social sign-in: where to send the browser. */
+export interface UserPoolOAuthStartResult {
+	/** The provider's authorization URL, including `state` and the PKCE `code_challenge`. */
+	redirect: string;
+	/** When the server-side state/PKCE record expires. */
+	expiresAt: number;
+}
+
+/** A completed social sign-in: a normal pool session plus where to resume. */
+export interface UserPoolOAuthCallbackResult extends UserPoolSignInResult {
+	/** The validated `return_to` captured at `oauthStart`, or null. */
+	returnTo: string | null;
+}
+
+/**
+ * What a provider told us after the code exchange. `emailVerified` must be true before the address
+ * is used to find or create a pool user; an unverified address is never linked.
+ */
+export interface UserPoolOAuthIdentity {
+	/** The provider's stable subject id. */
+	accountId: string;
+	/** The verified address. */
+	email: string;
+	name: string;
+	emailVerified: boolean;
 }
 
 export interface UserPoolAuthorizeInput {
@@ -533,6 +586,96 @@ interface MfaChallengeRecord {
 	attempts: number;
 }
 
+interface OAuthProviderRow {
+	id: string;
+	pool_id: string;
+	provider: string;
+	client_id: string;
+	client_secret_sealed: string;
+	scopes_json: string;
+	enabled: number;
+	created_at: number;
+}
+
+interface OAuthAccountRow {
+	pool_id: string;
+	user_id: string;
+	provider: string;
+	provider_account_id: string;
+	email: string | null;
+	created_at: number;
+}
+
+interface OAuthStateRecord {
+	poolId: string;
+	provider: UserPoolOAuthProvider;
+	codeVerifier: string;
+	redirectUri: string;
+	returnTo: string | null;
+	expiresAt: number;
+}
+
+interface OAuthTokenSet {
+	accessToken: string | null;
+	idToken: string | null;
+}
+
+/** One provider's fixed endpoints and defaults. Client ids and secrets come from the pool's row. */
+interface OAuthProviderDefinition {
+	authorizationEndpoint: string;
+	tokenEndpoint: string;
+	userInfoEndpoint?: string;
+	/** Apple signs an id_token; `jwksUrl` verifies it before any claim is trusted. */
+	jwksUrl?: string;
+	issuer?: string;
+	defaultScopes: string[];
+	authorizationParams?: Record<string, string>;
+}
+
+const OAUTH_PROVIDER_DEFINITIONS: Record<UserPoolOAuthProvider, OAuthProviderDefinition> = {
+	google: {
+		authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
+		tokenEndpoint: 'https://oauth2.googleapis.com/token',
+		userInfoEndpoint: 'https://openidconnect.googleapis.com/v1/userinfo',
+		jwksUrl: 'https://www.googleapis.com/oauth2/v3/certs',
+		issuer: 'https://accounts.google.com',
+		defaultScopes: ['openid', 'email', 'profile']
+	},
+	github: {
+		authorizationEndpoint: 'https://github.com/login/oauth/authorize',
+		tokenEndpoint: 'https://github.com/login/oauth/access_token',
+		// GitHub has no OIDC userinfo; `/user` and `/user/emails` are read instead.
+		defaultScopes: ['read:user', 'user:email']
+	},
+	microsoft: {
+		authorizationEndpoint: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
+		tokenEndpoint: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
+		userInfoEndpoint: 'https://graph.microsoft.com/oidc/userinfo',
+		jwksUrl: 'https://login.microsoftonline.com/common/discovery/v2.0/keys',
+		issuer: 'https://login.microsoftonline.com/common/v2.0',
+		defaultScopes: ['openid', 'email', 'profile'],
+		authorizationParams: { response_mode: 'query' }
+	},
+	apple: {
+		authorizationEndpoint: 'https://appleid.apple.com/auth/authorize',
+		tokenEndpoint: 'https://appleid.apple.com/auth/token',
+		jwksUrl: 'https://appleid.apple.com/auth/keys',
+		issuer: 'https://appleid.apple.com',
+		defaultScopes: ['name', 'email'],
+		authorizationParams: { response_mode: 'query' }
+	}
+};
+
+function isOAuthProvider(value: string): value is UserPoolOAuthProvider {
+	return (userPoolOAuthProviders as readonly string[]).includes(value);
+}
+
+function requireOAuthProvider(value: string): UserPoolOAuthProvider {
+	if (!isOAuthProvider(value))
+		throw new ValidationError('That social sign-in provider is not supported.');
+	return value;
+}
+
 const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
 /** Base32 as RFC 4648 defines it, unpadded: the form authenticator apps import. */
@@ -703,6 +846,20 @@ function parseScopes(raw: string | null | undefined): string[] | null {
 	return [...new Set(scopes)];
 }
 
+/** Provider scopes from the stored JSON, falling back to the provider's defaults. */
+function parseOAuthScopes(json: string, defaults: string[]): string[] {
+	const value = parseJson<unknown>(json, []);
+	if (!Array.isArray(value)) return [...defaults];
+	const scopes = value.filter((entry): entry is string => typeof entry === 'string' && entry.trim() !== '');
+	return scopes.length > 0 ? [...new Set(scopes)] : [...defaults];
+}
+
+/** Normalise admin-supplied scopes; an empty list means the provider's defaults. */
+function normalizeOAuthScopes(scopes: string[] | undefined, defaults: string[]): string[] {
+	const values = (scopes ?? []).map((scope) => scope.trim()).filter(Boolean);
+	return values.length > 0 ? [...new Set(values)] : [...defaults];
+}
+
 /** The WebAuthn relying party a pool uses. Derived from the pool issuer unless a page origin is given. */
 export interface UserPoolPasskeyRelyingParty {
 	/** The `rpID`: a hostname, never a URL. */
@@ -780,6 +937,17 @@ let injectedWebAuthn: UserPoolWebAuthnProvider | null | undefined;
 /** Replace the WebAuthn implementation (tests), or pass null to restore the lazy default loader. */
 export function setUserPoolWebAuthnProvider(provider: UserPoolWebAuthnProvider | null): void {
 	injectedWebAuthn = provider;
+}
+
+let injectedOAuthFetch: typeof fetch | undefined;
+
+/** Replace the social-login HTTP transport (tests). Production uses the global fetch. */
+export function setUserPoolOAuthFetch(fetcher: typeof fetch | null): void {
+	injectedOAuthFetch = fetcher ?? undefined;
+}
+
+function oauthFetch(): typeof fetch {
+	return injectedOAuthFetch ?? fetch;
 }
 
 function webAuthnAnchors(): string[] {
@@ -880,6 +1048,8 @@ export class UserPoolEngineService {
 	private readonly passkeyChallenges = new Map<string, PasskeyChallengeRecord>();
 	/** Password-verified sign-ins waiting for a TOTP or recovery code. */
 	private readonly mfaChallenges = new Map<string, MfaChallengeRecord>();
+	/** Outstanding social-login state and PKCE verifiers, keyed by the SHA-256 of `state`. */
+	private readonly oauthStates = new Map<string, OAuthStateRecord>();
 
 	constructor(private readonly ctx: CoreContext) {}
 
@@ -1033,6 +1203,175 @@ export class UserPoolEngineService {
 				[now, now, user.id, pool.id]
 			);
 		return this.startSession(pool, this.requireUser(pool.id, user.id), 'magic_link');
+	}
+
+	// ---------------------------------------------------------------- social login (OAuth)
+
+	/** Every provider a pool may offer, configured or not, for Settings. Never includes a secret. */
+	listOAuthProviders(poolId: string): UserPoolOAuthProviderView[] {
+		this.requirePool(poolId);
+		const rows = this.oauthProviderRows(poolId);
+		return userPoolOAuthProviders.map((provider) =>
+			this.oauthProviderView(poolId, provider, rows.find((row) => row.provider === provider) ?? null)
+		);
+	}
+
+	/** The providers with an enabled button, for the hosted sign-in page. No client ids or secrets. */
+	enabledOAuthProviders(poolId: string): UserPoolSocialProviderView[] {
+		const pool = this.requireEnabledPool(poolId);
+		return this.oauthProviderRows(pool.id)
+			.filter((row) => row.enabled === 1 && isOAuthProvider(row.provider))
+			.map((row) => ({
+				provider: row.provider as UserPoolOAuthProvider,
+				label: userPoolOAuthProviderLabels[row.provider as UserPoolOAuthProvider]
+			}));
+	}
+
+	/**
+	 * Create or update one provider. The secret is sealed with the organisation key and never
+	 * returned; omitting it keeps the stored one, which lets Settings toggle `enabled` or edit
+	 * scopes without asking an admin to paste the secret again.
+	 */
+	setOAuthProvider(
+		poolId: string,
+		provider: string,
+		raw: UserPoolOAuthProviderConfig
+	): UserPoolOAuthProviderView {
+		const pool = this.requireEnabledPool(poolId);
+		const cleanProvider = requireOAuthProvider(provider);
+		const input = userPoolOAuthProviderConfigSchema.parse(raw);
+		const definition = OAUTH_PROVIDER_DEFINITIONS[cleanProvider];
+		const existing = this.oauthProviderRow(pool.id, cleanProvider);
+		if (!input.clientSecret && !existing)
+			throw new ValidationError('Enter the client secret from the provider.');
+		const scopes = normalizeOAuthScopes(input.scopes, definition.defaultScopes);
+		const enabled = input.enabled ?? (existing ? existing.enabled === 1 : false);
+		const now = this.ctx.now();
+		if (existing) {
+			this.ctx.sqlite.run(
+				`UPDATE user_pool_oauth_providers
+				    SET client_id = ?, client_secret_sealed = ?, scopes_json = ?, enabled = ?
+				  WHERE pool_id = ? AND provider = ?`,
+				[
+					input.clientId,
+					input.clientSecret
+						? this.ctx.secrets.seal(pool.org_id, input.clientSecret)
+						: existing.client_secret_sealed,
+					JSON.stringify(scopes),
+					enabled ? 1 : 0,
+					pool.id,
+					cleanProvider
+				]
+			);
+		} else {
+			this.ctx.sqlite.run(
+				`INSERT INTO user_pool_oauth_providers
+				   (id, pool_id, provider, client_id, client_secret_sealed, scopes_json, enabled, created_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				[
+					newId('upop_'),
+					pool.id,
+					cleanProvider,
+					input.clientId,
+					this.ctx.secrets.seal(pool.org_id, input.clientSecret!),
+					JSON.stringify(scopes),
+					enabled ? 1 : 0,
+					now
+				]
+			);
+		}
+		return this.oauthProviderView(pool.id, cleanProvider, this.oauthProviderRow(pool.id, cleanProvider)!);
+	}
+
+	/** Remove one provider's configuration. Existing account links are kept, so re-enabling works. */
+	deleteOAuthProvider(poolId: string, provider: string): boolean {
+		this.requirePool(poolId);
+		const cleanProvider = requireOAuthProvider(provider);
+		const deleted = this.ctx.sqlite.run(
+			'DELETE FROM user_pool_oauth_providers WHERE pool_id = ? AND provider = ?',
+			[poolId, cleanProvider]
+		);
+		return deleted.changes > 0;
+	}
+
+	/**
+	 * Begin a social sign-in. The browser receives only the provider URL; `state` and the PKCE
+	 * verifier stay server-side, bound to this pool and provider and consumed once by the callback.
+	 */
+	oauthStart(
+		poolId: string,
+		provider: string,
+		options: { returnTo?: string | null } = {}
+	): UserPoolOAuthStartResult {
+		const pool = this.requireEnabledPool(poolId);
+		const cleanProvider = requireOAuthProvider(provider);
+		const definition = OAUTH_PROVIDER_DEFINITIONS[cleanProvider];
+		const config = this.enabledOAuthProviderRow(pool.id, cleanProvider);
+		if (!config) throw new UnauthorizedError('Social sign-in is not available for this pool.');
+		if (!this.allowRequest(`oauth-start:${pool.id}:${cleanProvider}`, USER_POOL_OAUTH_START_LIMIT))
+			throw new RateLimitError('Too many social sign-in attempts. Wait a few minutes and try again.');
+
+		const state = randomToken(32);
+		const codeVerifier = randomToken(48);
+		const redirectUri = this.oauthCallbackUrl(pool.id, cleanProvider);
+		const now = this.ctx.now();
+		const expiresAt = now + USER_POOL_OAUTH_STATE_TTL_SECONDS * 1000;
+		this.issueOAuthState(state, {
+			poolId: pool.id,
+			provider: cleanProvider,
+			codeVerifier,
+			redirectUri,
+			returnTo: this.safeReturnTo(options.returnTo),
+			expiresAt
+		});
+
+		const url = new URL(definition.authorizationEndpoint);
+		url.searchParams.set('client_id', config.client_id);
+		url.searchParams.set('redirect_uri', redirectUri);
+		url.searchParams.set('response_type', 'code');
+		url.searchParams.set('scope', parseOAuthScopes(config.scopes_json, definition.defaultScopes).join(' '));
+		url.searchParams.set('state', state);
+		url.searchParams.set('code_challenge', sha256Base64Url(codeVerifier));
+		url.searchParams.set('code_challenge_method', 'S256');
+		for (const [key, value] of Object.entries(definition.authorizationParams ?? {}))
+			url.searchParams.set(key, value);
+		return { redirect: url.toString(), expiresAt };
+	}
+
+	/**
+	 * Complete a social sign-in. The provider is exchanged server-side, its verified email is used
+	 * to find a verified pool user or create one under the pool's signup mode, and a normal pool
+	 * session is returned. Every provider or state failure is the same generic refusal.
+	 */
+	async oauthCallback(
+		poolId: string,
+		provider: string,
+		code: string | null | undefined,
+		state: string | null | undefined
+	): Promise<UserPoolOAuthCallbackResult> {
+		const refusal = new UnauthorizedError('Social sign-in could not be completed. Try again.');
+		const pool = this.requireEnabledPool(poolId);
+		const cleanProvider = requireOAuthProvider(provider);
+		const definition = OAUTH_PROVIDER_DEFINITIONS[cleanProvider];
+		const config = this.enabledOAuthProviderRow(pool.id, cleanProvider);
+		if (!config) throw refusal;
+		if (!this.allowRequest(`oauth-callback:${pool.id}:${cleanProvider}`, USER_POOL_OAUTH_CALLBACK_LIMIT))
+			throw new RateLimitError('Too many social sign-in attempts. Wait a few minutes and try again.');
+
+		const record = this.consumeOAuthState(pool.id, cleanProvider, state);
+		if (!code || !record) throw refusal;
+
+		const tokens = await this.exchangeOAuthCode(pool, config, definition, code, record);
+		const identity = await this.fetchOAuthIdentity(cleanProvider, definition, config, tokens);
+		if (!identity.emailVerified || !identity.accountId) throw refusal;
+		let email: string;
+		try {
+			email = normalizeEmail(identity.email);
+		} catch {
+			throw refusal;
+		}
+		const user = await this.linkOrCreateOAuthUser(pool, cleanProvider, identity, email);
+		return { ...this.startSession(pool, user, 'oauth'), returnTo: record.returnTo };
 	}
 
 	// ---------------------------------------------------------------- passkeys (WebAuthn)
@@ -1511,7 +1850,14 @@ export class UserPoolEngineService {
 	private startSession(
 		pool: UserPoolRow,
 		user: UserRow,
-		method: 'password' | 'magic_link' | 'password_reset' | 'passkey' | 'totp' | 'recovery_code'
+		method:
+			| 'password'
+			| 'magic_link'
+			| 'password_reset'
+			| 'passkey'
+			| 'totp'
+			| 'recovery_code'
+			| 'oauth'
 	): UserPoolSignInResult {
 		const now = this.ctx.now();
 		const token = randomToken(32);
@@ -1832,6 +2178,10 @@ export class UserPoolEngineService {
 				user.id,
 				poolId
 			]);
+			this.ctx.sqlite.run('DELETE FROM user_pool_oauth_accounts WHERE user_id = ? AND pool_id = ?', [
+				user.id,
+				poolId
+			]);
 			this.ctx.sqlite.run('DELETE FROM user_pool_users WHERE id = ? AND pool_id = ?', [user.id, poolId]);
 			this.forgetMfaChallenges(poolId, user.id);
 		})();
@@ -1848,6 +2198,8 @@ export class UserPoolEngineService {
 		this.ctx.sqlite.run('DELETE FROM user_pool_totp WHERE pool_id = ?', [poolId]);
 		this.ctx.sqlite.run('DELETE FROM user_pool_group_members WHERE pool_id = ?', [poolId]);
 		this.ctx.sqlite.run('DELETE FROM user_pool_groups WHERE pool_id = ?', [poolId]);
+		this.ctx.sqlite.run('DELETE FROM user_pool_oauth_accounts WHERE pool_id = ?', [poolId]);
+		this.ctx.sqlite.run('DELETE FROM user_pool_oauth_providers WHERE pool_id = ?', [poolId]);
 		this.ctx.sqlite.run('DELETE FROM user_pool_users WHERE pool_id = ?', [poolId]);
 		this.forgetMfaChallenges(poolId);
 	}
@@ -2081,6 +2433,467 @@ export class UserPoolEngineService {
 		if (input.codeChallenge) url.searchParams.set('code_challenge', input.codeChallenge);
 		if (input.codeChallengeMethod) url.searchParams.set('code_challenge_method', input.codeChallengeMethod);
 		return url.toString();
+	}
+
+	private oauthProviderRows(poolId: string): OAuthProviderRow[] {
+		return this.ctx.sqlite
+			.query<OAuthProviderRow, [string]>(
+				'SELECT * FROM user_pool_oauth_providers WHERE pool_id = ? ORDER BY provider'
+			)
+			.all(poolId);
+	}
+
+	private oauthProviderRow(poolId: string, provider: UserPoolOAuthProvider): OAuthProviderRow | null {
+		return (
+			this.ctx.sqlite
+				.query<OAuthProviderRow, [string, string]>(
+					'SELECT * FROM user_pool_oauth_providers WHERE pool_id = ? AND provider = ?'
+				)
+				.get(poolId, provider) ?? null
+		);
+	}
+
+	private enabledOAuthProviderRow(
+		poolId: string,
+		provider: UserPoolOAuthProvider
+	): OAuthProviderRow | null {
+		const row = this.oauthProviderRow(poolId, provider);
+		return row && row.enabled === 1 ? row : null;
+	}
+
+	private oauthCallbackUrl(poolId: string, provider: UserPoolOAuthProvider): string {
+		const origin = this.ctx.config.platformOrigin.replace(/\/+$/, '');
+		return `${origin}/api/v1/user-pools/${encodeURIComponent(poolId)}/oauth/callback/${provider}`;
+	}
+
+	private oauthProviderView(
+		poolId: string,
+		provider: UserPoolOAuthProvider,
+		row: OAuthProviderRow | null
+	): UserPoolOAuthProviderView {
+		const definition = OAUTH_PROVIDER_DEFINITIONS[provider];
+		return {
+			poolId,
+			provider,
+			label: userPoolOAuthProviderLabels[provider],
+			clientId: row?.client_id ?? '',
+			secretConfigured: Boolean(row?.client_secret_sealed),
+			scopes: row
+				? parseOAuthScopes(row.scopes_json, definition.defaultScopes)
+				: definition.defaultScopes,
+			enabled: row?.enabled === 1,
+			configured: row !== null,
+			callbackUrl: this.oauthCallbackUrl(poolId, provider),
+			createdAt: row?.created_at ?? null
+		};
+	}
+
+	/**
+	 * Store a state/PKCE record. Expired entries are swept and the map is bounded, exactly like the
+	 * passkey challenge store: the identity process will own these rows later.
+	 */
+	private issueOAuthState(state: string, record: OAuthStateRecord): void {
+		const now = this.ctx.now();
+		for (const [key, entry] of this.oauthStates)
+			if (entry.expiresAt <= now) this.oauthStates.delete(key);
+		while (this.oauthStates.size >= USER_POOL_OAUTH_STATE_CAP) {
+			const oldest = this.oauthStates.keys().next().value;
+			if (oldest === undefined) break;
+			this.oauthStates.delete(oldest);
+		}
+		this.oauthStates.set(sha256Hex(state), record);
+	}
+
+	/** Consume a state exactly once. Unknown, expired, wrong-pool and wrong-provider all return null. */
+	private consumeOAuthState(
+		poolId: string,
+		provider: UserPoolOAuthProvider,
+		state: string | null | undefined
+	): OAuthStateRecord | null {
+		if (!state) return null;
+		const key = sha256Hex(state);
+		const record = this.oauthStates.get(key);
+		if (!record) return null;
+		if (
+			record.poolId !== poolId ||
+			record.provider !== provider ||
+			record.expiresAt <= this.ctx.now()
+		) {
+			// An expired record is swept; a wrong-pool attempt must not burn the owner's state.
+			if (record.expiresAt <= this.ctx.now()) this.oauthStates.delete(key);
+			return null;
+		}
+		this.oauthStates.delete(key);
+		return record;
+	}
+
+	/** A `return_to` may resume on this platform only; an absolute URL to another origin is dropped. */
+	private safeReturnTo(raw: string | null | undefined): string | null {
+		if (!raw) return null;
+		try {
+			const base = new URL(this.ctx.config.platformOrigin);
+			const url = new URL(raw, base);
+			if (url.origin !== base.origin) return null;
+			return `${url.pathname.replace(/^\/{2,}/, '/')}${url.search}${url.hash}`;
+		} catch {
+			return null;
+		}
+	}
+
+	private oauthRefusal(): UnauthorizedError {
+		return new UnauthorizedError('Social sign-in could not be completed. Try again.');
+	}
+
+	/** Exchange the code at the provider. The response body is never logged or surfaced. */
+	private async exchangeOAuthCode(
+		pool: UserPoolRow,
+		config: OAuthProviderRow,
+		definition: OAuthProviderDefinition,
+		code: string,
+		record: OAuthStateRecord
+	): Promise<OAuthTokenSet> {
+		const refusal = this.oauthRefusal();
+		let response: Response;
+		try {
+			response = await oauthFetch()(definition.tokenEndpoint, {
+				method: 'POST',
+				headers: {
+					'content-type': 'application/x-www-form-urlencoded',
+					accept: 'application/json',
+					'user-agent': 'skiff-identity'
+				},
+				body: new URLSearchParams({
+					grant_type: 'authorization_code',
+					code,
+					redirect_uri: record.redirectUri,
+					client_id: config.client_id,
+					client_secret: this.ctx.secrets.open(pool.org_id, config.client_secret_sealed),
+					code_verifier: record.codeVerifier
+				}).toString()
+			});
+		} catch {
+			throw refusal;
+		}
+		if (!response.ok) throw refusal;
+		let data: Record<string, unknown> | null = null;
+		const body = await response.text();
+		try {
+			const parsed = JSON.parse(body) as unknown;
+			if (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
+				data = parsed as Record<string, unknown>;
+		} catch {
+			// GitHub answers form-encoded unless Accept: application/json; support both.
+			try {
+				data = Object.fromEntries(new URLSearchParams(body));
+			} catch {
+				data = null;
+			}
+		}
+		if (!data || typeof data.error === 'string') throw refusal;
+		const accessToken =
+			typeof data.access_token === 'string' && data.access_token ? data.access_token : null;
+		const idToken = typeof data.id_token === 'string' && data.id_token ? data.id_token : null;
+		if (!accessToken && !idToken) throw refusal;
+		return { accessToken, idToken };
+	}
+
+	private async fetchOAuthIdentity(
+		provider: UserPoolOAuthProvider,
+		definition: OAuthProviderDefinition,
+		config: OAuthProviderRow,
+		tokens: OAuthTokenSet
+	): Promise<UserPoolOAuthIdentity> {
+		const refusal = this.oauthRefusal();
+		if (provider === 'github') return this.fetchGitHubIdentity(tokens.accessToken);
+		if (provider === 'apple') {
+			if (!tokens.idToken) throw refusal;
+			const claims = await this.verifyOAuthIdToken(tokens.idToken, definition, config.client_id);
+			const email = typeof claims.email === 'string' ? claims.email : '';
+			return {
+				accountId: String(claims.sub ?? ''),
+				email,
+				name: typeof claims.name === 'string' ? claims.name : '',
+				emailVerified: claims.email_verified === true || claims.email_verified === 'true'
+			};
+		}
+		if (!tokens.accessToken || !definition.userInfoEndpoint) throw refusal;
+		let response: Response;
+		try {
+			response = await oauthFetch()(definition.userInfoEndpoint, {
+				method: 'GET',
+				headers: {
+					authorization: `Bearer ${tokens.accessToken}`,
+					accept: 'application/json',
+					'user-agent': 'skiff-identity'
+				}
+			});
+		} catch {
+			throw refusal;
+		}
+		if (!response.ok) throw refusal;
+		let data: Record<string, unknown>;
+		try {
+			const parsed = (await response.json()) as unknown;
+			if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw refusal;
+			data = parsed as Record<string, unknown>;
+		} catch {
+			throw refusal;
+		}
+		const email =
+			typeof data.email === 'string'
+				? data.email
+				: typeof data.preferred_username === 'string'
+					? data.preferred_username
+					: '';
+		// Entra's OIDC userinfo omits `email_verified` for tenant-managed addresses; a present
+		// address from an authenticated Entra token is the tenant's verified address. Google must
+		// say `email_verified: true` explicitly.
+		const emailVerified =
+			data.email_verified === true ||
+			(provider === 'microsoft' && data.email_verified !== false && email.includes('@'));
+		return {
+			accountId: String(data.sub ?? ''),
+			email,
+			name: typeof data.name === 'string' ? data.name : '',
+			emailVerified
+		};
+	}
+
+	/** GitHub's email list is the only place a verified address is asserted; `/user` email is not. */
+	private async fetchGitHubIdentity(accessToken: string | null): Promise<UserPoolOAuthIdentity> {
+		const refusal = this.oauthRefusal();
+		if (!accessToken) throw refusal;
+		const headers = {
+			authorization: `Bearer ${accessToken}`,
+			accept: 'application/json',
+			'user-agent': 'skiff-identity'
+		};
+		let userResponse: Response;
+		let emailsResponse: Response;
+		try {
+			[userResponse, emailsResponse] = await Promise.all([
+				oauthFetch()('https://api.github.com/user', { headers }),
+				oauthFetch()('https://api.github.com/user/emails', { headers })
+			]);
+		} catch {
+			throw refusal;
+		}
+		if (!userResponse.ok || !emailsResponse.ok) throw refusal;
+		let user: Record<string, unknown>;
+		let emails: unknown;
+		try {
+			const parsedUser = (await userResponse.json()) as unknown;
+			emails = (await emailsResponse.json()) as unknown;
+			if (!parsedUser || typeof parsedUser !== 'object' || Array.isArray(parsedUser)) throw refusal;
+			user = parsedUser as Record<string, unknown>;
+		} catch {
+			throw refusal;
+		}
+		if (!Array.isArray(emails)) throw refusal;
+		const verified = emails.filter(
+			(entry): entry is { email: string; primary?: boolean; verified?: boolean } =>
+				Boolean(entry) &&
+				typeof entry === 'object' &&
+				(entry as { verified?: unknown }).verified === true &&
+				typeof (entry as { email?: unknown }).email === 'string'
+		);
+		const primary = verified.find((entry) => entry.primary === true) ?? verified[0];
+		return {
+			accountId: String(user.id ?? ''),
+			email: primary?.email ?? '',
+			name:
+				typeof user.name === 'string' && user.name
+					? user.name
+					: typeof user.login === 'string'
+						? user.login
+						: '',
+			emailVerified: Boolean(primary)
+		};
+	}
+
+	/** Apple returns identity only in a signed `id_token`; verify it against Apple's JWKS first. */
+	private async verifyOAuthIdToken(
+		token: string,
+		definition: OAuthProviderDefinition,
+		clientId: string
+	): Promise<Record<string, unknown>> {
+		const refusal = this.oauthRefusal();
+		if (!definition.jwksUrl) throw refusal;
+		const [headerPart, payloadPart, signaturePart] = token.split('.');
+		if (!headerPart || !payloadPart || !signaturePart) throw refusal;
+		let header: Record<string, unknown>;
+		let payload: Record<string, unknown>;
+		try {
+			header = JSON.parse(Buffer.from(headerPart, 'base64url').toString('utf8')) as Record<
+				string,
+				unknown
+			>;
+			payload = JSON.parse(Buffer.from(payloadPart, 'base64url').toString('utf8')) as Record<
+				string,
+				unknown
+			>;
+		} catch {
+			throw refusal;
+		}
+		if (header.alg !== 'RS256') throw refusal;
+		let keys: unknown;
+		try {
+			const response = await oauthFetch()(definition.jwksUrl, {
+				headers: { accept: 'application/json', 'user-agent': 'skiff-identity' }
+			});
+			if (!response.ok) throw refusal;
+			keys = (await response.json()) as unknown;
+		} catch {
+			throw refusal;
+		}
+		const list =
+			keys && typeof keys === 'object' && Array.isArray((keys as { keys?: unknown }).keys)
+				? ((keys as { keys: unknown[] }).keys)
+				: [];
+		const jwk = list.find((entry): entry is Record<string, unknown> => {
+			if (!entry || typeof entry !== 'object') return false;
+			const candidate = entry as Record<string, unknown>;
+			return typeof header.kid !== 'string' || candidate.kid === header.kid;
+		});
+		if (!jwk) throw refusal;
+		let valid = false;
+		try {
+			const key = createPublicKey({
+				key: jwk,
+				format: 'jwk'
+			} as unknown as Parameters<typeof createPublicKey>[0]);
+			valid = verifySignature(
+				'RSA-SHA256',
+				Buffer.from(`${headerPart}.${payloadPart}`),
+				key,
+				Buffer.from(signaturePart, 'base64url')
+			);
+		} catch {
+			throw refusal;
+		}
+		if (!valid) throw refusal;
+		const now = Math.floor(this.ctx.now() / 1000);
+		if (typeof payload.exp === 'number' && payload.exp <= now) throw refusal;
+		if (definition.issuer && payload.iss !== definition.issuer) throw refusal;
+		const audience = payload.aud;
+		if (
+			clientId &&
+			audience !== clientId &&
+			!(Array.isArray(audience) && audience.includes(clientId))
+		)
+			throw refusal;
+		return payload;
+	}
+
+	/**
+	 * Link a verified provider identity to a pool user, or create one. An existing pool user must
+	 * already have a verified address: linking into an unverified row would let whoever registered
+	 * that address first take over the social identity. An invite pool still needs an invitation.
+	 */
+	private async linkOrCreateOAuthUser(
+		pool: UserPoolRow,
+		provider: UserPoolOAuthProvider,
+		identity: UserPoolOAuthIdentity,
+		email: string
+	): Promise<UserRow> {
+		const refusal = this.oauthRefusal();
+		const now = this.ctx.now();
+		const linked = this.ctx.sqlite
+			.query<OAuthAccountRow, [string, string, string]>(
+				`SELECT * FROM user_pool_oauth_accounts
+				  WHERE pool_id = ? AND provider = ? AND provider_account_id = ?`
+			)
+			.get(pool.id, provider, identity.accountId);
+		if (linked) {
+			const user = this.ctx.sqlite
+				.query<UserRow, [string, string]>(
+					'SELECT * FROM user_pool_users WHERE id = ? AND pool_id = ?'
+				)
+				.get(linked.user_id, pool.id);
+			if (!user || user.disabled_at !== null) throw refusal;
+			return user;
+		}
+
+		const existing = this.findUser(pool.id, email);
+		if (existing) {
+			if (existing.disabled_at !== null || existing.email_verified_at === null) throw refusal;
+			this.insertOAuthAccount(pool.id, existing.id, provider, identity.accountId, email, now);
+			return existing;
+		}
+
+		let invite: InviteRow | null = null;
+		if (pool.signup_mode === 'invite') {
+			invite = this.findInvite(pool.id, email, undefined);
+			if (!invite)
+				throw new ForbiddenError(
+					'userPool:signup',
+					'This pool is invite-only. Ask an administrator for an invitation.'
+				);
+		}
+
+		// A social-only user gets an argon2 hash of random bytes: no password can ever match it,
+		// and `Bun.password.verify` still sees a well-formed hash rather than failing open.
+		const passwordHash = await Bun.password.hash(randomToken(32), { algorithm: 'argon2id' });
+		const id = newId('upu_');
+		const displayName = (identity.name ?? '').trim().slice(0, 120);
+		try {
+			this.ctx.sqlite.transaction(() => {
+				this.ctx.sqlite.run(
+					`INSERT INTO user_pool_users
+					   (id, pool_id, email, email_verified_at, password_hash, name, metadata_json, created_at, updated_at, disabled_at)
+					 VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?, NULL)`,
+					[id, pool.id, email, now, passwordHash, displayName, now, now]
+				);
+				if (invite)
+					this.ctx.sqlite.run(
+						'UPDATE user_pool_invites SET used_at = ? WHERE id = ? AND used_at IS NULL',
+						[now, invite.id]
+					);
+				this.insertOAuthAccount(pool.id, id, provider, identity.accountId, email, now);
+			})();
+		} catch (cause) {
+			if (cause instanceof Error && /UNIQUE/i.test(cause.message)) {
+				const raced = this.findUser(pool.id, email);
+				if (!raced || raced.email_verified_at === null || raced.disabled_at !== null) throw refusal;
+				return raced;
+			}
+			throw cause;
+		}
+
+		const user = this.requireUser(pool.id, id);
+		// D122: the same metadata-only `user.created` event password sign-up emits.
+		this.ctx.events.emitUserPool(pool.org_id, pool.id, 'user.created', {
+			poolId: pool.id,
+			poolName: pool.name,
+			user: {
+				id: user.id,
+				email: user.email,
+				name: user.name,
+				emailVerified: true
+			}
+		});
+		return user;
+	}
+
+	private insertOAuthAccount(
+		poolId: string,
+		userId: string,
+		provider: UserPoolOAuthProvider,
+		accountId: string,
+		email: string,
+		now: number
+	): void {
+		try {
+			this.ctx.sqlite.run(
+				`INSERT INTO user_pool_oauth_accounts
+				   (pool_id, user_id, provider, provider_account_id, email, created_at)
+				 VALUES (?, ?, ?, ?, ?, ?)`,
+				[poolId, userId, provider, accountId, email, now]
+			);
+		} catch (cause) {
+			if (cause instanceof Error && /UNIQUE/i.test(cause.message)) throw this.oauthRefusal();
+			throw cause;
+		}
 	}
 
 	private findInvite(poolId: string, email: string, token: string | undefined): InviteRow | null {

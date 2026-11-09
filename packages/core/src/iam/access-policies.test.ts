@@ -43,6 +43,11 @@ function ensureTables(): void {
 			policy_id TEXT NOT NULL, idx INTEGER NOT NULL, action TEXT NOT NULL CHECK (action IN ('allow','deny')),
 			matcher_json TEXT NOT NULL, PRIMARY KEY (policy_id, idx)
 		);
+		CREATE TABLE IF NOT EXISTS access_service_tokens (
+			id TEXT PRIMARY KEY, org_id TEXT NOT NULL, policy_id TEXT NOT NULL, name TEXT NOT NULL,
+			header TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_by TEXT NOT NULL,
+			created_at INTEGER NOT NULL, last_used_at INTEGER, revoked_at INTEGER
+		);
 	`);
 	try {
 		opened.sqlite.exec('ALTER TABLE access_policies ADD COLUMN version INTEGER NOT NULL DEFAULT 0');
@@ -75,6 +80,7 @@ const viewer = buildPrincipal({ kind: 'user', userId: 'user_2', orgId: 'org_1', 
 
 beforeEach(() => {
 	opened.sqlite.exec(`
+		DELETE FROM access_service_tokens;
 		DELETE FROM access_policy_rules;
 		DELETE FROM access_policies;
 		DELETE FROM projects;

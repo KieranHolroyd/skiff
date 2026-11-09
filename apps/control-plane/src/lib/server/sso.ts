@@ -94,6 +94,8 @@ interface ProviderRow {
 	sp_entity_id: string | null;
 	audience: string | null;
 	want_assertions_signed: number;
+	/** 1 when assertions are encrypted to the provider's separate SP encryption certificate. */
+	want_assertions_encrypted: number;
 	identifier_format: string | null;
 	enabled: number;
 	created_by: string;
@@ -159,6 +161,8 @@ export interface SsoProviderView {
 		spEntityId: string | null;
 		audience: string | null;
 		wantAssertionsSigned: boolean;
+		/** Ask the IdP to encrypt assertions to a separate SP certificate. */
+		wantAssertionsEncrypted: boolean;
 		identifierFormat: string | null;
 		/** IdP signing certificates, public. The first is the primary; the rest are rollover. */
 		certificates: string[];
@@ -171,6 +175,11 @@ export interface SsoProviderView {
 		 * rollover window.
 		 */
 		spSigning: SsoSpKeyView | null;
+		/**
+		 * SP assertion encryption (IAM.md §8.3). A separate key pair from signing. Present only when
+		 * the toggle is on; the IdP imports this certificate to encrypt assertions.
+		 */
+		spEncryption: SsoSpKeyView | null;
 	} | null;
 	createdAt: number;
 	updatedAt: number;
@@ -247,6 +256,14 @@ const spKeys = new SsoSpKeyStore({
 	sqlite: core.ctx.sqlite,
 	secrets: core.ctx.secrets,
 	now: () => core.ctx.now()
+});
+
+/** A separate SP key pair for encrypted assertions; never the signing key. */
+const spEncryptionKeys = new SsoSpKeyStore({
+	sqlite: core.ctx.sqlite,
+	secrets: core.ctx.secrets,
+	now: () => core.ctx.now(),
+	purpose: 'encryption'
 });
 
 /** The redirect URI to register at the IdP for a provider id (Better Auth's OIDC callback). */
@@ -443,9 +460,8 @@ function parseSamlMetadata(xml: string): SamlMetadata {
 	}
 
 	const certificates =
-		xml.match(
-			/<(?:[\w-]+:)?X509Certificate\b[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?X509Certificate>/gi
-		) ?? [];
+		xml.match(/<(?:[\w-]+:)?X509Certificate\b[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?X509Certificate>/gi) ??
+		[];
 	const certs = normalizeSamlCertificates(
 		certificates.map(
 			(block) =>
@@ -459,10 +475,7 @@ function parseSamlMetadata(xml: string): SamlMetadata {
 }
 
 /** The IdP signing certificates on a stored row: `cert` first, then the rollover extras. */
-function providerCertificates(row: {
-	cert: string | null;
-	certs_json?: string | null;
-}): string[] {
+function providerCertificates(row: { cert: string | null; certs_json?: string | null }): string[] {
 	let extras: unknown = [];
 	try {
 		extras = row.certs_json ? JSON.parse(row.certs_json) : [];
@@ -471,7 +484,9 @@ function providerCertificates(row: {
 	}
 	return normalizeSamlCertificates([
 		row.cert ?? '',
-		...(Array.isArray(extras) ? extras.filter((value): value is string => typeof value === 'string') : [])
+		...(Array.isArray(extras)
+			? extras.filter((value): value is string => typeof value === 'string')
+			: [])
 	]);
 }
 
@@ -518,6 +533,7 @@ async function resolveSaml(
 	spEntityId: string;
 	audience: string | null;
 	wantAssertionsSigned: boolean;
+	wantAssertionsEncrypted: boolean;
 	identifierFormat: string | null;
 	sloUrl: string | null;
 	sloBinding: SsoSamlSloBinding;
@@ -525,7 +541,9 @@ async function resolveSaml(
 }> {
 	const saml = input.saml ?? {};
 	const metadataUrlInput =
-		saml.metadataUrl === undefined ? undefined : cleanOptionalText(saml.metadataUrl, 'The metadata URL');
+		saml.metadataUrl === undefined
+			? undefined
+			: cleanOptionalText(saml.metadataUrl, 'The metadata URL');
 	const metadataUrl =
 		metadataUrlInput === undefined ? (existing?.discovery_url ?? null) : metadataUrlInput;
 	const fetched = metadataUrlInput ? await fetchSamlMetadata(metadataUrlInput) : null;
@@ -536,7 +554,8 @@ async function resolveSaml(
 		cleanEntityId(input.issuer) ??
 		existing?.issuer ??
 		null;
-	if (!entityId) throw new ValidationError('The IdP entity id is required, or import a metadata URL.');
+	if (!entityId)
+		throw new ValidationError('The IdP entity id is required, or import a metadata URL.');
 
 	const entryPointRaw =
 		fetched?.entryPoint ??
@@ -545,7 +564,9 @@ async function resolveSaml(
 		null;
 	const entryPoint = entryPointRaw ? optionalUrl(entryPointRaw, 'The entry point') : null;
 	if (!entryPoint)
-		throw new ValidationError('The entry point (IdP SSO URL) is required, or import a metadata URL.');
+		throw new ValidationError(
+			'The entry point (IdP SSO URL) is required, or import a metadata URL.'
+		);
 
 	// A form that submits the full certificate textarea wins; otherwise `cert` and the additional
 	// certificates are combined. A blank field on update keeps what is stored, so a provider can be
@@ -569,9 +590,7 @@ async function resolveSaml(
 				? providerCertificates(existing)
 				: [];
 	if (certs.length === 0)
-		throw new ValidationError(
-			'The IdP signing certificate is required, or import a metadata URL.'
-		);
+		throw new ValidationError('The IdP signing certificate is required, or import a metadata URL.');
 
 	// SLO is optional. A blank value on update disables it; omitting the field keeps the stored one.
 	const sloUrl =
@@ -581,9 +600,7 @@ async function resolveSaml(
 				? null
 				: normalizeSsoSloUrl(saml.sloUrl);
 	if (saml.sloUrl !== undefined && saml.sloUrl !== null && saml.sloUrl.trim() !== '' && !sloUrl)
-		throw new ValidationError(
-			'The SLO URL must use https (http is allowed only for localhost).'
-		);
+		throw new ValidationError('The SLO URL must use https (http is allowed only for localhost).');
 	const sloBindingInput = saml.sloBinding ?? existing?.slo_binding ?? 'redirect';
 	if (!isSsoSamlSloBinding(sloBindingInput))
 		throw new ValidationError('Choose the redirect or POST binding for single logout.');
@@ -608,6 +625,12 @@ async function resolveSaml(
 				? existing.want_assertions_signed === 1
 				: true
 			: saml.wantAssertionsSigned;
+	const wantAssertionsEncrypted =
+		saml.wantAssertionsEncrypted === undefined
+			? existing
+				? existing.want_assertions_encrypted === 1
+				: false
+			: saml.wantAssertionsEncrypted;
 
 	return {
 		entityId,
@@ -616,6 +639,7 @@ async function resolveSaml(
 		spEntityId,
 		audience,
 		wantAssertionsSigned,
+		wantAssertionsEncrypted,
 		identifierFormat,
 		sloUrl,
 		sloBinding,
@@ -711,12 +735,15 @@ function view(row: ProviderRow): SsoProviderView {
 						spEntityId: row.sp_entity_id,
 						audience: row.audience,
 						wantAssertionsSigned: row.want_assertions_signed === 1,
+						wantAssertionsEncrypted: row.want_assertions_encrypted === 1,
 						identifierFormat: row.identifier_format,
 						certificates,
 						sloUrl: row.slo_url ?? null,
 						sloBinding,
 						// Never generates: the key is created by the sync that writes the plugin row.
-						spSigning: spKeys.view(row.id)
+						spSigning: spKeys.view(row.id),
+						// Only published while the toggle is on. The sync fails closed if it is gone.
+						spEncryption: row.want_assertions_encrypted === 1 ? spEncryptionKeys.view(row.id) : null
 					}
 				: null,
 		createdAt: row.created_at,
@@ -857,7 +884,9 @@ export class SsoService {
 		const protocol = rawInput.protocol ?? 'oidc';
 		if (!isSsoProtocol(protocol)) throw new ValidationError('Choose either OIDC or SAML.');
 		if (protocol === 'saml' && rawInput.preset)
-			throw new ValidationError('A preset is an OIDC configuration; choose OIDC or remove the preset.');
+			throw new ValidationError(
+				'A preset is an OIDC configuration; choose OIDC or remove the preset.'
+			);
 		const input = protocol === 'oidc' ? applyPreset(rawInput) : rawInput;
 		assertProviderFields({ ...input, protocol }, { requireSecret: protocol === 'oidc' });
 		if (reservedId !== undefined && !PROVIDER_ID.test(reservedId))
@@ -880,6 +909,9 @@ export class SsoService {
 		if (protocol === 'saml') {
 			const saml = await resolveSaml(input, id);
 			const claims = cleanClaims(input.claims, DEFAULT_SAML_CLAIMS);
+			// Generate the separate encryption key before the row exists: a provider stored as
+			// encrypted must never be visible without the key the IdP is told to encrypt to.
+			if (saml.wantAssertionsEncrypted) spEncryptionKeys.ensure(id);
 			try {
 				core.ctx.sqlite.run(
 					`INSERT INTO sso_providers
@@ -887,8 +919,9 @@ export class SsoService {
 					  authorization_endpoint, token_endpoint, jwks_endpoint, scopes_json,
 					  claim_email, claim_name, claim_groups, entry_point, cert, certs_json, slo_url,
 					  slo_binding, callback_url, sp_entity_id, audience, want_assertions_signed,
-					  identifier_format, enabled, created_by, created_at, updated_at)
-					 VALUES (?, ?, ?, 'saml', ?, '', '', ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					  want_assertions_encrypted, identifier_format, enabled, created_by, created_at,
+					  updated_at)
+					 VALUES (?, ?, ?, 'saml', ?, '', '', ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 					[
 						id,
 						principal.orgId,
@@ -908,6 +941,7 @@ export class SsoService {
 						saml.spEntityId,
 						saml.audience,
 						saml.wantAssertionsSigned ? 1 : 0,
+						saml.wantAssertionsEncrypted ? 1 : 0,
 						saml.identifierFormat,
 						input.enabled === false ? 0 : 1,
 						principal.userId,
@@ -916,6 +950,7 @@ export class SsoService {
 					]
 				);
 			} catch (cause) {
+				if (saml.wantAssertionsEncrypted) spEncryptionKeys.remove(id);
 				if (String(cause).includes('UNIQUE'))
 					throw new ConflictError('This organisation already has a provider for that issuer.');
 				throw cause;
@@ -931,6 +966,7 @@ export class SsoService {
 				certificateCount: saml.certs.length,
 				sloUrl: saml.sloUrl,
 				sloBinding: saml.sloBinding,
+				wantAssertionsEncrypted: saml.wantAssertionsEncrypted,
 				hasCertificate: true
 			});
 			return view(this.#provider(principal.orgId, id));
@@ -1013,13 +1049,18 @@ export class SsoService {
 				name: existing.claim_name,
 				groups: existing.claim_groups
 			});
+			// Turn the encryption key on before the row says it is on, and remove it only after the
+			// row says it is off: either order otherwise leaves a window that disagrees with itself.
+			const wasEncrypted = existing.want_assertions_encrypted === 1;
+			if (saml.wantAssertionsEncrypted) spEncryptionKeys.ensure(id);
 			try {
 				core.ctx.sqlite.run(
 					`UPDATE sso_providers SET
 					   name = ?, issuer = ?, discovery_url = ?, claim_email = ?, claim_name = ?,
 					   claim_groups = ?, entry_point = ?, cert = ?, certs_json = ?, slo_url = ?,
 					   slo_binding = ?, callback_url = ?, sp_entity_id = ?, audience = ?,
-					   want_assertions_signed = ?, identifier_format = ?, enabled = ?, updated_at = ?
+					   want_assertions_signed = ?, want_assertions_encrypted = ?, identifier_format = ?,
+					   enabled = ?, updated_at = ?
 					 WHERE org_id = ? AND id = ?`,
 					[
 						name,
@@ -1037,6 +1078,7 @@ export class SsoService {
 						saml.spEntityId,
 						saml.audience,
 						saml.wantAssertionsSigned ? 1 : 0,
+						saml.wantAssertionsEncrypted ? 1 : 0,
 						saml.identifierFormat,
 						input.enabled === undefined ? existing.enabled : input.enabled ? 1 : 0,
 						this.#now(),
@@ -1045,10 +1087,13 @@ export class SsoService {
 					]
 				);
 			} catch (cause) {
+				if (!wasEncrypted && saml.wantAssertionsEncrypted) spEncryptionKeys.remove(id);
 				if (String(cause).includes('UNIQUE'))
 					throw new ConflictError('This organisation already has a provider for that issuer.');
 				throw cause;
 			}
+			// Disabling the toggle must not leave an unreferenced sealed key behind.
+			if (!saml.wantAssertionsEncrypted) spEncryptionKeys.remove(id);
 			syncSsoProviders();
 			this.#audit(principal, 'sso.provider.update', id, {
 				name,
@@ -1059,7 +1104,8 @@ export class SsoService {
 				metadataUrl: saml.metadataUrl,
 				certificateCount: saml.certs.length,
 				sloUrl: saml.sloUrl,
-				sloBinding: saml.sloBinding
+				sloBinding: saml.sloBinding,
+				wantAssertionsEncrypted: saml.wantAssertionsEncrypted
 			});
 			return view(this.#provider(principal.orgId, id));
 		}
@@ -1164,6 +1210,28 @@ export class SsoService {
 		return view(this.#provider(principal.orgId, id));
 	}
 
+	/**
+	 * Rotate the separate SP encryption key. Only meaningful while assertion encryption is on; the
+	 * previous certificate stays published for the same overlap window as a signing rotation, so
+	 * the IdP can import the new certificate before it stops using the old one.
+	 */
+	rotateSpEncryptionKey(principal: Principal, id: string): SsoProviderView {
+		this.#requireManage(principal);
+		const row = this.#provider(principal.orgId, id);
+		if (row.protocol !== 'saml')
+			throw new ValidationError('Only a SAML provider decrypts assertions with an SP key.');
+		if (row.want_assertions_encrypted !== 1)
+			throw new ValidationError('Turn on “Encrypt assertions” before rotating the encryption key.');
+		const key = spEncryptionKeys.rotate(id);
+		syncSsoProviders();
+		this.#audit(principal, 'sso.provider.sp_encryption_key.rotate', id, {
+			name: row.name,
+			certificate: key.certificatePem,
+			previousCertificatePublishedUntil: key.previousPublishedUntil
+		});
+		return view(this.#provider(principal.orgId, id));
+	}
+
 	removeProvider(principal: Principal, id: string): void {
 		this.#requireManage(principal);
 		const row = this.#provider(principal.orgId, id);
@@ -1172,8 +1240,9 @@ export class SsoService {
 			id
 		]);
 		this.removeGroupMappingsForProvider(principal.orgId, id);
-		// The SP key belongs to this provider only; a replacement provider gets a fresh one.
+		// SP keys belong to this provider only; a replacement provider gets fresh ones.
 		spKeys.remove(id);
+		spEncryptionKeys.remove(id);
 		syncSsoProviders();
 		this.#audit(principal, 'sso.provider.delete', id, { name: row.name, issuer: row.issuer });
 	}

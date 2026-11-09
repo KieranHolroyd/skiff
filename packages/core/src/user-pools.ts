@@ -33,6 +33,8 @@ import {
 	type UserPoolGroupMemberView,
 	type UserPoolGroupView,
 	type UserPoolJwks,
+	type UserPoolOAuthProviderConfig,
+	type UserPoolOAuthProviderView,
 	type UserPoolOidcDiscovery,
 	type UserPoolSignupMode,
 	type UserPoolTheme,
@@ -270,6 +272,59 @@ export class UserPoolService {
 		const row = this.#row(principal, poolId);
 		this.#require(principal, 'userPool:manage-users', row);
 		return this.ctx.userPoolEngine.listInvites(row.id);
+	}
+
+	// ---------------------------------------------------------------- social login
+
+	/** Provider configuration for Settings; never includes a client secret. */
+	listOAuthProviders(principal: Principal, poolId: string): UserPoolOAuthProviderView[] {
+		const row = this.#row(principal, poolId);
+		this.#require(principal, 'userPool:credentials', row);
+		return this.ctx.userPoolEngine.listOAuthProviders(row.id);
+	}
+
+	/** Create or update one provider. The secret is write-only and sealed by the engine. */
+	setOAuthProvider(
+		principal: Principal,
+		poolId: string,
+		provider: string,
+		raw: UserPoolOAuthProviderConfig
+	): UserPoolOAuthProviderView {
+		const row = this.#row(principal, poolId);
+		this.#require(principal, 'userPool:credentials', row);
+		const view = this.ctx.userPoolEngine.setOAuthProvider(row.id, provider, raw);
+		// Metadata only: the client secret must never reach an audit row.
+		this.ctx.audit.record({
+			principal,
+			action: 'user_pool.oauth_provider.update',
+			resource: 'user_pool',
+			resourceId: row.id,
+			args: {
+				poolId: row.id,
+				pool: row.name,
+				provider: view.provider,
+				clientId: view.clientId,
+				scopes: view.scopes,
+				enabled: view.enabled
+			},
+			result: 'ok'
+		});
+		return view;
+	}
+
+	deleteOAuthProvider(principal: Principal, poolId: string, provider: string): void {
+		const row = this.#row(principal, poolId);
+		this.#require(principal, 'userPool:credentials', row);
+		if (!this.ctx.userPoolEngine.deleteOAuthProvider(row.id, provider))
+			throw new NotFoundError('User pool social provider');
+		this.ctx.audit.record({
+			principal,
+			action: 'user_pool.oauth_provider.delete',
+			resource: 'user_pool',
+			resourceId: row.id,
+			args: { poolId: row.id, pool: row.name, provider },
+			result: 'ok'
+		});
 	}
 
 	// ---------------------------------------------------------------- groups

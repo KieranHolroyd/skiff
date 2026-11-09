@@ -10,6 +10,7 @@ import { accessModes, deploymentStatuses, nodeStatuses, runtimes } from './model
 import { domainKinds } from './domain.ts';
 import { mailDesiredSchema } from './email.ts';
 import { workloadDesiredSchema, workloadStatuses } from './workload.ts';
+import { STORAGE_STS_CAPABILITY } from './object-storage.ts';
 import { databaseMetricBucketSchema, databaseSnapshotSchema } from './database.ts';
 import { brokerMetricBucketSchema, brokerQueueSnapshotSchema } from './broker.ts';
 import { databaseBackupResultSchema, databaseBackupTaskSchema } from './database-backup.ts';
@@ -318,6 +319,8 @@ export type DesiredState = z.infer<typeof desiredStateSchema>;
  * - `volume-profiles`: benchmarks `volumeProfileTasks` through the helper and reports results.
  * - `workload-identity`: delivers a workload JWT file and serves the node-local metadata endpoint
  *   (docs/IAM.md I18).
+ * - `storage-sts`: understands temporary RustFS STS credentials in an activation
+ *   (`storageSts`) instead of only sealed attachment keys (docs/IAM.md §7.4).
  */
 export const nodeCapabilities = [
 	'studio-principal',
@@ -334,6 +337,7 @@ export const nodeCapabilities = [
 	'volume-profiles',
 	'disk-mounts',
 	'workload-identity',
+	STORAGE_STS_CAPABILITY,
 ] as const;
 export type NodeCapability = (typeof nodeCapabilities)[number];
 

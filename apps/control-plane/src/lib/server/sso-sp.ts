@@ -1,24 +1,44 @@
 /**
- * SAML service-provider signing keys (IAM.md I19, §8.3).
+ * SAML service-provider keys (IAM.md I19, §8.3).
  *
- * `@better-auth/sso` signs AuthnRequests and logout messages with an SP private key, and publishes
- * the matching certificate in SP metadata. The key belongs to one provider: an organisation has at
- * most one provider in this slice, and keeping it per provider means deleting and re-adding an IdP
- * gets a fresh key instead of inheriting an old trust relationship.
+ * `@better-auth/sso` signs AuthnRequests and logout messages with an SP private key, and decrypts
+ * encrypted assertions with a second SP key. The keys belong to one provider: an organisation has
+ * at most one provider in this slice, and keeping them per provider means deleting and re-adding an
+ * IdP gets fresh key material instead of inheriting an old trust relationship.
  *
- * Storage: one `settings` row per provider (`sso.sp.<providerId>`). The private key is PKCS#8 PEM
- * sealed with the platform key (`core.ctx.secrets`, the same key `shares`/`github-app` use); the
- * certificate is public and stored beside it. A rotation keeps the previous certificate, and the
- * previous sealed key, until the overlap window ends so the IdP can be updated without a gap.
+ * Storage: one `settings` row per provider and purpose (`sso.sp.<providerId>` for signing,
+ * `sso.spEnc.<providerId>` for assertion encryption). The private key is PKCS#8 PEM sealed with the
+ * platform key (`core.ctx.secrets`, the same key `shares`/`github-app` use); the certificate is
+ * public and stored beside it. A rotation keeps the previous certificate, and the previous sealed
+ * key, until the overlap window ends so the IdP can be updated without a gap.
  *
- * Key generation happens at boot (`syncSsoProviders`) and on the explicit rotate action. Reading a
- * view never creates a key.
+ * The encryption key is deliberately separate from the signing key: an IdP imports the encryption
+ * certificate to encrypt assertions to Skiff, and reusing a signing key for that would make one
+ * compromise break both roles. The encryption certificate advertises RSA-OAEP (the IdP chooses the
+ * key transport from the certificate copied from SP metadata).
+ *
+ * Signing-key generation happens at boot (`syncSsoProviders`) and on the explicit rotate action.
+ * Encryption-key generation happens when the provider enables assertion encryption and on its
+ * explicit rotate action; the sync only reads it, so a missing or unreadable key fails closed.
+ * Reading a view never creates a key.
  */
 import type { Database } from 'bun:sqlite';
-import { createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign } from 'node:crypto';
+import {
+	createPrivateKey,
+	createPublicKey,
+	generateKeyPairSync,
+	randomBytes,
+	sign
+} from 'node:crypto';
 
-/** The settings-key prefix for a provider's SP key material. */
+/** The settings-key prefix for a provider's SP signing key material. */
 export const SSO_SP_SETTINGS_PREFIX = 'sso.sp.';
+
+/** The settings-key prefix for a provider's SP assertion-encryption key material. */
+export const SSO_SP_ENCRYPTION_SETTINGS_PREFIX = 'sso.spEnc.';
+
+/** Which role a store manages; they are separate keys and separate settings rows. */
+export type SsoSpKeyPurpose = 'signing' | 'encryption';
 
 /** `secrets.seal` is scoped to an org; platform-wide material uses the synthetic platform key. */
 const PLATFORM_KEY_ORG = 'platform';
@@ -31,6 +51,26 @@ export interface SsoSpSigningKey {
 	privateKeyPem: string;
 	/** Self-signed X.509 certificate over the same key. */
 	certificatePem: string;
+}
+
+/** The same key-pair shape is used for signing and for assertion encryption. */
+export type SsoSpKeyPair = SsoSpSigningKey;
+
+/**
+ * A provider has assertion encryption enabled but its sealed encryption key is absent or cannot be
+ * opened. The sync catches this and removes the plugin row, so sign-in fails closed rather than
+ * silently generating a new key the IdP does not trust.
+ */
+export class SsoSpKeyUnavailableError extends Error {
+	constructor(providerId: string, purpose: SsoSpKeyPurpose, cause?: unknown) {
+		super(
+			`The sealed SAML SP ${purpose} key for provider ${providerId} is ${
+				cause ? 'unreadable' : 'missing'
+			}. Rotate it in Settings → SSO before enabling sign-in again.`,
+			{ cause }
+		);
+		this.name = 'SsoSpKeyUnavailableError';
+	}
 }
 
 /** What Settings may show: public material only. */
@@ -66,10 +106,16 @@ interface SsoSpKeyStoreOptions {
 		open(orgId: string, value: string): string;
 	};
 	now?: () => number;
+	/** Defaults to `signing`; encryption keys live under a different settings prefix. */
+	purpose?: SsoSpKeyPurpose;
 }
 
 export function spKeySettingsKey(providerId: string): string {
 	return `${SSO_SP_SETTINGS_PREFIX}${providerId}`;
+}
+
+export function spEncryptionKeySettingsKey(providerId: string): string {
+	return `${SSO_SP_ENCRYPTION_SETTINGS_PREFIX}${providerId}`;
 }
 
 // -------------------------------------------------------------------------------------- DER / X.509
@@ -94,7 +140,8 @@ function oid(dotted: string): Buffer {
 	const bytes = [a! * 40 + b!];
 	for (const value of rest) {
 		const chunk: number[] = [value & 0x7f];
-		for (let v = Math.floor(value / 128); v > 0; v = Math.floor(v / 128)) chunk.unshift((v & 0x7f) | 0x80);
+		for (let v = Math.floor(value / 128); v > 0; v = Math.floor(v / 128))
+			chunk.unshift((v & 0x7f) | 0x80);
 		bytes.push(...chunk);
 	}
 	return tlv(0x06, Buffer.from(bytes));
@@ -127,10 +174,7 @@ function selfSignedRsaCertificate(
 	now: number
 ): string {
 	// sha256WithRSAEncryption (RFC 8017), with the NULL parameters X.509 expects.
-	const algorithm = sequence(
-		oid('1.2.840.113549.1.1.11'),
-		tlv(0x05, Buffer.alloc(0))
-	);
+	const algorithm = sequence(oid('1.2.840.113549.1.1.11'), tlv(0x05, Buffer.alloc(0)));
 	const subject = name(commonName);
 	const notBefore = new Date(now - 60_000);
 	const notAfter = new Date(now + 10 * 365 * 24 * 3600_000);
@@ -153,10 +197,7 @@ function selfSignedRsaCertificate(
  * Generate an RSA-2048 SP key and its self-signed certificate. RSA is deliberate: samlify's SP
  * request signer defaults to `rsa-sha256`, and most IdPs publish and accept RSA SP certificates.
  */
-export function generateSsoSpSigningKey(
-	commonName: string,
-	now = Date.now()
-): SsoSpSigningKey {
+export function generateSsoSpSigningKey(commonName: string, now = Date.now()): SsoSpSigningKey {
 	const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 	const privateKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
 	const spki = publicKey.export({ type: 'spki', format: 'der' });
@@ -166,13 +207,25 @@ export function generateSsoSpSigningKey(
 	};
 }
 
+/**
+ * Generate the separate RSA key an IdP encrypts assertions to. RSA-OAEP is a key-transport choice
+ * made by the IdP from the published certificate; the key pair itself is RSA (the same primitive
+ * samlify and every IdP accept for XML Encryption). It is never the signing key.
+ */
+export function generateSsoSpEncryptionKey(commonName: string, now = Date.now()): SsoSpKeyPair {
+	return generateSsoSpSigningKey(commonName, now);
+}
+
 /** Re-derive the certificate for an existing key (used by tests and key recovery). */
 export function ssoSpCertificateFromKey(
 	privateKeyPem: string,
 	commonName: string,
 	now = Date.now()
 ): string {
-	const spki = createPublicKey(createPrivateKey(privateKeyPem)).export({ type: 'spki', format: 'der' });
+	const spki = createPublicKey(createPrivateKey(privateKeyPem)).export({
+		type: 'spki',
+		format: 'der'
+	});
 	return selfSignedRsaCertificate(privateKeyPem, spki, commonName, now);
 }
 
@@ -182,11 +235,19 @@ export class SsoSpKeyStore {
 	readonly #sqlite: Pick<Database, 'query' | 'run'>;
 	readonly #secrets: SsoSpKeyStoreOptions['secrets'];
 	readonly #now: () => number;
+	readonly #purpose: SsoSpKeyPurpose;
+	readonly #settingsKey: (providerId: string) => string;
+	readonly #generate: (commonName: string, now: number) => SsoSpKeyPair;
 
 	constructor(options: SsoSpKeyStoreOptions) {
 		this.#sqlite = options.sqlite;
 		this.#secrets = options.secrets;
 		this.#now = options.now ?? Date.now;
+		this.#purpose = options.purpose ?? 'signing';
+		this.#settingsKey =
+			this.#purpose === 'encryption' ? spEncryptionKeySettingsKey : spKeySettingsKey;
+		this.#generate =
+			this.#purpose === 'encryption' ? generateSsoSpEncryptionKey : generateSsoSpSigningKey;
 	}
 
 	/** The stored key, or null when this provider has never had one. Never generates. */
@@ -210,29 +271,39 @@ export class SsoSpKeyStore {
 	}
 
 	/** Open the key for the plugin; generates and seals the first key if the provider has none. */
-	ensure(providerId: string, commonName = `Skiff SAML ${providerId}`): SsoSpKeyMaterial {
+	ensure(providerId: string, commonName?: string): SsoSpKeyMaterial {
 		const stored = this.#read(providerId);
-		if (stored) return this.#material(stored);
+		if (stored) return this.#material(providerId, stored);
 		const now = this.#now();
-		const generated = generateSsoSpSigningKey(commonName, now);
+		const generated = this.#generate(commonName ?? this.#commonName(providerId), now);
 		const next: StoredSpKey = {
 			privateKeySealed: this.#seal(generated.privateKeyPem),
 			certificatePem: generated.certificatePem,
 			createdAt: now
 		};
 		this.#write(providerId, next);
-		return this.#material(next);
+		return this.#material(providerId, next);
+	}
+
+	/**
+	 * Open the stored key without generating one. The sync uses this for assertion encryption so a
+	 * provider that says it is encrypted cannot silently get a new certificate the IdP never saw.
+	 */
+	require(providerId: string): SsoSpKeyMaterial {
+		const stored = this.#read(providerId);
+		if (!stored) throw new SsoSpKeyUnavailableError(providerId, this.#purpose);
+		return this.#material(providerId, stored);
 	}
 
 	/**
 	 * Re-key a provider. The old key and certificate stay published for the rollover window; the
-	 * new key signs from now on, so an IdP that still trusts the old certificate keeps accepting
-	 * requests until it is updated.
+	 * new key signs (or decrypts) from now on, so an IdP that still trusts the old certificate keeps
+	 * working until it is updated.
 	 */
-	rotate(providerId: string, commonName = `Skiff SAML ${providerId}`): SsoSpKeyMaterial {
+	rotate(providerId: string, commonName?: string): SsoSpKeyMaterial {
 		const current = this.#read(providerId) ?? null;
 		const now = this.#now();
-		const generated = generateSsoSpSigningKey(commonName, now);
+		const generated = this.#generate(commonName ?? this.#commonName(providerId), now);
 		const next: StoredSpKey = {
 			privateKeySealed: this.#seal(generated.privateKeyPem),
 			certificatePem: generated.certificatePem,
@@ -248,12 +319,18 @@ export class SsoSpKeyStore {
 				: {})
 		};
 		this.#write(providerId, next);
-		return this.#material(next);
+		return this.#material(providerId, next);
 	}
 
-	/** Remove a provider's key material when the provider is deleted. */
+	/** Remove a provider's key material when the provider is deleted or the toggle is turned off. */
 	remove(providerId: string): void {
-		this.#sqlite.run('DELETE FROM settings WHERE key = ?', [spKeySettingsKey(providerId)]);
+		this.#sqlite.run('DELETE FROM settings WHERE key = ?', [this.#settingsKey(providerId)]);
+	}
+
+	#commonName(providerId: string): string {
+		return this.#purpose === 'encryption'
+			? `Skiff SAML ${providerId} encryption`
+			: `Skiff SAML ${providerId}`;
 	}
 
 	#read(providerId: string): StoredSpKey | null {
@@ -261,7 +338,7 @@ export class SsoSpKeyStore {
 		try {
 			raw = this.#sqlite
 				.query<{ value: string }, [string]>('SELECT value FROM settings WHERE key = ?')
-				.get(spKeySettingsKey(providerId))?.value;
+				.get(this.#settingsKey(providerId))?.value;
 		} catch {
 			return null; // settings table not created yet (first boot)
 		}
@@ -296,11 +373,11 @@ export class SsoSpKeyStore {
 	#write(providerId: string, stored: StoredSpKey): void {
 		this.#sqlite.run(
 			'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at',
-			[spKeySettingsKey(providerId), JSON.stringify(stored), this.#now()]
+			[this.#settingsKey(providerId), JSON.stringify(stored), this.#now()]
 		);
 	}
 
-	#material(stored: StoredSpKey): SsoSpKeyMaterial {
+	#material(providerId: string, stored: StoredSpKey): SsoSpKeyMaterial {
 		const previous =
 			stored.previous && stored.previous.publishedUntil > this.#now()
 				? {
@@ -308,8 +385,14 @@ export class SsoSpKeyStore {
 						previousPublishedUntil: stored.previous.publishedUntil
 					}
 				: { previousCertificate: null, previousPublishedUntil: null };
+		let privateKeyPem: string;
+		try {
+			privateKeyPem = this.#open(stored.privateKeySealed);
+		} catch (cause) {
+			throw new SsoSpKeyUnavailableError(providerId, this.#purpose, cause);
+		}
 		return {
-			privateKeyPem: this.#open(stored.privateKeySealed),
+			privateKeyPem,
 			certificate: stored.certificatePem,
 			certificatePem: stored.certificatePem,
 			createdAt: stored.createdAt,

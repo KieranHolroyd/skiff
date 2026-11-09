@@ -1,5 +1,6 @@
 <script lang="ts">
 	import FingerprintIcon from '@lucide/svelte/icons/fingerprint';
+	import GlobeIcon from '@lucide/svelte/icons/globe';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import PowerIcon from '@lucide/svelte/icons/power';
@@ -27,6 +28,8 @@
 
 	let createPoolOpen = $state(false);
 	let addingClientFor = $state<string | null>(null);
+	/** `poolId:provider` for the provider form currently expanded. */
+	let socialFor = $state<string | null>(null);
 	let createdClient = $state<
 		| null
 		| { poolId: string; client: UserPoolClientView; clientSecret: string | null }
@@ -332,6 +335,142 @@
 							{/if}
 						</div>
 
+						{#if access?.credentials}
+							<div class="space-y-2 rounded-lg border bg-muted/20 p-3">
+								<p class="flex items-center gap-2 text-sm font-medium">
+									<GlobeIcon class="size-4 text-muted-foreground" />
+									Social login
+								</p>
+								<p class="text-xs text-muted-foreground">
+									Google, GitHub, Microsoft and Apple sign-in for this pool. Register the exact
+									callback URL below with the provider, then enable it. Client secrets are sealed
+									and never shown again.
+								</p>
+								<ul class="space-y-2">
+									{#each data.oauthProviders[pool.id] ?? [] as provider (provider.provider)}
+										{@const editing = socialFor === `${pool.id}:${provider.provider}`}
+										<li class="space-y-2 rounded-lg border bg-background px-3 py-2">
+											<div class="flex flex-wrap items-center justify-between gap-2">
+												<p class="flex flex-wrap items-center gap-2 text-sm">
+													<span class="font-medium">{provider.label}</span>
+													<Badge variant={provider.enabled ? 'success' : 'neutral'}>
+														{provider.enabled ? 'Enabled' : 'Off'}
+													</Badge>
+													{#if provider.configured}
+														<Badge variant="outline">
+															{provider.secretConfigured ? 'Secret set' : 'No secret'}
+														</Badge>
+													{:else}
+														<Badge variant="outline">Not configured</Badge>
+													{/if}
+												</p>
+												<Button
+													size="sm"
+													variant="outline"
+													onclick={() =>
+														(socialFor = editing ? null : `${pool.id}:${provider.provider}`)}
+												>
+													{editing ? 'Close' : provider.configured ? 'Edit' : 'Configure'}
+												</Button>
+											</div>
+											<div class="flex items-center gap-1">
+												<code class="min-w-0 truncate font-mono text-xs text-muted-foreground"
+													title={provider.callbackUrl}>{provider.callbackUrl}</code
+												>
+												<CopyButton
+													iconOnly
+													value={provider.callbackUrl}
+													label={`Copy the ${provider.label} callback URL`}
+												/>
+											</div>
+											{#if editing}
+												<form method="POST" action="?/saveOAuthProvider" class="grid gap-3">
+													<input type="hidden" name="poolId" value={pool.id} />
+													<input type="hidden" name="provider" value={provider.provider} />
+													<div class="grid gap-3 sm:grid-cols-2">
+														<Field.Field>
+															<Field.Label for={`oauth-client-${pool.id}-${provider.provider}`}>
+																{provider.label} client ID
+															</Field.Label>
+															<Input
+																id={`oauth-client-${pool.id}-${provider.provider}`}
+																name="clientId"
+																required
+																maxlength={512}
+																value={provider.clientId}
+																autocomplete="off"
+																spellcheck="false"
+															/>
+														</Field.Field>
+														<Field.Field>
+															<Field.Label for={`oauth-secret-${pool.id}-${provider.provider}`}>
+																Client secret
+																<span class="font-normal text-muted-foreground">
+																	{provider.secretConfigured ? 'leave blank to keep' : 'required'}
+																</span>
+															</Field.Label>
+															<Input
+																id={`oauth-secret-${pool.id}-${provider.provider}`}
+																name="clientSecret"
+																type="password"
+																required={!provider.secretConfigured}
+																maxlength={8192}
+																placeholder={provider.secretConfigured
+																	? '••••••••  (unchanged)'
+																	: ''}
+																autocomplete="new-password"
+															/>
+														</Field.Field>
+													</div>
+													<Field.Field>
+														<Field.Label for={`oauth-scopes-${pool.id}-${provider.provider}`}>
+															Scopes
+														</Field.Label>
+														<Input
+															id={`oauth-scopes-${pool.id}-${provider.provider}`}
+															name="scopes"
+															value={provider.scopes.join(' ')}
+															autocomplete="off"
+															spellcheck="false"
+														/>
+														<Field.Description>
+															Space or comma separated. Leave blank for the provider defaults.
+														</Field.Description>
+													</Field.Field>
+													<div class="flex flex-wrap items-center gap-3">
+														<Field.Field orientation="horizontal" class="items-center gap-2">
+															<Checkbox
+																id={`oauth-enabled-${pool.id}-${provider.provider}`}
+																name="enabled"
+																value="true"
+																checked={provider.enabled}
+															/>
+															<Field.Label
+																for={`oauth-enabled-${pool.id}-${provider.provider}`}
+																class="font-normal"
+															>
+																Show {provider.label} on the sign-in page
+															</Field.Label>
+														</Field.Field>
+														<Button type="submit" size="sm">Save provider</Button>
+													</div>
+												</form>
+												{#if provider.configured}
+													<form method="POST" action="?/deleteOAuthProvider">
+														<input type="hidden" name="poolId" value={pool.id} />
+														<input type="hidden" name="provider" value={provider.provider} />
+														<Button type="submit" size="sm" variant="ghost">
+															<TrashIcon />Remove {provider.label}
+														</Button>
+													</form>
+												{/if}
+											{/if}
+										</li>
+									{/each}
+								</ul>
+							</div>
+						{/if}
+
 						{#if access?.manageUsers}
 							<div class="space-y-3 rounded-lg border bg-muted/20 p-3">
 								<div class="flex flex-wrap items-center justify-between gap-2">
@@ -446,7 +585,7 @@
 	<Panel
 		title="Remaining"
 		icon={FingerprintIcon}
-		description="Hosted sign-in, users, sessions, passkeys and TOTP MFA are live. These pieces are still to come."
+		description="Hosted sign-in, users, sessions, passkeys, TOTP MFA and social login are live. These pieces are still to come."
 	>
 		<div class="space-y-4">
 			<div class="rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm">
@@ -458,9 +597,9 @@
 			</div>
 			<ul class="grid gap-3 sm:grid-cols-2">
 				<li class="rounded-lg border p-3">
-					<p class="text-sm font-medium">Social login</p>
+					<p class="text-sm font-medium">Email OTP</p>
 					<p class="mt-1 text-xs text-muted-foreground">
-						Google, GitHub, Apple and Microsoft, with a support MFA reset.
+						A one-time code by mail alongside the existing magic link.
 					</p>
 				</li>
 				<li class="rounded-lg border p-3">

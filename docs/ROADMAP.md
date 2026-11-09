@@ -266,7 +266,7 @@
 - [ ] B2B in pools: organisations, per-tenant federation, SCIM in and the Keycloak engine
 - [ ] SAML encrypted assertions; the dashboard binding editor's inline simulation diff
 - [ ] A Caddy-side Skiff Access decision cache (S6)
-- [ ] Storage STS (RustFS `AssumeRoleWithWebIdentity`)
+- [x] Storage STS (RustFS `AssumeRoleWithWebIdentity`)
 - [ ] Per-repository pipeline service accounts; Better Auth `apikey` migration (S1)
 - [ ] Scope-filtered MCP `tools/list`
 

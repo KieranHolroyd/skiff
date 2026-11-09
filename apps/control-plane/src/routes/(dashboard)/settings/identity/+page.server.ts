@@ -2,7 +2,8 @@ import { error, fail } from '@sveltejs/kit';
 import type {
 	UserPoolClientView,
 	UserPoolGroupMemberView,
-	UserPoolGroupView
+	UserPoolGroupView,
+	UserPoolOAuthProviderView
 } from '@skiff/contracts';
 import type { UserPoolUserView } from '@skiff/core';
 import { core } from '#lib/server/core.js';
@@ -35,6 +36,7 @@ export const load: PageServerLoad = ({ locals }) => {
 	const users: Record<string, UserPoolUserView[]> = {};
 	const groups: Record<string, UserPoolGroupView[]> = {};
 	const groupMembers: Record<string, UserPoolGroupMemberView[]> = {};
+	const oauthProviders: Record<string, UserPoolOAuthProviderView[]> = {};
 	const access: Record<
 		string,
 		{ update: boolean; credentials: boolean; delete: boolean; manageUsers: boolean }
@@ -49,6 +51,8 @@ export const load: PageServerLoad = ({ locals }) => {
 			delete: core.iam.can(principal, 'userPool:delete', resource),
 			manageUsers
 		};
+		if (access[pool.id]!.credentials)
+			oauthProviders[pool.id] = core.userPools.listOAuthProviders(principal, pool.id);
 		if (manageUsers) {
 			users[pool.id] = core.userPools.listUsers(principal, pool.id);
 			groups[pool.id] = core.userPools.listGroups(principal, pool.id);
@@ -63,6 +67,7 @@ export const load: PageServerLoad = ({ locals }) => {
 		users,
 		groups,
 		groupMembers,
+		oauthProviders,
 		access,
 		canCreate: core.iam.can(principal, 'userPool:create', { type: 'org' }),
 		discoveryBase: `${core.ctx.config.platformOrigin}/api/v1/user-pools`
@@ -148,6 +153,51 @@ export const actions: Actions = {
 			const required = formBoolean(data, 'mfaRequired');
 			await core.userPools.update(principal, poolId, { mfaRequired: required });
 			return { success: required ? 'MFA is now required.' : 'MFA is now optional.' };
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	/** Store one social provider. The secret field is optional: blank keeps the sealed one. */
+	saveOAuthProvider: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const poolId = formString(data, 'poolId');
+		const provider = formString(data, 'provider');
+		const clientId = formString(data, 'clientId');
+		if (!poolId || !provider || !clientId)
+			return fail(400, { message: 'Choose a provider and enter its client id.' });
+		const clientSecret = formOptionalString(data, 'clientSecret');
+		const scopes = formString(data, 'scopes')
+			.split(/[\s,]+/)
+			.map((scope) => scope.trim())
+			.filter(Boolean);
+		try {
+			const view = core.userPools.setOAuthProvider(principal, poolId, provider, {
+				clientId,
+				...(clientSecret ? { clientSecret } : {}),
+				scopes,
+				enabled: formBoolean(data, 'enabled')
+			});
+			return {
+				success: view.enabled
+					? `${view.label} sign-in is enabled.`
+					: `${view.label} configuration saved; sign-in is off.`
+			};
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	deleteOAuthProvider: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const poolId = formString(data, 'poolId');
+		const provider = formString(data, 'provider');
+		if (!poolId || !provider) return fail(400, { message: 'Missing pool or provider.' });
+		try {
+			core.userPools.deleteOAuthProvider(principal, poolId, provider);
+			return { success: 'Social provider removed.' };
 		} catch (cause) {
 			return failure(cause);
 		}

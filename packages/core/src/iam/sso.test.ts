@@ -450,6 +450,21 @@ describe('ssoProviderFieldErrors', () => {
 		expect(errors).toEqual({});
 	});
 
+	test('SAML accepts the assertion-encryption toggle', () => {
+		const errors = ssoProviderFieldErrors({
+			name: 'Okta SAML',
+			issuer: 'https://idp.example.com/metadata',
+			protocol: 'saml',
+			saml: {
+				entryPoint: 'https://idp.example.com/sso',
+				cert,
+				wantAssertionsSigned: true,
+				wantAssertionsEncrypted: true
+			}
+		});
+		expect(errors).toEqual({});
+	});
+
 	test('SAML refuses a plain-http SLO URL and an unknown binding', () => {
 		const errors = ssoProviderFieldErrors({
 			name: 'Okta SAML',
@@ -536,6 +551,43 @@ describe('SAML service-provider metadata', () => {
 		expect(xml.match(/<md:KeyDescriptor use="signing">/g)).toHaveLength(2);
 		expect(xml).toContain(`${'A'.repeat(120)}`);
 		expect(xml).toContain(`${'B'.repeat(120)}`);
+	});
+
+	test('omits every encryption KeyDescriptor unless an encryption certificate is supplied', () => {
+		const xml = ssoSamlSpMetadataXml({
+			entityId: 'https://skiff.example/sp',
+			acsUrl: 'https://skiff.example/acs',
+			certificates: [certificateA],
+			wantAssertionsSigned: true
+		});
+		expect(xml).not.toContain('use="encryption"');
+		expect(xml).not.toContain('EncryptionMethod');
+	});
+
+	test('publishes a separate encryption certificate with RSA-OAEP only when enabled', () => {
+		const xml = ssoSamlSpMetadataXml({
+			entityId: 'https://skiff.example/sp',
+			acsUrl: 'https://skiff.example/acs',
+			certificates: [certificateA],
+			encryptionCertificates: [certificateB],
+			wantAssertionsSigned: true
+		});
+		expect(xml.match(/<md:KeyDescriptor use="signing">/g)).toHaveLength(1);
+		expect(xml.match(/<md:KeyDescriptor use="encryption">/g)).toHaveLength(1);
+		expect(xml).toContain('http://www.w3.org/2001/04/xmlenc#rsa-oaep-mgf1p');
+		expect(xml).toContain(`<ds:X509Certificate>${'A'.repeat(120)}</ds:X509Certificate>`);
+		expect(xml).toContain(`<ds:X509Certificate>${'B'.repeat(120)}</ds:X509Certificate>`);
+	});
+
+	test('publishes both encryption certificates during a rollover', () => {
+		const xml = ssoSamlSpMetadataXml({
+			entityId: 'https://skiff.example/sp',
+			acsUrl: 'https://skiff.example/acs',
+			certificates: [certificateA],
+			encryptionCertificates: [certificateB, certificateA],
+			wantAssertionsSigned: true
+		});
+		expect(xml.match(/<md:KeyDescriptor use="encryption">/g)).toHaveLength(2);
 	});
 
 	test('escapes attribute values and omits an unconfigured SLO endpoint', () => {

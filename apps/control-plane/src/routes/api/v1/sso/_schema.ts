@@ -38,6 +38,8 @@ export const samlSchema = z.object({
 	spEntityId: z.string().trim().max(500).optional(),
 	audience: z.string().trim().max(500).optional(),
 	wantAssertionsSigned: z.boolean().optional(),
+	/** Ask the IdP to encrypt assertions to the provider's separate SP encryption certificate. */
+	wantAssertionsEncrypted: z.boolean().optional(),
 	identifierFormat: z.string().trim().max(500).optional()
 });
 

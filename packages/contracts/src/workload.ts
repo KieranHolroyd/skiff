@@ -1,6 +1,6 @@
 import * as z from 'zod';
 import { databaseExtensionAllowlist, databaseMonitorSchema, workloadDatabaseSchema } from './database.ts';
-import { storageAdminSchema, workloadObjectStorageSchema } from './object-storage.ts';
+import { storageAdminSchema, workloadObjectStorageSchema, workloadStorageStsSchema } from './object-storage.ts';
 import { workloadBrokerSchema } from './broker.ts';
 import { githubRunnerSchema } from './github-runner.ts';
 import { MAX_REGISTRY_AUTH_ENTRIES, imageDigestSchema, registryAuthEntrySchema, workloadRegistrySchema } from './registry.ts';
@@ -589,6 +589,14 @@ export const workloadActivationSchema = z.object({
 	 * it to the helper, which writes the 0400 file; it never reaches desired state, logs or audit.
 	 */
 	identity: workloadIdentityActivationSchema.optional(),
+	/**
+	 * Attached storage that received temporary RustFS STS credentials instead of its sealed static
+	 * key (IAM.md §7.4, I18). The credentials themselves are in `env`
+	 * (`<prefix>_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY`, `_SESSION_TOKEN`); this marks which
+	 * prefixes are temporary and when they expire. Absent when every attachment fell back to its
+	 * static key.
+	 */
+	storageSts: z.array(workloadStorageStsSchema).max(20).optional(),
 });
 export type WorkloadActivation = z.infer<typeof workloadActivationSchema>;
 

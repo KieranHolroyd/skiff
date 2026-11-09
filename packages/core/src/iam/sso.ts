@@ -112,32 +112,54 @@ export interface SsoSamlSpMetadataInput {
 	 * rotation.
 	 */
 	certificates: readonly string[];
+	/**
+	 * SP assertion-encryption certificates, current first, published with `use="encryption"`. This
+	 * is a separate key from the signing key. Omit it when the provider does not want encrypted
+	 * assertions: the metadata then carries no encryption certificate at all.
+	 */
+	encryptionCertificates?: readonly string[];
 	/** Require a signed assertion. Must match the provider's `wantAssertionsSigned`. */
 	wantAssertionsSigned: boolean;
 	/** The NameID format to advertise; the plugin default is emailAddress. */
 	identifierFormat?: string | null;
 }
 
-/**
- * The SP metadata an IdP imports. The plugin's own metadata endpoint normally generates this XML,
- * but its generator cannot add a signing certificate, and the plugin treats custom metadata as the
- * authority for the ACS URL and signed-assertion policy. Building it here also lets Settings show
- * exactly what the IdP will fetch, including a rollover certificate.
- */
-export function ssoSamlSpMetadataXml(input: SsoSamlSpMetadataInput): string {
-	const certificates = input.certificates
-		.map((certificate) => normalizeSamlCertificate(certificate))
-		.filter((certificate): certificate is string => certificate !== null);
-	const keyDescriptors = certificates.map(
-		(certificate) =>
-			`        <md:KeyDescriptor use="signing">
+function keyDescriptor(
+	use: 'signing' | 'encryption',
+	certificate: string,
+	encryptionMethods = false
+): string {
+	const methods = encryptionMethods
+		? `
+          <md:EncryptionMethod Algorithm="http://www.w3.org/2001/04/xmlenc#rsa-oaep-mgf1p"/>`
+		: '';
+	return `        <md:KeyDescriptor use="${use}">
           <ds:KeyInfo>
             <ds:X509Data>
               <ds:X509Certificate>${certificateBody(certificate)}</ds:X509Certificate>
             </ds:X509Data>
-          </ds:KeyInfo>
-        </md:KeyDescriptor>`
-	);
+          </ds:KeyInfo>${methods}
+        </md:KeyDescriptor>`;
+}
+
+/**
+ * The SP metadata an IdP imports. The plugin's own metadata endpoint normally generates this XML,
+ * but its generator cannot add a signing certificate, and the plugin treats custom metadata as the
+ * authority for the ACS URL and signed-assertion policy. Building it here also lets Settings show
+ * exactly what the IdP will fetch, including a rollover certificate. An encryption certificate is
+ * only published when the provider has assertion encryption turned on.
+ */
+export function ssoSamlSpMetadataXml(input: SsoSamlSpMetadataInput): string {
+	const signingCertificates = input.certificates
+		.map((certificate) => normalizeSamlCertificate(certificate))
+		.filter((certificate): certificate is string => certificate !== null);
+	const encryptionCertificates = (input.encryptionCertificates ?? [])
+		.map((certificate) => normalizeSamlCertificate(certificate))
+		.filter((certificate): certificate is string => certificate !== null);
+	const keyDescriptors = [
+		...signingCertificates.map((certificate) => keyDescriptor('signing', certificate)),
+		...encryptionCertificates.map((certificate) => keyDescriptor('encryption', certificate, true))
+	];
 	const nameIdFormat = input.identifierFormat?.trim() || SAML_EMAIL_NAMEID;
 	const slo = input.sloUrl
 		? `        <md:SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="${xmlAttribute(input.sloUrl)}"/>
@@ -283,6 +305,8 @@ export interface SsoSamlFields {
 	spEntityId?: string;
 	audience?: string;
 	wantAssertionsSigned?: boolean;
+	/** Ask the IdP to encrypt assertions to the provider's separate SP encryption certificate. */
+	wantAssertionsEncrypted?: boolean;
 	identifierFormat?: string;
 }
 

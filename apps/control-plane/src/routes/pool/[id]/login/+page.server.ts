@@ -30,7 +30,10 @@ export const load: PageServerLoad = ({ params, cookies, url }) => {
 		verifyEmail: url.searchParams.get('verify') === 'email',
 		email: url.searchParams.get('email') ?? '',
 		sent: url.searchParams.get('sent'),
-		magicError: url.searchParams.get('magic') === 'invalid'
+		magicError: url.searchParams.get('magic') === 'invalid',
+		oauthError: url.searchParams.get('oauth') === 'error',
+		/** Only enabled providers: no client id or secret reaches the page. */
+		socialProviders: core.userPoolEngine.enabledOAuthProviders(params.id)
 	};
 };
 
@@ -153,5 +156,25 @@ export const actions: Actions = {
 			throw error;
 		}
 		notice(event, 'sent', 'reset');
+	},
+
+	/** Send the browser to a configured provider. State and PKCE are created server-side. */
+	oauth: async (event) => {
+		const { params, request, cookies, url } = event;
+		const form = await request.formData();
+		if (!validCsrf(cookies, params.id, form.get('csrf')))
+			return fail(400, { error: 'Your sign-in form expired. Reload the page and try again.' });
+		const provider = String(form.get('provider') ?? '');
+		if (!provider) return fail(400, { error: 'Choose a sign-in provider.' });
+		if (!allowAttempt(`oauth:${params.id}:${clientKey(event)}`))
+			return fail(429, { error: 'Too many sign-in attempts. Wait a minute and try again.' });
+		const returnTo = String(form.get('return_to') ?? url.searchParams.get('return_to') ?? '');
+		try {
+			const started = core.userPoolEngine.oauthStart(params.id, provider, { returnTo });
+			redirect(303, started.redirect);
+		} catch (error) {
+			if (error instanceof CoreError) return fail(error.status, { error: error.message });
+			throw error;
+		}
 	}
 };

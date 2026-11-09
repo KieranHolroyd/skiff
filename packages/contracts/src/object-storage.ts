@@ -49,6 +49,30 @@ export const STORAGE_PORT_MAX = 19999;
 /** RustFS accepts any region; SDKs insist on one. */
 export const STORAGE_REGION = 'us-east-1';
 
+/**
+ * RustFS STS (`AssumeRoleWithWebIdentity`) with an external OIDC issuer. The pinned 1.0.4 build
+ * serves it on `POST /` (form encoded) and discovers providers through `RUSTFS_IDENTITY_OPENID_*`.
+ * The capability is advertised by agents that understand temporary storage credentials.
+ */
+export const STORAGE_STS_CAPABILITY = 'storage-sts';
+/** The first pinned RustFS version with the STS/OIDC handler (verified on the 1.0.4 image). */
+export const STORAGE_STS_MIN_VERSION = '1.0.4';
+/** Audience and OIDC client id Skiff's workload tokens use for RustFS. */
+export const STORAGE_STS_AUDIENCE = 'skiff';
+/** Claim RustFS maps to IAM policy names; a workload token carries its scoped policy here. */
+export const STORAGE_STS_CLAIM = 'groups';
+/** Requested temporary-credential lifetime; RustFS clamps values to 900–43200 seconds. */
+export const STORAGE_STS_TTL_SECONDS = 3600;
+/** RustFS rejects an inline `Policy` whose marshalled JSON exceeds this size. */
+export const STORAGE_STS_MAX_SESSION_POLICY_BYTES = 2048;
+/** A cached credential is refreshed this long before it expires. */
+export const STORAGE_STS_CACHE_MARGIN_MS = 5 * 60_000;
+
+/** Whether a RustFS version serves STS with an external OIDC issuer. */
+export function storageStsSupported(version: string): boolean {
+	return version.localeCompare(STORAGE_STS_MIN_VERSION, 'en', { numeric: true }) >= 0;
+}
+
 /** Environment slugs that would make `<slug>--<env>` collide with storage hosts (S3). */
 export const STORAGE_RESERVED_ENVIRONMENTS: ReadonlySet<string> = new Set(['s3', 'console']);
 
@@ -352,6 +376,45 @@ export interface StorageAttachmentView {
 	createdAt: string;
 }
 
+/**
+ * The instance's STS/OIDC settings. The endpoint is what an attached app or the control plane
+ * calls; `issuer`, `audience` and `claim` are the values the container received through
+ * `RUSTFS_IDENTITY_OPENID_*`. `rolePolicy` is null because the scoped policy comes from the
+ * workload token's `groups` claim (one policy per attachment key).
+ */
+export const storageStsSettingsSchema = z.object({
+	enabled: z.boolean(),
+	endpoint: z.string(),
+	issuer: z.string(),
+	audience: z.string(),
+	claim: z.literal(STORAGE_STS_CLAIM),
+	rolePolicy: z.string().nullable(),
+});
+export type StorageStsSettings = z.infer<typeof storageStsSettingsSchema>;
+
+/** Temporary credentials returned by RustFS STS. They are short-lived and never stored. */
+export interface StorageStsCredentials {
+	storageId: string;
+	/** The bucket the session policy narrowed to, or null for the attachment's whole grant set. */
+	bucket: string | null;
+	accessKeyId: string;
+	secretAccessKey: string;
+	sessionToken: string;
+	/** RustFS's `<Expiration>` value (RFC 3339). */
+	expiration: string;
+}
+
+/** Activation metadata for one attachment that received temporary credentials. */
+export const workloadStorageStsSchema = z.object({
+	prefix: z.string(),
+	storageId: z.string(),
+	bucket: bucketNameSchema.nullable(),
+	accessKeyId: z.string(),
+	/** When the credentials in `<prefix>_*` stop working. */
+	expiresAt: z.string(),
+});
+export type WorkloadStorageSts = z.infer<typeof workloadStorageStsSchema>;
+
 export interface StorageView {
 	id: string;
 	name: string;
@@ -380,6 +443,10 @@ export interface StorageView {
 	attachments: StorageAttachmentView[];
 	/** Root key state; never the secret. `rotating` while a new pair waits for the node (§5). */
 	rootKey: StorageRootKeyState;
+	/** STS/OIDC endpoint and role configuration (IAM.md §7.4). */
+	sts: StorageStsSettings;
+	/** What this instance's RustFS build can do; `sts` is the keyless-credential path. */
+	capabilities: { sts: boolean };
 	statsAt: string | null;
 	createdAt: string;
 	updatedAt: string;

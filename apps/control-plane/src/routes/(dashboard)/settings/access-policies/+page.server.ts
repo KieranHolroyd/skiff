@@ -1,6 +1,5 @@
 import { fail } from '@sveltejs/kit';
-import { randomToken } from '@skiff/core';
-import { sha256Hex, type AccessPolicy, type AccessPolicyScope } from '@skiff/contracts';
+import type { AccessPolicy, AccessPolicyScope, AccessServiceToken } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
 import { formOptionalString, formString, failStatus, toFormFailure } from '../../_lib/errors.js';
 import { parseRuleLines } from './_lib/rules.js';
@@ -23,13 +22,25 @@ interface ProjectOption {
 	environments: Array<{ id: string; slug: string; name: string; access: string; accessPolicyId: string | null }>;
 }
 
+export interface PolicyWithTokens extends AccessPolicy {
+	serviceTokens: AccessServiceToken[];
+}
+
 export const load: PageServerLoad = ({ locals, url }) => {
 	const principal = locals.principal!;
 	let denied = false;
-	let policies: AccessPolicy[] = [];
+	let policies: PolicyWithTokens[] = [];
 	let projects: ProjectOption[] = [];
 	try {
-		policies = core.accessPolicies.list(principal);
+		policies = core.accessPolicies.list(principal).map((policy) => {
+			let serviceTokens: AccessServiceToken[] = [];
+			try {
+				serviceTokens = core.accessPolicies.listServiceTokens(principal, policy.id);
+			} catch {
+				// The policy is visible; a missing token list should not hide it.
+			}
+			return { ...policy, serviceTokens };
+		});
 	} catch {
 		denied = true;
 	}
@@ -108,42 +119,44 @@ export const actions: Actions = {
 	},
 
 	/**
-	 * Mint a service token for a policy: the raw `skiff_svc_…` value is returned once, and only its
-	 * SHA-256 is appended as an allow rule. Removing the rule later is the revocation (and rotates
-	 * the hosts' session epoch, so cookies issued under the old policy stop verifying).
+	 * Mint a named machine token: the raw `skiff_svc_…` value is returned once, and only its SHA-256
+	 * is stored. Revoking the row later rotates the policy version, so cookies issued under the old
+	 * policy stop verifying. Creating a token does not sign anyone out.
 	 */
 	serviceToken: async ({ request, locals }) => {
 		const principal = locals.principal!;
 		const data = await request.formData();
 		try {
-			const policy = core.accessPolicies.get(principal, formString(data, 'id'));
-			const header = (formOptionalString(data, 'header') || 'X-Skiff-Access-Token').trim();
-			const secret = `skiff_svc_${randomToken(32)}`;
-			core.accessPolicies.update(principal, policy.id, {
-				rules: [
-					...policy.rules,
-					{
-						idx: policy.rules.length,
-						action: 'allow',
-						matcher: { type: 'serviceToken', header, tokenHash: sha256Hex(secret) },
-					},
-				],
+			const created = core.accessPolicies.createServiceToken(principal, formString(data, 'id'), {
+				name: formString(data, 'name'),
+				header: formOptionalString(data, 'header') || 'X-Skiff-Access-Token',
 			});
 			return {
-				success: 'Service token created. Copy it now: it is shown once.',
-				serviceToken: secret,
-				serviceTokenHeader: header,
+				success: 'Machine token created. Copy it now: it is shown once.',
+				serviceToken: created.secret,
+				serviceTokenHeader: created.token.header,
+				serviceTokenName: created.token.name,
 			};
 		} catch (error) {
 			return fail(failStatus(error), toFormFailure(error));
 		}
 	},
 
+	/**
+	 * Revoke a named machine token by id. A legacy `serviceToken` rule is still revoked by `idx`
+	 * through the rules editor, so older policy JSON keeps working.
+	 */
 	revokeServiceToken: async ({ request, locals }) => {
 		const principal = locals.principal!;
 		const data = await request.formData();
 		try {
-			const policy = core.accessPolicies.get(principal, formString(data, 'id'));
+			const policyId = formString(data, 'id');
+			const tokenId = formOptionalString(data, 'tokenId');
+			if (tokenId) {
+				core.accessPolicies.revokeServiceToken(principal, policyId, tokenId);
+				return { success: 'Machine token revoked. Its header pair stops working within seconds.' };
+			}
+			const policy = core.accessPolicies.get(principal, policyId);
 			const idx = Number(formString(data, 'idx'));
 			if (!Number.isInteger(idx)) throw new Error('Choose a service token to revoke.');
 			const target = policy.rules.find((rule) => rule.idx === idx);

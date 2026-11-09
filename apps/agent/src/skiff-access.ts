@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { evaluateAccessEdge, type RouteSpec } from '@skiff/contracts';
+import { evaluateAccessEdge, sha256Hex, type RouteSpec } from '@skiff/contracts';
 
 /**
  * Skiff Access, the identity-aware proxy (IAM.md I25, §11.1).
@@ -56,7 +56,49 @@ export interface SkiffAccessOptions {
 	/** Stable HMAC secret for the upstream JWT; falls back to the route's site key. */
 	signingSecret?: string | null;
 	cache?: AccessDecisionCache;
+	/**
+	 * Best-effort last-used reporting for a matched machine token. Called without awaiting; the
+	 * default posts the hash to the platform's `/api/v1/access/service-tokens/touch` endpoint. The
+	 * hash is already part of desired state, so it is not a credential. Never affects the decision.
+	 */
+	touchServiceToken?: (input: { policyId: string; header: string; tokenHash: string }) => void;
+	/** Throttles last-used reports to at most one a minute; one instance per agent process. */
+	touchThrottle?: ServiceTokenTouchThrottle;
 }
+
+/** Default touch lifetime; a busy token reports at most once a minute. */
+export const SERVICE_TOKEN_TOUCH_TTL_MS = 60_000;
+
+/**
+ * Bounds last-used reports so a chatty machine does not turn every request into a platform write.
+ * The platform enforces the same interval, but keeping the first gate in the agent means a busy
+ * token costs a map lookup rather than an HTTP request.
+ */
+export class ServiceTokenTouchThrottle {
+	private readonly touched = new Map<string, number>();
+	private readonly ttlMs: number;
+	private readonly maxEntries: number;
+
+	constructor(ttlMs = SERVICE_TOKEN_TOUCH_TTL_MS, maxEntries = 4_096) {
+		this.ttlMs = ttlMs;
+		this.maxEntries = maxEntries;
+	}
+
+	/** True when `key` may be reported at `nowMs`; records the attempt when it returns true. */
+	shouldTouch(key: string, nowMs: number): boolean {
+		const previous = this.touched.get(key);
+		if (previous !== undefined && nowMs - previous < this.ttlMs) return false;
+		if (this.touched.size >= this.maxEntries) this.touched.clear();
+		this.touched.set(key, nowMs);
+		return true;
+	}
+
+	get size(): number {
+		return this.touched.size;
+	}
+}
+
+const defaultTouchThrottle = new ServiceTokenTouchThrottle();
 
 export interface CachedDecision {
 	expiresAt: number;
@@ -171,6 +213,9 @@ export function handleSkiffAccessRequest(
 	);
 	if (machine.decision === 'deny') return textResponse(403, 'Access denied');
 	if (machine.decision === 'allow') {
+		// Reporting last use is fire-and-forget: a slow or unreachable platform must never delay the
+		// machine's request, and the decision above is already final.
+		reportServiceTokenUse(route, request.headers, machine.header, options, now);
 		const headers = accessHeaders(route, host, '', now, options, machine.header);
 		return new Response(null, { status: 200, headers });
 	}
@@ -190,6 +235,58 @@ export function handleSkiffAccessRequest(
 	const headers = accessHeaders(route, host, visitor.email, now, options);
 	cache?.set(cacheKey, headers, nowMs, visitor.exp * 1000);
 	return new Response(null, { status: 200, headers });
+}
+
+/**
+ * Report that a machine token was used. The matched hash is recomputed locally from the header
+ * value (the rule list only carries hashes), then throttled and posted without awaiting. A token
+ * that matched a legacy rule in the policy JSON is reported too; the platform's endpoint ignores
+ * hashes that are not named DB tokens.
+ */
+function reportServiceTokenUse(
+	route: RouteSpec,
+	headers: Headers,
+	header: string,
+	options: SkiffAccessOptions,
+	now: number,
+): void {
+	const policyId = route.access.policyId;
+	if (!policyId) return;
+	const value = headers.get(header);
+	if (!value) return;
+	const tokenHash = sha256Hex(value);
+	const matched = (route.access.serviceTokens ?? []).some(
+		(token) => token.header.toLowerCase() === header.toLowerCase() && token.tokenHash === tokenHash,
+	);
+	if (!matched) return;
+	const throttle = options.touchThrottle ?? defaultTouchThrottle;
+	if (!throttle.shouldTouch(`${policyId}|${tokenHash}`, now * 1000)) return;
+	const input = { policyId, header, tokenHash };
+	try {
+		if (options.touchServiceToken) options.touchServiceToken(input);
+		else postServiceTokenTouch(route.access.loginUrl, input);
+	} catch {
+		// Last-used telemetry is best effort and must never turn an allow into an error.
+	}
+}
+
+/** Fire-and-forget POST to the platform; the authorize origin is the platform's own origin. */
+function postServiceTokenTouch(
+	loginUrl: string,
+	input: { policyId: string; header: string; tokenHash: string },
+): void {
+	let url: URL;
+	try {
+		url = new URL('/api/v1/access/service-tokens/touch', loginUrl);
+	} catch {
+		return;
+	}
+	void fetch(url, {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify(input),
+		cache: 'no-store',
+	}).catch(() => undefined);
 }
 
 function handleAccessCallback(

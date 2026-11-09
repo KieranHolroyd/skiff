@@ -11,6 +11,7 @@ import {
 	FUNCTIONS_PYTHON_CAPABILITY,
 	BUN_DEFAULT_COMMAND,
 	PROCESS_NODE_CAPABILITY,
+	STORAGE_STS_CAPABILITY,
 	WORKLOAD_IDENTITY_AUDIENCE,
 	WORKLOAD_IDENTITY_CAPABILITY,
 	WORKLOAD_IDENTITY_MOUNT_PATH,
@@ -794,16 +795,27 @@ export class WorkloadService {
 			return activation;
 		const identity = await this.ctx.workloadIdentity.activation(row.id, WORKLOAD_IDENTITY_AUDIENCE);
 		const identityUrl = workloadIdentityUrl(spec.runtime);
+		// Attached storage gets short-lived STS credentials when the node understands them. Any
+		// failure keeps the sealed attachment key already present in `activation.env` (IAM.md §7.4).
+		const storage = await this.ctx.storage.workloadConsumerEnv(
+			{ kind: 'workload', userId: row.id, orgId: row.orgId, role: 'viewer', permissions: new Set() },
+			row.projectId,
+			row.nodeId,
+			spec.runtime,
+			{ sts: this.nodeHasCapability(nodeId, STORAGE_STS_CAPABILITY) },
+		);
 		return {
 			...activation,
 			env: {
 				...activation.env,
+				...storage.env,
 				// Platform values win over the user's environment: the token file is the workload's,
 				// and the metadata endpoint is how it refreshes it.
 				[WORKLOAD_IDENTITY_TOKEN_ENV]: WORKLOAD_IDENTITY_MOUNT_PATH,
 				...(identityUrl ? { [WORKLOAD_IDENTITY_URL_ENV]: identityUrl } : {}),
 			},
 			identity,
+			...(storage.sts.length > 0 ? { storageSts: storage.sts } : {}),
 		};
 	}
 

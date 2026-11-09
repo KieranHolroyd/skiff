@@ -15,6 +15,10 @@ import {
 	STORAGE_PORT_MIN,
 	STORAGE_REGION,
 	STORAGE_ROOT_KEY_PREFIX,
+	STORAGE_STS_AUDIENCE,
+	STORAGE_STS_CACHE_MARGIN_MS,
+	STORAGE_STS_CLAIM,
+	STORAGE_STS_TTL_SECONDS,
 	STORAGE_USER_KEY_PREFIX,
 	bucketCreateSchema,
 	bucketUpdateSchema,
@@ -25,11 +29,13 @@ import {
 	storageCreateSchema,
 	storageEngineRegistry,
 	storageEnvNames,
-	storageImage,
 	storageGatewayHost,
 	storageGrantsSchema,
+	storageImage,
 	storageKeyCreateSchema,
+	storagePolicyName,
 	storagePublicHost,
+	storageStsSupported,
 	storageUpdateSchema,
 	type BucketCreate,
 	type BucketLifecycleRule,
@@ -58,12 +64,15 @@ import {
 	type StorageRootKeyState,
 	type StorageRoute,
 	type StorageStatus,
+	type StorageStsCredentials,
+	type StorageStsSettings,
 	type StorageUpdate,
 	type StorageView,
 	type WorkloadActivation,
 	type WorkloadDesired,
 	type WorkloadRuntime,
 	type WorkloadStatus,
+	type WorkloadStorageSts,
 	STORAGE_NOTIFY_TARGET,
 } from '@skiff/contracts';
 import { featureEnabled } from './config.ts';
@@ -73,6 +82,12 @@ import { ConflictError, CoreError, NotFoundError, ValidationError } from './erro
 import { resolvePlacement } from './placement.ts';
 import type { ProjectRow } from './projects.ts';
 import type { DiskRow } from './disks.ts';
+import {
+	requestStorageSts,
+	StorageStsUnavailableError,
+	storageStsAudience,
+	storageStsSessionPolicy,
+} from './storage-sts.ts';
 import { newId, parseJson, randomBytes, sha256Hex } from './util.ts';
 
 export type StorageRow = typeof storageInstances.$inferSelect;
@@ -108,6 +123,24 @@ function rustfsNotifyEnv(endpoint: string): Record<string, string> {
 	};
 }
 
+/**
+ * OIDC/STS settings RustFS needs to accept Skiff's workload tokens. The token names its scoped
+ * policy in the `groups` claim, so no fixed role policy is configured; `issuer` is the platform
+ * origin and `client_id` is the token audience. A build without these settings ignores them, and
+ * the control plane falls back to the sealed attachment key.
+ */
+function rustfsStsEnv(config: { platformOrigin: string }): Record<string, string> {
+	const issuer = config.platformOrigin.replace(/\/+$/, '');
+	return {
+		RUSTFS_IDENTITY_OPENID_ENABLE: 'on',
+		RUSTFS_IDENTITY_OPENID_CONFIG_URL: `${issuer}/.well-known/openid-configuration`,
+		RUSTFS_IDENTITY_OPENID_ISSUER: issuer,
+		RUSTFS_IDENTITY_OPENID_CLIENT_ID: STORAGE_STS_AUDIENCE,
+		RUSTFS_IDENTITY_OPENID_CLAIM_NAME: STORAGE_STS_CLAIM,
+		RUSTFS_IDENTITY_OPENID_GROUPS_CLAIM: STORAGE_STS_CLAIM,
+	};
+}
+
 /** One consumer's view of an attachment, resolved for the node and runtime it runs on. */
 interface ResolvedAttachment {
 	storage: StorageRow;
@@ -123,6 +156,9 @@ interface ResolvedAttachment {
  * and attached apps only at their own activation (S4, S6).
  */
 export class StorageService {
+	/** Temporary credentials, keyed by instance/attachment/bucket/audience; never persisted. */
+	private readonly stsCache = new Map<string, StorageStsCredentials>();
+
 	constructor(private readonly ctx: CoreContext) {}
 
 	// ---------------------------------------------------------------- reads
@@ -355,6 +391,7 @@ export class StorageService {
 			.set({ deletedAt: now, purgeAt: now + this.ctx.policies.trashMs(), status: 'stopped', updatedAt: now })
 			.where(eq(storageInstances.id, row.id))
 			.run();
+		this.clearStsCache(row.id);
 		this.ctx.audit.record({
 			principal,
 			action: 'storage.delete',
@@ -1063,6 +1100,7 @@ export class StorageService {
 				.set({ grantsJson: JSON.stringify(input.grants), updatedAt: now })
 				.where(eq(storageKeys.id, attachment.credentialId))
 				.run();
+		this.clearStsCache(row.id);
 		this.ctx.audit.record({
 			principal,
 			action: 'storage.attachment.update',
@@ -1095,6 +1133,7 @@ export class StorageService {
 				.set({ revokedAt: this.ctx.now(), updatedAt: this.ctx.now() })
 				.where(eq(storageKeys.id, attachment.credentialId))
 				.run();
+		this.clearStsCache(row.id);
 		this.ctx.audit.record({
 			principal,
 			action: 'storage.detach',
@@ -1154,6 +1193,99 @@ export class StorageService {
 		return env;
 	}
 
+	/**
+	 * Temporary credentials for one workload on one instance (IAM.md §7.4, I18). `principal.userId`
+	 * must be a workload id; `bucket` narrows the session policy to one granted bucket. Cached until
+	 * five minutes before RustFS says the credentials expire. A build without STS, a missing
+	 * attachment or a failed call throws `StorageStsUnavailableError` so the caller can fall back to
+	 * the sealed attachment key.
+	 */
+	async stsForWorkload(
+		principal: Principal,
+		input: { instanceId: string; bucket?: string; audience?: string },
+	): Promise<StorageStsCredentials> {
+		const row = this.rowById(input.instanceId) ?? this.requireRow(principal, input.instanceId);
+		if (!row || row.deletedAt) throw new NotFoundError('Storage');
+		if (row.orgId !== principal.orgId)
+			throw new CoreError('forbidden', 'This storage instance belongs to another organisation.', 403);
+		if (!storageStsSupported(row.version))
+			throw new StorageStsUnavailableError(`RustFS ${row.version} does not serve STS; use the attachment key.`);
+		const workload = this.ctx.db
+			.select()
+			.from(workloads)
+			.where(and(eq(workloads.id, principal.userId), eq(workloads.orgId, principal.orgId)))
+			.get();
+		if (!workload)
+			throw new CoreError('forbidden', 'Storage STS is only available to a workload in this organisation.', 403);
+		const attached = this.liveAttachmentRows(workload.projectId).find((item) => item.storage.id === row.id);
+		if (!attached) throw new NotFoundError('Storage attachment');
+		const grants = parseGrants(attached.attachment.grantsJson);
+		if (input.bucket && !grants.some((grant) => grant.bucket === input.bucket))
+			throw new ValidationError(`"${row.name}" is not granted bucket "${input.bucket}" for this workload.`);
+		return this.issueStsForAttachment(principal, row, attached.attachment, grants, input.bucket, input.audience);
+	}
+
+	/**
+	 * Storage env for an attached workload, using temporary STS credentials when the node supports
+	 * them and RustFS accepts the workload token. Any failure returns the attachment's sealed key
+	 * instead, so an older agent/instance or an unreachable STS endpoint never breaks an activation.
+	 */
+	async workloadConsumerEnv(
+		principal: Principal,
+		projectId: string,
+		nodeId: string | null,
+		runtime: WorkloadRuntime,
+		options: { sts?: boolean } = {},
+	): Promise<{ env: Record<string, string>; sts: WorkloadStorageSts[] }> {
+		const env: Record<string, string> = {};
+		const sts: WorkloadStorageSts[] = [];
+		for (const item of this.resolveForConsumer(projectId, nodeId, runtime)) {
+			const prefix = item.attachment.envPrefix;
+			const publicUrl = this.publicUrl(item.storage);
+			env[`${prefix}_ENDPOINT_URL`] = item.endpoint;
+			if (publicUrl) env[`${prefix}_PUBLIC_ENDPOINT_URL`] = publicUrl;
+			env[`${prefix}_REGION`] = STORAGE_REGION;
+			env[`${prefix}_FORCE_PATH_STYLE`] = 'true';
+			if (item.grants.length === 1) env[`${prefix}_BUCKET`] = item.grants[0]!.bucket;
+
+			let issued: StorageStsCredentials | null = null;
+			if (options.sts && storageStsSupported(item.storage.version)) {
+				try {
+					issued = await this.issueStsForAttachment(
+						principal,
+						item.storage,
+						item.attachment,
+						item.grants,
+						undefined,
+						undefined,
+					);
+				} catch {
+					// Older RustFS, a missing scoped policy or an unreachable endpoint: keep the key.
+					issued = null;
+				}
+			}
+			if (issued) {
+				env[`${prefix}_ACCESS_KEY_ID`] = issued.accessKeyId;
+				env[`${prefix}_SECRET_ACCESS_KEY`] = issued.secretAccessKey;
+				env[`${prefix}_SESSION_TOKEN`] = issued.sessionToken;
+				sts.push({
+					prefix,
+					storageId: item.storage.id,
+					bucket: item.grants.length === 1 ? item.grants[0]!.bucket : null,
+					accessKeyId: issued.accessKeyId,
+					expiresAt: issued.expiration,
+				});
+			} else {
+				env[`${prefix}_ACCESS_KEY_ID`] = item.attachment.accessKeyId;
+				env[`${prefix}_SECRET_ACCESS_KEY`] = this.ctx.secrets.open(
+					item.attachment.orgId,
+					item.attachment.secretSealed,
+				);
+			}
+		}
+		return { env, sts };
+	}
+
 	/** Fingerprint of a consumer's storage attachments (no secrets), folded into its activation version. */
 	consumerVersion(projectId: string, nodeId: string | null, runtime: WorkloadRuntime): string {
 		const items = this.resolveForConsumer(projectId, nodeId, runtime).map((item) => ({
@@ -1182,6 +1314,7 @@ export class StorageService {
 				// rule watches one of its buckets, so instances without rules never restart for it.
 				const watched = this.ctx.events.watchedBuckets(row.id);
 				const notifyEnv = watched.size > 0 ? rustfsNotifyEnv(this.ctx.events.storageNotifyEndpoint(row.id)) : {};
+				const stsEnv = rustfsStsEnv(this.ctx.config);
 				const attachments = this.liveAttachmentsOf(row.id);
 				const keys = this.desiredKeysOf(row.id, attachments);
 				const users = new Map<string, StorageGrant[]>();
@@ -1208,8 +1341,8 @@ export class StorageService {
 					port: row.hostPort,
 					healthPath: '/health',
 					socketActivation: false,
-					activationVersion: storageActivationVersion(row, notifyEnv),
-					env: { ...RUSTFS_ENV, ...notifyEnv },
+					activationVersion: storageActivationVersion(row, notifyEnv, stsEnv),
+					env: { ...RUSTFS_ENV, ...stsEnv, ...notifyEnv },
 					secrets: [],
 					dataSizeMb: null,
 					objectStorage: {
@@ -1333,9 +1466,10 @@ export class StorageService {
 		for (const [accessKey, secret] of this.ctx.storageReplication.peerSecretsFor(row.id)) userSecrets.set(accessKey, secret);
 		const notifying = this.ctx.events.watchedBuckets(row.id).size > 0;
 		const notifyEnv = notifying ? rustfsNotifyEnv(this.ctx.events.storageNotifyEndpoint(row.id)) : {};
+		const stsEnv = rustfsStsEnv(this.ctx.config);
 		return {
 			workloadId: row.id,
-			activationVersion: storageActivationVersion(row, notifyEnv),
+			activationVersion: storageActivationVersion(row, notifyEnv, stsEnv),
 			env: {
 				RUSTFS_ACCESS_KEY: root.accessKeyId,
 				RUSTFS_SECRET_KEY: rootSecret,
@@ -1580,6 +1714,95 @@ export class StorageService {
 	}
 
 	// ---------------------------------------------------------------- internals
+
+	/**
+	 * Mint a workload token carrying the attachment's scoped policy in `groups`, then exchange it
+	 * at the instance's STS endpoint. The token's `groups` claim is what RustFS maps to IAM; the
+	 * inline session policy narrows it to the requested bucket when one is named.
+	 */
+	private async issueStsForAttachment(
+		principal: Principal,
+		storage: StorageRow,
+		attachment: AttachmentRow,
+		grants: StorageGrant[],
+		bucket: string | undefined,
+		audience: string | undefined,
+	): Promise<StorageStsCredentials> {
+		if (!storageStsSupported(storage.version))
+			throw new StorageStsUnavailableError(`RustFS ${storage.version} does not serve STS.`);
+		// The token's `groups` claim already selects the attachment's scoped policy, so a session
+		// policy is only needed to narrow further to one named bucket. Omitting it for the whole
+		// attachment also keeps multi-bucket grants under RustFS's 2 KiB inline-policy limit.
+		const policy = bucket ? storageStsSessionPolicy(grants, bucket) : undefined;
+		if (bucket && !policy)
+			throw new StorageStsUnavailableError(`The attachment is not granted bucket "${bucket}".`);
+		const resolvedAudience = storageStsAudience(audience);
+		const cacheKey = `${storage.id}:${attachment.accessKeyId}:${bucket ?? '*'}:${resolvedAudience}`;
+		const cached = this.stsCache.get(cacheKey);
+		if (cached && Date.parse(cached.expiration) - STORAGE_STS_CACHE_MARGIN_MS > this.ctx.now()) return cached;
+
+		// The workload identity service owns the service-account lifecycle; we only add the scoped
+		// policy claim to the same token shape it mints.
+		const minted = await this.ctx.workloadIdentity.mint(principal.userId, resolvedAudience);
+		const project = this.ctx.db
+			.select({ slug: projects.slug })
+			.from(projects)
+			.where(eq(projects.id, minted.projectId))
+			.get();
+		const token = await this.ctx.signingKeys.sign(
+			'workload',
+			{
+				sub: minted.serviceAccountId,
+				aud: resolvedAudience,
+				org_id: minted.orgId,
+				project_id: minted.projectId,
+				environment: minted.environment,
+				act: {
+					sub: `wl:${project?.slug ?? minted.projectId}/${minted.environment}`,
+					name: minted.serviceAccount,
+				},
+				[STORAGE_STS_CLAIM]: [storagePolicyName(attachment.accessKeyId)],
+			},
+			minted.expiresIn,
+		);
+		const endpoint =
+			this.ctx.config.storageGatewayUrl ??
+			`http://127.0.0.1:${this.ctx.config.storageGatewayPort ?? 8081}`;
+		const issued = await requestStorageSts({
+			endpoint,
+			host: storageGatewayHost(storage.id),
+			token,
+			...(policy ? { policy } : {}),
+			durationSeconds: STORAGE_STS_TTL_SECONDS,
+			roleSessionName: `skiff-${principal.userId}`.slice(0, 64),
+		});
+		const credentials: StorageStsCredentials = {
+			storageId: storage.id,
+			bucket: bucket ?? null,
+			...issued,
+		};
+		this.stsCache.set(cacheKey, credentials);
+		return credentials;
+	}
+
+	/** Drop cached credentials for an instance after a revoke, detach or grant change. */
+	private clearStsCache(storageId: string): void {
+		const prefix = `${storageId}:`;
+		for (const key of this.stsCache.keys()) if (key.startsWith(prefix)) this.stsCache.delete(key);
+	}
+
+	/** STS/OIDC settings for the view: derived from the pinned engine and platform issuer. */
+	private stsSettings(row: StorageRow): StorageStsSettings {
+		const issuer = this.ctx.config.platformOrigin.replace(/\/+$/, '');
+		return {
+			enabled: storageStsSupported(row.version),
+			endpoint: this.publicUrl(row) ?? `http://127.0.0.1:${row.hostPort}`,
+			issuer,
+			audience: STORAGE_STS_AUDIENCE,
+			claim: STORAGE_STS_CLAIM,
+			rolePolicy: null,
+		};
+	}
 
 	private rowById(id: string): StorageRow | undefined {
 		return this.ctx.db.select().from(storageInstances).where(eq(storageInstances.id, id)).get();
@@ -1949,6 +2172,8 @@ export class StorageService {
 				.map(bucketView),
 			attachments: this.attachmentsOf(row.id),
 			rootKey: rootKeyState(row),
+			sts: this.stsSettings(row),
+			capabilities: { sts: storageStsSupported(row.version) },
 			statsAt: row.statsAt ? new Date(row.statsAt).toISOString() : null,
 			createdAt: new Date(row.createdAt).toISOString(),
 			updatedAt: new Date(row.updatedAt).toISOString(),
@@ -2031,7 +2256,11 @@ function secretKey(): string {
 }
 
 /** Covers what the container itself depends on; bucket and key changes never restart it. */
-function storageActivationVersion(row: StorageRow, notifyEnv: Record<string, string> = {}): string {
+function storageActivationVersion(
+	row: StorageRow,
+	notifyEnv: Record<string, string> = {},
+	stsEnv: Record<string, string> = {},
+): string {
 	return sha256Hex(
 		JSON.stringify({
 			id: row.id,
@@ -2044,6 +2273,9 @@ function storageActivationVersion(row: StorageRow, notifyEnv: Record<string, str
 			// A restart must re-activate (and so restart) the container without touching data.
 			restartGeneration: row.restartGeneration,
 			env: RUSTFS_ENV,
+			// The OIDC issuer/client settings are stable per platform, but include them so changing the
+			// platform origin re-activates the container.
+			...(Object.keys(stsEnv).length > 0 ? { sts: stsEnv } : {}),
 			// Only present while notifications are on, so every other instance keeps its version.
 			...(Object.keys(notifyEnv).length > 0 ? { notify: notifyEnv } : {}),
 		}),

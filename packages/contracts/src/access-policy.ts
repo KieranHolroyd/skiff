@@ -94,6 +94,46 @@ export const accessPolicyUpdateSchema = z
 	.refine((value) => Object.keys(value).length > 0, 'Nothing to update.');
 export type AccessPolicyUpdate = z.infer<typeof accessPolicyUpdateSchema>;
 
+/** Default header a machine sends when none is chosen. */
+export const ACCESS_SERVICE_TOKEN_DEFAULT_HEADER = 'X-Skiff-Access-Token';
+
+const SERVICE_TOKEN_HEADER = z
+	.string()
+	.trim()
+	.min(1)
+	.max(80)
+	.regex(/^[A-Za-z0-9-]+$/, 'Use a header name such as X-Skiff-Access-Token.');
+
+/** Create a named machine token for a policy. The secret is generated and returned once. */
+export const accessServiceTokenCreateSchema = z.object({
+	name: z.string().trim().min(1).max(80),
+	header: SERVICE_TOKEN_HEADER.default(ACCESS_SERVICE_TOKEN_DEFAULT_HEADER),
+});
+export type AccessServiceTokenCreate = z.infer<typeof accessServiceTokenCreateSchema>;
+
+/**
+ * Best-effort last-used report from an agent. Only the token hash is sent: it is already part of
+ * the edge's desired state and is not a credential. The platform updates `last_used_at` at most
+ * once a minute per token.
+ */
+export const accessServiceTokenTouchSchema = z.object({
+	policyId: z.string().min(1).max(100),
+	header: SERVICE_TOKEN_HEADER.optional(),
+	tokenHash: z.string().regex(/^[a-f0-9]{64}$/),
+});
+export type AccessServiceTokenTouch = z.infer<typeof accessServiceTokenTouchSchema>;
+
+/** A machine token as returned to the dashboard. Never includes the secret or its hash. */
+export interface AccessServiceToken {
+	id: string;
+	policyId: string;
+	name: string;
+	header: string;
+	createdAt: number;
+	lastUsedAt: number | null;
+	revokedAt: number | null;
+}
+
 /** The policy as stored and returned. `rules` keep their stored order (`idx`). */
 export interface AccessPolicy {
 	id: string;

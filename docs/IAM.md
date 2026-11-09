@@ -349,7 +349,9 @@ working.
   - Calling Skiff's API as the workload (`SKIFF_TOKEN_FILE` is injected).
   - Registry pulls, replacing the HMAC login.
   - Short-lived credentials for attached storage, if RustFS supports
-    `AssumeRoleWithWebIdentity` (spike S3). Otherwise attachment keys stay as they are (D66).
+    `AssumeRoleWithWebIdentity` (spike S3: RustFS 1.0.4 supports it). Attachments get
+    `<P>_ACCESS_KEY_ID`/`_SECRET_ACCESS_KEY`/`_SESSION_TOKEN` from STS, with the sealed static key as
+    the fallback for older nodes or a failed call (D66).
   - AWS, GCP and Azure workload identity federation trusting the Skiff issuer
     ([CLOUD-IDENTITY.md](./CLOUD-IDENTITY.md)).
 - Database attachments keep passwords (D58, D86). Postgres has no native OIDC auth, and a pgbouncer
@@ -617,7 +619,7 @@ in `packages/contracts/src/iam/{catalog,authorize}.ts`, `packages/contracts/src/
 | **I2 Resource scopes** | I7 | Built | list filtering on queries that cannot express a scope |
 | **I3 Service accounts** | I13–I14 | Built | per-repository pipeline accounts; Better Auth `apikey` migration (S1); an org key-TTL policy |
 | **I4 Token service** | I15–I17 | Built | none |
-| **I5 Workload identity** | I18 | Built | RustFS storage STS (S3) |
+| **I5 Workload identity** | I18 | Built | Agent-side refresh beyond activation, cloud setup guides |
 | **I6 Enterprise sign-in** | I19–I21 | Built | SAML encrypted assertions |
 | **I7 Governance** | I11, I12, I22–I23 | Built | step-up on by default |
 | **I8 Platform IAM** | I24 | Built | a dedicated platform IAM page |
@@ -683,7 +685,7 @@ What is built now:
 |---|---|---|---|
 | S1 | Can Better Auth 1.7.15 `apikey` hashes be verified by Skiff code (same algorithm and encoding), so keys migrate without being reissued? | I14 migration path | **Open.** `apikey` rows still authenticate first; `access_keys` is written for new keys only. |
 | S2 | Better Auth `sso` and `scim` plugins at 1.7.15: SQLite support, how they work with the invite-only sign-up hook and the owner 2FA gate, and how mature SAML is | I19/I20 on the plugins or hand-rolled | **Answered: the plugins ship.** `@better-auth/sso` serves OIDC and SAML with Skiff-owned verification and SP signing, its SLO endpoints are enabled, and `@better-auth/scim` serves the directory. |
-| S3 | Does RustFS support STS `AssumeRoleWithWebIdentity` with an external OIDC issuer? | Short-lived storage credentials in I18 | **Open.** Attached storage still uses static attachment keys (D66). |
+| S3 | Does RustFS support STS `AssumeRoleWithWebIdentity` with an external OIDC issuer? | Short-lived storage credentials in I18 | **Yes.** RustFS 1.0.4 serves `AssumeRoleWithWebIdentity`; attached workloads get 1-hour credentials, falling back to the sealed attachment key. |
 | S4 | The cost of compile + cache at 1k bindings / 100 groups, and of `scopeFilter` on list queries | Whether to precompute and persist compiled grants | **Open.** Compiled grants are cached in memory by `iamVersion`; no persisted precompute. |
 | S5 | Cedar WASM in Bun: size, cold start, per-check latency | Whether Cedar becomes an engine for conditions and guardrails | **Open, not adopted.** The native engine remains. |
 | S6 | Caddy `forward_auth` to an agent-local handler: added p50 and p99, behaviour when the agent restarts | Whether I25 caches decisions in Caddy | **Partly answered.** The agent caches verified decisions with the site key in the cache key, and service tokens are decided before redirects; no Caddy-side cache. |

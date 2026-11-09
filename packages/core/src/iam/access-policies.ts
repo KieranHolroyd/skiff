@@ -11,6 +11,7 @@ import type { Database } from 'bun:sqlite';
 import {
 	accessPolicyMatcherSchema,
 	accessPolicyRuleSchema,
+	accessServiceTokenCreateSchema,
 	evaluateAccessPolicy,
 	serviceTokenRules,
 	type AccessIdentity,
@@ -19,6 +20,8 @@ import {
 	type AccessPolicyRule,
 	type AccessPolicyScope,
 	type AccessPolicyUpdate,
+	type AccessServiceToken,
+	type AccessServiceTokenCreate,
 	type AccessServiceTokenRule,
 	type Principal,
 	type ResourceRef,
@@ -26,8 +29,11 @@ import {
 import type { CoreContext } from '../context.ts';
 import type { ContentRoute } from '../access.ts';
 import { NotFoundError, ValidationError } from '../errors.ts';
-import { newId } from '../util.ts';
+import { newId, randomToken, sha256Hex } from '../util.ts';
 import type { ProjectRow } from '../projects.ts';
+
+/** Last-used updates are deliberately coarse: an agent may report every request. */
+export const SERVICE_TOKEN_TOUCH_INTERVAL_MS = 60_000;
 
 interface PolicyRow {
 	id: string;
@@ -49,6 +55,25 @@ interface RuleRow {
 	idx: number;
 	action: string;
 	matcher_json: string;
+}
+
+interface ServiceTokenRow {
+	id: string;
+	org_id: string;
+	policy_id: string;
+	name: string;
+	header: string;
+	token_hash: string;
+	created_by: string;
+	created_at: number;
+	last_used_at: number | null;
+	revoked_at: number | null;
+}
+
+export interface CreatedServiceToken {
+	token: AccessServiceToken;
+	/** The raw `skiff_svc_…` value. Returned once and never stored. */
+	secret: string;
 }
 
 export interface AccessPolicyView extends AccessPolicy {
@@ -151,11 +176,141 @@ export class AccessPolicyService {
 		return {
 			enabled: row.enabled === 1,
 			version: row.version ?? 0,
-			serviceTokens: serviceTokenRules({ rules }),
+			// Named tokens from the database are merged with legacy `serviceToken` matchers still in
+			// the policy JSON. DB tokens are allow-only; a legacy deny rule still wins in the
+			// evaluator regardless of order. Revoked rows are excluded here and on the
+			// `access_service_tokens` query, so a revocation disappears on the next desired-state pull.
+			serviceTokens: [
+				...serviceTokenRules({ rules }),
+				...this.activeServiceTokenRules(policyId),
+			],
 			// Anything the agent cannot prove from headers alone (a person, a CIDR request, a pool)
 			// means an anonymous visitor may still have a way in and should be sent to login.
 			hasPersonRules: rules.some((rule) => rule.matcher.type !== 'serviceToken'),
 		};
+	}
+
+	// ---------------------------------------------------------------- service tokens
+
+	/**
+	 * Named machine tokens for a policy. The raw value and its hash never leave `createServiceToken`;
+	 * this view is what Settings and the API show (name, header, last-used, revocation state).
+	 */
+	listServiceTokens(principal: Principal, policyId: string): AccessServiceToken[] {
+		const row = this.requireRow(principal.orgId, policyId);
+		this.ctx.iam.require(principal, 'accessPolicy:read', refFor(row));
+		return this.#sqlite
+			.query<ServiceTokenRow, [string, string]>(
+				`SELECT * FROM access_service_tokens
+				 WHERE policy_id = ? AND org_id = ?
+				 ORDER BY created_at DESC, id DESC`,
+			)
+			.all(policyId, principal.orgId)
+			.map((token) => serviceTokenView(token));
+	}
+
+	/**
+	 * Mint a named token. The secret is shown once; only its SHA-256 is stored, and the token is
+	 * published to agents through `edgeSettings` on the next desired-state pull. Creating a token is
+	 * not a revocation: it touches the policy's `updated_at` and the global desired-state watermark
+	 * but does not bump the revocation version, so existing visitors stay signed in.
+	 */
+	createServiceToken(
+		principal: Principal,
+		policyId: string,
+		input: AccessServiceTokenCreate,
+	): CreatedServiceToken {
+		const row = this.requireRow(principal.orgId, policyId);
+		this.ctx.iam.require(principal, 'accessPolicy:update', refFor(row));
+		const parsed = accessServiceTokenCreateSchema.parse(input);
+		// Desired state publishes at most 100 service tokens per route (`routeAccessSchema`); keep
+		// DB tokens within the same budget as legacy `serviceToken` rules.
+		const active = this.#sqlite
+			.query<{ count: number }, [string]>(
+				'SELECT COUNT(*) AS count FROM access_service_tokens WHERE policy_id = ? AND revoked_at IS NULL',
+			)
+			.get(policyId)?.count ?? 0;
+		const legacy = this.rules(policyId).filter((rule) => rule.matcher.type === 'serviceToken').length;
+		if (active + legacy >= 100)
+			throw new ValidationError('A policy may have at most 100 service tokens.');
+		const secret = `skiff_svc_${randomToken(32)}`;
+		const tokenHash = sha256Hex(secret);
+		const id = newId('ast_');
+		const now = this.ctx.now();
+		this.#sqlite.run(
+			`INSERT INTO access_service_tokens
+			   (id, org_id, policy_id, name, header, token_hash, created_by, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			[id, principal.orgId, policyId, parsed.name, parsed.header, tokenHash, principal.userId, now],
+		);
+		// The host's edge copy must learn the new hash; `projects.bump` changes the desired-state
+		// watermark without rotating the policy's site key.
+		this.#sqlite.run('UPDATE access_policies SET updated_at = ? WHERE id = ? AND org_id = ?', [
+			now,
+			policyId,
+			principal.orgId,
+		]);
+		this.ctx.projects.bump(principal.orgId);
+		this.ctx.audit.record({
+			principal,
+			action: 'access_policy.service_token.create',
+			resource: 'access_policy',
+			resourceId: policyId,
+			args: { tokenId: id, name: parsed.name, header: parsed.header },
+			result: 'ok',
+		});
+		return { token: serviceTokenView(this.requireServiceTokenRow(policyId, id)), secret };
+	}
+
+	/**
+	 * Revoke a token: the row is kept for history, `revoked_at` is set, and the policy version is
+	 * bumped. The version is folded into every host's site key, so browsers already signed in under
+	 * this policy are signed out too. Revoking an already-revoked token is a no-op.
+	 */
+	revokeServiceToken(principal: Principal, policyId: string, tokenId: string): AccessServiceToken {
+		const policy = this.requireRow(principal.orgId, policyId);
+		this.ctx.iam.require(principal, 'accessPolicy:update', refFor(policy));
+		const token = this.requireServiceTokenRow(policyId, tokenId);
+		if (token.revoked_at === null) {
+			const now = this.ctx.now();
+			this.#sqlite.run(
+				'UPDATE access_service_tokens SET revoked_at = ? WHERE id = ? AND policy_id = ? AND revoked_at IS NULL',
+				[now, tokenId, policyId],
+			);
+			this.bumpPolicyVersion(policyId);
+			this.ctx.projects.bump(principal.orgId);
+			this.ctx.audit.record({
+				principal,
+				action: 'access_policy.service_token.revoke',
+				resource: 'access_policy',
+				resourceId: policyId,
+				args: { tokenId, name: token.name, header: token.header },
+				result: 'ok',
+			});
+		}
+		return serviceTokenView(this.requireServiceTokenRow(policyId, tokenId));
+	}
+
+	/**
+	 * Best-effort last-used reporting from the edge (no principal, no request-path writes). Returns
+	 * true when the timestamp moved; a report within a minute of the last one is ignored. An unknown,
+	 * revoked or unknown token is silently ignored so the endpoint is not an oracle.
+	 */
+	touchServiceToken(policyId: string, tokenHash: string, now = this.ctx.now()): boolean {
+		const token = this.#sqlite
+			.query<{ id: string; last_used_at: number | null }, [string, string]>(
+				`SELECT id, last_used_at FROM access_service_tokens
+				 WHERE policy_id = ? AND token_hash = ? AND revoked_at IS NULL`,
+			)
+			.get(policyId, tokenHash);
+		if (!token) return false;
+		if (token.last_used_at !== null && now - token.last_used_at < SERVICE_TOKEN_TOUCH_INTERVAL_MS)
+			return false;
+		this.#sqlite.run(
+			'UPDATE access_service_tokens SET last_used_at = ? WHERE id = ? AND revoked_at IS NULL',
+			[now, token.id],
+		);
+		return true;
 	}
 
 	/** A policy's current revocation version; zero falls back to the project's site epoch. */
@@ -276,6 +431,10 @@ export class AccessPolicyService {
 		if (assigned || assignedEnv)
 			throw new ValidationError('Turn Skiff Access off for every host using this policy before deleting it.');
 		this.#sqlite.transaction(() => {
+			this.#sqlite.run('DELETE FROM access_service_tokens WHERE policy_id = ? AND org_id = ?', [
+				id,
+				principal.orgId,
+			]);
 			this.#sqlite.run('DELETE FROM access_policy_rules WHERE policy_id = ?', [id]);
 			this.#sqlite.run('DELETE FROM access_policies WHERE id = ? AND org_id = ?', [id, principal.orgId]);
 		})();
@@ -396,6 +555,32 @@ export class AccessPolicyService {
 		return row;
 	}
 
+	private requireServiceTokenRow(policyId: string, tokenId: string): ServiceTokenRow {
+		const row = this.#sqlite
+			.query<ServiceTokenRow, [string, string]>(
+				'SELECT * FROM access_service_tokens WHERE id = ? AND policy_id = ?',
+			)
+			.get(tokenId, policyId);
+		if (!row) throw new NotFoundError('Service token');
+		return row;
+	}
+
+	/** Active DB tokens in the edge's shape; header names are normalised like legacy rules. */
+	private activeServiceTokenRules(policyId: string): AccessServiceTokenRule[] {
+		return this.#sqlite
+			.query<{ header: string; token_hash: string }, [string]>(
+				`SELECT header, token_hash FROM access_service_tokens
+				 WHERE policy_id = ? AND revoked_at IS NULL
+				 ORDER BY created_at`,
+			)
+			.all(policyId)
+			.map((token) => ({
+				header: token.header.toLowerCase(),
+				tokenHash: token.token_hash.toLowerCase(),
+				action: 'allow' as const,
+			}));
+	}
+
 	private validateScope(principal: Principal, scope: AccessPolicyScope): AccessPolicyScope {
 		if (scope.type === 'org') return scope;
 		if (scope.type === 'project') {
@@ -502,4 +687,16 @@ function rulesWereRevoked(before: readonly AccessPolicyRule[], after: readonly A
 
 function ruleKey(rule: AccessPolicyRule): string {
 	return JSON.stringify([rule.action, rule.matcher]);
+}
+
+function serviceTokenView(row: ServiceTokenRow): AccessServiceToken {
+	return {
+		id: row.id,
+		policyId: row.policy_id,
+		name: row.name,
+		header: row.header,
+		createdAt: row.created_at,
+		lastUsedAt: row.last_used_at,
+		revokedAt: row.revoked_at,
+	};
 }

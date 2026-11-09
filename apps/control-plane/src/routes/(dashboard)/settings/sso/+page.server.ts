@@ -3,7 +3,13 @@ import { core } from '#lib/server/core.js';
 import { platformOrigin } from '#lib/server/config.js';
 import { sqlite } from '#lib/server/db.js';
 import { userHasSecondFactor } from '#lib/server/second-factor.js';
-import { reserveSsoProviderId, sso, ssoCallbackUrl, ssoSamlAcs, ssoSamlMetadata } from '#lib/server/sso.js';
+import {
+	reserveSsoProviderId,
+	sso,
+	ssoCallbackUrl,
+	ssoSamlAcs,
+	ssoSamlMetadata
+} from '#lib/server/sso.js';
 import { ssoPreset } from '#lib/sso-presets.js';
 import { ssoDefaultRole } from '#lib/server/sso-provision.js';
 import { failStatus, formBoolean, formString, toFormFailure } from '../../_lib/errors.js';
@@ -80,8 +86,7 @@ export const actions: Actions = {
 		const principal = locals.principal!;
 		const data = await request.formData();
 		const id = formString(data, 'providerId');
-		const protocol: 'oidc' | 'saml' =
-			formString(data, 'protocol') === 'saml' ? 'saml' : 'oidc';
+		const protocol: 'oidc' | 'saml' = formString(data, 'protocol') === 'saml' ? 'saml' : 'oidc';
 		const clientSecret = formString(data, 'clientSecret');
 		const discoveryUrl = formString(data, 'discoveryUrl');
 		// A preset's own fields arrive as `preset.<key>`; the server resolves the issuer from them
@@ -109,6 +114,7 @@ export const actions: Actions = {
 			spEntityId: formString(data, 'samlSpEntityId'),
 			audience: formString(data, 'samlAudience'),
 			wantAssertionsSigned: formBoolean(data, 'samlWantAssertionsSigned'),
+			wantAssertionsEncrypted: formBoolean(data, 'samlWantAssertionsEncrypted'),
 			identifierFormat: formString(data, 'samlIdentifierFormat')
 		};
 		const input = {
@@ -176,6 +182,24 @@ export const actions: Actions = {
 				success: `SP signing key rotated. The previous certificate stays in the metadata${
 					provider.saml?.spSigning?.previousPublishedUntil
 						? ` until ${new Date(provider.saml.spSigning.previousPublishedUntil).toISOString()}`
+						: ''
+				}.`
+			};
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	rotateSpEncryptionKey: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const id = formString(await request.formData(), 'providerId');
+		if (!id) return fail(400, { message: 'Missing provider id.' });
+		try {
+			const provider = sso.rotateSpEncryptionKey(principal, id);
+			return {
+				success: `SP encryption key rotated. Import the new certificate at the IdP; the previous one stays in the metadata${
+					provider.saml?.spEncryption?.previousPublishedUntil
+						? ` until ${new Date(provider.saml.spEncryption.previousPublishedUntil).toISOString()}`
 						: ''
 				}.`
 			};
