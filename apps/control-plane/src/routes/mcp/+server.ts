@@ -1,9 +1,11 @@
 import { requireMcpAuth } from '@better-auth/mcp';
+import { WORKLOAD_IDENTITY_AUDIENCE } from '@skiff/contracts';
 import { auth } from '#lib/server/auth.js';
 import { mcpResource } from '#lib/server/config.js';
 import { core } from '#lib/server/core.js';
 import { mcpHandler } from '#lib/server/mcp.js';
 import { grantRevokedResponse } from '#lib/server/mcp-grant.js';
+import { principalFromSkiffBearer } from '#lib/server/principal.js';
 import type { RequestHandler } from './$types';
 
 /**
@@ -42,6 +44,32 @@ const handle = requireMcpAuth(
 	{ resource: mcpResource },
 );
 
-export const POST: RequestHandler = ({ request }) => handle(request);
-export const GET: RequestHandler = ({ request }) => handle(request);
-export const DELETE: RequestHandler = ({ request }) => handle(request);
+/**
+ * OAuth first (better-auth verifies the audience-bound user JWT). A workload or STS token is not
+ * one of those, so a 401 from that path falls back to Skiff's ring: it must carry `aud` `skiff`
+ * (or this MCP resource) and names a service account, whose bindings and token restriction become
+ * the principal. Anything else keeps the original OAuth challenge so clients can start sign-in.
+ */
+async function handleWithSkiffToken(request: Request): Promise<Response> {
+	const response = await handle(request);
+	if (response.status !== 401) return response;
+	const token = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '').trim() ?? '';
+	if (!token) return response;
+	const principal = await principalFromSkiffBearer(token, request, {
+		workloadAudiences: [WORKLOAD_IDENTITY_AUDIENCE],
+		stsAudiences: [WORKLOAD_IDENTITY_AUDIENCE, mcpResource],
+	});
+	if (!principal) return response;
+	return mcpHandler.fetch(request, {
+		authInfo: {
+			token,
+			clientId: `service-account:${principal.userId}`,
+			scopes: [...principal.permissions],
+			extra: { principal },
+		},
+	});
+}
+
+export const POST: RequestHandler = ({ request }) => handleWithSkiffToken(request);
+export const GET: RequestHandler = ({ request }) => handleWithSkiffToken(request);
+export const DELETE: RequestHandler = ({ request }) => handleWithSkiffToken(request);

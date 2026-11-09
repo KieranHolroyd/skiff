@@ -1,9 +1,15 @@
 import type { RequestEvent } from '@sveltejs/kit';
 import type { AuthInfo } from '@modelcontextprotocol/server';
 import { buildPrincipal, isPlatformAdminUser, resolveMembership } from '@skiff/core';
-import type { AccessKeyVerification, Membership } from '@skiff/core';
+import type { AccessKeyVerification, Membership, SkiffTokenAudiences } from '@skiff/core';
+import { serviceAccountPrincipalFromSkiffToken, verifySkiffToken } from '@skiff/core';
 import type { Permission, Principal, Role } from '@skiff/contracts';
-import { effectivePermissions, isPermission, roles as roleDefinitions } from '@skiff/contracts';
+import {
+	WORKLOAD_IDENTITY_AUDIENCE,
+	effectivePermissions,
+	isPermission,
+	roles as roleDefinitions,
+} from '@skiff/contracts';
 import { auth } from './auth';
 import { openSignup } from './config';
 import { core } from './core';
@@ -89,39 +95,48 @@ function membershipFrom(
 
 /**
  * REST authentication: either a Better Auth API key (`skif_…`), a Skiff access key (`skif_…`,
- * IAM.md I14), or the session cookie. Better Auth is tried first so existing keys keep working;
- * its `apikey` rows are migrated to `access_keys` only once spike S1 settles the hash format.
- * Until then the dashboard (settings/api-keys) and CLI login (api/v1/cli/token) still mint Better
- * Auth rows; both now stamp `metadata.orgId`, so a key stays in the org it was created in.
- * MCP tokens are audience-bound to `/mcp` and verified there, not accepted by the REST API.
+ * IAM.md I14), a Skiff workload/STS token (IAM.md §7.3–§7.4), or the session cookie. Keys are
+ * tried first so existing credentials keep working; its `apikey` rows are migrated to
+ * `access_keys` only once spike S1 settles the hash format. Until then the dashboard
+ * (settings/api-keys) and CLI login (api/v1/cli/token) still mint Better Auth rows; both now stamp
+ * `metadata.orgId`, so a key stays in the org it was created in.
+ * MCP OAuth tokens are audience-bound to `/mcp` and verified there, not accepted by the REST API.
  */
 export async function principalFromRequest(request: Request): Promise<Principal | undefined> {
 	const authorization = request.headers.get('authorization');
 	if (authorization?.startsWith('Bearer ')) {
 		const key = authorization.slice(7).trim();
-		if (!key.startsWith('skif_')) return undefined;
-		const result = await auth.api.verifyApiKey({ body: { key } }).catch(() => undefined);
-		if (result?.valid && result.key) {
-			const userId = result.key.referenceId;
-			const metadata = parseMetadata(result.key.metadata);
-			const granted = metadata.scopes ?? metadata.permissions;
-			const principal = principalFromSession(userId, request, {
-				kind: 'apiKey',
-				granted: Array.isArray(granted) ? granted : undefined,
-				// Keys created since I5 carry the org they were minted in, so switching orgs or
-				// joining another one never moves an existing key (IAM.md I5, I14).
-				orgId: typeof metadata.orgId === 'string' ? metadata.orgId : undefined,
-			});
-			if (!principal) return undefined;
-			principal.keyId = result.key.id;
-			return principal;
+		if (key.startsWith('skif_')) {
+			const result = await auth.api.verifyApiKey({ body: { key } }).catch(() => undefined);
+			if (result?.valid && result.key) {
+				const userId = result.key.referenceId;
+				const metadata = parseMetadata(result.key.metadata);
+				const granted = metadata.scopes ?? metadata.permissions;
+				const principal = principalFromSession(userId, request, {
+					kind: 'apiKey',
+					granted: Array.isArray(granted) ? granted : undefined,
+					// Keys created since I5 carry the org they were minted in, so switching orgs or
+					// joining another one never moves an existing key (IAM.md I5, I14).
+					orgId: typeof metadata.orgId === 'string' ? metadata.orgId : undefined,
+				});
+				if (!principal) return undefined;
+				principal.keyId = result.key.id;
+				return principal;
+			}
+
+			// Not a Better Auth key: try Skiff's org-bound access keys. The raw IP is only used for the
+			// CIDR check; the principal carries its hash.
+			const verified = core.ctx.accessKeys.verify(key, { ip: clientIp(request) });
+			if (verified) return principalFromAccessKey(verified, request);
+			return undefined;
 		}
 
-		// Not a Better Auth key: try Skiff's org-bound access keys. The raw IP is only used for the
-		// CIDR check; the principal carries its hash.
-		const verified = core.ctx.accessKeys.verify(key, { ip: clientIp(request) });
-		if (verified) return principalFromAccessKey(verified, request);
-		return undefined;
+		// A Skiff workload or STS token. It names a service account and its org, and can only carry
+		// the bindings that account holds, narrowed by the token's own scope/resources.
+		return principalFromSkiffBearer(key, request, {
+			workloadAudiences: [WORKLOAD_IDENTITY_AUDIENCE],
+			stsAudiences: [WORKLOAD_IDENTITY_AUDIENCE, core.ctx.config.platformOrigin],
+		});
 	}
 
 	const session = await auth.api.getSession({ headers: request.headers });
@@ -131,6 +146,25 @@ export async function principalFromRequest(request: Request): Promise<Principal 
 		activeOrganizationId: session.session.activeOrganizationId,
 		session: session.session,
 	});
+}
+
+/**
+ * A workload or STS bearer token, for the surfaces that accept one (REST, MCP, the registry
+ * realm). The token must be signed by Skiff's ring, unexpired, issued by the platform, and carry
+ * one of the accepted audiences; its service account must still exist in the org it names.
+ * Returns undefined for anything else, so a caller can fall back to its own credential path.
+ */
+export async function principalFromSkiffBearer(
+	token: string,
+	request: Request,
+	audiences: SkiffTokenAudiences = {},
+): Promise<Principal | undefined> {
+	const identity = await verifySkiffToken(core.ctx, token, audiences);
+	if (!identity) return undefined;
+	return {
+		...serviceAccountPrincipalFromSkiffToken(core.ctx, identity),
+		ipHash: hashIp(request),
+	};
 }
 
 /**
@@ -191,9 +225,15 @@ function parseMetadata(metadata: unknown): { scopes?: string[]; permissions?: st
 	return {};
 }
 
-/** MCP principal: scopes from the JWT ∩ the user's current org role (DESIGN §6.3). */
+/**
+ * MCP principal: scopes from the JWT ∩ the user's current org role (DESIGN §6.3). A workload or
+ * STS token has no user to resolve, so the route verifies it and passes the built service-account
+ * principal through `authInfo.extra.principal`.
+ */
 export function principalFromMcp(authInfo: AuthInfo | undefined, request: Request): Principal | undefined {
 	if (!authInfo) return undefined;
+	const injected = injectedPrincipal(authInfo);
+	if (injected) return injected;
 	const userId = String(authInfo.extra?.sub ?? '');
 	if (!userId) return undefined;
 	const membership = resolveMembership(sqlite, userId, { openSignup });
@@ -210,6 +250,16 @@ export function principalFromMcp(authInfo: AuthInfo | undefined, request: Reques
 		ipHash: hashIp(request),
 		platformAdmin: isPlatformAdminUser(sqlite, userId),
 	});
+}
+
+/** A principal the MCP route already built from a verified workload/STS token. */
+function injectedPrincipal(authInfo: AuthInfo): Principal | undefined {
+	const value = authInfo.extra?.principal;
+	if (!value || typeof value !== 'object') return undefined;
+	const principal = value as Partial<Principal>;
+	if (typeof principal.userId !== 'string' || typeof principal.orgId !== 'string') return undefined;
+	if (typeof principal.kind !== 'string' || !(principal.permissions instanceof Set)) return undefined;
+	return principal as Principal;
 }
 
 /** Throws a 401 response for API routes. */

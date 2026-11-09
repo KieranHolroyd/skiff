@@ -12,12 +12,12 @@ export const load: PageServerLoad = ({ locals }) => {
 	if (!hasPermission(principal, 'project:read'))
 		error(403, 'You need permission to read projects to see maintenance.');
 
-	const platformAdmin = principal.platformAdmin === true;
+	const canViewPlatform = core.ctx.platformIam.canView(principal);
 	const canPrune = core.operations.actions(principal).some((action) => action.id === 'prune');
 
 	const org = core.operations.list(principal, { limit: HISTORY });
 	let platform: OperationView[] = [];
-	if (platformAdmin) {
+	if (canViewPlatform) {
 		try {
 			platform = core.operations.list(principal, { scope: 'platform', limit: HISTORY });
 		} catch {
@@ -40,7 +40,7 @@ export const load: PageServerLoad = ({ locals }) => {
 
 	return {
 		canPrune,
-		canPrunePlatform: canPrune && platformAdmin,
+		canPrunePlatform: canPrune && core.ctx.platformIam.canMaintain(principal),
 		history,
 		actors: actorNames(history.map((operation) => operation.actor.id)),
 		activePrune,

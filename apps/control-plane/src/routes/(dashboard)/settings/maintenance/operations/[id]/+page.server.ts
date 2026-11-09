@@ -54,7 +54,7 @@ export const load: PageServerLoad = ({ locals, params, url }) => {
 				!isTerminalOperation(operation.status) &&
 				(mine ||
 					hasPermission(principal, 'project:delete') ||
-					(principal.platformAdmin === true && operation.scope === 'platform')),
+					(core.ctx.platformIam.canMaintain(principal) && operation.scope === 'platform')),
 			canApply: operation.status === 'planned' && mine && runnable
 		};
 	} catch (caught) {

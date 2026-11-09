@@ -94,7 +94,8 @@ export const load: PageServerLoad = ({ url, locals, cookies }) => {
 		});
 		// An existing owner signing in again answers the normal challenge, not the wizard.
 		if (state === 'challenge') redirect(303, '/two-factor?redirect=%2Fsetup');
-		if (state === 'satisfied' && !locals.principal?.platformAdmin) redirect(303, '/overview');
+		if (state === 'satisfied' && !(locals.principal && core.ctx.platformIam.canAdminister(locals.principal)))
+			redirect(303, '/overview');
 		return {
 			phase: state === 'enrol' ? ('secure' as const) : ('done' as const),
 			account: { name: locals.user.name, email: locals.user.email },

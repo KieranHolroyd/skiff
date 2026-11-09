@@ -201,27 +201,29 @@
 		</Panel>
 	{/if}
 
-	<PolicyPanel group="ingress" policies={data.policies} defaults={data.policyDefaults} {form}>
-		<div class="mb-5 grid gap-4 sm:grid-cols-3">
-			<div class="rounded-lg border p-3">
-				<p class="text-xs text-muted-foreground">Driver in use</p>
-				<p class="font-mono text-sm">{data.status.driver}</p>
-				<p class="mt-1 text-xs text-muted-foreground">
-					{failover.ingress.rotates ? 'The controller tracks the record set.' : 'No record set to rotate.'}
-				</p>
+	{#if data.canEditPolicies}
+		<PolicyPanel group="ingress" policies={data.policies} defaults={data.policyDefaults} {form}>
+			<div class="mb-5 grid gap-4 sm:grid-cols-3">
+				<div class="rounded-lg border p-3">
+					<p class="text-xs text-muted-foreground">Driver in use</p>
+					<p class="font-mono text-sm">{data.status.driver}</p>
+					<p class="mt-1 text-xs text-muted-foreground">
+						{failover.ingress.rotates ? 'The controller tracks the record set.' : 'No record set to rotate.'}
+					</p>
+				</div>
+				<div class="rounded-lg border p-3">
+					<p class="text-xs text-muted-foreground">Withdraw after</p>
+					<p class="text-sm">{seconds(failover.policy.ingressHoldDownSeconds)}</p>
+					<p class="mt-1 text-xs text-muted-foreground">Twice the hold-down ({data.status.policy.holdDownSeconds}s), at least 120 s</p>
+				</div>
+				<div class="rounded-lg border p-3">
+					<p class="text-xs text-muted-foreground">Re-add after</p>
+					<p class="text-sm">{seconds(data.status.policy.readdSeconds)} healthy</p>
+					<p class="mt-1 text-xs text-muted-foreground">At most once per 10 min; withdrawn twice in 30 min pins it out</p>
+				</div>
 			</div>
-			<div class="rounded-lg border p-3">
-				<p class="text-xs text-muted-foreground">Withdraw after</p>
-				<p class="text-sm">{seconds(failover.policy.ingressHoldDownSeconds)}</p>
-				<p class="mt-1 text-xs text-muted-foreground">Twice the hold-down ({data.status.policy.holdDownSeconds}s), at least 120 s</p>
-			</div>
-			<div class="rounded-lg border p-3">
-				<p class="text-xs text-muted-foreground">Re-add after</p>
-				<p class="text-sm">{seconds(data.status.policy.readdSeconds)} healthy</p>
-				<p class="mt-1 text-xs text-muted-foreground">At most once per 10 min; withdrawn twice in 30 min pins it out</p>
-			</div>
-		</div>
-	</PolicyPanel>
+		</PolicyPanel>
+	{/if}
 
 	<Panel title="Ingress nodes" icon={ActivityIcon} description="Every node holding the ingress role, with readiness and its place in the record set.">
 		{#if data.status.nodes.length === 0}

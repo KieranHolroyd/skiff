@@ -74,7 +74,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	// Capacity is platform-level: only an admin can see other nodes' slice budgets.
 	let capacity: { sliceMemoryMb: number; reservedMemoryMb: number; workloads: number } | null =
 		null;
-	if (principal.platformAdmin === true) {
+	if (core.ctx.platformIam.canView(principal)) {
 		const rows = attempt(() => core.workloads.capacity(principal), null);
 		if (rows)
 			capacity = {

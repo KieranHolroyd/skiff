@@ -5,6 +5,12 @@ import { join } from 'node:path';
 import { backupRuns, deployments, orgQuotas, shareLinks, shareRedemptions } from '@skiff/db';
 import { operationLimits } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
+import {
+	AUTO_ROTATION_PURPOSES,
+	KEY_ROTATION_INTERVAL_MS,
+	signingKeyRotationDecision,
+	type SigningKeyRotationAction,
+} from './iam/keys.ts';
 import { SERVICE_ACCOUNT_AUTO_DISABLE_UNUSED } from './service-accounts.ts';
 
 const DAY_MS = 86_400_000;
@@ -18,6 +24,16 @@ export const SPIKE_FACTOR = 2;
 const PARQUET_STATE_KEY = 'telemetry:parquet_exported_day';
 /** The last UTC day the IAM rollup and hygiene pass ran (IAM.md §9.5). */
 export const IAM_DAILY_STATE_KEY = 'iam:daily_last_run';
+/** The last time the monthly signing-key rotation sweep ran (IAM.md I15, §7.3). */
+export const IAM_KEYS_ROTATED_STATE_KEY = 'iam:keys_last_rotated_at';
+
+export interface IamKeyRotationAction {
+	purpose: string;
+	action: Exclude<SigningKeyRotationAction, 'skip'>;
+	activeKid: string;
+	nextKid: string | null;
+	retiredKid: string | null;
+}
 
 export interface MaintenanceReport {
 	projectsPurged: number;
@@ -35,6 +51,10 @@ export interface MaintenanceReport {
 		reviewsCompleted: number;
 		unusedServiceAccounts: number;
 		serviceAccountsDisabled: number;
+	};
+	/** The monthly signing-key rotation; absent when the marker says it is not due yet. */
+	iamKeys?: {
+		actions: IamKeyRotationAction[];
 	};
 }
 
@@ -178,6 +198,8 @@ export class MaintenanceService {
 		await this.ctx.usage.captureSnapshots();
 		// IAM rollup, request expiry, overdue reviews and service-account hygiene, once per UTC day.
 		const iam = await this.iamDaily();
+		// Signing keys are rotated monthly; the marker in `alert_state` gates the sweep.
+		const iamKeys = await this.iamKeyRotation();
 
 		alertsFired.push(...(await this.promoteSpikeAlerts()));
 
@@ -201,6 +223,7 @@ export class MaintenanceService {
 			alertsFired,
 			telemetry,
 			iam,
+			iamKeys,
 		};
 	}
 
@@ -280,6 +303,68 @@ export class MaintenanceService {
 			unusedServiceAccounts,
 			serviceAccountsDisabled,
 		};
+	}
+
+	/**
+	 * The monthly signing-key rotation sweep (IAM.md I15, §7.3). Every automatic purpose keeps an
+	 * active key; when the active key reaches its interval a `next` key is published, and it is
+	 * promoted only after it has been public for the overlap. `pool:<id>` rings are managed with
+	 * their pool and never appear in {@link AUTO_ROTATION_PURPOSES}.
+	 *
+	 * `iam:keys_last_rotated_at` records the last sweep that changed a ring, so the 60-second loop
+	 * does not re-evaluate a fresh rotation. If nothing was due, the marker is left alone and the
+	 * next sweep checks again; a failed purpose does not advance it either, so it retries.
+	 */
+	private async iamKeyRotation(): Promise<MaintenanceReport['iamKeys'] | undefined> {
+		const now = this.ctx.now();
+		const marker = this.ctx.sqlite
+			.query<{ last_value: string | null }, [string]>(
+				'SELECT last_value FROM alert_state WHERE key = ?',
+			)
+			.get(IAM_KEYS_ROTATED_STATE_KEY);
+		const lastAt = marker?.last_value ? Number(marker.last_value) : null;
+		if (lastAt !== null && Number.isFinite(lastAt) && now - lastAt < KEY_ROTATION_INTERVAL_MS)
+			return undefined;
+
+		const actions: IamKeyRotationAction[] = [];
+		let failed = false;
+		for (const purpose of AUTO_ROTATION_PURPOSES) {
+			const decision = signingKeyRotationDecision({
+				...this.ctx.signingKeys.rotationState(purpose),
+				now,
+			});
+			try {
+				if (decision.action === 'ensure') {
+					const active = this.ctx.signingKeys.ensureSync(purpose);
+					actions.push({
+						purpose,
+						action: 'ensure',
+						activeKid: active.kid,
+						nextKid: null,
+						retiredKid: null,
+					});
+				} else if (decision.action === 'publish-next' || decision.action === 'promote') {
+					const result = await this.ctx.signingKeys.rotate(purpose);
+					actions.push({
+						purpose,
+						action: decision.action,
+						activeKid: result.active.kid,
+						nextKid: result.next?.kid ?? null,
+						retiredKid: result.retiredKid,
+					});
+				}
+			} catch (error) {
+				failed = true;
+				console.error(`[maintenance] signing-key rotation for ${purpose} failed:`, error);
+			}
+		}
+
+		if (actions.length === 0 || failed) return actions.length === 0 ? undefined : { actions };
+		this.ctx.sqlite.run(
+			'INSERT INTO alert_state (key, last_fired_at, last_value) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET last_fired_at = excluded.last_fired_at, last_value = excluded.last_value',
+			[IAM_KEYS_ROTATED_STATE_KEY, now, String(now)],
+		);
+		return { actions };
 	}
 
 	/**

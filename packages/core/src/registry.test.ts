@@ -7,6 +7,7 @@ import { createDb } from '@skiff/db';
 import { DEFAULT_FEATURES } from '@skiff/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
+import { serviceAccountPrincipalFromSkiffToken, verifySkiffToken } from './iam/token-consumers.ts';
 import { LocalObjectStore } from './object-store.ts';
 import type { Core } from './index.ts';
 
@@ -94,6 +95,21 @@ beforeAll(async () => {
 		productionAccess: 'public',
 		previewAccess: 'platform',
 	});
+	// Real principals carry member rows; the engine's legacy fallback stops once a write bumps
+	// iamVersion, so seed the base bindings these fixtures stand for.
+	for (const [principal, role] of [
+		[admin, 'owner'],
+		[viewer, 'viewer'],
+		[deployer, 'deployer'],
+		[outsider, 'owner'],
+	] as const) {
+		await core.ctx.iam.bind(admin, {
+			principalType: 'user',
+			principalId: principal.userId,
+			roleId: role,
+			scope: { type: 'org' },
+		});
+	}
 });
 
 describe('registry settings', () => {
@@ -157,6 +173,98 @@ describe('token realm', () => {
 		expect(decode(core.registry.issueToken({ kind: 'principal', principal: outsider }, HOST, ['repository:acme/shop:pull']).token).access).toEqual([]);
 		// Docker's login probe: no scope, still a token.
 		expect(decode(core.registry.issueToken({ kind: 'principal', principal: viewer }, null, []).token).access).toEqual([]);
+	});
+
+	test('accepts a workload or STS token for its own org, narrowed by the token scope and resources', async () => {
+		opened.sqlite.run(
+			`INSERT INTO service_accounts
+			   (id, org_id, name, description, owner_group_id, disabled_at, created_by, created_at)
+			 VALUES ('sa_registry', 'org_a', 'registry-ci', '', NULL, NULL, 'system:test', ?)`,
+			[Date.now()],
+		);
+		core.ctx.iam.bind(admin, {
+			principalType: 'serviceAccount',
+			principalId: 'sa_registry',
+			roleId: 'deployer',
+			scope: { type: 'org' },
+		});
+
+		const workloadToken = await core.ctx.signingKeys.sign(
+			'workload',
+			{
+				sub: 'sa_registry',
+				aud: 'skiff',
+				org_id: 'org_a',
+				project_id: 'prj_x',
+				environment: 'production',
+			},
+			3600,
+		);
+		const workloadIdentity = await verifySkiffToken(core.ctx, workloadToken);
+		expect(workloadIdentity).not.toBeNull();
+		const workloadPrincipal = serviceAccountPrincipalFromSkiffToken(core.ctx, workloadIdentity!);
+		expect(
+			decode(
+				core.registry.issueToken({ kind: 'principal', principal: workloadPrincipal }, HOST, [
+					'repository:acme/shop:push,pull',
+					// Another org's namespace is never granted, even with a valid token.
+					'repository:other/x:pull',
+				]).token,
+			).access,
+		).toEqual([{ type: 'repository', name: 'acme/shop', actions: ['push', 'pull'] }]);
+
+		// An STS token's scope can only narrow the account: pull at acme/shop, nothing elsewhere.
+		const stsToken = await core.ctx.signingKeys.sign(
+			'sts',
+			{
+				sub: 'sa_registry',
+				aud: 'skiff',
+				org_id: 'org_a',
+				trust_id: 'ft_registry',
+				scope: 'image:pull',
+				resources: ['repository:acme/shop'],
+			},
+			900,
+		);
+		const stsIdentity = await verifySkiffToken(core.ctx, stsToken);
+		expect(stsIdentity).not.toBeNull();
+		const stsPrincipal = serviceAccountPrincipalFromSkiffToken(core.ctx, stsIdentity!);
+		expect(
+			decode(
+				core.registry.issueToken({ kind: 'principal', principal: stsPrincipal }, HOST, [
+					'repository:acme/shop:pull,push',
+					'repository:acme/other:pull',
+				]).token,
+			).access,
+		).toEqual([{ type: 'repository', name: 'acme/shop', actions: ['pull'] }]);
+
+		// A resource ceiling for another repository grants nothing for this one.
+		const elsewhereToken = await core.ctx.signingKeys.sign(
+			'sts',
+			{
+				sub: 'sa_registry',
+				aud: 'skiff',
+				org_id: 'org_a',
+				trust_id: 'ft_registry',
+				scope: 'image:pull',
+				resources: ['repository:acme/other'],
+			},
+			900,
+		);
+		const elsewherePrincipal = serviceAccountPrincipalFromSkiffToken(
+			core.ctx,
+			(await verifySkiffToken(core.ctx, elsewhereToken))!,
+		);
+		expect(
+			decode(
+				core.registry.issueToken({ kind: 'principal', principal: elsewherePrincipal }, HOST, [
+					'repository:acme/shop:pull',
+				]).token,
+			).access,
+		).toEqual([]);
+
+		opened.sqlite.run("DELETE FROM iam_bindings WHERE principal_id = 'sa_registry'");
+		opened.sqlite.run("DELETE FROM service_accounts WHERE id = 'sa_registry'");
 	});
 
 	test('a push grant creates the repository, linked to the project of the same slug', () => {

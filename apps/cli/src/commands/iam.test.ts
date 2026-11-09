@@ -4,13 +4,16 @@ import {
 	explainText,
 	formatScope,
 	groupTable,
+	keysTable,
 	parseExpiry,
+	parseKeyRotation,
 	parsePermissions,
 	parsePrincipal,
 	parseScope,
 	roleTable,
 	whoCanTable,
 	type IamDecision,
+	type IamKeyEntry,
 	type IamRoleView,
 } from './iam.ts';
 
@@ -209,5 +212,54 @@ describe('explainText', () => {
 		const text = explainText(denied, 'database:credentials', { type: 'project', id: 'prj_1' }, [owner]);
 		expect(text).toContain('Denied  database:credentials on project:prj_1');
 		expect(text).toContain('No grant for this permission was considered.');
+	});
+});
+
+describe('parseKeyRotation', () => {
+	test('accepts one purpose or all', () => {
+		expect(parseKeyRotation({ all: false, purpose: 'sts' })).toEqual({ purpose: 'sts' });
+		expect(parseKeyRotation({ all: false, purpose: ' pool:team-a ' })).toEqual({
+			purpose: 'pool:team-a',
+		});
+		expect(parseKeyRotation({ all: true })).toEqual({ all: true });
+	});
+
+	test('refuses neither and both', () => {
+		expect(() => parseKeyRotation({ all: false })).toThrow(/purpose/);
+		expect(() => parseKeyRotation({ all: false, purpose: '   ' })).toThrow(/purpose/);
+		expect(() => parseKeyRotation({ all: true, purpose: 'sts' })).toThrow(/not both/);
+	});
+});
+
+describe('keysTable', () => {
+	test('shows the active and next kid, retired count and rotation decision', () => {
+		const entries: IamKeyEntry[] = [
+			{
+				purpose: 'sts',
+				automatic: true,
+				active: { kid: 'k_active', createdAt: Date.UTC(2026, 10, 8), activatedAt: Date.UTC(2026, 10, 8) },
+				next: { kid: 'k_next', createdAt: Date.UTC(2026, 11, 8) },
+				retired: 2,
+				keys: [],
+				rotation: { due: false, action: 'skip', reason: 'not due' },
+			},
+			{
+				purpose: 'pool:team-a',
+				automatic: false,
+				active: null,
+				next: null,
+				retired: 0,
+				keys: [],
+				rotation: { due: true, action: 'ensure', reason: 'no active key' },
+			},
+		];
+		const table = keysTable(entries);
+		expect(table).toContain('sts');
+		expect(table).toContain('k_active');
+		expect(table).toContain('k_next');
+		expect(table).toContain('2');
+		expect(table).toContain('no');
+		expect(table).toContain('pool:team-a');
+		expect(table).toContain('ensure');
 	});
 });

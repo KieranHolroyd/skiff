@@ -9,6 +9,12 @@ import { createCore, type Core } from '../index.ts';
 import { LocalObjectStore } from '../object-store.ts';
 import { buildPrincipal } from '../orgs.ts';
 import { SERVICE_ACCOUNT_UNUSED_DAYS } from '../service-accounts.ts';
+import {
+	AUTO_ROTATION_PURPOSES,
+	KEY_ROTATION_INTERVAL_MS,
+	KEY_ROTATION_OVERLAP_MS,
+} from './keys.ts';
+import { IAM_KEYS_ROTATED_STATE_KEY } from '../maintenance.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'skiff-iam-maintenance-'));
 const opened = createDb({ path: ':memory:' });
@@ -150,6 +156,15 @@ function usageRows(): Array<{ principal_id: string; permission: string }> {
 		.all();
 }
 
+function keyRotationMarker(): number | null {
+	const row = opened.sqlite
+		.query<{ last_value: string | null }, [string]>(
+			'SELECT last_value FROM alert_state WHERE key = ?',
+		)
+		.get(IAM_KEYS_ROTATED_STATE_KEY);
+	return row?.last_value ? Number(row.last_value) : null;
+}
+
 beforeEach(() => {
 	now = Date.parse('2026-11-08T12:00:00Z');
 	truncateAll(opened.sqlite);
@@ -283,6 +298,53 @@ describe('daily IAM maintenance', () => {
 		expect(
 			opened.sqlite.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM service_accounts').get()?.n,
 		).toBe(3);
+	});
+});
+
+describe('monthly signing-key rotation', () => {
+	test('ensures keys, records the marker, then publishes and promotes on schedule without touching pools', async () => {
+		const pool = await core.ctx.signingKeys.ensure('pool:team-a');
+		const first = await core.maintenance.run();
+		expect(first.iamKeys).toBeDefined();
+		expect(keyRotationMarker()).toBe(now);
+		for (const purpose of AUTO_ROTATION_PURPOSES)
+			expect(core.ctx.signingKeys.rotationState(purpose).activeActivatedAt).toBe(now);
+
+		// The marker gates a second sweep on the same day.
+		const second = await core.maintenance.run();
+		expect(second.iamKeys).toBeUndefined();
+		expect(core.ctx.signingKeys.list('pool:team-a').map((key) => key.kid)).toEqual([pool.kid]);
+
+		// A month later each automatic purpose gets a next key while the active key keeps signing.
+		now += KEY_ROTATION_INTERVAL_MS;
+		const third = await core.maintenance.run();
+		expect(third.iamKeys?.actions.map((action) => action.action)).toEqual(
+			AUTO_ROTATION_PURPOSES.map(() => 'publish-next'),
+		);
+		for (const purpose of AUTO_ROTATION_PURPOSES) {
+			const state = core.ctx.signingKeys.rotationState(purpose);
+			expect(state.activeActivatedAt).toBe(now - KEY_ROTATION_INTERVAL_MS);
+			expect(state.nextCreatedAt).toBe(now);
+		}
+
+		// The following month the published key is promoted and a fresh next is published.
+		const before = core.ctx.signingKeys.rotationState('sts');
+		now += KEY_ROTATION_INTERVAL_MS;
+		const fourth = await core.maintenance.run();
+		expect(fourth.iamKeys?.actions.map((action) => action.action)).toEqual(
+			AUTO_ROTATION_PURPOSES.map(() => 'promote'),
+		);
+		const after = core.ctx.signingKeys.rotationState('sts');
+		expect(after.activeActivatedAt).toBe(now);
+		expect(after.nextCreatedAt).toBe(now);
+		expect(after.activeActivatedAt).toBeGreaterThan(before.activeActivatedAt!);
+		expect(now - before.nextCreatedAt!).toBeGreaterThanOrEqual(KEY_ROTATION_OVERLAP_MS);
+
+		const sts = core.ctx.signingKeys.list('sts');
+		expect(sts.filter((key) => key.state === 'active')).toHaveLength(1);
+		expect(sts.filter((key) => key.state === 'next')).toHaveLength(1);
+		expect(sts.some((key) => key.state === 'retired')).toBe(true);
+		expect(core.ctx.signingKeys.list('pool:team-a').map((key) => key.kid)).toEqual([pool.kid]);
 	});
 });
 

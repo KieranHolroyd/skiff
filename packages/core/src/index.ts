@@ -79,7 +79,7 @@ import { TokenService } from './iam/sts.ts';
 import { AccessPolicyService } from './iam/access-policies.ts';
 import { ScimTokenService } from './iam/scim.ts';
 import { UserPoolService } from './user-pools.ts';
-import { UserPoolEngineService } from './user-pool-engine.ts';
+import { UserPoolEngineService, createUserPoolMailer } from './user-pool-engine.ts';
 
 export * from './config.ts';
 export * from './context.ts';
@@ -96,6 +96,7 @@ export * from './iam/sso.ts';
 export * from './iam/keys.ts';
 export * from './iam/workload-identity.ts';
 export * from './iam/sts.ts';
+export * from './iam/token-consumers.ts';
 export * from './iam/access-policies.ts';
 export * from './iam/scim.ts';
 export * from './user-pools.ts';
@@ -357,6 +358,9 @@ export function createCore(options: CoreOptions): Core {
 	ctx.storage = new StorageService(ctx);
 	ctx.brokers = new BrokerService(ctx);
 	ctx.email = new EmailService(ctx, options.email ?? defaultEmailOptions());
+	// Pool mail (verification, magic link, reset and invite) uses the platform's sender or the
+	// mail node; tests replace this hook with a capture.
+	ctx.userPoolMail = createUserPoolMailer(ctx);
 	ctx.events = new EventService(ctx);
 	ctx.nodeTasks = new NodeTaskService(ctx);
 	ctx.jobs = new JobService(ctx);

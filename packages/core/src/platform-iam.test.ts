@@ -180,6 +180,64 @@ describe('platform roles', () => {
 		expect(core.ctx.platformIam.can(operator, 'project:read')).toBe(false);
 		expect(core.ctx.platformIam.can(operator, 'iam:manage-owners')).toBe(false);
 	});
+
+	test('a group binding applies to every current member', () => {
+		const admin = principal({ credential: 'session' });
+		opened.sqlite.run(
+			`INSERT INTO iam_groups (id, org_id, name, created_at, updated_at)
+			 VALUES ('grp_ops', 'org_1', 'Ops', ?, ?)`,
+			[now, now],
+		);
+		for (const userId of ['user_op', 'user_oncall'])
+			opened.sqlite.run(
+				`INSERT INTO iam_group_members (group_id, user_id, created_at) VALUES ('grp_ops', ?, ?)`,
+				[userId, now],
+			);
+
+		const bound = core.ctx.platformIam.bind(admin, {
+			groupId: 'grp_ops',
+			roleId: 'platform-operator',
+		});
+		expect(bound).toMatchObject({
+			principalType: 'group',
+			principalId: 'grp_ops',
+			roleId: 'platform-operator',
+		});
+		expect(core.ctx.platformIam.list(admin)).toHaveLength(1);
+
+		for (const userId of ['user_op', 'user_oncall']) {
+			const member = principal({ userId, role: 'viewer', platformAdmin: false });
+			expect(core.ctx.platformIam.can(member, 'platform:nodes')).toBe(true);
+			expect(core.ctx.platformIam.can(member, 'platform:storage')).toBe(true);
+			expect(core.ctx.platformIam.can(member, 'platform:ha')).toBe(true);
+			expect(core.ctx.platformIam.can(member, 'platform:settings')).toBe(false);
+		}
+
+		// Someone outside the group gets nothing.
+		const outsider = principal({ userId: 'user_out', role: 'viewer', platformAdmin: false });
+		expect(core.ctx.platformIam.canView(outsider)).toBe(false);
+
+		// Removing the membership takes effect on the next check.
+		opened.sqlite.run(
+			`DELETE FROM iam_group_members WHERE group_id = 'grp_ops' AND user_id = 'user_op'`,
+		);
+		const former = principal({ userId: 'user_op', role: 'viewer', platformAdmin: false });
+		expect(core.ctx.platformIam.canView(former)).toBe(false);
+	});
+
+	test('a group binding needs a real group and cannot also name a user', () => {
+		const admin = principal({ credential: 'session' });
+		expect(() =>
+			core.ctx.platformIam.bind(admin, { groupId: 'grp_missing', roleId: 'platform-viewer' }),
+		).toThrow(/no group/);
+		expect(() =>
+			core.ctx.platformIam.bind(admin, {
+				userId: 'user_view',
+				groupId: 'grp_ops',
+				roleId: 'platform-viewer',
+			}),
+		).toThrow(/exactly one user id or group id/);
+	});
 });
 
 describe('D129 session-only condition', () => {
@@ -299,6 +357,7 @@ describe('platform services behind ctx.platformIam', () => {
 		notForbidden(() => core.topology.view(operator));
 		notForbidden(() => core.workloads.capacity(operator));
 		notForbidden(() => core.ingress.status(operator));
+		notForbidden(() => core.failover.status(operator));
 		notForbidden(() => core.failover.history(operator));
 
 		// Drain passes authorization and fails only because there is no such node.
@@ -329,6 +388,8 @@ describe('platform services behind ctx.platformIam', () => {
 		notForbidden(() => core.shares.list(viewer));
 		notForbidden(() => core.topology.view(viewer));
 		notForbidden(() => core.workloads.capacity(viewer));
+		notForbidden(() => core.ingress.status(viewer));
+		notForbidden(() => core.failover.status(viewer));
 		notForbidden(() => core.failover.history(viewer));
 
 		expectForbidden(() => core.nodes.setDraining(viewer, 'node_missing', true));

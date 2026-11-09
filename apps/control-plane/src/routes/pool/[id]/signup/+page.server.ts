@@ -14,8 +14,8 @@ import type { Actions, PageServerLoad } from './$types';
 
 /**
  * Hosted pool sign-up. `open` pools create the account immediately; `invite` pools require the
- * invite token from the query string (or a pending invitation for the address). Verification mail
- * is not sent by this slice: the link is logged the way the platform logs magic links without SMTP.
+ * invite token from the query string (or a pending invitation for the address). The engine mails
+ * the verification link itself, through the platform sender or the mail node.
  */
 export const load: PageServerLoad = ({ params, cookies, url }) => {
 	const token = poolSessionToken(cookies, params.id);
@@ -53,13 +53,11 @@ export const actions: Actions = {
 				name,
 				inviteToken ? { inviteToken } : {}
 			);
-			if (created.verificationToken) {
-				// TODO(I28): send through the platform's skiff-mail outbox. Until then the link is
-				// logged, exactly as the platform logs a magic link when SMTP is not configured.
-				console.info(
-					`[pool ${params.id}] verify ${created.user.email}: ${platformOrigin}/pool/${params.id}/verify?token=${encodeURIComponent(created.verificationToken)}`
+			if (!created.user.emailVerified && core.userPools.publicInfo(params.id).requireEmailVerification)
+				redirect(
+					303,
+					`/pool/${params.id}/login?verify=email&email=${encodeURIComponent(created.user.email)}`
 				);
-			}
 			const signedIn = await core.userPoolEngine.signIn(params.id, email, password);
 			setPoolSession(cookies, params.id, signedIn.token);
 			redirect(

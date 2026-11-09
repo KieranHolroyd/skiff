@@ -238,7 +238,30 @@
 - [x] G5: cosign signature policy at deploy, CVE scanning (D159)
 - [x] G6: S3 storage + Valkey cache, single replica (D159)
 
+## Identity and access ([IAM.md](./IAM.md), D168, D181–D189)
+- [x] Permission catalog with metadata, principal v2, named system principals, the lint guard, the owner/admin split and audit actor columns (D181)
+- [x] Scoped bindings engine: platform/org/project/environment/resource scopes, custom roles, groups, guests, explain and who-can, Settings → Access and project Access tabs (D182)
+- [x] Service accounts and org-bound access keys (SHA-256, expiry, CIDR, restrictions, last-used) with REST and CLI, and an MCP service-account list (D183)
+- [x] One signing-key ring with a unified JWKS, operator list/rotate routes, RFC 8693 STS and federation trusts (D184)
+- [x] Workload identity: a service account per workload, a rotated token file and the loopback metadata endpoint (D184)
+- [x] Workload and STS tokens accepted as `Bearer` by REST, MCP and the registry realm; the registry also takes one as its Basic password (D184)
+- [x] SSO OIDC and SAML, verified domains, JIT and group mappings, enforced SSO with break-glass, org auth policy and presets (D185, D180)
+- [x] SCIM 2.0 users and groups with deactivation revocation (D185)
+- [x] Guardrails, JIT access requests, usage rollup and access reviews (D186)
+- [x] Step-up verification: catalog rules, `/api/auth/step-up/*`, the VerifyDialog, the window and the failure budget (D186, gated by `SKIFF_STEP_UP`)
+- [x] Platform IAM roles, platform-scope bindings (users and groups) and platform guardrails (D187)
+- [x] Skiff Access: the `access` protection mode, ordered policies, the agent's `forward_auth` and host-bound login (D188)
+- [x] User pools and OIDC clients with discovery/JWKS; the native engine with password, magic link, reset, verification, invites and the OAuth code flow; attachments, `env.AUTH` and pool events (D189)
+- [ ] Identity process: split the pool engine into `skiff-identity.service` with a SQLite file per pool
+- [ ] Pool auth extras: passkeys, social login, TOTP MFA, breached-password checks and lockout
+- [ ] Pool import and export (Auth0, Cognito, Firebase)
+- [ ] B2B in pools: organisations, per-tenant federation, SCIM in and the Keycloak engine
+- [ ] SAML single logout
+- [ ] Federation-trust CRUD and `/iam/simulate`
+- [ ] Storage STS (RustFS `AssumeRoleWithWebIdentity`)
+- [ ] Service-account impersonation and per-repository pipeline accounts
+- [ ] Skiff Access service tokens and user-pool identity at the edge
+
 ## Later / maybe
 - Importing external Prometheus datasources
-- Custom roles UI
 - Templates/scaffolding tool for agents

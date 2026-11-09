@@ -22,22 +22,30 @@
  * `env.AUTH.verify(request)` against the pool JWKS, and `user.created`/`user.signed_in` are emitted
  * to the `pools` event source (D122). The secret stays in the sealed client row; only the
  * activation payload opens it.
- * TODO(I27): passkeys, social login, TOTP MFA, magic links, password reset, breached-password
- * checks, lockout and import/export remain for the identity process. Email verification links are
- * issued here; sending them through the platform's skiff-mail outbox is wired by the hosted page
- * and is the one mail TODO in this slice.
+ * Verification, magic-link sign-in, password reset and invitations leave through the same mail
+ * path as platform mail: the transactional sender (`SKIFF_SMTP_*`, D22) when configured, else the
+ * platform sender on the org's skiff-mail node, else a development-only link log. Links carry a
+ * single-use token whose SHA-256 hash is all that is stored; no request reveals whether an address
+ * is known, and each request is rate limited per address and per client IP.
+ *
+ * TODO(I27): passkeys, social login, TOTP MFA, breached-password checks, lockout, suspicious
+ * sign-in mail, import/export and the identity process remain for a later slice.
  */
 import { createHash } from 'node:crypto';
 import type { CoreContext } from './context.ts';
 import {
 	ConflictError,
+	CoreError,
 	ForbiddenError,
 	NotFoundError,
 	UnauthorizedError,
 	ValidationError
 } from './errors.ts';
 import { newId, parseJson, randomToken, safeEqual, sha256Hex } from './util.ts';
-import { userPoolSigningPurpose } from './user-pools.ts';
+import {
+	userPoolRequireEmailVerificationKey,
+	userPoolSigningPurpose
+} from './user-pools.ts';
 
 /** Session lifetime. Sliding expiry waits for the identity process (I27). */
 export const USER_POOL_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
@@ -47,8 +55,49 @@ export const USER_POOL_CODE_TTL_SECONDS = 5 * 60;
 export const USER_POOL_TOKEN_TTL_SECONDS = 60 * 60;
 export const USER_POOL_INVITE_TTL_SECONDS = 7 * 24 * 60 * 60;
 export const USER_POOL_EMAIL_TOKEN_TTL_SECONDS = 24 * 60 * 60;
+/** A magic link is short lived: it is a sign-in credential, not a receipt. */
+export const USER_POOL_MAGIC_LINK_TTL_SECONDS = 15 * 60;
+export const USER_POOL_PASSWORD_RESET_TTL_SECONDS = 60 * 60;
 export const USER_POOL_PASSWORD_MIN_LENGTH = 8;
 export const USER_POOL_PASSWORD_MAX_LENGTH = 200;
+
+/** Request throttles, per address and per client IP, over one rolling window. */
+export const USER_POOL_REQUEST_WINDOW_SECONDS = 15 * 60;
+export const USER_POOL_MAGIC_EMAIL_LIMIT = 5;
+export const USER_POOL_RESET_EMAIL_LIMIT = 3;
+export const USER_POOL_VERIFY_EMAIL_LIMIT = 3;
+export const USER_POOL_REQUEST_IP_LIMIT = 20;
+
+/** The hosted page each kind of mail points at. */
+export type UserPoolMailPurpose = 'verify_email' | 'magic_link' | 'password_reset' | 'invite';
+
+/**
+ * One transactional message for a pool's end user. `link` is the single-use URL; it is present so
+ * the development fallback can print it, and must never be written to a production log.
+ */
+export interface UserPoolMailMessage {
+	orgId: string;
+	poolId: string;
+	poolName: string;
+	to: string;
+	purpose: UserPoolMailPurpose;
+	subject: string;
+	text: string;
+	link: string;
+}
+
+/** The mail seam `createCore` wires; tests inject a capture hook. */
+export interface UserPoolMailer {
+	send(message: UserPoolMailMessage): Promise<void>;
+}
+
+type EmailTokenPurpose = 'verify_email' | 'magic_link' | 'password_reset';
+
+const EMAIL_TOKEN_TTL: Record<EmailTokenPurpose, number> = {
+	verify_email: USER_POOL_EMAIL_TOKEN_TTL_SECONDS,
+	magic_link: USER_POOL_MAGIC_LINK_TTL_SECONDS,
+	password_reset: USER_POOL_PASSWORD_RESET_TTL_SECONDS
+};
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const SUPPORTED_SCOPES = new Set(['openid', 'profile', 'email']);
@@ -105,6 +154,8 @@ export interface UserPoolInviteCreated {
 export interface UserPoolSignInResult extends UserPoolSessionContext {
 	/** Raw opaque session token; only its SHA-256 hash is stored. */
 	token: string;
+	/** Open pools allow an unverified address; the hosted page should offer to resend the link. */
+	emailVerificationPending: boolean;
 }
 
 export interface UserPoolAuthorizeInput {
@@ -276,6 +327,9 @@ function parseScopes(raw: string | null | undefined): string[] | null {
 }
 
 export class UserPoolEngineService {
+	/** Per-instance rolling windows for the enumeration-safe request endpoints. */
+	private readonly requestWindow = new Map<string, number[]>();
+
 	constructor(private readonly ctx: CoreContext) {}
 
 	// ---------------------------------------------------------------- users and sessions
@@ -341,26 +395,141 @@ export class UserPoolEngineService {
 				emailVerified: user.email_verified_at !== null
 			}
 		});
-		return {
-			user: userView(user),
-			verificationToken: invite ? null : this.issueEmailVerification(pool.id, id, now).token
-		};
+		let verificationToken: string | null = null;
+		if (!invite) {
+			verificationToken = this.issueEmailToken(pool.id, id, 'verify_email', now).token;
+			await this.sendLinkMail(pool, user, 'verify_email', verificationToken);
+		}
+		return { user: userView(user), verificationToken };
 	}
 
-	/** Verify an email + password pair and start a pool session. */
+	/**
+	 * Verify an email + password pair and start a pool session. An invite-only pool (or an open
+	 * pool that opted in) refuses an unverified address; an open pool lets it in and reports the
+	 * pending verification so the hosted page can nag.
+	 */
 	async signIn(poolId: string, email: string, password: string): Promise<UserPoolSignInResult> {
 		const pool = this.requireEnabledPool(poolId);
 		const address = normalizeEmail(email);
-		const user = this.ctx.sqlite
-			.query<UserRow, [string, string]>('SELECT * FROM user_pool_users WHERE pool_id = ? AND email = ?')
-			.get(pool.id, address);
+		const user = this.findUser(pool.id, address);
 
 		// One message for missing users, wrong passwords and disabled accounts: no account oracle.
 		const refusal = new UnauthorizedError('That email and password do not match an account in this pool.');
 		if (!user) throw refusal;
 		const valid = await Bun.password.verify(password, user.password_hash);
 		if (!valid || user.disabled_at !== null) throw refusal;
+		if (this.emailVerificationRequired(pool) && user.email_verified_at === null)
+			throw new CoreError('email_unverified', 'Verify your email address before signing in.', 403);
 
+		return this.startSession(pool, user, 'password');
+	}
+
+	/**
+	 * Request a magic sign-in link. Always resolves with the same shape for a known and an unknown
+	 * address: the caller never learns whether the account exists, and the limiter is charged in
+	 * both cases.
+	 */
+	async requestMagicLink(
+		poolId: string,
+		email: string,
+		options: { ip?: string | null } = {}
+	): Promise<void> {
+		const pool = this.requireEnabledPool(poolId);
+		const address = normalizeEmail(email);
+		if (
+			!this.allowRequest(`magic:ip:${pool.id}:${options.ip ?? 'unknown'}`, USER_POOL_REQUEST_IP_LIMIT) ||
+			!this.allowRequest(`magic:email:${pool.id}:${address}`, USER_POOL_MAGIC_EMAIL_LIMIT)
+		)
+			return;
+		const user = this.findUser(pool.id, address);
+		if (!user || user.disabled_at !== null) return;
+		const issued = this.issueEmailToken(pool.id, user.id, 'magic_link');
+		await this.sendLinkMail(pool, user, 'magic_link', issued.token);
+	}
+
+	/** Consume a magic link: proves the address, marks it verified and starts a session. */
+	async magicLinkSignIn(poolId: string, token: string): Promise<UserPoolSignInResult> {
+		const pool = this.requireEnabledPool(poolId);
+		const user = this.consumeEmailToken(pool.id, token, 'magic_link');
+		const now = this.ctx.now();
+		if (user.email_verified_at === null)
+			this.ctx.sqlite.run(
+				'UPDATE user_pool_users SET email_verified_at = ?, updated_at = ? WHERE id = ? AND pool_id = ?',
+				[now, now, user.id, pool.id]
+			);
+		return this.startSession(pool, this.requireUser(pool.id, user.id), 'magic_link');
+	}
+
+	/** Request a password-reset link. Enumeration-safe and rate limited like a magic link. */
+	async requestPasswordReset(
+		poolId: string,
+		email: string,
+		options: { ip?: string | null } = {}
+	): Promise<void> {
+		const pool = this.requireEnabledPool(poolId);
+		const address = normalizeEmail(email);
+		if (
+			!this.allowRequest(`reset:ip:${pool.id}:${options.ip ?? 'unknown'}`, USER_POOL_REQUEST_IP_LIMIT) ||
+			!this.allowRequest(`reset:email:${pool.id}:${address}`, USER_POOL_RESET_EMAIL_LIMIT)
+		)
+			return;
+		const user = this.findUser(pool.id, address);
+		if (!user || user.disabled_at !== null) return;
+		const issued = this.issueEmailToken(pool.id, user.id, 'password_reset');
+		await this.sendLinkMail(pool, user, 'password_reset', issued.token);
+	}
+
+	/**
+	 * Consume a reset link, set a new password and revoke every session that came before it. The
+	 * browser doing the reset gets a fresh session, so it stays signed in while other devices drop.
+	 */
+	async resetPassword(poolId: string, token: string, newPassword: string): Promise<UserPoolSignInResult> {
+		const pool = this.requireEnabledPool(poolId);
+		validatePassword(newPassword);
+		// Hash before consuming: a hashing failure must not burn the link.
+		const passwordHash = await Bun.password.hash(newPassword, { algorithm: 'argon2id' });
+		const user = this.consumeEmailToken(pool.id, token, 'password_reset');
+		const now = this.ctx.now();
+		this.ctx.sqlite.transaction(() => {
+			this.ctx.sqlite.run(
+				`UPDATE user_pool_users
+				    SET password_hash = ?, email_verified_at = COALESCE(email_verified_at, ?), updated_at = ?
+				  WHERE id = ? AND pool_id = ?`,
+				[passwordHash, now, now, user.id, pool.id]
+			);
+			this.ctx.sqlite.run(
+				'UPDATE user_pool_sessions SET revoked_at = ? WHERE pool_id = ? AND user_id = ? AND revoked_at IS NULL',
+				[now, pool.id, user.id]
+			);
+		})();
+		return this.startSession(pool, this.requireUser(pool.id, user.id), 'password_reset');
+	}
+
+	/** Re-send a verification link for an unverified address. Enumeration-safe. */
+	async requestEmailVerification(
+		poolId: string,
+		email: string,
+		options: { ip?: string | null } = {}
+	): Promise<void> {
+		const pool = this.requireEnabledPool(poolId);
+		const address = normalizeEmail(email);
+		if (
+			!this.allowRequest(`verify:ip:${pool.id}:${options.ip ?? 'unknown'}`, USER_POOL_REQUEST_IP_LIMIT) ||
+			!this.allowRequest(`verify:email:${pool.id}:${address}`, USER_POOL_VERIFY_EMAIL_LIMIT)
+		)
+			return;
+		const user = this.findUser(pool.id, address);
+		if (!user || user.disabled_at !== null || user.email_verified_at !== null) return;
+		const issued = this.issueEmailToken(pool.id, user.id, 'verify_email');
+		await this.sendLinkMail(pool, user, 'verify_email', issued.token);
+	}
+
+	/** Insert a session row and emit the D122 event; shared by password, magic-link and reset sign-in. */
+	private startSession(
+		pool: UserPoolRow,
+		user: UserRow,
+		method: 'password' | 'magic_link' | 'password_reset'
+	): UserPoolSignInResult {
 		const now = this.ctx.now();
 		const token = randomToken(32);
 		const id = sha256Hex(token);
@@ -376,7 +545,8 @@ export class UserPoolEngineService {
 			poolId: pool.id,
 			poolName: pool.name,
 			user: { id: user.id, email: user.email, name: user.name },
-			session: { id, expiresAt }
+			session: { id, expiresAt },
+			method
 		});
 		return {
 			token,
@@ -389,7 +559,8 @@ export class UserPoolEngineService {
 				createdAt: now,
 				lastSeenAt: now,
 				revokedAt: null
-			}
+			},
+			emailVerificationPending: user.email_verified_at === null
 		};
 	}
 
@@ -433,26 +604,14 @@ export class UserPoolEngineService {
 
 	/** Consume a verification link token and mark the user verified. */
 	verifyEmail(poolId: string, token: string): UserPoolUserView {
+		const pool = this.requireEnabledPool(poolId);
+		const user = this.consumeEmailToken(pool.id, token, 'verify_email');
 		const now = this.ctx.now();
-		const row = this.ctx.sqlite
-			.query<EmailTokenRow, [string, string]>(
-				`SELECT * FROM user_pool_email_tokens
-				  WHERE token_hash = ? AND pool_id = ? AND purpose = 'verify_email'`
-			)
-			.get(sha256Hex(token), poolId);
-		if (!row || row.used_at !== null || row.expires_at <= now)
-			throw new ValidationError('That verification link is invalid or has expired.');
-		const user = this.requireUser(poolId, row.user_id);
-
-		this.ctx.sqlite.transaction(() => {
-			this.ctx.sqlite.run('UPDATE user_pool_email_tokens SET used_at = ? WHERE token_hash = ?', [now, row.token_hash]);
-			this.ctx.sqlite.run('UPDATE user_pool_users SET email_verified_at = ?, updated_at = ? WHERE id = ?', [
-				now,
-				now,
-				user.id
-			]);
-		})();
-		return userView(this.requireUser(poolId, user.id));
+		this.ctx.sqlite.run(
+			'UPDATE user_pool_users SET email_verified_at = ?, updated_at = ? WHERE id = ? AND pool_id = ?',
+			[now, now, user.id, pool.id]
+		);
+		return userView(this.requireUser(pool.id, user.id));
 	}
 
 	/** Issue (and store) a fresh email-verification token. The raw token is returned once. */
@@ -461,15 +620,7 @@ export class UserPoolEngineService {
 		userId: string,
 		now = this.ctx.now()
 	): { token: string; expiresAt: number } {
-		this.requireUser(poolId, userId);
-		const token = randomToken(32);
-		const expiresAt = now + USER_POOL_EMAIL_TOKEN_TTL_SECONDS * 1000;
-		this.ctx.sqlite.run(
-			`INSERT INTO user_pool_email_tokens (token_hash, pool_id, user_id, purpose, created_at, expires_at, used_at)
-			 VALUES (?, ?, ?, 'verify_email', ?, ?, NULL)`,
-			[sha256Hex(token), poolId, userId, now, expiresAt]
-		);
-		return { token, expiresAt };
+		return this.issueEmailToken(poolId, userId, 'verify_email', now);
 	}
 
 	// ---------------------------------------------------------------- invites and admin
@@ -498,6 +649,8 @@ export class UserPoolEngineService {
 			 VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
 			[id, pool.id, address, sha256Hex(token), options.createdBy ?? null, now, expiresAt]
 		);
+		// The invitation leaves as mail; the raw token is still returned once for a manual copy.
+		void this.sendInviteMail(pool, address, token, expiresAt);
 		return {
 			invite: {
 				id,
@@ -836,6 +989,205 @@ export class UserPoolEngineService {
 			throw new UnauthorizedError('Invalid client credentials.');
 	}
 
+	private findUser(poolId: string, email: string): UserRow | null {
+		return (
+			this.ctx.sqlite
+				.query<UserRow, [string, string]>(
+					'SELECT * FROM user_pool_users WHERE pool_id = ? AND email = ?'
+				)
+				.get(poolId, email) ?? null
+		);
+	}
+
+	/** Invite-only always requires verification; an open pool may opt in through its setting. */
+	private emailVerificationRequired(pool: UserPoolRow): boolean {
+		if (pool.signup_mode === 'invite') return true;
+		return (
+			this.ctx.sqlite
+				.query<{ value: string }, [string]>('SELECT value FROM settings WHERE key = ?')
+				.get(userPoolRequireEmailVerificationKey(pool.id))?.value === '1'
+		);
+	}
+
+	/** Rolling-window limiter, keyed by address or client IP. Mirrors the hosted pages' helper. */
+	private allowRequest(key: string, limit: number): boolean {
+		const now = this.ctx.now();
+		const windowMs = USER_POOL_REQUEST_WINDOW_SECONDS * 1000;
+		const recent = (this.requestWindow.get(key) ?? []).filter((at) => now - at < windowMs);
+		if (recent.length >= limit) {
+			this.requestWindow.set(key, recent);
+			return false;
+		}
+		recent.push(now);
+		this.requestWindow.delete(key);
+		this.requestWindow.set(key, recent);
+		if (this.requestWindow.size > 10_000) {
+			for (const [entry, times] of this.requestWindow)
+				if (times.every((at) => now - at >= windowMs)) this.requestWindow.delete(entry);
+		}
+		return true;
+	}
+
+	/**
+	 * Store a fresh single-use token for one purpose. Any earlier unused token for the same purpose
+	 * is voided, so only the newest link in a mailbox works and a reset cannot be replayed.
+	 */
+	private issueEmailToken(
+		poolId: string,
+		userId: string,
+		purpose: EmailTokenPurpose,
+		now = this.ctx.now()
+	): { token: string; expiresAt: number } {
+		this.requireUser(poolId, userId);
+		const token = randomToken(32);
+		const expiresAt = now + EMAIL_TOKEN_TTL[purpose] * 1000;
+		this.ctx.sqlite.transaction(() => {
+			this.ctx.sqlite.run(
+				`UPDATE user_pool_email_tokens SET used_at = ?
+				  WHERE pool_id = ? AND user_id = ? AND purpose = ? AND used_at IS NULL`,
+				[now, poolId, userId, purpose]
+			);
+			this.ctx.sqlite.run(
+				`INSERT INTO user_pool_email_tokens (token_hash, pool_id, user_id, purpose, created_at, expires_at, used_at)
+				 VALUES (?, ?, ?, ?, ?, ?, NULL)`,
+				[sha256Hex(token), poolId, userId, purpose, now, expiresAt]
+			);
+		})();
+		return { token, expiresAt };
+	}
+
+	/**
+	 * Check and single-use a token. The same refusal answers unknown, expired, already used and
+	 * disabled-account tokens, and the update is conditional so two concurrent clicks cannot both
+	 * win.
+	 */
+	private consumeEmailToken(poolId: string, token: string, purpose: EmailTokenPurpose): UserRow {
+		const refusal = new ValidationError('That link is invalid or has expired.');
+		if (!token) throw refusal;
+		const now = this.ctx.now();
+		const row = this.ctx.sqlite
+			.query<EmailTokenRow, [string, string, string]>(
+				`SELECT * FROM user_pool_email_tokens
+				  WHERE token_hash = ? AND pool_id = ? AND purpose = ?`
+			)
+			.get(sha256Hex(token), poolId, purpose);
+		if (!row || row.used_at !== null || row.expires_at <= now) throw refusal;
+		const user = this.ctx.sqlite
+			.query<UserRow, [string, string]>('SELECT * FROM user_pool_users WHERE id = ? AND pool_id = ?')
+			.get(row.user_id, poolId);
+		if (!user || user.disabled_at !== null) throw refusal;
+		const used = this.ctx.sqlite.run(
+			'UPDATE user_pool_email_tokens SET used_at = ? WHERE token_hash = ? AND used_at IS NULL',
+			[now, row.token_hash]
+		);
+		if (used.changes === 0) throw refusal;
+		return user;
+	}
+
+	private async sendLinkMail(
+		pool: UserPoolRow,
+		user: UserRow,
+		purpose: Exclude<UserPoolMailPurpose, 'invite'>,
+		token: string
+	): Promise<void> {
+		const link = this.poolLink(pool.id, purpose, token);
+		const ttlMinutes = Math.round(EMAIL_TOKEN_TTL[purpose] / 60);
+		const copy: Record<
+			Exclude<UserPoolMailPurpose, 'invite'>,
+			{ subject: string; intro: string }
+		> = {
+			verify_email: {
+				subject: `Verify your email for ${pool.name}`,
+				intro: `Confirm that this address belongs to your ${pool.name} account.`
+			},
+			magic_link: {
+				subject: `Sign in to ${pool.name}`,
+				intro: `Use this link to sign in to ${pool.name}.`
+			},
+			password_reset: {
+				subject: `Reset your ${pool.name} password`,
+				intro: `Someone asked to reset the password for this ${pool.name} account. If that was not you, ignore this mail.`
+			}
+		};
+		await this.sendMail({
+			orgId: pool.org_id,
+			poolId: pool.id,
+			poolName: pool.name,
+			to: user.email,
+			purpose,
+			subject: copy[purpose].subject,
+			text: [
+				copy[purpose].intro,
+				'',
+				link,
+				'',
+				`This link can be used once and expires in ${ttlMinutes} minutes.`
+			].join('\n'),
+			link
+		});
+	}
+
+	private async sendInviteMail(
+		pool: UserPoolRow,
+		email: string,
+		token: string,
+		expiresAt: number
+	): Promise<void> {
+		const link = this.poolLink(pool.id, 'invite', token);
+		await this.sendMail({
+			orgId: pool.org_id,
+			poolId: pool.id,
+			poolName: pool.name,
+			to: email,
+			purpose: 'invite',
+			subject: `You're invited to ${pool.name}`,
+			text: [
+				`You have been invited to join ${pool.name}.`,
+				'',
+				link,
+				'',
+				`This invitation expires ${new Date(expiresAt).toISOString()}.`
+			].join('\n'),
+			link
+		});
+	}
+
+	private poolLink(
+		poolId: string,
+		purpose: UserPoolMailPurpose,
+		token: string
+	): string {
+		const origin = this.ctx.config.platformOrigin.replace(/\/+$/, '');
+		const path =
+			purpose === 'verify_email'
+				? 'verify'
+				: purpose === 'magic_link'
+					? 'magic'
+					: purpose === 'password_reset'
+						? 'reset'
+						: 'signup';
+		const parameter = purpose === 'invite' ? 'invite' : 'token';
+		return `${origin}/pool/${poolId}/${path}?${parameter}=${encodeURIComponent(token)}`;
+	}
+
+	/**
+	 * Mail failures never fail a sign-up or a request: an unknown address, a suppressed recipient
+	 * and a mail outage must look identical to the caller. The log line carries ids only, never a
+	 * link or token.
+	 */
+	private async sendMail(message: UserPoolMailMessage): Promise<void> {
+		try {
+			await this.ctx.userPoolMail?.send(message);
+		} catch (error) {
+			// Name only: an SMTP or serialiser message can quote the body, which carries the link.
+			console.error(
+				`[user-pool] ${message.purpose} mail for pool ${message.poolId} could not be sent (${
+					error instanceof Error ? error.name : 'unknown error'
+				}).`
+			);
+		}
+	}
+
 	private requirePool(poolId: string): UserPoolRow {
 		const row = this.ctx.sqlite
 			.query<UserPoolRow, [string]>(
@@ -869,6 +1221,59 @@ export class UserPoolEngineService {
 		if (!row) throw new NotFoundError('User pool user');
 		return row;
 	}
+}
+
+/**
+ * The production mail path (see `docs/EMAIL.md`): the platform's transactional SMTP sender (D22)
+ * first, so sign-in links still work when the mail node is down, then the platform sender on a mail
+ * node (skiff-mail outbox). With neither, only a development process logs the link; a production
+ * process refuses without putting the token anywhere. A future public `sendPlatformMail` on
+ * `EmailService` replaces the structural call to its current private queue method.
+ */
+interface SkiffMailPlatformSender {
+	settings(): { nodeId: string | null };
+	queuePlatformMail?(
+		orgId: string,
+		message: { to: string; subject: string; text: string },
+		tags: Record<string, string>
+	): Promise<string>;
+}
+
+export function createUserPoolMailer(ctx: CoreContext): UserPoolMailer {
+	return {
+		async send(message) {
+			const transport = ctx.config.email;
+			if (transport) {
+				try {
+					await transport.send({ to: message.to, subject: message.subject, text: message.text });
+					return;
+				} catch {
+					// Fall through to the mail node; the caller only sees a generic failure.
+				}
+			}
+			const email = ctx.email as unknown as SkiffMailPlatformSender | undefined;
+			if (email?.settings().nodeId && typeof email.queuePlatformMail === 'function') {
+				await email.queuePlatformMail(
+					message.orgId,
+					{ to: message.to, subject: message.subject, text: message.text },
+					{ skiff: `user-pool-${message.purpose}` }
+				);
+				return;
+			}
+			// Documented development fallback: the only place a pool link is ever logged.
+			if (process.env.NODE_ENV !== 'production' && process.env.NODE_ENV !== 'test') {
+				console.info(
+					`[user-pool:dev] ${message.purpose} mail for ${message.poolName} to ${message.to}: ${message.link}`
+				);
+				return;
+			}
+			throw new CoreError(
+				'platform_mail_unavailable',
+				'Skiff has no mail path for pool email: configure SKIFF_SMTP_* or a mail node.',
+				409
+			);
+		}
+	};
 }
 
 function userView(row: UserRow): UserPoolUserView {

@@ -398,9 +398,14 @@ export class GithubAppService {
 		return `${WEB}/apps/${app.slug}/installations/new?state=${encodeURIComponent(state)}`;
 	}
 
-	/** Whether the principal may install the App or link an installation to its org (a person, owner or admin). */
+	/** Whether a person may install the App or link an installation to their org. */
 	canLink(principal: Principal): boolean {
-		return principal.kind === 'user' && (principal.role === 'owner' || principal.role === 'admin');
+		// A person at the keyboard who may administer the organisation; an API key, MCP token or
+		// service account cannot complete the OAuth round trip, so a session is required as well.
+		return (
+			principal.credential === 'session' &&
+			this.ctx.iam.can(principal, 'org:update', { type: 'org' })
+		);
 	}
 
 	/** Refresh every installation from GitHub (new ones arrive unclaimed). */

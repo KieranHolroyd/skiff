@@ -3,7 +3,7 @@ import { hasPermission, STEP_UP_WINDOW_MS } from '@skiff/contracts';
 import { freshUntil, isVerificationFresh, minutesLeft } from '#lib/server/step-up/policy.js';
 import { core } from '#lib/server/core.js';
 import { contentDomain, features, platformOrigin, sharedDomain } from '#lib/server/config.js';
-import { availableUpdate, canManagePlatform } from '#lib/server/self-update.js';
+import { availableUpdate } from '#lib/server/self-update.js';
 import { assistantStatus } from '#lib/server/assistant/config.js';
 import { listMemberships } from '#lib/server/org-membership.js';
 import type { LayoutServerLoad } from './$types';
@@ -72,7 +72,9 @@ export const load: LayoutServerLoad = ({ locals, url, cookies }) => {
 			operationHistoryDays
 		}))(core.policies.get()),
 		/** Platform admins are nudged to Settings → Storage until it is set up or skipped (docs/STORAGE.md §4). */
-		storageOnboarding: principal.platformAdmin ? core.disks.onboardingState() : ('done' as const),
+		storageOnboarding: core.ctx.platformIam.can(principal, 'platform:storage')
+			? core.disks.onboardingState()
+			: ('done' as const),
 		permissions: [...principal.permissions].sort(),
 		can: {
 			createProject: hasPermission(principal, 'project:create'),
@@ -92,8 +94,18 @@ export const load: LayoutServerLoad = ({ locals, url, cookies }) => {
 			updateSecret: hasPermission(principal, 'secret:update'),
 			deleteSecret: hasPermission(principal, 'secret:delete'),
 			manageWorkload: hasPermission(principal, 'project:update'),
-			manageNodes: principal.platformAdmin === true,
-			viewCapacity: principal.platformAdmin === true,
+			/** Fleet capabilities come from the caller's platform bindings, not the Better Auth flag. */
+			manageNodes: core.ctx.platformIam.can(principal, 'platform:nodes'),
+			viewCapacity: core.ctx.platformIam.canView(principal),
+			viewPlatform: core.ctx.platformIam.canView(principal),
+			administerPlatform: core.ctx.platformIam.canAdminister(principal),
+			configurePlatform:
+				core.ctx.platformIam.canAdminister(principal) &&
+				hasPermission(principal, 'iam:manage-owners'),
+			manageStorage: core.ctx.platformIam.can(principal, 'platform:storage'),
+			manageHa: core.ctx.platformIam.can(principal, 'platform:ha'),
+			manageUpdates: core.ctx.platformIam.can(principal, 'platform:updates'),
+			manageQuotas: core.ctx.platformIam.can(principal, 'platform:quotas'),
 			manageApiKeys: hasPermission(principal, 'apiKey:create'),
 			seeMemberEmails: hasPermission(principal, 'iam:read')
 		},
@@ -114,6 +126,8 @@ export const load: LayoutServerLoad = ({ locals, url, cookies }) => {
 		 * Platform admins see an "update available" marker. Streamed (not awaited) so a slow GitHub
 		 * check never holds up navigation; the check itself is cached for five minutes.
 		 */
-		updateAvailable: canManagePlatform(principal) ? availableUpdate().catch(() => null) : null
+		updateAvailable: core.ctx.platformIam.can(principal, 'platform:updates')
+			? availableUpdate().catch(() => null)
+			: null
 	};
 };

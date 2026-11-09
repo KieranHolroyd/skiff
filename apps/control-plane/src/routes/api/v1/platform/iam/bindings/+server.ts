@@ -9,19 +9,24 @@ const roleId = z.enum(platformRoleIds as [string, ...string[]]);
 
 const condition = z.object({ op: z.string().min(1) }).passthrough();
 
-const createBinding = z.object({
-	userId: z.string().min(1).max(128),
-	roleId,
-	/** Null is deliberate: D129's quota exception is a binding without the session-only condition. */
-	condition: condition.nullish(),
-	expiresAt: z.number().int().positive().nullish(),
-	reason: z.string().max(500).optional(),
-});
+const createBinding = z
+	.object({
+		userId: z.string().min(1).max(128).optional(),
+		groupId: z.string().min(1).max(128).optional(),
+		roleId,
+		/** Null is deliberate: D129's quota exception is a binding without the session-only condition. */
+		condition: condition.nullish(),
+		expiresAt: z.number().int().positive().nullish(),
+		reason: z.string().max(500).optional(),
+	})
+	.refine((input) => Boolean(input.userId) !== Boolean(input.groupId), {
+		message: 'Provide exactly one of userId or groupId.',
+	});
 
 /**
  * Platform role bindings (IAM.md I24, §10). `GET` lists every platform binding; `POST` binds a
- * user to `platform-admin|operator|viewer`. The service requires a platform administrator for
- * writes and keeps D129's session-only default for `platform-admin`.
+ * user or group to `platform-admin|operator|viewer`. The service requires a platform administrator
+ * for writes and keeps D129's session-only default for `platform-admin`.
  */
 export const GET: RequestHandler = (event) =>
 	route(() => {
@@ -41,7 +46,7 @@ export const POST: RequestHandler = (event) =>
 		const input = await readJson(event.request, createBinding);
 		return json(
 			core.platformIam.bind(principal, {
-				userId: input.userId,
+				...(input.groupId ? { groupId: input.groupId } : { userId: input.userId! }),
 				roleId: input.roleId,
 				...(input.condition === undefined
 					? {}

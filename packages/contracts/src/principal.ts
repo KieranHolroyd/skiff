@@ -1,3 +1,4 @@
+import type { Restriction } from './iam/authorize.ts';
 import { permissionCatalog, type Permission, type Role, type StepUp } from './permissions.ts';
 
 /**
@@ -68,6 +69,11 @@ export interface Principal {
 	actingFor?: ActingFor;
 	/** Which kind of credential proved the principal, for audit and conditions. */
 	credential?: CredentialKind;
+	/**
+	 * A ceiling the credential itself carries (an STS token's `scope`/`resources`, a key's
+	 * limits). It only ever narrows the bindings compiled for the principal (IAM.md §7.3).
+	 */
+	restriction?: Restriction;
 	/** MCP client id / API key id, for the audit log. */
 	clientId?: string;
 	keyId?: string;

@@ -935,6 +935,9 @@
 								<p class="flex flex-wrap items-center gap-2">
 									<span class="text-sm font-medium">{review.name}</span>
 									<Badge variant={reviewStatusVariant(review.status)}>{review.status}</Badge>
+									{#if review.overdue}
+										<Badge variant="danger" title="Past its due date; the daily sweep will complete it">overdue</Badge>
+									{/if}
 									<Badge variant="secondary">{scopeLabel(review.scope)}</Badge>
 									<Badge variant="outline">
 										Default: {review.defaultDecision}
@@ -1066,6 +1069,68 @@
 			</span>
 		{/snippet}
 	</Panel>
+
+	{#if data.accessCan.serviceAccounts || data.serviceAccounts.length > 0}
+		<Panel
+			title="Service accounts"
+			icon={KeyRoundIcon}
+			count={data.serviceAccounts.length}
+			description="Org-owned machine principals. An account unused for 90 days is flagged; disabling it keeps its keys and bindings."
+			flush
+		>
+			{#if data.serviceAccounts.length === 0}
+				<div class="p-4">
+					<EmptyState
+						icon={KeyRoundIcon}
+						compact
+						title="No service accounts"
+						description="Create one from the API or CLI, then bind its sa_… id like any other principal."
+					/>
+				</div>
+			{:else}
+				<Table.Root>
+					<Table.Header class="bg-muted/45">
+						<Table.Row>
+							<Table.Head class="pl-4">Account</Table.Head>
+							<Table.Head>Owner</Table.Head>
+							<Table.Head>Last used</Table.Head>
+							<Table.Head class="pr-4">Status</Table.Head>
+						</Table.Row>
+					</Table.Header>
+					<Table.Body>
+						{#each data.serviceAccounts as account (account.id)}
+							<Table.Row>
+								<Table.Cell class="pl-4">
+									<p class="text-sm font-medium">{account.name}</p>
+									<p class="mt-0.5 truncate font-mono text-xs text-muted-foreground">{account.id}</p>
+								</Table.Cell>
+								<Table.Cell class="text-sm">
+									{account.ownerGroupId
+										? (data.groups.find((group) => group.id === account.ownerGroupId)?.name ??
+											account.ownerGroupId)
+										: 'Organisation'}
+								</Table.Cell>
+								<Table.Cell class="text-sm text-muted-foreground">
+									{usageLabel(account)}
+								</Table.Cell>
+								<Table.Cell class="pr-4">
+									<div class="flex flex-wrap items-center gap-1.5">
+										{#if account.disabled}
+											<Badge variant="neutral">disabled</Badge>
+										{:else if account.unused}
+											<Badge variant="warning">Unused for {account.unusedDays} days</Badge>
+										{:else}
+											<Badge variant="success">in use</Badge>
+										{/if}
+									</div>
+								</Table.Cell>
+							</Table.Row>
+						{/each}
+					</Table.Body>
+				</Table.Root>
+			{/if}
+		</Panel>
+	{/if}
 
 	<Panel
 		title="Why can't I?"

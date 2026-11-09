@@ -26,6 +26,8 @@ Commands:
   group remove <group> <user>   Remove a member
   explain <permission>          Why you can or cannot do something
   who-can <permission>          Everyone who can do it
+  keys [list]                   Signing keys by purpose, and the next rotation decision
+  keys rotate --purpose <p>     Rotate one purpose (--all for every automatic purpose)
 
 Role and group options:
       --permission <p>          A catalog permission, e.g. project:read; repeat or comma-separate
@@ -38,6 +40,10 @@ Bind options:
 
 Explain and who-can options:
       --resource <resource>     org (default), platform, project:<id> or environment:<project>/<id>
+
+Keys rotate options:
+      --purpose <p>             sts, registry, oidc, workload, or an explicit pool:<id>
+      --all                     Rotate every purpose the monthly sweep rotates
 
 Options:
   -y, --yes                    Don't ask for confirmation (required when stdin isn't a terminal)
@@ -53,7 +59,9 @@ Examples:
   skif iam bind user:user_abc owner --scope org
   skif iam bind group:grp_eng deployer --scope project:prj_shop --expires 7d --reason "release week"
   skif iam explain deployment:promote --resource project:prj_shop
-  skif iam who-can database:credentials --resource project:prj_shop`;
+  skif iam who-can database:credentials --resource project:prj_shop
+  skif iam keys rotate --purpose sts
+  skif iam keys rotate --all`;
 
 const baseFlags: FlagSpec = {
 	json: { type: 'boolean' },
@@ -73,6 +81,11 @@ const bindFlags: FlagSpec = {
 	reason: { type: 'string' },
 };
 const resourceFlags: FlagSpec = { ...baseFlags, resource: { type: 'string' } };
+const keysRotateFlags: FlagSpec = {
+	...baseFlags,
+	purpose: { type: 'string' },
+	all: { type: 'boolean' },
+};
 
 const PRINCIPAL_TYPES = ['user', 'group', 'serviceAccount'] as const;
 type PrincipalType = (typeof PRINCIPAL_TYPES)[number];
@@ -138,6 +151,38 @@ export interface IamWhoCan {
 	principals: Array<{ principalType: string; principalId: string; via: string | null }>;
 }
 
+export interface IamKeyEntry {
+	purpose: string;
+	automatic: boolean;
+	active: { kid: string; createdAt: number; activatedAt: number | null } | null;
+	next: { kid: string; createdAt: number } | null;
+	retired: number;
+	keys: Array<{
+		kid: string;
+		alg: string;
+		state: string;
+		createdAt: number;
+		activatedAt: number | null;
+		retireAfter: number | null;
+	}>;
+	rotation: { due: boolean; action: string; reason: string };
+}
+
+export interface IamKeysView {
+	purposes: IamKeyEntry[];
+	policy: { intervalDays: number; overlapHours: number; automaticPurposes: string[] };
+	lastRotatedAt: number | null;
+	nextCheckAt: number | null;
+	can: { rotate: boolean };
+}
+
+export interface IamKeyRotation {
+	purpose: string;
+	active: { kid: string };
+	next: { kid: string } | null;
+	retiredKid: string | null;
+}
+
 export async function iamCommand(argv: string[]): Promise<void> {
 	const first = argv[0];
 	if (!first || first === 'help' || first === '--help' || first === '-h') {
@@ -164,6 +209,9 @@ export async function iamCommand(argv: string[]): Promise<void> {
 		case 'who-can':
 		case 'whocan':
 			return whoCanCommand(argv.slice(1));
+		case 'keys':
+		case 'key':
+			return keysCommand(argv.slice(1));
 		default:
 			throw new UsageError(`Unknown iam command "${first}".\n\n${usage}`);
 	}
@@ -496,7 +544,78 @@ async function whoCanCommand(argv: string[]): Promise<void> {
 	console.log(whoCanTable(result));
 }
 
+// ---------------------------------------------------------------- signing keys
+
+async function keysCommand(argv: string[]): Promise<void> {
+	const first = argv[0];
+	if (!first || first.startsWith('-')) return listKeys(argv);
+	if (first === 'list' || first === 'ls') return listKeys(argv.slice(1));
+	if (first === 'rotate') return rotateKeys(argv.slice(1));
+	throw new UsageError(`Unknown keys command "${first}". Use \`skif iam keys list\` or \`skif iam keys rotate\`.\n\n${usage}`);
+}
+
+async function listKeys(argv: string[]): Promise<void> {
+	const args = parseArgs(argv, baseFlags);
+	if (args.boolean('help')) {
+		console.log(usage);
+		return;
+	}
+	rejectExtraPositionals(args, 0, 'Usage: skif iam keys [list] [--json]');
+	const client = await authenticatedClient();
+	const raw = await requestJson(client, 'GET', '/api/v1/iam/keys');
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	const view = keysViewFrom(raw);
+	const lines = [keysTable(view.purposes)];
+	if (view.lastRotatedAt !== null)
+		lines.push(
+			'',
+			`Last rotation: ${formatTime(view.lastRotatedAt)}. Next check: ${formatTime(view.nextCheckAt ?? undefined)}.`,
+		);
+	if (!view.can.rotate)
+		lines.push('Rotating signing keys needs platform maintenance (a platform admin session).');
+	console.log(lines.join('\n'));
+}
+
+async function rotateKeys(argv: string[]): Promise<void> {
+	const args = parseArgs(argv, keysRotateFlags);
+	if (args.boolean('help')) {
+		console.log(usage);
+		return;
+	}
+	rejectExtraPositionals(args, 0, 'Usage: skif iam keys rotate --purpose <p> | --all [--json]');
+	const body = parseKeyRotation({ all: args.boolean('all'), purpose: args.string('purpose') });
+	const client = await authenticatedClient();
+	const raw = await requestJson(client, 'POST', '/api/v1/iam/keys/rotate', body);
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	const rotations = rotationsFrom(raw);
+	for (const rotation of rotations) {
+		const next = rotation.next ? rotation.next.kid : 'none';
+		const retired = rotation.retiredKid ?? 'none';
+		console.log(
+			`Rotated ${rotation.purpose}: active ${rotation.active.kid}, next ${next}, retired ${retired}.`,
+		);
+	}
+}
+
 // ---------------------------------------------------------------- parsing helpers (pure)
+
+/** Validate `keys rotate` options: exactly one of `--purpose <p>` or `--all`. */
+export function parseKeyRotation(options: { all: boolean; purpose?: string }): {
+	all?: boolean;
+	purpose?: string;
+} {
+	const purpose = options.purpose?.trim();
+	if (options.all && purpose) throw new UsageError('Use --purpose or --all, not both.');
+	if (options.all) return { all: true };
+	if (!purpose) throw new UsageError('Name a purpose with --purpose, or pass --all.');
+	return { purpose };
+}
 
 export function parseScope(value: string, flag = '--scope'): IamScopeView {
 	const text = value.trim();
@@ -646,6 +765,17 @@ export function whoCanTable(result: IamWhoCan): string {
 	return renderTable(['PRINCIPAL', 'TYPE', 'VIA'], rows);
 }
 
+export function keysTable(purposes: IamKeyEntry[]): string {
+	const rows = purposes.map((entry) => [
+		entry.purpose,
+		entry.active?.kid ?? '-',
+		entry.next?.kid ?? '-',
+		String(entry.retired),
+		entry.rotation.due ? entry.rotation.action : 'no',
+	]);
+	return renderTable(['PURPOSE', 'ACTIVE', 'NEXT', 'RETIRED', 'DUE'], rows);
+}
+
 // ---------------------------------------------------------------- requests and small helpers
 
 export async function requestJson(
@@ -713,6 +843,57 @@ function whoCanFrom(raw: unknown): IamWhoCan {
 		permission: record.permission,
 		principals: record.principals as IamWhoCan['principals'],
 	};
+}
+
+function keysViewFrom(raw: unknown): IamKeysView {
+	const record = asRecord(raw);
+	const policy = asRecord(record?.policy);
+	if (!record || !Array.isArray(record.purposes) || !policy || !Array.isArray(policy.automaticPurposes))
+		throw new CliError('The platform returned an unexpected signing-key response.', {
+			code: 'protocol',
+			details: raw,
+		});
+	const can = asRecord(record.can);
+	return {
+		purposes: record.purposes as IamKeyEntry[],
+		policy: {
+			intervalDays: typeof policy.intervalDays === 'number' ? policy.intervalDays : 30,
+			overlapHours: typeof policy.overlapHours === 'number' ? policy.overlapHours : 24,
+			automaticPurposes: policy.automaticPurposes.filter(
+				(value): value is string => typeof value === 'string',
+			),
+		},
+		lastRotatedAt: numberOrNull(record.lastRotatedAt),
+		nextCheckAt: numberOrNull(record.nextCheckAt),
+		can: { rotate: can?.rotate === true },
+	};
+}
+
+function rotationsFrom(raw: unknown): IamKeyRotation[] {
+	const record = asRecord(raw);
+	if (!record || !Array.isArray(record.rotations))
+		throw new CliError('The platform returned an unexpected key rotation response.', {
+			code: 'protocol',
+			details: raw,
+		});
+	return record.rotations.flatMap((value) => {
+		const rotation = asRecord(value);
+		const active = asRecord(rotation?.active);
+		const next = asRecord(rotation?.next);
+		if (!rotation || typeof rotation.purpose !== 'string' || typeof active?.kid !== 'string') return [];
+		return [
+			{
+				purpose: rotation.purpose,
+				active: { kid: active.kid },
+				next: typeof next?.kid === 'string' ? { kid: next.kid } : null,
+				retiredKid: typeof rotation.retiredKid === 'string' ? rotation.retiredKid : null,
+			},
+		];
+	});
+}
+
+function numberOrNull(value: unknown): number | null {
+	return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 function explainQuery(permission: string, scope: IamScopeView): string {

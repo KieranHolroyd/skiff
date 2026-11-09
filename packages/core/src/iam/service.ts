@@ -28,6 +28,7 @@ import {
 	type Permission,
 	type Principal,
 	type ResourceRef,
+	type Restriction,
 	type Role,
 	type ScopeRef,
 } from '@skiff/contracts';
@@ -148,20 +149,17 @@ export class IamService {
 						scope: { type: 'org' },
 					},
 				],
+				restriction: principal.restriction,
 			});
 		}
 		this.ensureMemberBinding(principal);
 		const version = this.version(principal.orgId);
 		const type = bindingType(principal);
-		// A scoped key or an MCP consent can only narrow its user's bindings (IAM.md §2).
-		const restriction =
-			principal.kind === 'apiKey' || principal.kind === 'mcp'
-				? { permissions: [...principal.permissions] as Permission[] }
-				: undefined;
-		const capped = restriction
-			? `:${[...principal.permissions].sort().join(',')}`
-			: '';
-		const key = `${type}:${principal.userId}:${principal.orgId}:${version}${capped}`;
+		// A credential can only narrow its principal's bindings (IAM.md §2). A scoped key or an
+		// MCP consent contributes its effective permissions; an STS/workload token contributes the
+		// `scope`/`resources` it was minted with. Every kind may carry a restriction.
+		const restriction = this.restrictionFor(principal);
+		const key = `${type}:${principal.userId}:${principal.orgId}:${version}${restrictionKey(restriction)}`;
 		const cached = this.#cache.get(key);
 		if (cached) return cached;
 
@@ -762,6 +760,35 @@ export class IamService {
 
 	// ---------------------------------------------------------------- internals
 
+	/**
+	 * The narrowing a principal's credential imposes. A scoped key or an MCP consent is capped by
+	 * the effective permissions it carries; an explicit `principal.restriction` (an STS token's
+	 * `scope`/`resources`, a workload token's limits) is intersected with that cap. Any other kind
+	 * with no restriction is uncapped.
+	 */
+	private restrictionFor(principal: Principal): Restriction | undefined {
+		const derived: Restriction | undefined =
+			principal.kind === 'apiKey' || principal.kind === 'mcp'
+				? { permissions: [...principal.permissions] as Permission[] }
+				: undefined;
+		const own = principal.restriction;
+		if (!own) return derived;
+
+		let permissions: Permission[] | undefined;
+		if (own.permissions !== undefined) {
+			permissions = derived
+				? own.permissions.filter((permission) => derived.permissions?.includes(permission))
+				: [...own.permissions];
+		} else {
+			permissions = derived?.permissions as Permission[] | undefined;
+		}
+		const resources = own.resources ? [...own.resources] : undefined;
+		return {
+			...(permissions !== undefined ? { permissions } : {}),
+			...(resources !== undefined ? { resources } : {}),
+		};
+	}
+
 	private bindingsFromRows(orgId: string, rows: readonly BindingRow[]): Binding[] {
 		return rows.flatMap((row) => {
 			const scope = scopeFromRow(row);
@@ -913,6 +940,14 @@ const BUILT_IN_DESCRIPTIONS: Record<Role, string> = {
 	viewer: 'Read-only access to the org and its projects.',
 	guest: 'Project-only access from bindings; no organisation-wide permissions.',
 };
+
+/** The cache key fragment for a restriction: sorted, so insertion order never splits the cache. */
+function restrictionKey(restriction: Restriction | undefined): string {
+	if (!restriction) return '';
+	const permissions = [...(restriction.permissions ?? [])].sort().join(',');
+	const resources = [...(restriction.resources ?? [])].sort().join(',');
+	return `:${permissions}|${resources}`;
+}
 
 function bindingType(principal: Principal): BindingPrincipalType {
 	if (principal.kind === 'user' || principal.kind === 'apiKey' || principal.kind === 'mcp') return 'user';

@@ -1,10 +1,10 @@
 # Skiff — Identity and access management (IAM)
 
-Status: **Agreed (2026-11-08) → D168.** Both parts are in scope, Part A first, with the shape
-questions in §15 answered and the rest left as recommendations. Proposals are numbered I1–I30 and
-take D-numbers (next free: D171) as they ship; this document is the plan, not the implementation.
-[STEP-UP.md](./STEP-UP.md) is a separate, still-open proposal; this plan builds on it (§9.1) and does
-not replace it.
+Status: **Agreed (2026-11-08, D168) and built (2026-11-09, D181–D189).** Both parts are in:
+platform IAM (Part A) and Skiff Access plus user pools (Part B). The remaining gaps are listed in
+§13 and are deliberately small. Proposals are numbered I1–I30 and took D-numbers as they shipped;
+the next free ID is D190. [STEP-UP.md](./STEP-UP.md) was agreed and built with this plan (D186) and
+is no longer a separate proposal.
 
 This plan turns Skiff's fixed four-role RBAC (D9, DESIGN §6.2) into a full IAM service, in two parts:
 
@@ -377,7 +377,7 @@ to directly. Better Auth needs a `member` row for sign-in to resolve an org, so 
 ### 8.3 SSO (I19)
 
 - This uses Better Auth's `sso` plugin (spike S2 for 1.7.15 maturity and the invite-only hook at
-  `auth.ts:233`). OIDC ships first. SAML follows in the same plugin.
+  `auth.ts:233`). OIDC and SAML both run in the same plugin.
 - Providers are per org: issuer, client id, client secret (sealed with the org key) and claim
   mapping. `/login` asks for the email first. A verified domain routes the user to its IdP.
 - **Presets (D180):** adding a provider starts from Microsoft Entra ID, Google Workspace, Okta,
@@ -429,9 +429,9 @@ rotatable).
 
 ### 9.1 Step-up
 
-STEP-UP.md is adopted as written, with one change: its `STEP_UP_ACTIONS` registry becomes the
-catalog's `stepUp` and `tokens` fields (I1). `iam.require` throws `StepUpRequired` when the decision
-says so, so every surface gets it through one path. Agreeing and building STEP-UP.md is phase I7.
+STEP-UP.md was adopted as written and built in phase I7 (D186), with one change: its
+`STEP_UP_ACTIONS` registry became the catalog's `stepUp` and `tokens` fields (I1). `iam.require`
+throws `StepUpRequired` when the decision says so, so every surface gets it through one path.
 
 ### 9.2 Guardrails (I11)
 
@@ -540,13 +540,13 @@ A **user pool** is an org resource, like a database. It's an OIDC provider for o
 
 | Engine | Verdict |
 |---|---|
-| **Native `skiff-identity`** | **Recommended first.** `skiff-agent identity` runs as a static `skiff-identity.service` on a chosen node (the skiff-mail pattern, D115: same signed binary, own cgroup, `MemoryMax=256M`). Each pool is its own Better Auth instance with its own SQLite file on a disk (D169), replicated by Litestream. The edge routes `auth.<sitesDomain>` to it. It reuses Skiff's Better Auth knowledge and the existing passkey and mail plumbing, and costs about 50 MB rather than a JVM. |
+| **Native `skiff-identity`** | **Built, in-process for now.** `UserPoolEngineService` owns the pool's users, sessions, codes and hosted-page primitives in the `user_pool_*` tables (migration `0097`), with `pool:<id>` signing keys and argon2id passwords. The hosted pages are `/pool/<id>/{login,signup,reset,magic,logout,verify}`. Splitting it into a static `skiff-identity.service` on a chosen node (the skiff-mail pattern, D115), with an SQLite file per pool on a disk (D169), Litestream and the `auth.<sitesDomain>` edge route, is the identity-process target and is deferred. |
 | Managed Keycloak | A later engine as a tier-3 container, for SAML IdP or LDAP federation needs. It takes about 512 MB or more. |
 | Managed Authentik / Zitadel | Template candidates (D92) rather than first-class engines. |
-| Embedding pools in the control plane | Rejected. Tenant sign-in traffic would hit the control plane, which conflicts with D107 (the control plane may fail over). |
+| Embedding pools in the control plane | The current slice (the engine runs in-process). D107's reason to move tenant sign-in onto its own service still stands as the identity-process target. |
 
-Pool HA follows CLUSTERING: L0 is a single node, and later a replica with a Litestream-restored
-standby.
+Pool HA currently follows the control plane. The target is CLUSTERING: L0 is a single node, and
+later a replica with a Litestream-restored standby.
 
 ### 11.3 B2B (I30, later)
 
@@ -559,13 +559,20 @@ standby.
 
 ## 12. Surfaces
 
-| Surface | Additions |
+| Surface | Live |
 |---|---|
-| Dashboard | Settings → **Access** (Members, Groups, Roles, Service accounts, Access keys (org-wide), Federation, SSO and domains, Auth policy, Guardrails, Requests, Reviews). Each project and resource gets an **Access** tab (bindings at that scope, invite guest, explain). There's also an org switcher and a "Why can't I?" link on every 403 page that calls explain. |
-| REST | `/api/v1/iam/{roles,groups,bindings,explain,who-can}` (built with I1), then guardrails and simulate (I7), `/api/v1/service-accounts`, `/api/v1/access-keys`, `/api/v1/federation-trusts`, `/api/v1/sso/*`, `/api/v1/access-requests`, `/api/v1/access-reviews`, `/api/iam/token` (STS), `/.well-known/jwks.json` |
-| CLI | `skif iam roles\|groups\|bind\|unbind\|explain\|who-can`, `skif sa create\|keys\|token`, `skif access request\|approve`, `skif org switch`, `skif iam keys rotate` |
-| MCP | Read: `whoami` (gains bindings), `explain_access`, `who_can`, `list_roles`, `list_service_accounts`. Write (confirmed): `create_service_account`, `bind_role`, `request_access`. Never over MCP: approving requests, creating keys, SSO, guardrails, owner changes. |
-| Scope-filtered `tools/list` | Tools are filtered by the compiled grants (FEATURE-RESEARCH P1), which become cheap once I10 exists. |
+| Dashboard | Settings → **Access** (Roles, Bindings, Groups, Guardrails, Access requests, Access reviews, Service accounts, explain), Settings → **Identity** (SSO providers, domains, group mappings, auth policy, SCIM tokens, user pools), Settings → **Access policies**, Settings → **Platform access**, Settings → **Members**, a project's **Access** tab, and the org switcher. Every 403 offers "Why can't I?" through explain. Access keys have REST and CLI surfaces only. |
+| REST | `/api/v1/iam/{roles,groups,bindings,explain,who-can,guardrails,access-requests,access-reviews,usage,keys,keys/rotate}`, `/api/v1/service-accounts`, `/api/v1/access-keys`, `/api/v1/sso/{providers,domains,presets,resolve,policy,group-mappings,scim}`, `/api/v1/access-policies`, `/api/v1/user-pools` (clients, users, invites, `oauth/*`, discovery and JWKS), `/api/v1/platform/iam/{roles,bindings,guardrails}`, `/api/v1/access/authorize`, `/api/v1/org/switch`, `/api/iam/token` (STS), `/.well-known/jwks.json` and `/.well-known/openid-configuration`. |
+| CLI | `skif iam roles\|bindings\|groups\|bind\|unbind\|explain\|who-can\|keys list\|keys rotate`, `skif sa`, `skif key`, `skif pool`, `skif access-policy`, `skif identity token`, `skif sts exchange`. |
+| MCP | Read only: `whoami`, `explain_access`, `who_can`, `list_roles`, `list_service_accounts`. No write or approval tool yet. |
+| Scope-filtered `tools/list` | Not built; it becomes cheap once the compiled grants are used by the MCP registry. |
+
+**Not built:** `/api/v1/federation-trusts` (the STS service reads trusts from the database),
+`/api/v1/iam/simulate`, `skif access request|approve`, `skif org switch`, and the MCP write tools
+(`create_service_account`, `bind_role`, `request_access`). Storage STS is also open.
+
+Workload and STS tokens are accepted as `Bearer` by the REST API, MCP and the registry realm, and
+as the registry's Basic password.
 
 ---
 
@@ -573,67 +580,64 @@ standby.
 
 Each phase ships on its own and leaves the system working.
 
-Started 2026-11-08: I1's catalog and I2's principal v2 are in `packages/contracts/src/iam/catalog.ts`,
-`principal.ts` and `permissions.ts`. Every permission now carries scopes, risk, step-up level, token
-rule, MCP visibility and consent default; the owner/admin split is encoded in the built-in roles but
-no call site reads it yet. `scripts/lint-iam.ts` (in `bun run check`, baseline in
-`scripts/iam-lint-baseline.json`) now fails any new `principal.role` or `principal.kind` check, so the
-existing set can only burn down.
+Built between 2026-11-08 and 2026-11-09. The catalog, principal v2 and the role-name migration are
+in `packages/contracts/src/iam/{catalog,authorize}.ts`, `packages/contracts/src/principal.ts` and
+`packages/core/src/iam/service.ts`; the governance and identity phases followed on migrations
+`0080`–`0099`. What remains is a short list of gaps, not a phase.
 
-The engine is built: the pure `authorize`/`compileGrants` in `packages/contracts/src/iam/authorize.ts`
-and the impure `IamService` in `packages/core/src/iam/service.ts` (bindings, custom roles, groups,
-guardrails, the `iamVersion` cache, `require`/`can`/`scopeFilter`/`explain`/`whoCan`), on migration
-`0080_iam.sql`. `member.role` becomes an org binding the first time the engine sees a user. The matrix
-test runs every catalog permission through an org grant, a project grant, another project, expiry, a
-guardrail, a token restriction and a session-only condition.
+| Phase | Proposals | Status | Remaining |
+|---|---|---|---|
+| **I0 Foundations** | I1–I5 | Built | the `compat:legacy-role` grant until every member seeds a binding |
+| **I1 Engine at org scope** | I6–I10, I12 | Built | `/iam/simulate` and the draft-binding diff |
+| **I2 Resource scopes** | I7 | Built | list filtering on queries that cannot express a scope |
+| **I3 Service accounts** | I13–I14 | Built | impersonation tokens; per-repository pipeline accounts; Better Auth `apikey` migration (S1) |
+| **I4 Token service** | I15–I17 | Built | federation-trust CRUD |
+| **I5 Workload identity** | I18 | Built | RustFS storage STS (S3) |
+| **I6 Enterprise sign-in** | I19–I21 | Built | SAML SLO |
+| **I7 Governance** | I11, I12, I22–I23 | Built | step-up on by default; simulate |
+| **I8 Platform IAM** | I24 | Built | a dedicated platform IAM page |
+| **I9 Skiff Access** | I25 | Built | service tokens and user-pool identity at the edge; decision caching (S6) |
+| **I10 User pools** | I26–I29 | Built | passkeys, social login and MFA; import and export |
+| **I11 Pool extras** | I30 | Deferred | B2B organisations, tenant federation, SCIM in, the Keycloak engine |
 
 What is built now:
 
-- **I0/I1** — catalog, principal v2, named system principals, audit actor columns, the lint guard,
-  roles/groups/bindings, `/api/v1/iam` and Settings → Access.
+- **I0/I1** — catalog, principal v2, named system principals, audit actor columns, the lint guard
+  (the baseline is now empty), the owner/admin split, roles/groups/bindings, `/api/v1/iam` and
+  Settings → Access.
 - **I2** — the core modules authorize through `iam.require` with a resource (projects, deployments,
   domains, databases, pipelines, builds, registry, storage, brokers, shares, app volumes, email,
   jobs, events, alerts, workloads, functions, templates, environments, access, studio, node tasks,
   replicas, moves, metrics, backups, usage, uploads, logs, secrets, console, flows, releases,
-  GitHub), with `scopeFilter` on the lists that can express it. A temporary legacy fallback and the
-  42 baselined role/kind checks remain.
+  GitHub), with `scopeFilter` on the lists that can express it. The `compat:legacy-role` grant
+  remains; no role/kind check is baselined.
 - **I3** — service accounts and org-bound `access_keys` with SHA-256 hashes, expiry, CIDR and
-  restriction, plus creation/revocation routes.
-- **I4** — the ES256 key ring with rotation and shared JWKS, federation trusts and RFC 8693 token
-  exchange. The registry realm and pipeline OIDC now sign with the ring; the old keys stay readable
-  for their TTL overlap and are removed later.
+  restriction, plus creation/revocation routes and `skif sa` / `skif key`. Impersonation and
+  per-repository pipeline accounts are still open; a trusted pipeline deploy runs as
+  `system:pipeline-deploy`.
+- **I4** — the ES256 key ring with rotation, shared JWKS and operator list/rotate routes
+  (`/api/v1/iam/keys`), federation trusts and RFC 8693 token exchange. The registry realm and
+  pipeline OIDC sign with the ring; the old keys stay readable for their TTL overlap and are
+  removed later. REST, MCP and the registry realm accept a workload or STS token as `Bearer`.
 - **I5** — active-organization sessions, the header switcher, org-bound key metadata, and workload
   identity: one service account per workload, a 1-hour token delivered through activation, a
-  loopback metadata endpoint and `SKIFF_TOKEN_FILE`. Registry login and storage STS remain.
-- **I6** — OIDC sign-in through `@better-auth/sso`, provider sync, JIT membership, domain routing,
-  org auth policy, SCIM 2.0 with deactivation and group mirroring, and SSO group mapping. SAML
+  loopback metadata endpoint and `SKIFF_TOKEN_FILE`. The registry accepts that token; storage STS
   remains.
+- **I6** — OIDC and SAML sign-in through `@better-auth/sso`, provider sync, JIT membership, domain
+  routing, org auth policy, SCIM 2.0 with deactivation and group mirroring, and SSO group mapping.
+  SAML SLO remains.
 - **I7** — guardrail templates and CRUD, JIT access requests, usage rollup, access reviews, and
-  step-up enforcement behind `SKIFF_STEP_UP` (the verification plugin and dialog remain).
-- **I8** — platform roles at platform scope, D129 as a session condition, and seeded admin bindings.
+  step-up: the catalog's `stepUp`/`tokens` fields, the `/api/auth/step-up/*` plugin and the
+  VerifyDialog. Enforcement is off unless `SKIFF_STEP_UP=1`; simulate remains.
+- **I8** — platform roles at platform scope, D129 as a session condition, platform guardrails,
+  seeded admin bindings, user and group bindings at `/api/v1/platform/iam/*`.
 - **I9** — access policies, the `access` protection mode, the agent's `forward_auth` handler and the
   Settings page. Service tokens and user-pool identity are not enforced at the edge yet.
-- **I10** — user pools and OIDC clients with discovery/JWKS. The native identity engine is a seam
-  only: no users, hosted sign-in or sessions yet.
-
-| Phase | Contents | Proposals | Done when |
-|---|---|---|---|
-| **I0 Foundations** | Permission catalog with metadata. Principal v2. Named system principals. Role-name checks → permissions, plus the lint rule. Owner/admin split. Audit actor columns. Org switching and org-bound credentials. | I1–I5 | No `.role ===` outside iam/. Every system call has a named principal. Keys carry `org_id`. |
-| **I1 Engine at org scope** | IAM tables. `authorize` + compile cache + `iamVersion`. Built-in roles as rows. `member.role` → bindings. Custom roles. Groups. Explain. Settings → Access (Members, Groups, Roles). | I6–I10, I12 (explain) | Custom roles and groups work org-wide. The matrix test is green at org scope. |
-| **I2 Resource scopes** | Project, environment and resource bindings. The module-by-module `iam.require(…, resource)` migration. List filtering. Access tabs. Guests. | I7 | A guest bound to one project sees and changes only that project, on all four surfaces. |
-| **I3 Service accounts** | Service accounts, the `access_keys` table and migration, key policies, impersonation, pipelines running as a service account, CLI keys with expiry. | I13, I14 | CI runs with no human key. A removed member's automation keeps working. |
-| **I4 Token service** | Key ring + rotation flow. Unified JWKS. STS token exchange. Federation trusts. Registry and pipeline OIDC move onto the ring. | I15–I17 | GitHub Actions and GitLab CI deploy keylessly. Keys rotate with no outage. |
-| **I5 Workload identity** | Per-workload service accounts, token delivery, metadata endpoint, registry login via token, storage STS (if S3 passes), cloud federation guide. | I18 | An app calls Skiff's API and AWS with no stored secret. |
-| **I6 Enterprise sign-in** | SSO OIDC, domains, JIT + group mapping, enforcement + break-glass + preflight. Org auth policy. SCIM. SAML. | I19–I21 | Okta/Entra/Google sign-in with enforced SSO. A SCIM deactivation revokes everything in under a minute. |
-| **I7 Governance** | STEP-UP.md built on the catalog. Guardrails. Simulate and who-can. JIT access requests. Usage rollup. Access reviews. | I11, I12, I22, I23 | A production promote needs a time-boxed, approved grant. A quarterly review completes from the dashboard. |
-| **I8 Platform IAM** | Platform roles and scope. D129 as a condition. Platform guardrails. | I24 | An operator can drain nodes but can't change domains. |
-| **I9 Skiff Access** | The `access` protection mode, access policies, forward_auth handler, service tokens. | I25 | A staging environment is open only to the org's `eng` group through the org's IdP. |
-| **I10 User pools** | The native `skiff-identity` engine, pools, clients, hosted UI, attachment + `env.AUTH`, events, admin surfaces, import and export. | I26–I29 | A template app (D92) ships with sign-up, passkeys and MFA, with no third-party auth. |
-| **I11 Pool extras** | B2B organisations, per-tenant federation, SCIM in, Keycloak engine. | I30 | On demand. |
-
-Rough size: I0 is M, I1 L, I2 L (the call-site migration), I3 M, I4 M, I5 M–L, I6 L, I7 L, I8 S,
-I9 M, I10 XL, I11 L. I0–I3 is the core: it delivers custom roles, groups, per-project access, guests
-and service accounts.
+- **I10** — user pools and OIDC clients with discovery/JWKS, plus the native engine: email +
+  password, pool sessions, magic links, password reset, email verification and invites,
+  authorization codes, access/ID tokens, userinfo, RP-initiated logout and hosted sign-in pages.
+  Attachments inject `<P>_*` env, set `env.AUTH.verify` and emit `pools` events. Passkeys, social
+  login, MFA and import/export remain.
 
 ---
 

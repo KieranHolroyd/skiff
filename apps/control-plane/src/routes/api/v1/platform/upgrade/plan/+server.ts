@@ -1,4 +1,3 @@
-import { canViewPlatform } from '@skiff/contracts';
 import { ForbiddenError } from '@skiff/core';
 import { core } from '#lib/server/core.js';
 import { route } from '#lib/server/api.js';
@@ -20,7 +19,7 @@ import type { RequestHandler } from './$types';
 export const GET: RequestHandler = (event) =>
 	route(async () => {
 		const principal = requirePrincipal(event);
-		if (!canViewPlatform(principal))
+		if (!core.ctx.platformIam.canView(principal))
 			throw new ForbiddenError('only a platform admin can plan an upgrade');
 		const source = updateSource();
 		const latest = await latestVersion(source);

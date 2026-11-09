@@ -20,14 +20,24 @@
 
 	let bindOpen = $state(false);
 	let guardrailOpen = $state(false);
+	let bindTarget = $state<'user' | 'group'>('user');
 
 	const users = $derived(data.users);
+	const groups = $derived(data.groups);
 	const bindings = $derived(data.bindings);
 	const guardrails = $derived(data.guardrails);
 
 	function userLabel(id: string): string {
 		const user = users.find((entry) => entry.id === id);
 		return user ? (user.email || user.name) : id;
+	}
+
+	function principalLabel(binding: { principalType: string; principalId: string }): string {
+		if (binding.principalType === 'group') {
+			const group = groups.find((entry) => entry.id === binding.principalId);
+			return group ? group.name : binding.principalId;
+		}
+		return userLabel(binding.principalId);
 	}
 
 	function conditionLabel(condition: { op: string } | null): string {
@@ -46,7 +56,7 @@
 	function unbind(id: string, roleId: string) {
 		askConfirm({
 			title: `Remove the ${roleId} binding?`,
-			description: 'That user loses the platform permissions this role granted.',
+			description: 'That principal loses the platform permissions this role granted.',
 			confirmLabel: 'Remove binding',
 			tone: 'danger',
 			action: '?/unbind',
@@ -126,7 +136,7 @@
 					<div class="flex flex-wrap items-center justify-between gap-3 rounded-md border px-3 py-2">
 						<div class="min-w-0 space-y-0.5">
 							<div class="flex flex-wrap items-center gap-2">
-								<span class="truncate text-sm font-medium">{userLabel(binding.principalId)}</span>
+								<span class="truncate text-sm font-medium">{principalLabel(binding)}</span>
 								<Badge variant={roleTone(binding.roleId)} class="font-mono text-[10px]">{binding.roleId}</Badge>
 								<Badge variant="outline" class="text-[10px]">{conditionLabel(binding.condition)}</Badge>
 							</div>
@@ -215,15 +225,39 @@
 >
 	<Field.Group>
 		<Field.Field>
-			<Field.Label for="platform-user">User</Field.Label>
-			<NativeSelect.Root id="platform-user" name="userId" required>
-				{#each users as user (user.id)}
-					<NativeSelect.Option value={user.id}>
-						{user.email || user.name} ({user.id})
-					</NativeSelect.Option>
-				{/each}
+			<Field.Label for="platform-target">Applies to</Field.Label>
+			<NativeSelect.Root id="platform-target" name="target" bind:value={bindTarget}>
+				<NativeSelect.Option value="user">A person</NativeSelect.Option>
+				<NativeSelect.Option value="group">A group</NativeSelect.Option>
 			</NativeSelect.Root>
 		</Field.Field>
+		{#if bindTarget === 'group'}
+			<Field.Field>
+				<Field.Label for="platform-group">Group</Field.Label>
+				<NativeSelect.Root id="platform-group" name="groupId" required>
+					{#each groups as group (group.id)}
+						<NativeSelect.Option value={group.id}>
+							{group.name} ({group.id})
+						</NativeSelect.Option>
+					{/each}
+				</NativeSelect.Root>
+				<Field.Description>
+					Every member of the group gets the role. Add or remove people from the group in
+					Settings → Access.
+				</Field.Description>
+			</Field.Field>
+		{:else}
+			<Field.Field>
+				<Field.Label for="platform-user">User</Field.Label>
+				<NativeSelect.Root id="platform-user" name="userId" required>
+					{#each users as user (user.id)}
+						<NativeSelect.Option value={user.id}>
+							{user.email || user.name} ({user.id})
+						</NativeSelect.Option>
+					{/each}
+				</NativeSelect.Root>
+			</Field.Field>
+		{/if}
 		<Field.Field>
 			<Field.Label for="platform-role">Role</Field.Label>
 			<NativeSelect.Root id="platform-role" name="roleId">

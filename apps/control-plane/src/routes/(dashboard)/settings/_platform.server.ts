@@ -8,7 +8,6 @@ import {
 import { core } from '#lib/server/core.js';
 import {
 	OWNER_ONLY_MESSAGE,
-	canConfigurePlatform,
 	configAvailability,
 	configInFlight,
 	configPending,
@@ -20,9 +19,22 @@ import {
 
 /** Shared by Settings → Backups and Settings → Notifications. */
 
+/**
+ * Email, backups, alerts and similar install-wide settings need a platform administrator who also
+ * owns the current org. The platform decision comes from the caller's bindings (IAM.md I24);
+ * D129's session-only condition still refuses API keys and MCP tokens.
+ */
+function canConfigure(principal: Principal | undefined): principal is Principal {
+	return (
+		principal !== undefined &&
+		core.ctx.platformIam.canAdminister(principal) &&
+		principal.permissions.has('iam:manage-owners')
+	);
+}
+
 export function requireOwnerPage(locals: App.Locals): Principal {
-	if (!canConfigurePlatform(locals.principal)) error(403, OWNER_ONLY_MESSAGE);
-	return locals.principal!;
+	if (!canConfigure(locals.principal)) error(403, OWNER_ONLY_MESSAGE);
+	return locals.principal;
 }
 
 export function configState() {
@@ -45,7 +57,7 @@ type Body = Parameters<typeof submitConfigRequest>[1];
  */
 export function queueConfig(locals: App.Locals, body: Body, success: string) {
 	const principal = locals.principal;
-	if (!principal || !canConfigurePlatform(principal))
+	if (!canConfigure(principal))
 		return fail(403, { message: OWNER_ONLY_MESSAGE });
 	const availability = configAvailability();
 	if (availability === 'local' && body.action === 'telemetry')

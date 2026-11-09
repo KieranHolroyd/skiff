@@ -1,5 +1,5 @@
 import { fail } from '@sveltejs/kit';
-import { canAdministerPlatform, hasPermission } from '@skiff/contracts';
+import { hasPermission } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -15,7 +15,7 @@ export const load: PageServerLoad = ({ locals }) => {
 		usage: core.registry.usage(principal),
 		trusts: registry.enabled ? core.registry.listOidcTrusts(principal) : [],
 		canEditTrusts: hasPermission(principal, 'image:credentials'),
-		canAdminister: canAdministerPlatform(principal)
+		canAdminister: core.ctx.platformIam.canAdminister(principal)
 	};
 };
 

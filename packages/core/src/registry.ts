@@ -35,6 +35,7 @@ import {
 import type { CoreContext } from './context.ts';
 import { CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { buildSystemPrincipal } from './iam/system.ts';
+import { tokenRestrictionAllows } from './iam/token-consumers.ts';
 import { MANIFEST_ACCEPT } from './oci-client.ts';
 import { OidcError, refMatches, verifyGithubOidc, verifyGitlabOidc } from './registry-oidc.ts';
 import { certificateFromPrivateKeyPem, type RegistryAccess } from './registry-token.ts';
@@ -826,10 +827,32 @@ export class RegistryService {
 		return [{ type: 'repository', name: parsed.name, actions: ['pull'] }];
 	}
 
+	/**
+	 * The resource ids a token's `resources` claim may name for one repository: its Docker name
+	 * (always available, even before the row exists) and its row id when it has been pushed before.
+	 */
+	private repositoryResources(name: string): string[] {
+		const resources = [`repository:${name}`];
+		const row = this.ctx.db
+			.select({ id: registryRepositories.id })
+			.from(registryRepositories)
+			.where(eq(registryRepositories.name, name))
+			.get();
+		if (row) resources.push(`repository:${row.id}`);
+		return resources;
+	}
+
 	private grantForPrincipal(principal: Principal, scope: string): RegistryAccess[] {
 		const parsed = this.parseScope(scope);
 		if (!parsed) return [];
-		if (this.isMirrorRepository(parsed.name)) return hasPermission(principal, 'image:pull') ? this.grantMirrorPull(scope) : [];
+		// A workload/STS token can only narrow the account's bindings further, at `repository:*` or
+		// a row id. The name is always a candidate so a first push (no row yet) still works.
+		const resources = this.repositoryResources(parsed.name);
+		if (this.isMirrorRepository(parsed.name))
+			return hasPermission(principal, 'image:pull') &&
+				tokenRestrictionAllows(principal.restriction, 'image:pull', resources)
+				? this.grantMirrorPull(scope)
+				: [];
 		const orgSlug = parsed.name.split('/')[0]!;
 		const orgId = this.orgIdBySlug(orgSlug);
 		// The namespace is the principal's own org; a token never crosses orgs.
@@ -837,7 +860,14 @@ export class RegistryService {
 		const wanted: Record<string, Permission> = { pull: 'image:pull', push: 'image:push', delete: 'image:delete' };
 		const actions = parsed.actions
 			.flatMap((action) => (action === '*' ? ['pull', 'push', 'delete'] : [action]))
-			.filter((action) => wanted[action] && hasPermission(principal, wanted[action]!));
+			.filter((action) => {
+				const permission = wanted[action];
+				return Boolean(
+					permission &&
+						hasPermission(principal, permission) &&
+						tokenRestrictionAllows(principal.restriction, permission, resources),
+				);
+			});
 		if (actions.length === 0) return [];
 		if (actions.includes('push')) {
 			this.assertPushQuota(orgId, parsed.name);

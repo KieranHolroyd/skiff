@@ -17,7 +17,7 @@ export const load: PageServerLoad = ({ locals, params }) => {
 
 	// Node capacity drives the placement picker's fit check; only platform admins may see it.
 	let capacity: ReturnType<typeof core.workloads.capacity> = [];
-	if (principal.platformAdmin === true) {
+	if (core.ctx.platformIam.canView(principal)) {
 		try {
 			capacity = core.workloads.capacity(principal);
 		} catch {

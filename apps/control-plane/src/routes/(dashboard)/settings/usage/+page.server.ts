@@ -27,7 +27,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		quotas,
 		history,
 		projects,
-		canSetQuotas: principal.platformAdmin === true
+		canSetQuotas: core.ctx.platformIam.can(principal, 'platform:quotas')
 	};
 };
 
@@ -38,7 +38,7 @@ export const actions: Actions = {
 	 */
 	quotas: async ({ request, locals }) => {
 		const principal = locals.principal!;
-		if (principal.platformAdmin !== true)
+		if (!core.ctx.platformIam.can(principal, 'platform:quotas'))
 			return fail(403, { message: 'Only a platform admin can change quotas.' });
 		const data = await request.formData();
 		const input: Record<string, number> = {};

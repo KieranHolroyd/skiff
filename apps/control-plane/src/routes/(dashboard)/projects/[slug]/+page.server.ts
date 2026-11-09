@@ -189,7 +189,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			[]
 		);
 		const capacity: NodeCapacityView[] =
-			principal.platformAdmin === true ? safely(() => core.workloads.capacity(principal), []) : [];
+			core.ctx.platformIam.canView(principal) ? safely(() => core.workloads.capacity(principal), []) : [];
 		// Managed databases (D56): only process/container projects can attach one.
 		const databaseAttachments: DatabaseAttachmentView[] =
 			row.runtime === 'static' ? [] : safely(() => core.databases.attachments(principal, row), []);
@@ -338,7 +338,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 				containerFiles: consoleOn && principal.credential === 'session' && canAt('container:files'),
 				containerExec: consoleOn && principal.credential === 'session' && canAt('container:exec'),
 				restartContainer: consoleOn && canAt('project:update'),
-				viewCapacity: principal.platformAdmin === true,
+				viewCapacity: core.ctx.platformIam.canView(principal),
 				readDatabases: canAt('database:read'),
 				createDatabase: canAt('database:create'),
 				attachDatabase:

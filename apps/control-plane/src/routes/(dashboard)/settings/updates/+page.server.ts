@@ -2,7 +2,6 @@ import { error, fail } from '@sveltejs/kit';
 import { core } from '#lib/server/core.js';
 import {
 	approvalsFromForm,
-	canManagePlatform,
 	compareToRunning,
 	currentChannel,
 	defaultUpdateMethod,
@@ -20,8 +19,8 @@ import {
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
-	if (!canManagePlatform(locals.principal))
-		error(403, 'Only platform owners and admins can manage platform updates.');
+	if (!locals.principal || !core.ctx.platformIam.can(locals.principal, 'platform:updates'))
+		error(403, 'Only platform owners, admins and operators can manage platform updates.');
 	const source = updateSource();
 	// `?channel=` previews the other channel; the host only switches when an update is requested.
 	const hostChannel = currentChannel();
@@ -67,8 +66,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 export const actions: Actions = {
 	check: async ({ locals, request }) => {
-		if (!canManagePlatform(locals.principal))
-			return fail(403, { message: 'Only platform owners and admins can check for updates.' });
+		if (!locals.principal || !core.ctx.platformIam.can(locals.principal, 'platform:updates'))
+			return fail(403, { message: 'Only platform owners, admins and operators can check for updates.' });
 		// The page posts the channel it is previewing (`?/check` drops the page's own query).
 		const channel =
 			updateChannelFromForm((await request.formData()).get('channel')) ?? currentChannel();
@@ -89,8 +88,8 @@ export const actions: Actions = {
 
 	update: async ({ locals, request }) => {
 		const principal = locals.principal;
-		if (!principal || !canManagePlatform(principal))
-			return fail(403, { message: 'Only platform owners and admins can update the platform.' });
+		if (!principal || !core.ctx.platformIam.can(principal, 'platform:updates'))
+			return fail(403, { message: 'Only platform owners, admins and operators can update the platform.' });
 		const data = await request.formData();
 		const submitted = data.get('method');
 		const method = submitted === null ? defaultUpdateMethod() : updateMethodFromForm(submitted);

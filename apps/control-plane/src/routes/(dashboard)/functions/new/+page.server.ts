@@ -12,7 +12,7 @@ export const load: PageServerLoad = ({ locals }) => {
 	if (!hasPermission(principal, 'project:create'))
 		error(403, 'Your role cannot create functions in this organisation.');
 	let capacity: NodeCapacityView[] = [];
-	if (principal.platformAdmin === true) {
+	if (core.ctx.platformIam.canView(principal)) {
 		try {
 			capacity = core.workloads.capacity(principal);
 		} catch {

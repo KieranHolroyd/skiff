@@ -60,7 +60,7 @@ export const load: PageServerLoad = ({ locals }) => {
 
 	// Node names come from capacity, which only platform admins can read.
 	const nodeNames = new Map<string, string>();
-	if (principal.platformAdmin === true) {
+	if (core.ctx.platformIam.canView(principal)) {
 		try {
 			for (const node of core.workloads.capacity(principal)) nodeNames.set(node.nodeId, node.name);
 		} catch {

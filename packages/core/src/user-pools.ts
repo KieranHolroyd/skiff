@@ -53,6 +53,14 @@ export function userPoolSigningPurpose(poolId: string): `pool:${string}` {
 }
 
 /**
+ * The per-pool "verify email before sign-in" switch. Stored as a platform setting rather than a
+ * column because 0097 is the frozen engine schema; an `invite` pool is always required regardless.
+ */
+export function userPoolRequireEmailVerificationKey(poolId: string): string {
+	return `user_pool.${poolId}.require_email_verification`;
+}
+
+/**
  * The public issuer for a pool. The id, not the display name, keeps two organisations with a
  * pool called "shop" from colliding; a verified custom domain can replace it later.
  */
@@ -136,6 +144,8 @@ export interface UserPoolPublicInfo {
 	description: string;
 	issuer: string;
 	signupMode: UserPoolSignupMode;
+	/** Password sign-in waits for email verification. Always true for an invite-only pool. */
+	requireEmailVerification: boolean;
 	theme: UserPoolTheme;
 }
 
@@ -186,6 +196,7 @@ export class UserPoolService {
 			description: row.description,
 			issuer: row.issuer,
 			signupMode: row.signup_mode as UserPoolSignupMode,
+			requireEmailVerification: this.#requireEmailVerification(row),
 			theme: parseTheme(row.theme_json)
 		};
 	}
@@ -296,6 +307,7 @@ export class UserPoolService {
 				throw new ConflictError(`A user pool named "${input.name}" already exists.`);
 			throw cause;
 		}
+		if (input.requireEmailVerification) this.#setRequireEmailVerification(id, true);
 		this.ctx.audit.record({
 			principal,
 			action: 'user_pool.create',
@@ -305,6 +317,7 @@ export class UserPoolService {
 				name: input.name,
 				engine: input.engine,
 				signupMode: input.signupMode,
+				requireEmailVerification: input.requireEmailVerification === true,
 				issuer,
 				signingKeyId: key.kid
 			},
@@ -321,6 +334,9 @@ export class UserPoolService {
 		const description = patch.description ?? row.description;
 		const signupMode = (patch.signupMode ?? row.signup_mode) as UserPoolSignupMode;
 		const theme = patch.theme === undefined ? parseTheme(row.theme_json) : patch.theme;
+		const requireEmailVerification =
+			signupMode === 'invite' ||
+			(patch.requireEmailVerification ?? this.#requireEmailVerification(row));
 		const disabledAt =
 			patch.disabled === undefined
 				? row.disabled_at
@@ -341,10 +357,13 @@ export class UserPoolService {
 			name === row.name &&
 			description === row.description &&
 			signupMode === row.signup_mode &&
+			requireEmailVerification === this.#requireEmailVerification(row) &&
 			disabledAt === row.disabled_at &&
 			JSON.stringify(theme) === JSON.stringify(parseTheme(row.theme_json));
 		if (unchanged) return this.#view(row);
 
+		if (patch.requireEmailVerification !== undefined)
+			this.#setRequireEmailVerification(row.id, patch.requireEmailVerification);
 		this.ctx.sqlite.run(
 			`UPDATE user_pools
 			    SET name = ?, description = ?, signup_mode = ?, theme_json = ?, disabled_at = ?, updated_at = ?
@@ -369,6 +388,7 @@ export class UserPoolService {
 				name,
 				description,
 				signupMode,
+				requireEmailVerification,
 				disabled: disabledAt !== null,
 				...(row.name !== name ? { previousName: row.name } : {})
 			},
@@ -715,6 +735,29 @@ export class UserPoolService {
 
 	// ---------------------------------------------------------------- internals
 
+	/** Invite-only is always verified; an open pool opts in through its setting. */
+	#requireEmailVerification(row: UserPoolRow): boolean {
+		if (row.signup_mode === 'invite') return true;
+		return (
+			this.ctx.sqlite
+				.query<{ value: string }, [string]>('SELECT value FROM settings WHERE key = ?')
+				.get(userPoolRequireEmailVerificationKey(row.id))?.value === '1'
+		);
+	}
+
+	#setRequireEmailVerification(poolId: string, value: boolean): void {
+		const key = userPoolRequireEmailVerificationKey(poolId);
+		if (!value) {
+			this.ctx.sqlite.run('DELETE FROM settings WHERE key = ?', [key]);
+			return;
+		}
+		this.ctx.sqlite.run(
+			`INSERT INTO settings (key, value, updated_at) VALUES (?, '1', ?)
+			 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+			[key, this.ctx.now()]
+		);
+	}
+
 	#require(principal: Principal, permission: Permission, pool: UserPoolRow): void {
 		this.ctx.iam.require(principal, permission, { type: 'userPool', id: pool.id });
 	}
@@ -826,6 +869,7 @@ export class UserPoolService {
 			issuer: row.issuer,
 			signingKeyId: row.signing_key_id,
 			signupMode: row.signup_mode as UserPoolSignupMode,
+			requireEmailVerification: this.#requireEmailVerification(row),
 			theme: parseTheme(row.theme_json),
 			disabled: row.disabled_at !== null,
 			disabledAt: row.disabled_at,

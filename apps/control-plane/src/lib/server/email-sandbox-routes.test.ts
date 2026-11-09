@@ -41,6 +41,13 @@ const request = (overrides: Record<string, unknown> = {}) => ({
 });
 
 const fakeCore = {
+	ctx: {
+		platformIam: {
+			canView: (principal: Principal) => principal.platformAdmin === true,
+			canAdminister: (principal: Principal) =>
+				principal.platformAdmin === true && principal.kind === 'user'
+		}
+	},
 	email: {
 		listSandboxAddresses: (...args: unknown[]) => {
 			calls.push({ op: 'list', args });

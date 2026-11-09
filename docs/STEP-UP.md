@@ -1,7 +1,8 @@
 # Step-up verification ("Please verify it's you")
 
-Status: **Proposed (2026-11-07). Not agreed.** Once agreed this gets a DECISIONS row (next free: D128)
-and a paragraph in [DESIGN.md](./DESIGN.md) §6.1. Until then nothing here is in force.
+Status: **Agreed and built (2026-11-09) → D186.** Enforcement ships behind `SKIFF_STEP_UP=1`; the
+policy, plugin, API error mapping and VerifyDialog are in `apps/control-plane/src/lib/server/step-up/`
+and the catalog. Remaining work is listed in [IAM.md](./IAM.md) §13.
 
 ## 1. What and why
 

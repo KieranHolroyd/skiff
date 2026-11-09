@@ -5,6 +5,11 @@ import { join } from 'node:path';
 import { createDb } from '@skiff/db';
 import { createCore, type Core } from '../index.ts';
 import { LocalObjectStore } from '../object-store.ts';
+import {
+	KEY_ROTATION_INTERVAL_MS,
+	KEY_ROTATION_OVERLAP_MS,
+	signingKeyRotationDecision,
+} from './keys.ts';
 
 /**
  * The signing-key ring (docs/IAM.md I15). The migration is applied by the real migrator in
@@ -198,5 +203,69 @@ describe('signing-key ring', () => {
 		expect(all.keys.map((key) => key.kid)).toContain(sts.kid);
 		expect(all.keys.map((key) => key.kid)).not.toContain(pool.kid);
 		expect(core.ctx.signingKeys.jwks('pool:team-a').map((key) => key.kid)).toContain(pool.kid);
+	});
+});
+
+describe('signing-key rotation schedule', () => {
+	const base = Date.parse('2026-11-08T12:00:00Z');
+	const interval = KEY_ROTATION_INTERVAL_MS;
+	const overlap = KEY_ROTATION_OVERLAP_MS;
+
+	test('not due while the active key is young', () => {
+		const decision = signingKeyRotationDecision({
+			activeActivatedAt: base - 10 * 24 * 60 * 60_000,
+			nextCreatedAt: null,
+			now: base,
+		});
+		expect(decision).toMatchObject({ action: 'skip', due: false });
+		expect(decision.reason).toMatch(/not due/);
+	});
+
+	test('publishes a next key in the overlap window before the interval ends', () => {
+		const decision = signingKeyRotationDecision({
+			activeActivatedAt: base - (interval - overlap),
+			nextCreatedAt: null,
+			now: base,
+		});
+		expect(decision).toMatchObject({ action: 'publish-next', due: true });
+	});
+
+	test('does not promote a next key that has not been public for the overlap', () => {
+		const decision = signingKeyRotationDecision({
+			activeActivatedAt: base - interval - 24 * 60 * 60_000,
+			nextCreatedAt: base - overlap + 1,
+			now: base,
+		});
+		expect(decision).toMatchObject({ action: 'skip', due: false });
+		expect(decision.reason).toMatch(/full overlap/);
+	});
+
+	test('promotes after the active interval and the full overlap', () => {
+		const decision = signingKeyRotationDecision({
+			activeActivatedAt: base - interval - 24 * 60 * 60_000,
+			nextCreatedAt: base - overlap,
+			now: base,
+		});
+		expect(decision).toMatchObject({ action: 'promote', due: true });
+	});
+
+	test('ensures a ring with no keys and promotes a lone waiting next', () => {
+		expect(
+			signingKeyRotationDecision({ activeActivatedAt: null, nextCreatedAt: null, now: base }),
+		).toMatchObject({ action: 'ensure', due: true });
+		expect(
+			signingKeyRotationDecision({ activeActivatedAt: null, nextCreatedAt: base - 1, now: base }),
+		).toMatchObject({ action: 'promote', due: true });
+	});
+
+	test('keeps two usable keys during the publication overlap', async () => {
+		const first = await core.ctx.signingKeys.ensure('sts');
+		const published = await core.ctx.signingKeys.rotate('sts');
+		expect(published.active.kid).toBe(first.kid);
+		expect(published.next?.kid).not.toBe(first.kid);
+		expect(published.retiredKid).toBeNull();
+		expect(
+			core.ctx.signingKeys.list('sts').filter((key) => key.state !== 'retired'),
+		).toHaveLength(2);
 	});
 });

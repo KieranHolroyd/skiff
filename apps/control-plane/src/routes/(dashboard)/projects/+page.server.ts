@@ -15,7 +15,7 @@ export const load: PageServerLoad = ({ locals, url }) => {
 	const view =
 		url.searchParams.get('view') === 'trash' ? ('trash' as const) : ('projects' as const);
 	let capacity: Awaited<ReturnType<typeof core.workloads.capacity>> = [];
-	if (principal.platformAdmin === true) {
+	if (core.ctx.platformIam.canView(principal)) {
 		try {
 			capacity = core.workloads.capacity(principal);
 		} catch {

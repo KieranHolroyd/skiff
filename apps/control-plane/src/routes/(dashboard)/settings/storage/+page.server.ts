@@ -12,8 +12,8 @@ import type { Actions, PageServerLoad } from './$types';
 /** Settings → Storage (docs/STORAGE.md §5): defaults per kind, then each node's disks. */
 export const load: PageServerLoad = ({ locals, url }) => {
 	const principal = locals.principal!;
-	if (!principal.platformAdmin)
-		error(403, 'Storage is platform infrastructure; a platform admin manages it.');
+	if (!core.ctx.platformIam.can(principal, 'platform:storage'))
+		error(403, 'Storage is platform infrastructure; a platform operator or admin manages it.');
 	const overview = core.disks.overview(principal);
 	return {
 		overview,

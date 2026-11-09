@@ -1,5 +1,5 @@
 import { error, fail } from '@sveltejs/kit';
-import { canAdministerPlatform, canViewPlatform, type Principal } from '@skiff/contracts';
+import type { Principal } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
 import {
 	failStatus,
@@ -18,16 +18,16 @@ import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = ({ locals }) => {
 	const principal = locals.principal!;
-	if (!canViewPlatform(principal))
+	if (!core.ctx.platformIam.canView(principal))
 		error(403, 'Only a platform admin can see production access requests.');
 	return {
 		requests: core.email.listAccessRequests(principal, { limit: 200 }),
-		canDecide: canAdministerPlatform(principal)
+		canDecide: core.ctx.platformIam.canAdminister(principal)
 	};
 };
 
 function requireDecider(locals: App.Locals): Principal {
-	if (!locals.principal || !canAdministerPlatform(locals.principal))
+	if (!locals.principal || !core.ctx.platformIam.canAdminister(locals.principal))
 		error(403, 'Only a platform admin can decide production access requests.');
 	return locals.principal;
 }

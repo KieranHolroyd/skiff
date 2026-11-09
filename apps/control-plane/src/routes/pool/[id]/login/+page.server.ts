@@ -1,4 +1,4 @@
-import { fail, redirect } from '@sveltejs/kit';
+import { fail, redirect, type RequestEvent } from '@sveltejs/kit';
 import { CoreError } from '@skiff/core';
 import { core } from '#lib/server/core.js';
 import { platformOrigin } from '#lib/server/config.js';
@@ -27,9 +27,19 @@ export const load: PageServerLoad = ({ params, cookies, url }) => {
 	}
 	return {
 		verified: url.searchParams.get('verified') === '1',
-		email: url.searchParams.get('email') ?? ''
+		verifyEmail: url.searchParams.get('verify') === 'email',
+		email: url.searchParams.get('email') ?? '',
+		sent: url.searchParams.get('sent'),
+		magicError: url.searchParams.get('magic') === 'invalid'
 	};
 };
+
+/** Redirect back to this page with a one-word notice, keeping `return_to`. */
+function notice(event: RequestEvent, key: string, value: string): never {
+	const next = new URL(event.url);
+	next.searchParams.set(key, value);
+	redirect(303, `${next.pathname}${next.search}`);
+}
 
 export const actions: Actions = {
 	default: async (event) => {
@@ -61,5 +71,39 @@ export const actions: Actions = {
 			if (error instanceof CoreError) return fail(error.status, { error: error.message });
 			throw error;
 		}
+	},
+
+	/** Mail a single-use magic link. Always the same response, whether the address exists or not. */
+	magic: async (event) => {
+		const { params, request, cookies } = event;
+		const form = await request.formData();
+		if (!validCsrf(cookies, params.id, form.get('csrf')))
+			return fail(400, { error: 'Your form expired. Reload the page and try again.' });
+		const email = String(form.get('email') ?? '').trim();
+		if (!email) return fail(400, { error: 'Enter your email address.' });
+		try {
+			await core.userPoolEngine.requestMagicLink(params.id, email, { ip: clientKey(event) });
+		} catch (error) {
+			if (error instanceof CoreError) return fail(error.status, { error: error.message });
+			throw error;
+		}
+		notice(event, 'sent', 'magic');
+	},
+
+	/** Mail a single-use password-reset link. Same response for a known and an unknown address. */
+	reset: async (event) => {
+		const { params, request, cookies } = event;
+		const form = await request.formData();
+		if (!validCsrf(cookies, params.id, form.get('csrf')))
+			return fail(400, { error: 'Your form expired. Reload the page and try again.' });
+		const email = String(form.get('email') ?? '').trim();
+		if (!email) return fail(400, { error: 'Enter your email address.' });
+		try {
+			await core.userPoolEngine.requestPasswordReset(params.id, email, { ip: clientKey(event) });
+		} catch (error) {
+			if (error instanceof CoreError) return fail(error.status, { error: error.message });
+			throw error;
+		}
+		notice(event, 'sent', 'reset');
 	}
 };

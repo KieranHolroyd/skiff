@@ -1,9 +1,10 @@
 # Skiff REST API (v1)
 
-Base URL: `https://<platformOrigin>/api/v1`. "Platform admin" means the Better Auth admin-plugin
-user role (`user.role = admin`), never an org owner/admin. Authentication is either the Better Auth session
-cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mutation also sends
-`Origin: <platformOrigin>` (CSRF policy). Errors are JSON:
+Base URL: `https://<platformOrigin>/api/v1`. "Platform admin" means a `platform-admin` binding at
+platform scope (seeded from the Better Auth admin-plugin `user.role = admin`, D187), never an org
+owner/admin. Authentication is either the Better Auth session cookie (dashboard) or
+`Authorization: Bearer skif_…` (API key, CLI). Every mutation also sends `Origin: <platformOrigin>`
+(CSRF policy). Errors are JSON:
 
 ```json
 { "error": "conflict", "message": "\"blog\" is already taken.", "suggestions": ["blog-app"] }
@@ -118,7 +119,7 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | GET | `/registry/scan?repository=<org>/<name>&reference=<tag\|sha256:…>` | `image:pull` | Trivy summary and the 50 most severe CVEs; 400 while CVE scanning is off (D159) |
 | GET/POST | `/registry/trusts` | `image:pull` / `image:credentials` | GitHub Actions OIDC trusts: `{ githubRepository: owner/repo, ref?: glob, repository: <org>/<name>\|<org>/*, push? }` (D158) |
 | DELETE | `/registry/trusts/:id` | `image:credentials` | remove a trust |
-| GET | `/api/registry/token` (not under `/api/v1`) | Basic: any user + `skif_` API key | the Docker token realm (D155): `?service=<host>&scope=repository:<org>/<name>:pull,push` → `{ token, access_token, expires_in, issued_at }` |
+| GET | `/api/registry/token` (not under `/api/v1`) | Basic: any user + `skif_` API key, a per-workload login, a job token, a GitHub/GitLab OIDC token, or a Skiff workload/STS token (also accepted as `Bearer`) | the Docker token realm (D155): `?service=<host>&scope=repository:<org>/<name>:pull,push` → `{ token, access_token, expires_in, issued_at }`; the grant is intersected with the caller's `image:*` permissions in its own org and the token's restriction |
 | GET | `/projects/:slug/container/targets` | `container:inspect` | container projects (D127): one entry per replica, `{ replica, nodeId, nodeName, desiredId }`. Every console call takes `?replica=<n>` for a multi-copy workload |
 | GET | `/projects/:slug/container/inspect` | `container:inspect` | `{ targets, container }`: state, unit restarts, image and digest, entrypoint/command, env **names**, ports, networks, mounts, sandbox flags, raw counters (`stats`: CPU µs, memory/peak/limit, OOM kills, PIDs, net and block bytes, `sampledAt`; rates are the difference of two calls) and processes |
 | GET | `/projects/:slug/container/files?path=` | `container:files` | `{ listing }` of one directory, symlinks resolved inside the container, ≤ 2,000 entries (`truncated`). 403 for the secrets dir and tmpfs, 409 while the container is not running |
@@ -231,6 +232,10 @@ secret keys, except `/credentials`.
 | GET | `/storage/:name/logs` | `logs:read` (+ `storage:read` to resolve the name) | `?after&limit&level&q` → `{ events: [{ seq, ts, kind, serviceId, source, stream, level, message }], cursor, hasMore }`. Newest page without `after`; the cursor tails new lines. RustFS writes to the unit journal and the agent drains it every couple of seconds |
 | POST | `/storage/:name/restart` | `storage:update` | restarts the RustFS container (buckets, objects and keys stay); the node applies it on its next reconcile → `202 { storage }` |
 | GET | `/storage/:name/credentials` | `storage:credentials` | `{ credentials: { accessKeyId, secretAccessKey, region, endpoint, internalEndpoint, publicEndpoint, note } }`, the root key; `endpoint` is the public URL when public, else loopback on the node; `cache-control: no-store`; every read is audited. Not available over MCP (S6) |
+| GET | `/storage/:name/keys` | `storage:read` | `{ keys }`: named S3 keys with their bucket grants, purpose, expiry and access key id; no secrets |
+| POST | `/storage/:name/keys` | `storage:update` | `{ name, grants, purpose?, expiresAt? }` → 201 `{ key }`; the secret is not returned here |
+| DELETE | `/storage/:name/keys/:id` | `storage:update` | revoke the key; the node removes its RustFS user on the next round → `{ key }` |
+| POST | `/storage/:name/keys/:id/reveal` | `storage:credentials` | `{ key }` with the secret; `cache-control: no-store`; audited; never MCP |
 | GET | `/storage/:name/metrics` | `storage:read` | same `?from&to&interval` rules as database metrics → `{ points: [{ bucket, up, usedBytes, objects, bucketCount, memoryBytes }], interval }` |
 | GET | `/storage/:name/buckets` | `storage:read` | `{ buckets: [{ name, access, state (ready\|deleting\|delete-blocked), sizeBytes, objects, createdAt, statsAt }] }` |
 | POST | `/storage/:name/buckets` | `storage:update` | `{ name, access? (private\|public-read) }` → `201 { bucket }`; re-creating a bucket whose delete was blocked cancels that delete. At most 200 per instance |
@@ -549,6 +554,52 @@ snapshots bindings.
 | POST | `/iam/access-reviews/:id/complete` | `iam:review` | applies every decision (undecided items follow `defaultDecision`) → the review |
 | GET | `/iam/usage` | own usage; `iam:read` for `?principalId` | `{ usage: [{ principalType, principalId, permission, scopeType, scopeId, lastUsedAt, count30d }], windowDays: 30 }`, newest first |
 
+### Signing keys
+
+The platform key ring ([IAM.md](./IAM.md) §7.3; I15). `GET` needs a platform read and `POST` needs
+platform maintenance; D129's session-only condition applies to both. No private key is ever
+returned.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| GET | `/iam/keys` | platform read | `{ purposes, policy, lastRotatedAt, nextCheckAt, can: { rotate } }`; each purpose lists its active/next `kid`, retired count, every key's state and the rotation decision the monthly sweep would take |
+| POST | `/iam/keys/rotate` | platform maintenance | `{ purpose }` or `{ all: true }` → `{ rotations, rotatedAt }`. `all` covers the automatically rotated purposes and never `pool:<id>` keys, which rotate with their pool |
+
+### Platform IAM
+
+Platform roles bound at `platform` scope ([IAM.md](./IAM.md) §10; I24). Reads need a platform read;
+writes need a platform administrator **session** (D129), and platform guardrail writes also need
+`iam:manage-guardrails` in the admin's own org.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| GET | `/platform/iam/roles` | signed in | `{ roles }`: `platform-admin`, `platform-operator`, `platform-viewer` and their permissions |
+| GET | `/platform/iam/bindings` | platform read | `{ bindings, roles, can: { administer } }`; every binding at `{ type: "platform" }` with its condition and expiry |
+| POST | `/platform/iam/bindings` | platform admin **session** | `{ userId \| groupId, roleId, condition?, expiresAt?, reason? }` → 201; exactly one of `userId` or `groupId`. Omitting `condition` keeps the role's default (`platform-admin` is `credentialIn: [session]`); `condition: null` removes it for the quota exception |
+| DELETE | `/platform/iam/bindings/:id` | platform admin **session** | `{ ok: true }`; the synced `user.role = admin` binding is re-created on the next sync |
+| GET | `/platform/iam/guardrails` | platform read | `{ guardrails, can: { manage } }`; rows with `org_id IS NULL` that apply to every org |
+| POST | `/platform/iam/guardrails` | platform admin **session** + `iam:manage-guardrails` | `{ name?, permissions?, selector?, scope?, condition?, enabled? }` → 201 |
+| PATCH/DELETE | `/platform/iam/guardrails/:id` | same | update the rule or delete it |
+
+### Step-up verification
+
+"Please verify it's you" before a sensitive action ([STEP-UP.md](./STEP-UP.md); D186). These are
+Better Auth endpoints under `/api/auth`, not `/api/v1`, and need the dashboard session cookie. A
+guarded action answers `403 { error: "step_up_required", permission, level }`; the client opens the
+dialog and retries the original request once. Enforcement is off unless `SKIFF_STEP_UP=1`.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/auth/step-up/status` | `{ fresh, class, strongest, windowMs, freshUntil, preferred, alternatives, email }`; `email` is masked |
+| POST | `/api/auth/step-up/passkey/options` | WebAuthn assertion options for this user's passkeys; the challenge is bound to the session for 2 minutes |
+| POST | `/api/auth/step-up/passkey/verify` | `{ response }` → `{ ok, class: "strong", method: "passkey" }` |
+| POST | `/api/auth/step-up/totp` | `{ code }` → `{ ok, class: "strong", method: "totp" }`; a replayed step is refused |
+| POST | `/api/auth/step-up/backup-code` | `{ code }` → `{ ok, class: "strong", method: "backup-code" }`; the code is consumed |
+| POST | `/api/auth/step-up/password` | `{ password }` → `{ ok, class: "basic", method: "password" }`; 403 when a stronger factor exists |
+| POST | `/api/auth/step-up/email/send` | `{ action? }` → `{ sent: true, expiresIn }`; throttled to one a minute |
+| POST | `/api/auth/step-up/email/verify` | `{ code, action? }` → `{ ok, class: "basic", method: "email" }` |
+| POST | `/api/auth/step-up/lock` | clears the window now → `{ ok: true }` |
+
 ### SSO providers, domains and org auth policy
 
 OIDC sign-in per organisation ([IAM.md](./IAM.md) I19–I21, §8.3–§8.5). Client secrets are
@@ -556,8 +607,8 @@ write-only; a blank `clientSecret` on update keeps the stored one.
 
 | Method | Path | Permission | Notes |
 |---|---|---|---|
-| GET | `/sso/providers` | `sso:read` | `{ providers }` with issuer, endpoints, scopes, claim map, `hasClientSecret` and `callbackUrl` |
-| POST | `/sso/providers` | `sso:manage` | `{ name, issuer? \| preset: { id, values? }, clientId, clientSecret, discoveryUrl?, scopes?, claims?, enabled? }` → 201; 409 for a second provider on the same issuer |
+| GET | `/sso/providers` | `sso:read` | `{ providers }` with `protocol` (`oidc`\|`saml`), issuer, endpoints, scopes, claim map, `hasClientSecret`, `callbackUrl`, and for SAML the `acsUrl` and `spMetadataUrl` |
+| POST | `/sso/providers` | `sso:manage` | `{ name, protocol? (oidc\|saml), issuer? \| preset: { id, values? }, clientId?, clientSecret?, discoveryUrl?, scopes?, claims?, enabled?, saml? }` → 201; 409 for a second provider on the same issuer. OIDC needs `issuer` (or a preset), `clientId` and `clientSecret`; SAML takes `saml: { metadataUrl?, entityId?, entryPoint?, cert?, spEntityId?, audience?, wantAssertionsSigned?, identifierFormat? }`, where `metadataUrl` is fetched at save time and otherwise `entityId`, `entryPoint` and `cert` are required. `protocol` cannot change after creation |
 | GET | `/sso/providers/:id` | `sso:read` | one provider (no secret) |
 | PATCH | `/sso/providers/:id` | `sso:manage` | partial update; `clientSecret` omitted keeps the current one |
 | DELETE | `/sso/providers/:id` | `sso:manage` | `{ ok: true }`; sign-in through it stops at once |
@@ -569,6 +620,16 @@ write-only; a blank `clientSecret` on update keeps the stored one.
 | PUT | `/sso/policy` | `sso:manage` | a partial of those fields; session limits are seconds, `null` turns a limit off |
 | GET | `/sso/presets` | signed in | `{ presets }`: the ready-made IdP set-ups and the values each needs (D180) |
 | GET | `/sso/resolve?email=` | public | email → `{ provider: { id, name, orgId, domain } \| null }`; only a verified domain routes |
+| GET | `/sso/group-mappings` | `sso:read` | `{ mappings }`: IdP group claim value → Skiff group |
+| POST | `/sso/group-mappings` | `sso:manage` | `{ providerId, claimValue, groupId }` → 201; the mapping applies on the next sign-in |
+| DELETE | `/sso/group-mappings/:id` | `sso:manage` | `{ ok: true }` |
+| GET | `/sso/scim` | `sso:read` | `{ endpoint, tokens }`; the protocol endpoint is `/api/auth/scim/v2` and no token value is returned |
+| POST | `/sso/scim` | `sso:manage` | mints a bearer token → 201 with the token shown once and the endpoint; minting revokes the org's other active tokens |
+| DELETE | `/sso/scim/:id` | `sso:manage` | revokes one token; the directory's next request gets a 401 |
+| POST | `/org/switch` | signed in | `{ organizationId }` → `{ org: { id, name, slug, role } }`; stored on the session and remembered for the next sign-in. A key cannot switch, because a key is bound to its own org |
+
+The Better Auth SSO callback is `/api/auth/sso/callback/:providerId` for OIDC and
+`/api/auth/sso/saml2/sp/acs/:providerId` for SAML; both are public and live outside `/api/v1`.
 
 ### Access policies (Skiff Access)
 
@@ -584,22 +645,39 @@ an SSO provider, a user pool and its groups, a CIDR, or a service-token header.
 | PATCH | `/access-policies/:id` | `accessPolicy:update` at its scope | `{ name?, description?, enabled?, rules? }` (rules replace the ordered list) |
 | DELETE | `/access-policies/:id` | `accessPolicy:delete` at its scope | `{ ok: true }`; refused while a project or environment still assigns it |
 | POST | `/projects/:slug/access` | `project:update` | assign one with `{ scope: production\|previews, mode: "access", policyId }`; this is the same route as the other protection modes. Named-environment assignment exists only in the dashboard |
+| GET | `/access/authorize?host=&return=` | public (platform session) | the Skiff Access login page. The agent redirects an unauthenticated visitor here; the platform evaluates the host's ordered policy and, on `allow`, redirects to the agent's `/_skiff/access/callback` with a single-use host-bound token, else renders an HTML 403. Only content hosts this platform serves may be a `return` target |
 
 ### User pools and OIDC clients
 
 A pool is an org resource: a hosted OIDC provider for one app's own users ([IAM.md](./IAM.md)
-I26–I29, §11.2). The native engine is a seam only — no users, sessions or hosted sign-in yet.
+I26–I29, §11.2). The native `skiff-identity` engine runs in the control plane today: pool users,
+sessions, authorization codes, access/ID tokens, magic links, password reset, email verification and
+invites live in the `user_pool_*` tables, signed by the pool's `pool:<id>` key. Pool users are not
+platform users and a platform session cannot sign anybody into a pool. The hosted pages are
+`/pool/<id>/{login,signup,reset,magic,logout,verify}`. Passkeys, social login, MFA, import and export
+are not built. Attaching a pool to a project is a dashboard action (there is no REST attachment
+route): it injects `<P>_ISSUER`, `<P>_CLIENT_ID` and `<P>_CLIENT_SECRET`, and a function gets
+`env.AUTH.verify(request)`.
 
 | Method | Path | Permission | Notes |
 |---|---|---|---|
 | GET | `/user-pools` | `userPool:read` (org or per pool) | `{ pools }`; an org grant sees every pool |
-| POST | `/user-pools` | `userPool:create` | `{ name, description?, engine? (skiff-identity), signupMode? (invite\|open), theme? }` → 201 with the pool; 409 for a duplicate name |
+| POST | `/user-pools` | `userPool:create` | `{ name, description?, engine? (skiff-identity), signupMode? (invite\|open), requireEmailVerification?, theme? }` → 201 with the pool; 409 for a duplicate name |
 | GET | `/user-pools/:id` | `userPool:read` on the pool | `{ pool }` with issuer and active signing `kid` |
-| PATCH | `/user-pools/:id` | `userPool:update` on the pool | `{ name?, description?, signupMode?, theme?, disabled? }` → `{ pool }`; disabling keeps clients and keys |
-| DELETE | `/user-pools/:id` | `userPool:delete` on the pool | `{ ok: true }`; removes the clients and signing key |
+| PATCH | `/user-pools/:id` | `userPool:update` on the pool | `{ name?, description?, signupMode?, requireEmailVerification?, theme?, disabled? }` → `{ pool }`; disabling keeps clients and keys |
+| DELETE | `/user-pools/:id` | `userPool:delete` on the pool | `{ ok: true }`; removes the clients, signing key and pool users; refused while a project is attached |
 | GET | `/user-pools/:id/clients` | `userPool:read` on the pool | `{ clients }`: public `clientId`, redirect allowlist, no secret |
 | POST | `/user-pools/:id/clients` | `userPool:credentials` on the pool | `{ name, redirectUris, public? }` → 201 `{ client, clientSecret }`; `clientSecret` is `null` for a public (PKCE) client and is shown once |
-| DELETE | `/user-pools/:id/clients/:clientId` | `userPool:credentials` on the pool | `{ ok: true }`; `:clientId` may be the row id or the public OIDC `client_id` |
+| DELETE | `/user-pools/:id/clients/:clientId` | `userPool:credentials` on the pool | `{ ok: true }`; `:clientId` may be the row id or the public OIDC `client_id`; refused while attached |
+| GET | `/user-pools/:id/users` | `userPool:manage-users` on the pool | `{ users }`: id, email, name, verification and disabled state, metadata |
+| PATCH | `/user-pools/:id/users/:userId` | `userPool:manage-users` on the pool | `{ disabled }` → `{ user }`; disabling revokes their pool sessions at once |
+| DELETE | `/user-pools/:id/users/:userId` | `userPool:manage-users` on the pool | GDPR delete: the user, sessions, codes and verification tokens → `{ ok: true }` |
+| GET | `/user-pools/:id/users/invites` | `userPool:manage-users` on the pool | `{ invites }`: pending invitations, no raw token |
+| POST | `/user-pools/:id/users/invites` | `userPool:manage-users` on the pool | `{ email }` → 201 with the invitation and its token **once** |
+| GET | `/user-pools/:id/oauth/authorize` | public | OIDC authorization code flow: `?client_id&redirect_uri&response_type=code&scope=&state=&nonce=&code_challenge=&code_challenge_method=`. A signed-in pool session gets a single-use code; anyone else is redirected to the pool's hosted login. Always a 303 |
+| POST | `/user-pools/:id/oauth/token` | public | `grant_type=authorization_code`, `code`, `redirect_uri`, `client_id`, `client_secret?` (or HTTP Basic), `code_verifier?` → `{ access_token, token_type: "Bearer", expires_in, id_token, scope }`; `cache-control: no-store` |
+| GET/POST | `/user-pools/:id/oauth/userinfo` | pool bearer access token | `{ sub, email?, email_verified?, name? }`; an ID token or a revoked/disabled user is refused |
+| GET/POST | `/user-pools/:id/oauth/logout` | public | revokes the pool session and redirects to `post_logout_redirect_uri` when it is same-origin, else `/pool/<id>/login` |
 | GET | `/user-pools/:id/.well-known/openid-configuration` | public | OpenID Connect Discovery for the pool; 404 while the pool is disabled |
 | GET | `/user-pools/:id/.well-known/jwks.json` | public | the pool's `pool:<id>` signing keys; 404 while disabled |
 
@@ -619,9 +697,13 @@ From a workload, `skif identity token --audience <aud>` reads `$SKIFF_TOKEN_FILE
 `/var/run/skiff/token`) and uses the node metadata endpoint for a non-`skiff` audience;
 `skif sts exchange --subject-token-file <path> --audience <aud> [--scope <p>]` runs this exchange.
 Neither prints the subject token. The full setup, including AWS, GCP and Azure trust policies, is
-in [CLOUD-IDENTITY.md](./CLOUD-IDENTITY.md). The endpoint mints tokens, but the REST API, registry
-realm and MCP do not yet accept a workload or STS token as `Bearer`; they verify API keys, access
-keys and sessions only.
+in [CLOUD-IDENTITY.md](./CLOUD-IDENTITY.md).
+
+A workload or STS token is accepted as `Bearer` by the REST API, MCP and the registry realm; the
+registry also accepts one as the Basic password. It resolves to the service account's principal,
+narrowed by the token's `scope` and `resources`. A workload token must carry `aud: skiff`; an STS
+token may carry `skiff`, the platform origin or the MCP resource, depending on the surface. Storage
+STS (RustFS `AssumeRoleWithWebIdentity`) is still deferred.
 
 There is no federation-trust CRUD route yet: trusts are read by the token service from the
 database, and `/api/v1/federation-trusts` (listed as planned in [IAM.md](./IAM.md) §12) does not

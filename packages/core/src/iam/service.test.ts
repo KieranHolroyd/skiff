@@ -33,14 +33,21 @@ function open(): Core {
 	});
 }
 
-function principal(overrides: Partial<Parameters<typeof buildPrincipal>[0]> = {}): Principal {
-	return buildPrincipal({
+function principal(
+	overrides: Partial<Parameters<typeof buildPrincipal>[0]> & {
+		restriction?: Principal['restriction'];
+	} = {},
+): Principal {
+	const { restriction, ...input } = overrides;
+	const built = buildPrincipal({
 		kind: 'user',
 		userId: 'user_1',
 		orgId: 'org_1',
 		role: 'owner',
-		...overrides,
+		...input,
 	});
+	if (restriction) built.restriction = restriction;
+	return built;
 }
 
 function addMember(userId: string, role: string): void {
@@ -267,6 +274,42 @@ describe('bindings and the decision', () => {
 		});
 		expect(core.ctx.iam.can(key, 'project:read', { type: 'org' })).toBe(true);
 		expect(core.ctx.iam.can(key, 'database:read', { type: 'org' })).toBe(false);
+	});
+
+	test('a token restriction narrows a service account for every kind and is part of the cache key', () => {
+		const owner = principal();
+		core.ctx.iam.bind(owner, {
+			principalType: 'serviceAccount',
+			principalId: 'sa_token',
+			roleId: 'owner',
+			scope: { type: 'org' },
+		});
+		const uncapped = principal({ kind: 'serviceAccount', userId: 'sa_token' });
+		expect(core.ctx.iam.can(uncapped, 'database:read', { type: 'org' })).toBe(true);
+
+		const restricted = principal({
+			kind: 'serviceAccount',
+			userId: 'sa_token',
+			restriction: {
+				permissions: ['project:read'],
+				resources: ['project:prj_1'],
+			},
+		});
+		expect(core.ctx.iam.can(restricted, 'project:read', { type: 'project', id: 'prj_1' })).toBe(true);
+		expect(core.ctx.iam.can(restricted, 'project:read', { type: 'project', id: 'prj_2' })).toBe(false);
+		expect(core.ctx.iam.can(restricted, 'database:read', { type: 'org' })).toBe(false);
+
+		// A different resource list is a different compiled principal, not a cache hit.
+		const elsewhere = principal({
+			kind: 'serviceAccount',
+			userId: 'sa_token',
+			restriction: {
+				permissions: ['project:read'],
+				resources: ['project:prj_2'],
+			},
+		});
+		expect(core.ctx.iam.can(elsewhere, 'project:read', { type: 'project', id: 'prj_2' })).toBe(true);
+		expect(core.ctx.iam.can(elsewhere, 'project:read', { type: 'project', id: 'prj_1' })).toBe(false);
 	});
 
 	test('a guardrail beats an owner binding', () => {

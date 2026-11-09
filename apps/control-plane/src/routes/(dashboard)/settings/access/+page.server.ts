@@ -169,6 +169,7 @@ export const load: PageServerLoad = ({ locals }) => {
 	let guardrails: GuardrailView[] = [];
 	let accessRequests: AccessRequestView[] = [];
 	let accessReviews: AccessReviewView[] = [];
+	let serviceAccounts: ReturnType<typeof core.serviceAccounts.list> = [];
 	try {
 		guardrails = core.governance.list(principal);
 		accessRequests = core.governance.list(principal, {});
@@ -181,6 +182,11 @@ export const load: PageServerLoad = ({ locals }) => {
 	} catch {
 		// `0090_access_reviews.sql` may not have run yet on an upgrading install.
 	}
+	try {
+		serviceAccounts = core.serviceAccounts.list(principal);
+	} catch {
+		// Without `serviceAccount:read` the card is simply absent.
+	}
 
 	return {
 		roles: core.iam.listRoles(principal.orgId),
@@ -190,6 +196,7 @@ export const load: PageServerLoad = ({ locals }) => {
 		guardrailTemplates: GUARDRAIL_TEMPLATES,
 		accessRequests,
 		accessReviews,
+		serviceAccounts,
 		members,
 		groupMembers,
 		projects,
@@ -200,7 +207,8 @@ export const load: PageServerLoad = ({ locals }) => {
 			manageBindings: core.iam.can(principal, 'iam:manage-bindings', org),
 			manageGroups: core.iam.can(principal, 'iam:manage-groups', org),
 			manageGuardrails: core.iam.can(principal, 'iam:manage-guardrails', org),
-			review: core.iam.can(principal, 'iam:review', org)
+			review: core.iam.can(principal, 'iam:review', org),
+			serviceAccounts: core.iam.can(principal, 'serviceAccount:read', org)
 		},
 		showEmails,
 		currentUserId: principal.userId,

@@ -9,7 +9,15 @@ import { GROUP_LABELS, GROUP_ORDER, sectionForPath, visibleSections } from './se
 export interface SettingsSubnavData {
 	role: string;
 	permissions: readonly string[];
-	can: { manageNodes: boolean };
+	can: {
+		manageNodes: boolean;
+		viewPlatform: boolean;
+		administerPlatform: boolean;
+		configurePlatform: boolean;
+		manageStorage: boolean;
+		manageHa: boolean;
+		manageUpdates: boolean;
+	};
 	org: { name: string };
 	hints: Hints;
 	updateAvailable: Promise<{ latest: string } | null> | null;
@@ -17,9 +25,15 @@ export interface SettingsSubnavData {
 
 export function settingsSubnav(data: SettingsSubnavData, pathname: string): Subnav {
 	const sections = visibleSections({
-		platformAdmin: data.can.manageNodes,
-		role: data.role,
-		permissions: data.permissions
+		owner: data.can.configurePlatform,
+		permissions: data.permissions,
+		platform: {
+			view: data.can.viewPlatform,
+			administer: data.can.administerPlatform,
+			storage: data.can.manageStorage,
+			ha: data.can.manageHa,
+			updates: data.can.manageUpdates
+		}
 	});
 	return {
 		key: 'settings',

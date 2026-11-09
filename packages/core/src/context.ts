@@ -69,7 +69,7 @@ import type { WorkloadIdentityService } from './iam/workload-identity.ts';
 import type { TokenService } from './iam/sts.ts';
 import type { AccessPolicyService } from './iam/access-policies.ts';
 import type { UserPoolService } from './user-pools.ts';
-import type { UserPoolEngineService } from './user-pool-engine.ts';
+import type { UserPoolEngineService, UserPoolMailer } from './user-pool-engine.ts';
 import type { ScimTokenService } from './iam/scim.ts';
 import type { ServerErrorService } from './server-errors.ts';
 
@@ -192,6 +192,11 @@ export interface CoreContext {
 	userPools: UserPoolService;
 	/** Native email/password user-pool engine: users, sessions and the OIDC code flow (I27). */
 	userPoolEngine: UserPoolEngineService;
+	/**
+	 * Where a pool's transactional mail (verification, magic link, reset, invite) leaves the
+	 * platform. Wired in `createCore`; tests replace it with a capture hook.
+	 */
+	userPoolMail?: UserPoolMailer;
 	/** SCIM bearer tokens and directory reconciliation (IAM.md I20). */
 	scim: ScimTokenService;
 	/** Functions: Workers-compatible workloads on workerd (D110). */

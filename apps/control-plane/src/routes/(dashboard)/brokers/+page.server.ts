@@ -28,7 +28,7 @@ export const load: PageServerLoad = ({ locals, url }) => {
 
 	// Node choices come from capacity, which only platform admins can read (same as databases).
 	let capacity: NodeCapacityView[] = [];
-	if (principal.platformAdmin === true) {
+	if (core.ctx.platformIam.canView(principal)) {
 		try {
 			capacity = core.workloads.capacity(principal);
 		} catch {

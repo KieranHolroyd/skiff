@@ -76,7 +76,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		[]
 	);
 	const capacity: NodeCapacityView[] =
-		principal.platformAdmin === true ? safely(() => core.workloads.capacity(principal), []) : [];
+		core.ctx.platformIam.canView(principal) ? safely(() => core.workloads.capacity(principal), []) : [];
 
 	const cronNext: Record<string, string | null> = {};
 	for (const cron of view?.triggers.crons ?? []) {
@@ -216,7 +216,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			createSecret: hasPermission(principal, 'secret:create'),
 			updateSecret: hasPermission(principal, 'secret:update'),
 			deleteSecret: hasPermission(principal, 'secret:delete'),
-			viewCapacity: principal.platformAdmin === true,
+			viewCapacity: core.ctx.platformIam.canView(principal),
 			readDatabases: hasPermission(principal, 'database:read'),
 			createDatabase: hasPermission(principal, 'database:create'),
 			attachDatabase:

@@ -51,7 +51,12 @@ export const userPoolCreateSchema = z.object({
 	description: z.string().trim().max(1000).optional(),
 	engine: z.enum(userPoolEngines).default('skiff-identity'),
 	signupMode: z.enum(userPoolSignupModes).default('invite'),
-	theme: userPoolThemeSchema.optional()
+	theme: userPoolThemeSchema.optional(),
+	/**
+	 * Refuse password sign-in until the address is verified. An `invite` pool always requires it
+	 * (an invitation proves the address); an `open` pool only when this is set.
+	 */
+	requireEmailVerification: z.boolean().optional()
 });
 export type UserPoolCreate = z.input<typeof userPoolCreateSchema>;
 
@@ -60,6 +65,7 @@ export const userPoolUpdateSchema = z.object({
 	description: z.string().trim().max(1000).optional(),
 	signupMode: z.enum(userPoolSignupModes).optional(),
 	theme: userPoolThemeSchema.optional(),
+	requireEmailVerification: z.boolean().optional(),
 	disabled: z.boolean().optional()
 });
 export type UserPoolUpdate = z.input<typeof userPoolUpdateSchema>;
@@ -183,6 +189,8 @@ export interface UserPoolView {
 	/** The active `pool:<id>` signing key's `kid`; null until discovery first creates the ring. */
 	signingKeyId: string | null;
 	signupMode: UserPoolSignupMode;
+	/** Password sign-in waits for email verification. Always true for an invite-only pool. */
+	requireEmailVerification: boolean;
 	theme: UserPoolTheme;
 	disabled: boolean;
 	disabledAt: number | null;

@@ -63,6 +63,82 @@ export interface RotationResult {
 	retiredKid: string | null;
 }
 
+/** How long an active key signs before the monthly sweep replaces it (docs/IAM.md I15, §7.3). */
+export const KEY_ROTATION_INTERVAL_MS = 30 * 24 * 60 * 60_000;
+/** A `next` key is public for at least this long before it is promoted. */
+export const KEY_ROTATION_OVERLAP_MS = 24 * 60 * 60_000;
+/**
+ * Purposes the maintenance sweep rotates on its own. `pool:<id>` keys are managed with their pool
+ * (one key per pool), so they are never selected here.
+ */
+export const AUTO_ROTATION_PURPOSES = ['registry', 'oidc', 'sts', 'workload'] as const;
+export type AutoRotationPurpose = (typeof AUTO_ROTATION_PURPOSES)[number];
+
+/** Whether the monthly sweep may rotate this purpose without an explicit request. */
+export function rotatesAutomatically(purpose: string): boolean {
+	return (AUTO_ROTATION_PURPOSES as readonly string[]).includes(purpose);
+}
+
+export type SigningKeyRotationAction = 'ensure' | 'publish-next' | 'promote' | 'skip';
+
+export interface SigningKeyRotationState {
+	/** When the active key began signing: `activated_at`, or `created_at` for the first key. */
+	activeActivatedAt: number | null;
+	nextCreatedAt: number | null;
+	now: number;
+}
+
+export interface SigningKeyRotationDecision {
+	action: SigningKeyRotationAction;
+	due: boolean;
+	reason: string;
+}
+
+/**
+ * Decide what the monthly sweep should do with one purpose's ring.
+ *
+ * The active key is replaced every {@link KEY_ROTATION_INTERVAL_MS}; a `next` key is published
+ * early enough to be public for {@link KEY_ROTATION_OVERLAP_MS} before promotion. That gives two
+ * usable keys during the overlap (the old one keeps signing, the new one is already in JWKS), and a
+ * promotion only happens once the waiting key has been public for the full window.
+ */
+export function signingKeyRotationDecision(
+	state: SigningKeyRotationState,
+): SigningKeyRotationDecision {
+	if (state.activeActivatedAt === null) {
+		return state.nextCreatedAt === null
+			? { action: 'ensure', due: true, reason: 'the purpose has no active key' }
+			: { action: 'promote', due: true, reason: 'a published next key is waiting for an active key' };
+	}
+
+	const activeAge = state.now - state.activeActivatedAt;
+	if (state.nextCreatedAt === null) {
+		return activeAge >= KEY_ROTATION_INTERVAL_MS - KEY_ROTATION_OVERLAP_MS
+			? {
+					action: 'publish-next',
+					due: true,
+					reason: 'the active key is due and no next key is published',
+				}
+			: { action: 'skip', due: false, reason: 'the active key is not due for rotation' };
+	}
+
+	const nextAge = state.now - state.nextCreatedAt;
+	if (activeAge >= KEY_ROTATION_INTERVAL_MS && nextAge >= KEY_ROTATION_OVERLAP_MS)
+		return {
+			action: 'promote',
+			due: true,
+			reason: 'the active key is due and the next key has been published for the overlap',
+		};
+	return {
+		action: 'skip',
+		due: false,
+		reason:
+			nextAge < KEY_ROTATION_OVERLAP_MS
+				? 'the next key has not been published for the full overlap'
+				: 'the active key is not due for rotation',
+	};
+}
+
 export interface JwtClaims {
 	iss: string;
 	aud: string | string[];
@@ -323,6 +399,25 @@ export class SigningKeyService {
 			.query<{ purpose: string }, []>('SELECT DISTINCT purpose FROM signing_keys ORDER BY purpose')
 			.all()
 			.map((row) => row.purpose);
+	}
+
+	/** The active tenure and next publication age the rotation schedule needs. */
+	rotationState(purpose: string): { activeActivatedAt: number | null; nextCreatedAt: number | null } {
+		const active = this.row(purpose, 'active');
+		return {
+			activeActivatedAt: active ? (active.activated_at ?? active.created_at) : null,
+			nextCreatedAt: this.row(purpose, 'next')?.created_at ?? null,
+		};
+	}
+
+	/** Every key for a purpose, newest first, including retired keys (an operator view only). */
+	list(purpose: string): SigningKeyRecord[] {
+		return this.#sqlite
+			.query<SigningKeyRow, [string]>(
+				'SELECT * FROM signing_keys WHERE purpose = ? ORDER BY created_at DESC',
+			)
+			.all(purpose)
+			.map(view);
 	}
 
 	/**

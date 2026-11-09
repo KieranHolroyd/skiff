@@ -41,11 +41,18 @@ export const load: PageServerLoad = ({ locals }) => {
 		denied = true;
 	}
 	const canManage = core.platformIam.canAdminister(principal);
+	let groups: Array<{ id: string; name: string }> = [];
+	try {
+		groups = core.iam.listGroups(principal.orgId).map((group) => ({ id: group.id, name: group.name }));
+	} catch {
+		// Better Auth / IAM tables may not exist during first boot.
+	}
 	return {
 		denied,
 		bindings,
 		guardrails,
 		users: userOptions(),
+		groups,
 		roles: platformRoleIds.map((id) => ({
 			id,
 			description: platformRoleDescriptions[id],
@@ -63,9 +70,12 @@ export const actions: Actions = {
 		const principal = locals.principal!;
 		const data = await request.formData();
 		const condition = formString(data, 'condition');
+		const target = formString(data, 'target') === 'group' ? 'group' : 'user';
 		try {
 			core.platformIam.bind(principal, {
-				userId: formString(data, 'userId'),
+				...(target === 'group'
+					? { groupId: formString(data, 'groupId') }
+					: { userId: formString(data, 'userId') }),
 				roleId: formString(data, 'roleId'),
 				// `none` is the quota-write exception (D129): a binding without the session condition.
 				condition: condition === 'none' ? null : undefined,
@@ -74,7 +84,7 @@ export const actions: Actions = {
 		} catch (cause) {
 			return fail(failStatus(cause), toFormFailure(cause));
 		}
-		return { success: 'Platform role bound.' };
+		return { success: `Platform role bound to the ${target}.` };
 	},
 
 	unbind: async ({ request, locals }) => {

@@ -209,15 +209,17 @@ export class PlatformIamService {
 	// ------------------------------------------------------------------ writes
 
 	/**
-	 * Bind a user to a platform admin role. Only a platform admin (D129: the admin's own session once
-	 * seeded) may write. `condition: null` explicitly removes the default session-only condition;
-	 * omitting it keeps the role's default (D129's quota exception is a `platform-admin` binding with
-	 * `condition: null`).
+	 * Bind a user or group to a platform role. Only a platform admin (D129: the admin's own session
+	 * once seeded) may write. Exactly one of `userId` or `groupId` is required: a group binding
+	 * applies to every member of that group through `bindingsFor`'s membership join. `condition:
+	 * null` explicitly removes the default session-only condition; omitting it keeps the role's
+	 * default (D129's quota exception is a `platform-admin` binding with `condition: null`).
 	 */
 	bind(
 		principal: Principal,
 		input: {
-			userId: string;
+			userId?: string;
+			groupId?: string;
 			roleId: PlatformRole | string;
 			condition?: Condition | null;
 			expiresAt?: number | null;
@@ -225,7 +227,16 @@ export class PlatformIamService {
 		},
 	): PlatformBindingView {
 		if (!this.canAdminister(principal)) throw new ForbiddenError('platform:admin');
-		if (!input.userId.trim()) throw new ValidationError('A platform binding needs a user id.');
+		const userId = input.userId?.trim() ?? '';
+		const groupId = input.groupId?.trim() ?? '';
+		if (Boolean(userId) === Boolean(groupId))
+			throw new ValidationError(
+				'A platform binding needs exactly one user id or group id.',
+			);
+		const principalType = groupId ? ('group' as const) : ('user' as const);
+		const principalId = groupId || userId;
+		if (groupId && !this.#groupExists(groupId))
+			throw new ValidationError(`There is no group with the id "${groupId}".`);
 		if (!isPlatformRole(input.roleId))
 			throw new ValidationError(`"${input.roleId}" is not a platform admin role.`);
 		if (input.expiresAt != null && input.expiresAt <= this.ctx.now())
@@ -237,13 +248,13 @@ export class PlatformIamService {
 		const now = this.ctx.now();
 
 		const existing = this.#sqlite
-			.query<BindingRow, [string, string]>(
+			.query<BindingRow, [string, string, string]>(
 				`SELECT * FROM iam_bindings
 				 WHERE org_id IS NULL AND scope_type = 'platform'
-				   AND principal_type = 'user' AND principal_id = ? AND role_id = ?
+				   AND principal_type = ? AND principal_id = ? AND role_id = ?
 				 LIMIT 1`,
 			)
-			.get(input.userId, roleId);
+			.get(principalType, principalId, roleId);
 		if (existing) {
 			// Keep the write idempotent: a repeated bind returns the row rather than duplicating it.
 			// An explicit condition (including `null`) updates the row, which is how D129's quota
@@ -268,10 +279,11 @@ export class PlatformIamService {
 			`INSERT INTO iam_bindings
 			   (id, org_id, principal_type, principal_id, role_id, scope_type, scope_id, scope_parent_id,
 			    condition_json, expires_at, reason, created_by, created_at)
-			 VALUES (?, NULL, 'user', ?, ?, 'platform', NULL, NULL, ?, ?, ?, ?, ?)`,
+			 VALUES (?, NULL, ?, ?, ?, 'platform', NULL, NULL, ?, ?, ?, ?, ?)`,
 			[
 				id,
-				input.userId,
+				principalType,
+				principalId,
 				roleId,
 				condition ? JSON.stringify(condition) : null,
 				input.expiresAt ?? null,
@@ -286,8 +298,8 @@ export class PlatformIamService {
 			resource: 'iam_binding',
 			resourceId: id,
 			args: {
-				principalType: 'user',
-				principalId: input.userId,
+				principalType,
+				principalId,
 				roleId,
 				scope: PLATFORM_SCOPE,
 				condition: condition ?? null,
@@ -296,8 +308,8 @@ export class PlatformIamService {
 		});
 		return {
 			id,
-			principalType: 'user',
-			principalId: input.userId,
+			principalType,
+			principalId,
 			roleId,
 			roleName: roleId,
 			roleDescription: platformRoleDescriptions[roleId],
@@ -593,6 +605,19 @@ export class PlatformIamService {
 				} satisfies Binding,
 			];
 		});
+	}
+
+	/** Whether a group row exists. A platform binding may name a group from any organisation. */
+	#groupExists(groupId: string): boolean {
+		try {
+			const row = this.#sqlite
+				.query<{ id: string }, [string]>('SELECT id FROM iam_groups WHERE id = ? LIMIT 1')
+				.get(groupId);
+			return row !== null && row !== undefined;
+		} catch {
+			// A bare core test before the IAM tables exist has no groups to bind.
+			return false;
+		}
 	}
 
 	private hasAdminBinding(principal: Principal): boolean {

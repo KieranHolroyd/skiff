@@ -134,12 +134,23 @@ export interface Section {
 	href: SectionHref;
 	path: string;
 	icon: typeof Building2Icon;
-	/** Platform admins only (manages nodes, installs updates). */
-	platformAdmin?: boolean;
+	/** A platform capability from the caller's platform bindings (IAM.md I24). */
+	platform?: PlatformCapability;
 	/** Platform admin who also owns the current org (canConfigurePlatform on the server). */
 	ownerOnly?: boolean;
 	/** Needs any one of these org permissions. */
 	anyPermission?: Permission[];
+}
+
+/** The platform capabilities the Settings navigation reads from the dashboard layout's `can`. */
+export type PlatformCapability = 'view' | 'administer' | 'storage' | 'ha' | 'updates';
+
+export interface PlatformViewer {
+	view: boolean;
+	administer: boolean;
+	storage: boolean;
+	ha: boolean;
+	updates: boolean;
 }
 
 export const SECTIONS: Section[] = [
@@ -222,7 +233,7 @@ export const SECTIONS: Section[] = [
 		href: '/(dashboard)/settings/platform-access' as unknown as SectionHref,
 		path: '/settings/platform-access',
 		icon: KeyRoundIcon,
-		platformAdmin: true
+		platform: 'view'
 	},
 	{
 		id: 'sso',
@@ -344,7 +355,7 @@ export const SECTIONS: Section[] = [
 		href: '/(dashboard)/settings/errors' as unknown as SectionHref,
 		path: '/settings/errors',
 		icon: BugIcon,
-		platformAdmin: true
+		platform: 'view'
 	},
 	{
 		id: 'domains',
@@ -376,7 +387,7 @@ export const SECTIONS: Section[] = [
 		href: '/(dashboard)/email/server',
 		path: '/email/server',
 		icon: MailIcon,
-		platformAdmin: true
+		platform: 'administer'
 	},
 	{
 		id: 'assistant',
@@ -396,7 +407,7 @@ export const SECTIONS: Section[] = [
 		href: '/(dashboard)/settings/clustering',
 		path: '/settings/clustering',
 		icon: NetworkIcon,
-		platformAdmin: true
+		platform: 'administer'
 	},
 	{
 		id: 'high-availability',
@@ -406,7 +417,7 @@ export const SECTIONS: Section[] = [
 		href: '/(dashboard)/settings/high-availability',
 		path: '/settings/high-availability',
 		icon: WaypointsIcon,
-		platformAdmin: true
+		platform: 'ha'
 	},
 	{
 		id: 'storage',
@@ -417,7 +428,7 @@ export const SECTIONS: Section[] = [
 		href: '/(dashboard)/settings/storage',
 		path: '/settings/storage',
 		icon: HardDriveIcon,
-		platformAdmin: true
+		platform: 'storage'
 	},
 	{
 		// NFS/SMB mounts, not a project's share links (those live on each project).
@@ -428,7 +439,7 @@ export const SECTIONS: Section[] = [
 		href: '/(dashboard)/settings/shares',
 		path: '/settings/shares',
 		icon: FolderTreeIcon,
-		platformAdmin: true
+		platform: 'storage'
 	},
 	{
 		id: 'backups',
@@ -448,7 +459,7 @@ export const SECTIONS: Section[] = [
 		href: '/(dashboard)/settings/updates',
 		path: '/settings/updates',
 		icon: CircleArrowUpIcon,
-		platformAdmin: true
+		platform: 'updates'
 	},
 	{
 		id: 'maintenance',
@@ -500,15 +511,17 @@ export function section(id: SectionId): Section {
 }
 
 export function visibleSections(viewer: {
-	platformAdmin: boolean;
-	role: string;
+	/** The caller is a platform admin who also owns the current org (canConfigurePlatform). */
+	owner: boolean;
 	permissions: readonly string[];
+	platform: PlatformViewer;
 }): Section[] {
-	const owner = viewer.platformAdmin && viewer.role === 'owner';
+	const canPlatform = (need: PlatformCapability | undefined) =>
+		!need || viewer.platform[need];
 	return SECTIONS.filter(
 		(entry) =>
-			(!entry.platformAdmin || viewer.platformAdmin) &&
-			(!entry.ownerOnly || owner) &&
+			canPlatform(entry.platform) &&
+			(!entry.ownerOnly || viewer.owner) &&
 			(!entry.anyPermission ||
 				entry.anyPermission.some((permission) => viewer.permissions.includes(permission)))
 	);

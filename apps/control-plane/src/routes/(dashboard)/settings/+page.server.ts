@@ -72,7 +72,7 @@ export const load: PageServerLoad = ({ locals }) => {
 		access,
 		heldCount: principal.permissions.size,
 		totalCount: access.reduce((sum, group) => sum + group.actions.length, 0),
-		platformAdmin: principal.platformAdmin === true,
+		platformAdmin: core.ctx.platformIam.canAdminister(principal),
 		/** Only an org manager (`org:update`) may rename the org. */
 		canRename: core.ctx.iam.can(principal, 'org:update', { type: 'org' })
 	};
