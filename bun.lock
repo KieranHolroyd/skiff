@@ -16,6 +16,7 @@
       "dependencies": {
         "@skiff/builder": "workspace:*",
         "@skiff/contracts": "workspace:*",
+        "@skiff/identity": "workspace:*",
         "@skiff/mail": "workspace:*",
         "@skiff/site-config": "workspace:*",
         "@skiff/studio": "workspace:*",
@@ -122,6 +123,16 @@
     "apps/helper": {
       "name": "@skiff/helper",
       "version": "0.1.0",
+    },
+    "apps/identity": {
+      "name": "@skiff/identity",
+      "version": "0.1.0",
+      "dependencies": {
+        "@skiff/contracts": "workspace:*",
+        "@skiff/core": "workspace:*",
+        "@skiff/db": "workspace:*",
+        "zod": "^4.6.7",
+      },
     },
     "packages/contracts": {
       "name": "@skiff/contracts",
@@ -555,6 +566,8 @@
     "@skiff/function-bindings": ["@skiff/function-bindings@workspace:packages/function-bindings"],
 
     "@skiff/helper": ["@skiff/helper@workspace:apps/helper"],
+
+    "@skiff/identity": ["@skiff/identity@workspace:apps/identity"],
 
     "@skiff/mail": ["@skiff/mail@workspace:packages/mail"],
 
