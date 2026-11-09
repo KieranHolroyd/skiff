@@ -67,7 +67,7 @@ See [static sites](/deploying/static-sites), [apps and containers](/compute/apps
 
 See [domains and environments](/deploying/domains-and-environments) and [configuration](/self-hosting/configuration).
 
-**Access mode.** Each project sets an access mode separately for production and for previews: `public` (anyone can visit), `password` (visitors enter a password) or `platform` (visitors must sign in to Skiff). Production defaults to `public`, and previews default to `platform`. See [access and sharing](/deploying/access-and-sharing).
+**Access mode.** Each project sets an access mode separately for production and for previews: `public` (anyone can visit), `password` (visitors enter a password) or `platform` (visitors must sign into your cloud). Production defaults to `public`, and previews default to `platform`. See [access and sharing](/deploying/access-and-sharing).
 
 **Share link.** A link that gives someone temporary access to a protected deployment. You can limit it by expiry date, number of visitors, number of redemptions, session length and a list of allowed email addresses. A visit counts as a redemption, not a page load, and you can revoke a link at any time. See [access and sharing](/deploying/access-and-sharing).
 

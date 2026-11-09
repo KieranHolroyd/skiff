@@ -1,9 +1,9 @@
 ---
 title: Sign-in and two-factor
-description: How people sign in to Skiff, how owners must verify a second factor, how to reset a forgotten password, and how to recover access.
+description: How people sign into your cloud, how owners must verify a second factor, how to reset a forgotten password, and how to recover access.
 ---
 
-This page covers how you sign in to the Skiff dashboard, how the first owner is created, how owners verify a second factor in every session, and how the CLI gets access through your browser. Account management lives under **Settings → Account**, which is described below.
+This page covers how you sign into your cloud, how the first owner is created, how owners verify a second factor in every session, and how the CLI gets access through your browser. Account management lives under **Settings → Account**, which is described below.
 
 ## Sign-in methods
 
