@@ -217,7 +217,7 @@ mock.module('./core', () => ({ core: fakeCore }));
 mock.module('./config', () => ({ platformOrigin: 'https://control.test', authSecret: 'test-secret' }));
 mock.module('./principal', () => principalStub({ principalFromMcp: () => null }));
 
-const { skiffToolDefinitions } = await import('./mcp');
+const { skiffToolDefinitions, visibleTools, visibleToolNames } = await import('./mcp');
 const { assistantTools } = await import('./assistant/tools');
 
 const owner: Principal = {
@@ -452,25 +452,18 @@ describe('IAM read MCP tools', () => {
 		expect(platform.text).toContain('platform');
 	});
 
-	test('every IAM read tool refuses a caller without its permission', async () => {
-		for (const name of ['list_roles', 'explain_access', 'who_can']) {
-			const result = await call(viewer, name, { permission: 'project:read' });
-			expect(result.ok).toBe(false);
-			expect(result.text).toContain('iam:read');
-		}
-		const simulated = await call(viewer, 'simulate_access', {
-			principalId: 'user_2',
-			kind: 'binding',
-			roleId: 'viewer',
-		});
-		expect(simulated.ok).toBe(false);
-		expect(simulated.text).toContain('iam:read');
-		const accounts = await call(viewer, 'list_service_accounts');
-		expect(accounts.ok).toBe(false);
-		expect(accounts.text).toContain('serviceAccount:read');
-		const trusts = await call(viewer, 'list_federation_trusts');
-		expect(trusts.ok).toBe(false);
-		expect(trusts.text).toContain('federation:read');
+	test('every IAM read tool is omitted for a caller without its permission', () => {
+		// Read tools are filtered too (IAM.md §12): a client never sees an action it cannot use.
+		const names = new Set(assistantTools(viewer).map((tool) => tool.name));
+		for (const name of [
+			'list_roles',
+			'explain_access',
+			'who_can',
+			'simulate_access',
+			'list_service_accounts',
+			'list_federation_trusts',
+		])
+			expect(names.has(name)).toBe(false);
 	});
 });
 
@@ -722,5 +715,46 @@ describe('IAM write MCP tools', () => {
 				),
 			),
 		).toEqual([]);
+	});
+});
+
+describe('scope-filtered tools/list (IAM.md §12)', () => {
+	test('an owner sees write and read tools; a viewer sees only what its grants allow', () => {
+		const ownerTools = new Set(visibleTools(owner).map((tool) => tool.name));
+		expect(ownerTools.has('create_project')).toBe(true);
+		expect(ownerTools.has('delete_database')).toBe(true);
+		expect(ownerTools.has('list_projects')).toBe(true);
+		expect(ownerTools.has('list_service_accounts')).toBe(true);
+
+		const viewerTools = new Set(visibleTools(viewer).map((tool) => tool.name));
+		// Reads the viewer role has stay: the filter covers reads as well as writes.
+		expect(viewerTools.has('list_projects')).toBe(true);
+		expect(viewerTools.has('get_project')).toBe(true);
+		expect(viewerTools.has('list_databases')).toBe(true);
+		expect(viewerTools.has('whoami')).toBe(true);
+		expect(viewerTools.has('search_docs')).toBe(true);
+		// Writes and grants the viewer does not have disappear, read tools included.
+		expect(viewerTools.has('create_project')).toBe(false);
+		expect(viewerTools.has('delete_database')).toBe(false);
+		expect(viewerTools.has('bind_role')).toBe(false);
+		expect(viewerTools.has('list_roles')).toBe(false);
+		expect(viewerTools.has('list_service_accounts')).toBe(false);
+	});
+
+	test('a read grant keeps its read tool visible without exposing IAM writes', () => {
+		const reader: Principal = {
+			kind: 'user',
+			userId: 'user_4',
+			orgId: 'org_1',
+			role: 'viewer',
+			permissions: new Set(roles.viewer).add('iam:read'),
+		};
+		const names = new Set(visibleTools(reader).map((tool) => tool.name));
+		expect(names.has('explain_access')).toBe(true);
+		expect(names.has('who_can')).toBe(true);
+		expect(names.has('bind_role')).toBe(false);
+		expect(names.has('unbind_role')).toBe(false);
+		// Same helper as the assistant catalog and the MCP handler.
+		expect(visibleToolNames(reader)).toEqual(names);
 	});
 });

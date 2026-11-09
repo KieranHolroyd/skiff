@@ -59,6 +59,7 @@ import type { ProjectRow } from './projects.ts';
 import type {
 	UserPoolInviteCreated,
 	UserPoolInviteView,
+	UserPoolSessionView,
 	UserPoolUserView
 } from './user-pool-engine.ts';
 import {
@@ -168,6 +169,14 @@ interface UserPoolAttachmentRow {
 	project_slug: string;
 }
 
+/** A support-impersonation session: the user, the session claim and the one-time token. */
+export interface UserPoolImpersonationView {
+	user: UserPoolUserView;
+	session: UserPoolSessionView & { impersonatedBy: string };
+	/** Raw opaque pool-session token; shown once, never stored in the clear. */
+	token: string;
+}
+
 /** The public part of a pool that a hosted page may show before anybody signs in. */
 export interface UserPoolPublicInfo {
 	id: string;
@@ -271,6 +280,79 @@ export class UserPoolService {
 			args: { poolId: row.id, pool: row.name, email: user.email },
 			result: 'ok'
 		});
+	}
+
+	/**
+	 * Start a short-lived support-impersonation session for one pool user (IAM.md I29).
+	 *
+	 * An impersonated session is a normal pool session with an `impersonatedBy` claim, so it is
+	 * accepted only by the pool's OAuth/hosted surfaces, never by Skiff's platform admin API (which
+	 * takes a platform session, key or STS token). The app still sees the user's full identity: the
+	 * remaining risk is that an app which ignores `impersonated_by` cannot tell support apart. The
+	 * session is capped at one hour and every start/end is audited with the admin as `actingFor`.
+	 */
+	impersonateUser(
+		principal: Principal,
+		poolId: string,
+		userId: string,
+		options: { ttlSeconds?: number } = {}
+	): UserPoolImpersonationView {
+		const row = this.#row(principal, poolId);
+		this.#require(principal, 'userPool:impersonate-user', row);
+		const result = this.ctx.userPoolEngine.impersonate(
+			row.id,
+			userId,
+			principal.userId,
+			options
+		);
+		this.ctx.audit.record({
+			principal,
+			action: 'user_pool.user.impersonate',
+			resource: 'user_pool_user',
+			resourceId: result.user.id,
+			args: {
+				poolId: row.id,
+				pool: row.name,
+				email: result.user.email,
+				userId: result.user.id,
+				sessionId: result.session.id,
+				expiresAt: result.session.expiresAt,
+				actingFor: principal.userId,
+			},
+			result: 'ok',
+		});
+		return {
+			user: result.user,
+			session: result.session,
+			token: result.token,
+		};
+	}
+
+	/**
+	 * End support impersonation for one user. Only sessions started by `impersonateUser` are
+	 * revoked; the user's own normal sessions stay signed in.
+	 */
+	endImpersonation(principal: Principal, poolId: string, userId: string): { revoked: number } {
+		const row = this.#row(principal, poolId);
+		this.#require(principal, 'userPool:impersonate-user', row);
+		const user = this.ctx.userPoolEngine.user(row.id, userId);
+		const revoked = this.ctx.userPoolEngine.endImpersonation(row.id, userId);
+		this.ctx.audit.record({
+			principal,
+			action: 'user_pool.user.impersonation.end',
+			resource: 'user_pool_user',
+			resourceId: user.id,
+			args: {
+				poolId: row.id,
+				pool: row.name,
+				email: user.email,
+				userId: user.id,
+				revoked,
+				actingFor: principal.userId,
+			},
+			result: 'ok',
+		});
+		return { revoked };
 	}
 
 	inviteUser(principal: Principal, poolId: string, email: string): UserPoolInviteCreated {

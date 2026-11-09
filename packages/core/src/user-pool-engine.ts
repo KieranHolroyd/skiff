@@ -110,6 +110,9 @@ import {
 
 /** Session lifetime. Sliding expiry waits for the identity process (I27). */
 export const USER_POOL_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
+/** Support impersonation (IAM.md I29) is a short, explicit session, never a normal 7-day one. */
+export const USER_POOL_IMPERSONATION_MAX_TTL_SECONDS = 60 * 60;
+export const USER_POOL_IMPERSONATION_DEFAULT_TTL_SECONDS = 15 * 60;
 /** Authorization codes are short lived, as OAuth requires. */
 export const USER_POOL_CODE_TTL_SECONDS = 5 * 60;
 /** Access and ID tokens; the signing ring's own maximum is one hour (keys.ts). */
@@ -237,6 +240,16 @@ export interface UserPoolSessionView {
 	createdAt: number;
 	lastSeenAt: number | null;
 	revokedAt: number | null;
+	/**
+	 * The admin user id when this is a support impersonation session (IAM.md I29). A hosted page
+	 * shows this as a banner, and an app can refuse sensitive actions when it is set.
+	 */
+	impersonatedBy: string | null;
+}
+
+/** The result of starting a support impersonation: a normal pool session plus its one-time token. */
+export interface UserPoolImpersonationResult extends UserPoolSignInResult {
+	session: UserPoolSessionView & { impersonatedBy: string };
 }
 
 export interface UserPoolSessionContext {
@@ -881,6 +894,31 @@ function signInStateKey(poolId: string, userId: string): string {
 	return `user_pool.${poolId}.signin.${userId}`;
 }
 
+/**
+ * Support impersonation markers live in `settings` rather than a new column: the engine schema
+ * (0097) is frozen while the identity process moves (I27). The session id is already a hash, so
+ * the key names no credential. A marker is deleted when the impersonation ends.
+ */
+function impersonationSessionKey(poolId: string, sessionId: string): string {
+	return `user_pool.${poolId}.impersonation.session.${sessionId}`;
+}
+
+function impersonationCodeKey(poolId: string, codeHash: string): string {
+	return `user_pool.${poolId}.impersonation.code.${codeHash}`;
+}
+
+/** Normalise a requested support-impersonation lifetime to (0, 1 hour]. */
+export function userPoolImpersonationTtl(value: number | undefined): number {
+	if (value === undefined) return USER_POOL_IMPERSONATION_DEFAULT_TTL_SECONDS;
+	if (!Number.isInteger(value) || value <= 0)
+		throw new ValidationError('An impersonation lifetime must be a positive whole number of seconds.');
+	if (value > USER_POOL_IMPERSONATION_MAX_TTL_SECONDS)
+		throw new ValidationError(
+			`An impersonation session lasts at most ${USER_POOL_IMPERSONATION_MAX_TTL_SECONDS} seconds (one hour).`
+		);
+	return value;
+}
+
 function parseMetadata(json: string): Record<string, unknown> {
 	const value = parseJson<unknown>(json, {});
 	return value && typeof value === 'object' && !Array.isArray(value)
@@ -1408,7 +1446,8 @@ export class UserPoolEngineService {
 				expiresAt: challenge.expiresAt,
 				createdAt: this.ctx.now(),
 				lastSeenAt: null,
-				revokedAt: null
+				revokedAt: null,
+				impersonatedBy: null
 			};
 			return {
 				token: challenge.token,
@@ -2206,24 +2245,29 @@ export class UserPoolEngineService {
 			| 'recovery_code'
 			| 'oauth'
 			| 'email_otp'
+			| 'impersonation',
+		options: { impersonatedBy?: string; ttlSeconds?: number } = {}
 	): UserPoolSignInResult {
 		const now = this.ctx.now();
 		const token = randomToken(32);
 		const id = sha256Hex(token);
-		const expiresAt = now + USER_POOL_SESSION_TTL_SECONDS * 1000;
+		const expiresAt = now + (options.ttlSeconds ?? USER_POOL_SESSION_TTL_SECONDS) * 1000;
 		this.ctx.sqlite.run(
 			`INSERT INTO user_pool_sessions
 			   (id, pool_id, user_id, expires_at, created_at, last_seen_at, revoked_at)
 			 VALUES (?, ?, ?, ?, ?, ?, NULL)`,
 			[id, pool.id, user.id, expiresAt, now, now]
 		);
+		if (options.impersonatedBy)
+			this.recordImpersonation(pool.id, id, options.impersonatedBy, expiresAt);
 		// D122: sign-in metadata only. The raw session token never leaves this method.
 		this.ctx.events.emitUserPool(pool.org_id, pool.id, 'user.signed_in', {
 			poolId: pool.id,
 			poolName: pool.name,
 			user: { id: user.id, email: user.email, name: user.name },
 			session: { id, expiresAt },
-			method
+			method,
+			...(options.impersonatedBy ? { impersonatedBy: options.impersonatedBy } : {})
 		});
 		return {
 			token,
@@ -2235,7 +2279,8 @@ export class UserPoolEngineService {
 				expiresAt,
 				createdAt: now,
 				lastSeenAt: now,
-				revokedAt: null
+				revokedAt: null,
+				impersonatedBy: options.impersonatedBy ?? null
 			},
 			emailVerificationPending: user.email_verified_at === null,
 			mfaRequired: false
@@ -2267,7 +2312,114 @@ export class UserPoolEngineService {
 			this.ctx.sqlite.run('UPDATE user_pool_sessions SET last_seen_at = ? WHERE id = ?', [now, session.id]);
 			session.last_seen_at = now;
 		}
-		return { user: userView(user), session: sessionView(session) };
+		return {
+			user: userView(user),
+			session: sessionView(session, this.impersonatedBy(poolId, session.id)),
+		};
+	}
+
+	/**
+	 * Mint a short-lived pool session for one user (IAM.md I29 support impersonation). The caller
+	 * must already hold `userPool:impersonate-user`; the service checks that and writes the audit
+	 * row. The raw token is returned once, and the session carries `impersonatedBy` for the banner
+	 * and for apps that want to refuse sensitive actions.
+	 */
+	impersonate(
+		poolId: string,
+		userId: string,
+		adminId: string,
+		options: { ttlSeconds?: number } = {}
+	): UserPoolImpersonationResult {
+		const pool = this.requireEnabledPool(poolId);
+		const user = this.requireUser(pool.id, userId);
+		if (user.disabled_at !== null)
+			throw new ValidationError('A disabled user cannot be impersonated.');
+		if (!adminId.trim()) throw new ValidationError('An impersonation session needs the admin who started it.');
+		const ttlSeconds = userPoolImpersonationTtl(options.ttlSeconds);
+		return this.startSession(pool, user, 'impersonation', {
+			impersonatedBy: adminId,
+			ttlSeconds,
+		}) as UserPoolImpersonationResult;
+	}
+
+	/**
+	 * End every live support-impersonation session for one user. Normal sessions (a real sign-in)
+	 * are untouched: only sessions with an impersonation marker are revoked. Returns how many.
+	 *
+	 * OIDC access/id tokens already minted from the session stay valid until their one-hour expiry;
+	 * they carry `impersonated_by`, so an app can refuse or flag them without waiting for revocation.
+	 */
+	endImpersonation(poolId: string, userId: string): number {
+		const now = this.ctx.now();
+		const sessions = this.ctx.sqlite
+			.query<{ id: string }, [string, string]>(
+				'SELECT id FROM user_pool_sessions WHERE pool_id = ? AND user_id = ? AND revoked_at IS NULL'
+			)
+			.all(poolId, userId);
+		let revoked = 0;
+		this.ctx.sqlite.transaction(() => {
+			for (const session of sessions) {
+				if (this.impersonatedBy(poolId, session.id) === null) continue;
+				const result = this.ctx.sqlite.run(
+					'UPDATE user_pool_sessions SET revoked_at = ? WHERE id = ? AND pool_id = ? AND revoked_at IS NULL',
+					[now, session.id, poolId]
+				);
+				if (result.changes > 0) revoked += 1;
+				this.ctx.sqlite.run('DELETE FROM settings WHERE key = ?', [
+					impersonationSessionKey(poolId, session.id),
+				]);
+			}
+		})();
+		return revoked;
+	}
+
+	/** The admin behind an impersonation session, or null for a normal one. */
+	private impersonatedBy(poolId: string, sessionId: string): string | null {
+		const row = this.ctx.sqlite
+			.query<{ value: string }, [string]>('SELECT value FROM settings WHERE key = ?')
+			.get(impersonationSessionKey(poolId, sessionId));
+		if (!row) return null;
+		try {
+			const value = JSON.parse(row.value) as { by?: unknown; expiresAt?: unknown };
+			if (typeof value.expiresAt === 'number' && value.expiresAt <= this.ctx.now()) return null;
+			return typeof value.by === 'string' ? value.by : null;
+		} catch {
+			return null;
+		}
+	}
+
+	/** Remember the admin on a session; the marker is not a credential and is deleted on end. */
+	private recordImpersonation(poolId: string, sessionId: string, by: string, expiresAt: number): void {
+		this.ctx.sqlite.run(
+			`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+			 ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+			[impersonationSessionKey(poolId, sessionId), JSON.stringify({ by, expiresAt }), this.ctx.now()]
+		);
+	}
+
+	/** Carry the impersonator from the pooled session through the short-lived authorization code. */
+	private recordCodeImpersonation(poolId: string, codeHash: string, by: string, expiresAt: number): void {
+		this.ctx.sqlite.run(
+			`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+			 ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+			[impersonationCodeKey(poolId, codeHash), JSON.stringify({ by, expiresAt }), this.ctx.now()]
+		);
+	}
+
+	/** Read and delete the code's impersonation marker; tokens then carry `impersonated_by`. */
+	private consumeCodeImpersonation(poolId: string, codeHash: string): string | null {
+		const key = impersonationCodeKey(poolId, codeHash);
+		const row = this.ctx.sqlite
+			.query<{ value: string }, [string]>('SELECT value FROM settings WHERE key = ?')
+			.get(key);
+		if (!row) return null;
+		this.ctx.sqlite.run('DELETE FROM settings WHERE key = ?', [key]);
+		try {
+			const value = JSON.parse(row.value) as { by?: unknown };
+			return typeof value.by === 'string' ? value.by : null;
+		} catch {
+			return null;
+		}
 	}
 
 	/** Revoke one session. Returns false when it was already gone. */
@@ -2563,6 +2715,15 @@ export class UserPoolEngineService {
 			.get(userId, poolId);
 		if (!user) return false;
 		this.ctx.sqlite.transaction(() => {
+			const sessions = this.ctx.sqlite
+				.query<{ id: string }, [string, string]>(
+					'SELECT id FROM user_pool_sessions WHERE user_id = ? AND pool_id = ?'
+				)
+				.all(user.id, poolId);
+			for (const session of sessions)
+				this.ctx.sqlite.run('DELETE FROM settings WHERE key = ?', [
+					impersonationSessionKey(poolId, session.id),
+				]);
 			this.ctx.sqlite.run('DELETE FROM user_pool_codes WHERE user_id = ? AND pool_id = ?', [user.id, poolId]);
 			this.ctx.sqlite.run('DELETE FROM user_pool_sessions WHERE user_id = ? AND pool_id = ?', [user.id, poolId]);
 			this.ctx.sqlite.run('DELETE FROM user_pool_email_tokens WHERE user_id = ? AND pool_id = ?', [
@@ -2593,6 +2754,10 @@ export class UserPoolEngineService {
 
 	/** Remove every engine row for a pool; called from `UserPoolService.delete` inside its transaction. */
 	purgePool(poolId: string): void {
+		// Impersonation markers are in `settings`, not the engine tables, so remove them too.
+		this.ctx.sqlite.run('DELETE FROM settings WHERE key LIKE ?', [
+			`user_pool.${poolId}.impersonation.%`,
+		]);
 		this.ctx.sqlite.run('DELETE FROM user_pool_codes WHERE pool_id = ?', [poolId]);
 		this.ctx.sqlite.run('DELETE FROM user_pool_sessions WHERE pool_id = ?', [poolId]);
 		this.ctx.sqlite.run('DELETE FROM user_pool_email_tokens WHERE pool_id = ?', [poolId]);
@@ -2672,6 +2837,14 @@ export class UserPoolEngineService {
 				now
 			]
 		);
+		// Carry support impersonation from the session into the tokens this code will mint.
+		if (context.session.impersonatedBy)
+			this.recordCodeImpersonation(
+				pool.id,
+				sha256Hex(code),
+				context.session.impersonatedBy,
+				now + USER_POOL_CODE_TTL_SECONDS * 1000
+			);
 		return {
 			redirect: appendQuery(input.redirectUri, { code, state: input.state }),
 			needsLogin: false
@@ -2714,6 +2887,7 @@ export class UserPoolEngineService {
 			[this.ctx.now(), row.code_hash]
 		);
 		if (used.changes === 0) throw new UnauthorizedError('The authorization code was already used.');
+		const impersonatedBy = this.consumeCodeImpersonation(pool.id, row.code_hash);
 
 		const user = this.requireUser(pool.id, row.user_id);
 		if (user.disabled_at !== null) throw new UnauthorizedError('This account is disabled.');
@@ -2731,6 +2905,7 @@ export class UserPoolEngineService {
 				...(row.nonce ? { nonce: row.nonce } : {}),
 				...(withEmail ? { email: user.email, email_verified: user.email_verified_at !== null } : {}),
 				...(withProfile ? { name: user.name } : {}),
+				...(impersonatedBy ? { impersonated_by: impersonatedBy } : {}),
 				groups
 			},
 			USER_POOL_TOKEN_TTL_SECONDS,
@@ -2746,6 +2921,7 @@ export class UserPoolEngineService {
 				typ: 'access',
 				...(withEmail ? { email: user.email, email_verified: user.email_verified_at !== null } : {}),
 				...(withProfile ? { name: user.name } : {}),
+				...(impersonatedBy ? { impersonated_by: impersonatedBy } : {}),
 				groups
 			},
 			USER_POOL_TOKEN_TTL_SECONDS,
@@ -4038,7 +4214,7 @@ function userView(row: UserRow): UserPoolUserView {
 	};
 }
 
-function sessionView(row: SessionRow): UserPoolSessionView {
+function sessionView(row: SessionRow, impersonatedBy: string | null = null): UserPoolSessionView {
 	return {
 		id: row.id,
 		poolId: row.pool_id,
@@ -4046,7 +4222,8 @@ function sessionView(row: SessionRow): UserPoolSessionView {
 		expiresAt: row.expires_at,
 		createdAt: row.created_at,
 		lastSeenAt: row.last_seen_at,
-		revokedAt: row.revoked_at
+		revokedAt: row.revoked_at,
+		impersonatedBy
 	};
 }
 

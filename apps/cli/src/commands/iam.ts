@@ -28,6 +28,7 @@ Commands:
   who-can <permission>          Everyone who can do it
   keys [list]                   Signing keys by purpose, and the next rotation decision
   keys rotate --purpose <p>     Rotate one purpose (--all for every automatic purpose)
+  migrate-keys                  Copy legacy Better Auth keys into org-bound access keys
 
 Role and group options:
       --permission <p>          A catalog permission, e.g. project:read; repeat or comma-separate
@@ -44,6 +45,9 @@ Explain and who-can options:
 Keys rotate options:
       --purpose <p>             sts, registry, oidc, workload, or an explicit pool:<id>
       --all                     Rotate every purpose the monthly sweep rotates
+
+Migrate keys options:
+      --org <id>                A platform admin: limit the run to one org (default: every org)
 
 Options:
   -y, --yes                    Don't ask for confirmation (required when stdin isn't a terminal)
@@ -86,6 +90,7 @@ const keysRotateFlags: FlagSpec = {
 	purpose: { type: 'string' },
 	all: { type: 'boolean' },
 };
+const migrateKeysFlags: FlagSpec = { ...baseFlags, org: { type: 'string' } };
 
 const PRINCIPAL_TYPES = ['user', 'group', 'serviceAccount'] as const;
 type PrincipalType = (typeof PRINCIPAL_TYPES)[number];
@@ -212,6 +217,9 @@ export async function iamCommand(argv: string[]): Promise<void> {
 		case 'keys':
 		case 'key':
 			return keysCommand(argv.slice(1));
+		case 'migrate-keys':
+		case 'migrate-access-keys':
+			return migrateKeys(argv.slice(1));
 		default:
 			throw new UsageError(`Unknown iam command "${first}".\n\n${usage}`);
 	}
@@ -601,6 +609,44 @@ async function rotateKeys(argv: string[]): Promise<void> {
 			`Rotated ${rotation.purpose}: active ${rotation.active.kid}, next ${next}, retired ${retired}.`,
 		);
 	}
+}
+
+// ---------------------------------------------------------------- Better Auth key migration
+
+async function migrateKeys(argv: string[]): Promise<void> {
+	const args = parseArgs(argv, migrateKeysFlags);
+	if (args.boolean('help')) {
+		console.log(usage);
+		return;
+	}
+	rejectExtraPositionals(args, 0, 'Usage: skif iam migrate-keys [--org <id>] [--json]');
+	const org = args.string('org');
+	const client = await authenticatedClient();
+	const raw = await requestJson(
+		client,
+		'POST',
+		'/api/v1/access-keys/migrate',
+		org ? { orgId: org } : {},
+	);
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	const result = asRecord(raw);
+	if (!result) throw new CliError('The platform returned an unexpected migration response.', { code: 'protocol' });
+	const count = (key: string): number =>
+		typeof result[key] === 'number' ? (result[key] as number) : 0;
+	console.log(
+		`Better Auth keys: ${count('examined')} examined, ${count('migrated')} migrated, ` +
+			`${count('alreadyMigrated')} already migrated.`,
+	);
+	if (count('disabled') > 0)
+		console.log(`${count('disabled')} migrated key${count('disabled') === 1 ? ' was' : 's were'} disabled and stay revoked.`);
+	if (count('skippedNoOrg') > 0)
+		console.log(`${count('skippedNoOrg')} skipped: the owner has no org membership.`);
+	if (count('skippedOtherOrg') > 0) console.log(`${count('skippedOtherOrg')} skipped: another org.`);
+	if (count('skippedInvalid') > 0)
+		console.log(`${count('skippedInvalid')} skipped: the hash is not Better Auth's SHA-256 base64url.`);
 }
 
 // ---------------------------------------------------------------- parsing helpers (pure)

@@ -43,6 +43,17 @@
 		| null
 		| { poolId: string; client: UserPoolClientView; clientSecret: string | null }
 	>(null);
+	let createdImpersonation = $state<
+		| null
+		| {
+				poolId: string;
+				userId: string;
+				email: string;
+				token: string;
+				expiresAt: number;
+				impersonatedBy: string;
+		  }
+	>(null);
 	let importOpen = $state(false);
 	let importTarget = $state<UserPoolView | null>(null);
 	let importText = $state('');
@@ -171,6 +182,39 @@
 		createdClient = { poolId: pool.id, ...payload.created };
 		addingClientFor = null;
 		form.reset();
+	}
+
+	/** Start support impersonation (IAM.md I29). The raw token is shown once, like a client secret. */
+	async function startImpersonation(pool: UserPoolView, userId: string) {
+		const result = await runAction('?/impersonateUser', {
+			poolId: pool.id,
+			userId
+		});
+		if (result.type !== 'success') return;
+		const payload = result.data as
+			| {
+					impersonation?: {
+						userId: string;
+						email: string;
+						token: string;
+						expiresAt: number;
+						impersonatedBy: string;
+					};
+			  }
+			| undefined;
+		if (!payload?.impersonation) return;
+		createdImpersonation = { poolId: pool.id, ...payload.impersonation };
+	}
+
+	function stopImpersonation(pool: UserPoolView, user: { id: string; email: string }) {
+		askConfirm({
+			title: `End impersonation for ${user.email}?`,
+			description:
+				'Every support session for this user is revoked now. Their own normal sign-in sessions are unaffected.',
+			confirmLabel: 'End impersonation',
+			action: '?/endImpersonation',
+			fields: { poolId: pool.id, userId: user.id }
+		});
 	}
 </script>
 
@@ -662,6 +706,84 @@
 													</NativeSelect.Root>
 													<Button type="submit" size="sm" variant="outline">Add member</Button>
 												</form>
+											</li>
+										{/each}
+									</ul>
+								{/if}
+							</div>
+
+							<div class="space-y-3 rounded-lg border bg-muted/20 p-3">
+								<div class="flex flex-wrap items-center justify-between gap-2">
+									<p class="flex items-center gap-2 text-sm font-medium">
+										<UsersIcon class="size-4 text-muted-foreground" />
+										Users
+										<Badge variant="secondary" class="tabular-nums">
+											{(data.users[pool.id] ?? []).length}
+										</Badge>
+									</p>
+								</div>
+								<p class="text-xs text-muted-foreground">
+									Support impersonation opens a short-lived pool session (at most one hour) as
+									the user. It is audited, carries <code class="font-mono">impersonated_by</code>
+									, and ends on its own or with Stop impersonation.
+								</p>
+
+								{#if createdImpersonation && createdImpersonation.poolId === pool.id}
+									{@const impersonation = createdImpersonation}
+									<div class="space-y-2 rounded-lg border border-warning/30 bg-warning/5 p-3">
+										<p class="text-sm font-medium">
+											Impersonation session for {impersonation.email}
+										</p>
+										<p class="text-xs text-muted-foreground">
+											Copy the pool session token now; it is shown once. Set it as the pool's
+											session cookie, or use it against the pool's OAuth flow. It expires at
+											{formatDateTime(impersonation.expiresAt)}.
+										</p>
+										<div class="flex flex-wrap items-center gap-2">
+											<code class="max-w-full break-all rounded bg-background px-2 py-1 font-mono text-xs">
+												{impersonation.token}
+											</code>
+											<CopyButton value={impersonation.token} label="Copy session token" />
+											<Button size="sm" variant="ghost" onclick={() => (createdImpersonation = null)}>
+												Dismiss
+											</Button>
+										</div>
+									</div>
+								{/if}
+
+								{#if (data.users[pool.id] ?? []).length === 0}
+									<p class="text-xs text-muted-foreground">No users yet.</p>
+								{:else}
+									<ul class="space-y-2">
+										{#each data.users[pool.id] ?? [] as user (user.id)}
+											<li
+												class="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-background px-3 py-2"
+											>
+												<div class="min-w-0">
+													<p class="truncate text-sm font-medium">{user.email}</p>
+													<p class="text-xs text-muted-foreground">
+														{user.name || 'No name'}
+														{#if user.disabled}· disabled{/if}
+													</p>
+												</div>
+												{#if access?.impersonate}
+													<div class="flex flex-wrap items-center gap-2">
+														<Button
+															size="sm"
+															variant="outline"
+															onclick={() => void startImpersonation(pool, user.id)}
+														>
+															Impersonate
+														</Button>
+														<Button
+															size="sm"
+															variant="ghost"
+															onclick={() => stopImpersonation(pool, user)}
+														>
+															Stop impersonation
+														</Button>
+													</div>
+												{/if}
 											</li>
 										{/each}
 									</ul>

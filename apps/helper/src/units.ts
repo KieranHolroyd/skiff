@@ -686,6 +686,24 @@ export interface ContainerUnitOptions {
 	authFile?: string | null;
 	/** Workload identity (IAM.md I18): host directory mounted read-only at `/var/run/skiff`. */
 	identityDir?: string | null;
+	/**
+	 * Compose: publish a loopback host port to a container port. A single-image container keeps
+	 * publishing `workload.port` on both sides.
+	 */
+	publish?: { hostPort: number; containerPort: number } | null;
+	/** Compose: extra DNS aliases on the workload network (the service name). */
+	networkAliases?: string[];
+	/** Compose: service units that must start first (`After=`/`Requires=`). */
+	afterUnits?: string[];
+	/** Compose: named volumes are the only persistent mounts; do not add the generic `/data`. */
+	dataMount?: boolean;
+	/** Compose: override the image command (argv, never a shell string). */
+	exec?: string[];
+}
+
+/** Quote one argv entry for a Quadlet `Exec=` line. `%` is a systemd specifier, so escape it. */
+function quoteExecArg(arg: string): string {
+	return `"${arg.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%')}"`;
 }
 
 /**
@@ -733,12 +751,16 @@ export function renderContainerUnit(options: ContainerUnitOptions): string {
 	lines.push(`Description=${description(workload)} (container)`);
 	lines.push('After=network-online.target');
 	lines.push('Wants=network-online.target');
+	// Compose `depends_on` is an ordering constraint, not a health wait. The units are started in
+	// order by the helper; Requires= keeps a dependency restarting with the service.
+	for (const unit of options.afterUnits ?? []) lines.push(`After=${unit}`, `Requires=${unit}`);
 	lines.push('StartLimitIntervalSec=60');
 	lines.push('StartLimitBurst=10');
 	lines.push('');
 	lines.push('[Container]');
 	lines.push(`ContainerName=skiff-workload-${workload.id}`);
 	lines.push(`Image=${options.image}`);
+	if (options.exec && options.exec.length > 0) lines.push(`Exec=${options.exec.map(quoteExecArg).join(' ')}`);
 	const runner = Boolean(workload.runner);
 	if (runner) {
 		// Ephemeral runners (plan 21, D91): always the newest image, a fixed entrypoint, and a fresh
@@ -747,16 +769,21 @@ export function renderContainerUnit(options: ContainerUnitOptions): string {
 		lines.push(`Exec=${RUNNER_ENTRYPOINT}`);
 	}
 	// Caddy on the host proxies to loopback; the container listens on the declared port. Workers
-	// (plan 21) publish nothing: they only make outbound connections.
-	if (workload.ingress !== 'none') lines.push(`PublishPort=127.0.0.1:${workload.port}:${workload.port}`);
+	// (plan 21) publish nothing: they only make outbound connections. Compose assigns a loopback
+	// host port that may differ from the service's container port.
+	if (options.publish)
+		lines.push(`PublishPort=127.0.0.1:${options.publish.hostPort}:${options.publish.containerPort}`);
+	else if (workload.ingress !== 'none' && options.publish !== null)
+		lines.push(`PublishPort=127.0.0.1:${workload.port}:${workload.port}`);
 	lines.push(`Network=${networkUnitName(workloadNetworkName(workload))}`);
+	for (const alias of options.networkAliases ?? []) lines.push(`NetworkAlias=${alias}`);
 	lines.push(`EnvironmentFile=${options.envFile}`);
 	// Container root is not host root: every container gets its own range of the `containers`
 	// subordinate ids (see userns.ts), so uid 0 inside maps to an unprivileged host uid. `U` hands
 	// the writable mounts (and the 0400 secret files) to whichever uid the container runs as, on
 	// each start, because an `auto` range is not guaranteed to be the same one next time.
 	lines.push(`UserNS=${CONTAINER_USERNS}`);
-	if (!runner) lines.push(`Volume=${options.dataDir}:/data:Z,U`);
+	if (!runner && options.dataMount !== false) lines.push(`Volume=${options.dataDir}:/data:Z,U`);
 	for (const mount of options.volumeMounts ?? []) {
 		// A read-only attachment is never chowned: the volume's one writer owns it (single-writer),
 		// and a reader re-owning it would take it away from that writer.

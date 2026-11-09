@@ -34,8 +34,9 @@ type Log = (level: 'info' | 'warn' | 'error', message: string) => void;
  */
 export async function createIdentityRuntime(
 	config: IdentityConfig,
-	options: { log?: Log } = {},
+	options: { log?: Log; version?: string } = {},
 ): Promise<IdentityRuntime> {
+	const version = options.version ?? process.env.SKIFF_IDENTITY_VERSION?.trim() ?? 'dev';
 	mkdirSync(config.dataDir, { recursive: true, mode: 0o700 });
 	const { sqlite, db } = openIdentityDb({ path: config.dbPath });
 	const cookieSecret = identityCookieSecret(config.masterKey);
@@ -85,6 +86,7 @@ export async function createIdentityRuntime(
 			core,
 			sqlite,
 			secureCookies: config.secureCookies,
+			version,
 			...(options.log ? { log: options.log } : {}),
 		}),
 	});
@@ -93,7 +95,9 @@ export async function createIdentityRuntime(
 	const controlServer = Bun.serve({
 		unix: config.socketPath,
 		fetch: createIdentityControlHandler({
+			core,
 			sqlite,
+			version,
 			...(options.log ? { log: options.log } : {}),
 		}),
 	});

@@ -33,6 +33,7 @@ describe('loadConfig', () => {
 		expect(config.caddyListen).toEqual([':443', ':80']);
 		expect(config.agentSocket).toBe('/run/skiff-agent/agent.sock');
 		expect(config.cookieName).toBe('__skiff_s');
+		expect(config.accessCacheMs).toBe(15_000);
 		expect(config.caddyAccessLog).toBeNull();
 		expect(config.insecureHttp).toBe(false);
 		expect(config.tls).toBe(false);
@@ -46,6 +47,14 @@ describe('loadConfig', () => {
 		expect(config.workloadHealthTimeoutMs).toBe(30_000);
 		expect(config.logDrain).toBe(true);
 		expect(config.logDrainIntervalMs).toBe(2_000);
+	});
+
+	test('lets an operator change the Skiff Access decision cache lifetime', () => {
+		const config = loadConfig({ ...base, SKIFF_ACCESS_CACHE_MS: '3000' });
+		expect(config.accessCacheMs).toBe(3_000);
+		expect(() => loadConfig({ ...base, SKIFF_ACCESS_CACHE_MS: 'soon' })).toThrow(
+			/SKIFF_ACCESS_CACHE_MS/,
+		);
 	});
 
 	test('lets an operator disable or slow the log drain', () => {

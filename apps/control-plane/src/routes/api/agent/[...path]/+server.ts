@@ -13,6 +13,7 @@ import {
 	telemetryBatchSchema
 } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
+import { identityGeneration } from '@skiff/core';
 import { json, readJson, route } from '#lib/server/api.js';
 
 function nodeToken(request: Request): string {
@@ -254,6 +255,93 @@ const handler: RequestHandler = async (event) => {
 			if (!consoleToken) return json({ error: 'unauthorized' }, 401);
 			const node = core.nodes.authenticate(token);
 			return core.containerConsole.activation(node.id, consoleToken);
+		}
+
+		// Confidential OIDC clients and social providers for the identity process (docs/IAM.md
+		// §11.2). Like `email/state`, the secret is opened at the control plane — the sealed rows use
+		// the control plane's org keys, which the separate process does not have — and fetched over
+		// the node-token channel, never placed in desired state. The agent relays it to the process
+		// over the private unix socket, which seals it again with its own master key before storing.
+		if (action === 'identity/secrets') {
+			if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
+			const node = core.nodes.authenticate(token);
+			const state = await core.nodes.desiredState(token);
+			if (!state.identity) return json({ generation: 0, pools: [] }, 200, { 'cache-control': 'no-store' });
+			const wanted = new Set(state.identity.pools.map((pool) => pool.id));
+			const clients = core.ctx.sqlite
+				.query<
+					{ id: string; pool_id: string; client_id: string; client_secret_sealed: string | null; org_id: string },
+					[]
+				>(
+					`SELECT c.id, c.pool_id, c.client_id, c.client_secret_sealed, p.org_id
+					   FROM user_pool_clients c JOIN user_pools p ON p.id = c.pool_id
+					  WHERE p.disabled_at IS NULL AND p.engine = 'skiff-identity'
+					  ORDER BY c.name COLLATE NOCASE`,
+				)
+				.all()
+				.filter((client) => wanted.has(client.pool_id));
+			const providers = core.ctx.sqlite
+				.query<
+					{
+						pool_id: string;
+						provider: string;
+						client_id: string;
+						client_secret_sealed: string;
+						scopes_json: string;
+						enabled: number;
+						org_id: string;
+					},
+					[]
+				>(
+					`SELECT o.pool_id, o.provider, o.client_id, o.client_secret_sealed, o.scopes_json, o.enabled, p.org_id
+					   FROM user_pool_oauth_providers o JOIN user_pools p ON p.id = o.pool_id
+					  WHERE p.disabled_at IS NULL AND p.engine = 'skiff-identity'`,
+				)
+				.all()
+				.filter((provider) => wanted.has(provider.pool_id));
+			const pools = state.identity.pools.map((pool) => ({
+				id: pool.id,
+				orgId: pool.orgId,
+				clients: clients
+					.filter((client) => client.pool_id === pool.id)
+					.map((client) => {
+						let secret: string | null = null;
+						if (client.client_secret_sealed) {
+							try {
+								secret = core.ctx.secrets.open(client.org_id, client.client_secret_sealed);
+							} catch {
+								secret = null; // A damaged sealed row fails that client closed.
+							}
+						}
+						return { id: client.id, clientId: client.client_id, secret };
+					}),
+				oauthProviders: providers
+					.filter((provider) => provider.pool_id === pool.id)
+					.flatMap((provider) => {
+						try {
+							return [
+								{
+									provider: provider.provider,
+									clientId: provider.client_id,
+									secret: core.ctx.secrets.open(provider.org_id, provider.client_secret_sealed),
+									scopes: JSON.parse(provider.scopes_json) as string[],
+									enabled: provider.enabled === 1,
+								},
+							];
+						} catch {
+							return [];
+						}
+					}),
+			}));
+			const generation = identityGeneration({
+				nodeId: node.id,
+				pools: pools.map((pool) => ({
+					id: pool.id,
+					clients: pool.clients.map((client) => [client.id, client.clientId, client.secret !== null]),
+					providers: pool.oauthProviders.map((provider) => [provider.provider, provider.clientId, provider.scopes, provider.enabled]),
+				})),
+			});
+			return json({ generation, pools }, 200, { 'cache-control': 'no-store' });
 		}
 
 		if (action === 'telemetry') {

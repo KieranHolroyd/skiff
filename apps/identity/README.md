@@ -18,7 +18,17 @@ At `https://auth.<sitesDomain>/<poolId>` (the issuer Caddy routes to this proces
 | `/<pool>/oauth2/token` | Code + PKCE/secret exchange |
 | `/<pool>/oauth2/userinfo` | Bearer access-token claims |
 | `/<pool>/oauth2/logout` | End the pool session |
-| `/<pool>/login`, `/signup`, `/verify`, `/reset`, `/magic` | Hosted pages (`/mfa` is the TOTP step) |
+| `/<pool>/login`, `/signup`, `/verify`, `/reset`, `/magic`, `/otp`, `/account` | Hosted pages (`/mfa` is the TOTP step) |
+| `/<pool>/passkeys/{login,register}/{options,verify}` | WebAuthn sign-in and enrolment JSON |
+| `/<pool>/oauth/callback/<provider>` and `/api/v1/user-pools/<pool>/oauth/callback/<provider>` | Social sign-in callback (the engine builds the latter) |
+| `/health`, `/readyz` | Pool count, applied state/secrets generations and readiness |
+| `/metrics` | Prometheus text: readiness, pool/generation gauges and request counters |
+
+The hosted pages mirror the control plane's `/pool/<id>/*` pages: password, sign-up, verify,
+reset, magic link, email OTP, TOTP MFA, passkeys, social buttons, the account page (passkeys,
+TOTP, groups, resend verification, sign-out) and logout. Every form carries a double-submit CSRF
+token scoped to the pool path, and each flow has its own rolling-window rate limit. The theme's
+`displayName`, `primaryColor`, `backgroundColor` and `https` logo are applied; copy is fixed.
 
 The engine also emits links as `/pool/<pool>/…`; both shapes are parsed, and Caddy routes both to
 this process. Hosted pages are dependency-free HTML with the pool's theme colours and logo.
@@ -60,20 +70,53 @@ marker:
    clients that left the projection. It answers health with the applied generation, so the agent
    only pushes when the content hash changes.
 
-Clients in the projection have no sealed secret, so **public clients with PKCE work today**;
-confidential clients fail closed until a later slice adds an authenticated per-node secret fetch
-(the skiff-mail `GET /state` pattern, with the control plane opening the sealed secret for that
-node only). That is the deliberate next step, not an auth reimplementation.
+Clients in the projection have no sealed secret. Public clients with PKCE work from the projection
+alone; confidential clients are filled in by the authenticated per-node secret fetch:
+
+5. `IdentityBridge` calls `GET /api/agent/identity/secrets` with its node bearer, and only for the
+   pools in this node's `DesiredState.identity`. The control plane opens each
+   `client_secret_sealed` (and each enabled social provider's secret) for that one node.
+6. The bridge relays the bundle over the private unix socket (`PUT /secrets`, mode 0660) and never
+   logs it. The identity process seals each value with its own master key before writing
+   `user_pool_clients` / `user_pool_oauth_providers`, then reports `secretsGeneration`.
+7. The fetch repeats after a restart, whenever the process reports a different generation, and at
+   most once a minute so a rotated secret reaches the pool. A failed fetch leaves public clients
+   working and confidential clients failing closed.
+
+Neither the desired state nor a log line ever carries a client secret.
 
 ### Signing keys and mail
 
 Pool tokens are signed by `pool:<id>` keys in this database, sealed with a local master key
 (`/var/lib/skiff/identity/master.key`, generated 0600 on first boot, or
 `SKIFF_IDENTITY_MASTER_KEY`). No other process verifies them, so the identity node is
-self-contained. Pool mail (verification, magic link, reset, invite) uses
+self-contained.
+
+**Moving a pool without invalidating tokens.** The control socket exposes
+`GET /keys/export[?pool=<id>]` and `PUT /keys/import`. Export returns a versioned bundle of the
+`signing_keys` rows for the pool (`next`, `active` and `retired`), base64-encoded; the private JWKs
+stay sealed with this node's master key, so the bundle contains no plaintext key material. Import
+replaces the rows and restores `user_pools.signing_key_id`, so tokens signed before the move keep
+verifying. The destination node must be configured with the same `SKIFF_IDENTITY_MASTER_KEY` (or
+the same `master.key` file) to open them. A bundle larger than 64 KiB is reported with
+`tooLarge: true` and is not returned, which keeps it out of desired state; a projection may carry
+`keyBundle` (already sealed) for a move.
+
+Pool mail (verification, magic link, reset, invite, OTP) uses
 `SKIFF_IDENTITY_MAIL_URL` + optional `SKIFF_IDENTITY_MAIL_TOKEN` to hand the rendered message to
 the control plane / mail path; without it, a development process logs the link and a production
 process refuses (`platform_mail_unavailable`), the same rule as the in-process engine.
+
+### Health, metrics and fallback
+
+`GET /health` returns `{ ok, ready, status, generation, secretsGeneration, pools, version,
+lastStateAt }`; `GET /readyz` is the cheap readiness probe. `GET /metrics` is Prometheus text with
+`skiff_identity_ready`, pool/generation gauges and `skiff_identity_requests_total{route,status}`.
+The agent reports the unit's status, version, generation, pool count and restart count in the
+heartbeat. While the unit is unhealthy, the agent omits the identity Caddy routes so the assigned
+pools fall back to the control plane's `/api/v1/user-pools/*` and `/pool/*` routes; they move back
+when a health check succeeds. The bridge starts the unit when assignment appears, stops it when
+assignment disappears, and restarts it after three consecutive failed health checks.
 
 ## Node placement and files
 
@@ -93,9 +136,14 @@ Everything above assumes one identity node. Real multi-node HA needs:
 - per-pool placement (a pool's node id in its row) instead of "all pools on one node";
 - a Litestream-restored standby per identity node, with a promotion step and a Caddy upstream
   change (the CLUSTERING C7/C8 pattern);
-- a confidential-client secret fetch over the node channel;
+- a confidential-client and social-provider secret fetch over the node channel (implemented as
+  `GET /api/agent/identity/secrets`, opened at the control plane, re-sealed in the process);
 - idempotent state application already exists, so a standby can be fed the same projection;
-- sticky sessions or a shared session store if pools move while users are signed in.
+- sealed signing-key export/import for a moved pool (implemented on the control socket);
+- sticky sessions or a shared session store if pools move while users are signed in;
+- per-pool placement: today one node receives every pool, so its failure stops all assigned pools
+  until the agent falls back to the control-plane routes. True HA needs one identity unit (or
+  replica set) per pool group and a Caddy upstream per placement.
 
 ## Configuration
 
@@ -108,10 +156,15 @@ Everything above assumes one identity node. Real multi-node HA needs:
 | `SKIFF_IDENTITY_CONTENT_DOMAIN` | `SKIFF_CONTENT_DOMAIN` or `localhost` | Issuer host `auth.<domain>` |
 | `SKIFF_IDENTITY_ORIGIN` | `https://auth.<content domain>` | Link origin and cookie security |
 | `SKIFF_IDENTITY_MASTER_KEY` | generated file | 32 bytes, base64 or raw |
+| `SKIFF_IDENTITY_VERSION` | `SKIFF_AGENT_VERSION` or `dev` | Reported in health and the heartbeat |
 | `SKIFF_IDENTITY_MAIL_URL` / `_TOKEN` | unset | Forward pool mail; otherwise dev log / refusal |
 
 ## Tests
 
-`test/http.test.ts` covers path parsing (both issuer shapes), cookie scope, safe redirects and
-client credentials. The auth behaviour itself stays covered by the existing engine tests in
-`packages/core`; this app is only the process and HTTP shell.
+`test/http.test.ts` covers path parsing (both issuer shapes, passkeys, social callbacks, health and
+metrics), cookie scope, CSRF shape, safe redirects, client credentials, themed rendering and rate
+limits. `test/secrets.test.ts` covers sealing a fetched secret bundle, preserving a sealed secret
+across a desired-state push, provider replacement, health and key export/import.
+`apps/agent/src/identity-bridge.test.ts` covers the authenticated fetch, secret relay without
+logging, state push and unit start/restart/stop. The auth behaviour itself stays covered by the
+existing engine tests in `packages/core`; this app is only the process and HTTP shell.

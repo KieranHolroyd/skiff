@@ -95,12 +95,15 @@
 		}
 	});
 
-	// Keep `?path=` deep-linkable without a navigation.
+	// Keep `?path=` deep-linkable without a navigation. Compare against the parameter the effect
+	// would write, not the raw path: the root has no `?path=` at all, so comparing `path` (`/`) to
+	// the missing parameter never matches and the effect would replace state on every run forever.
 	$effect(() => {
 		const current = path;
-		if (!browser || page.url.searchParams.get('path') === current) return;
+		const parameter = current === '/' ? null : current;
+		if (!browser || page.url.searchParams.get('path') === parameter) return;
 		const url = new URL(page.url.href);
-		if (current === '/') url.searchParams.delete('path');
+		if (parameter === null) url.searchParams.delete('path');
 		else url.searchParams.set('path', current);
 		try {
 			// eslint-disable-next-line svelte/no-navigation-without-resolve -- same route, only `?path` changes

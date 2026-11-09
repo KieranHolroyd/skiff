@@ -68,6 +68,16 @@ describe('identity issuer routing (IAM.md §11.2)', () => {
 		expect(proxy.upstreams).toEqual([{ dial: '127.0.0.1:8788' }]);
 	});
 
+	test('routes the engine social callback path to the identity process too', () => {
+		const compiled = routes(compile(identity));
+		const callback = compiled.find((route) => route['@id'] === 'identity:shop:callback')!;
+		expect(callback).toBeDefined();
+		const match = (callback.match as Json[])[0]!;
+		expect((match.path_regexp as Json).pattern).toBe('^/api/v1/user-pools/shop/oauth/callback/');
+		const proxy = (callback.handle as Json[]).find((handler) => handler.handler === 'reverse_proxy')!;
+		expect(proxy.upstreams).toEqual([{ dial: '127.0.0.1:8788' }]);
+	});
+
 	test('keeps the control-plane fallback for unassigned pools', () => {
 		const compiled = routes(compile(identity));
 		const fallback = compiled.find((route) => route['@id'] === 'user-pool:discovery')!;

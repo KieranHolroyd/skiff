@@ -11,8 +11,7 @@ const registered = new Set([
 	...[...mcpSource.matchAll(/\n\ttool\(\n\t\t'([a-z_]+)',/g)].map((match) => match[1]),
 	...pipelineToolNames
 ]);
-const toolsSource = readFileSync(new URL('./tools.ts', import.meta.url), 'utf8');
-const gated = [...toolsSource.matchAll(/^\t([a-z_]+): '[a-zA-Z]+:[a-z-]+',?$/gm)].map(
+const gated = [...mcpSource.matchAll(/^\t([a-z_]+): '[a-zA-Z]+:[a-z-]+',?$/gm)].map(
 	(match) => match[1]!
 );
 

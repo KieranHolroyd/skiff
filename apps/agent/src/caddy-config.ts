@@ -302,6 +302,21 @@ export function compileIdentityIssuerRoutes(identity: IdentityDesired): CaddyRou
 	const upstream = identity.upstream.replace(/^https?:\/\//, '');
 	return identity.pools.flatMap((pool) => {
 		const id = pool.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+		const proxy = [
+			{ handler: 'encode', encodings: { zstd: {}, gzip: {} } },
+			{
+				handler: 'reverse_proxy',
+				upstreams: [{ dial: upstream }],
+				headers: {
+					request: {
+						set: {
+							'X-Forwarded-Host': ['{http.request.host}'],
+							'X-Forwarded-Proto': ['{http.request.scheme}'],
+						},
+					},
+				},
+			},
+		];
 		return [
 			{
 				'@id': `identity:${pool.id}`,
@@ -315,21 +330,23 @@ export function compileIdentityIssuerRoutes(identity: IdentityDesired): CaddyRou
 					},
 				],
 				terminal: true,
-				handle: [
-					{ handler: 'encode', encodings: { zstd: {}, gzip: {} } },
+				handle: proxy,
+			},
+			{
+				// The engine builds social callbacks against `platformOrigin`, which is the issuer
+				// host in the standalone process: keep that absolute path on the identity upstream.
+				'@id': `identity:${pool.id}:callback`,
+				match: [
 					{
-						handler: 'reverse_proxy',
-						upstreams: [{ dial: upstream }],
-						headers: {
-							request: {
-								set: {
-									'X-Forwarded-Host': ['{http.request.host}'],
-									'X-Forwarded-Proto': ['{http.request.scheme}'],
-								},
-							},
+						host: [host],
+						path_regexp: {
+							name: `skiff_identity_callback_${pool.id.replace(/[^A-Za-z0-9_]/g, '_')}`,
+							pattern: `^/api/v1/user-pools/${id}/oauth/callback/`,
 						},
 					},
 				],
+				terminal: true,
+				handle: proxy,
 			},
 		];
 	});

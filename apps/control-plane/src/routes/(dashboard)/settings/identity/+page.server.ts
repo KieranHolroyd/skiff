@@ -39,7 +39,13 @@ export const load: PageServerLoad = ({ locals }) => {
 	const oauthProviders: Record<string, UserPoolOAuthProviderView[]> = {};
 	const access: Record<
 		string,
-		{ update: boolean; credentials: boolean; delete: boolean; manageUsers: boolean }
+		{
+			update: boolean;
+			credentials: boolean;
+			delete: boolean;
+			manageUsers: boolean;
+			impersonate: boolean;
+		}
 	> = {};
 	for (const pool of pools) {
 		clients[pool.id] = core.userPools.listClients(principal, pool.id);
@@ -49,7 +55,8 @@ export const load: PageServerLoad = ({ locals }) => {
 			update: core.iam.can(principal, 'userPool:update', resource),
 			credentials: core.iam.can(principal, 'userPool:credentials', resource),
 			delete: core.iam.can(principal, 'userPool:delete', resource),
-			manageUsers
+			manageUsers,
+			impersonate: core.iam.can(principal, 'userPool:impersonate-user', resource)
 		};
 		if (access[pool.id]!.credentials)
 			oauthProviders[pool.id] = core.userPools.listOAuthProviders(principal, pool.id);
@@ -311,6 +318,56 @@ export const actions: Actions = {
 		try {
 			core.userPools.removeGroupMember(principal, poolId, groupId, userId);
 			return { success: 'Member removed.' };
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	/** Start a support-impersonation session (IAM.md I29); the token is returned once. */
+	impersonateUser: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const poolId = formString(data, 'poolId');
+		const userId = formString(data, 'userId');
+		if (!poolId || !userId) return fail(400, { message: 'Missing pool or user id.' });
+		const ttlText = formOptionalString(data, 'ttlSeconds');
+		const ttlSeconds = ttlText ? Number(ttlText) : undefined;
+		if (ttlText && (!Number.isInteger(ttlSeconds) || (ttlSeconds ?? 0) <= 0))
+			return fail(400, { message: 'The impersonation lifetime must be a positive number of seconds.' });
+		try {
+			const impersonation = core.userPools.impersonateUser(principal, poolId, userId, {
+				...(ttlSeconds ? { ttlSeconds } : {})
+			});
+			return {
+				success: `Impersonation session for ${impersonation.user.email} started. It ends on its own, or use Stop impersonation.`,
+				impersonation: {
+					userId: impersonation.user.id,
+					email: impersonation.user.email,
+					token: impersonation.token,
+					expiresAt: impersonation.session.expiresAt,
+					impersonatedBy: impersonation.session.impersonatedBy
+				}
+			};
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	/** End support impersonation for one user; their own normal sessions stay signed in. */
+	endImpersonation: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const poolId = formString(data, 'poolId');
+		const userId = formString(data, 'userId');
+		if (!poolId || !userId) return fail(400, { message: 'Missing pool or user id.' });
+		try {
+			const result = core.userPools.endImpersonation(principal, poolId, userId);
+			return {
+				success:
+					result.revoked > 0
+						? `Ended ${result.revoked} impersonation session${result.revoked === 1 ? '' : 's'}.`
+						: 'That user has no active impersonation session.'
+			};
 		} catch (cause) {
 			return failure(cause);
 		}

@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,6 +14,67 @@ const dir = mkdtempSync(join(tmpdir(), 'skiff-access-keys-'));
 const opened = createDb({ path: ':memory:' });
 let now = Date.parse('2026-11-08T12:00:00Z');
 let core: Core;
+let apiKeySequence = 0;
+
+/**
+ * Exactly what `@better-auth/api-key` 1.7.15's `defaultKeyHasher` does:
+ * `base64url(sha256(utf8(raw)))` with no padding.
+ */
+function betterAuthHash(raw: string): string {
+	return createHash('sha256').update(raw).digest('base64url');
+}
+
+function addMembership(userId: string, orgId = 'org_1', createdAt = '2026-01-01T00:00:00.000Z'): void {
+	opened.sqlite.run(
+		'INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES (?, ?, ?, ?, ?)',
+		[`mem_${userId}_${orgId}`, orgId, userId, 'owner', createdAt],
+	);
+}
+
+/** Insert a Better Auth `apikey` row, including the hash its plugin would have stored. */
+function insertApiKey(
+	overrides: {
+		raw?: string;
+		referenceId?: string;
+		name?: string | null;
+		prefix?: string | null;
+		start?: string | null;
+		enabled?: boolean;
+		expiresAt?: string | null;
+		createdAt?: string;
+		lastRequest?: string | null;
+		metadata?: string | null;
+		hash?: string;
+	} = {},
+): { id: string; raw: string; hash: string } {
+	apiKeySequence++;
+	const raw =
+		overrides.raw ??
+		`skif_${'A'.repeat(63)}${'ABCDEFGHIJKLMNOPQRSTUVWXYZ'[apiKeySequence % 26]}`;
+	const id = `apikey_${apiKeySequence}`;
+	const hash = overrides.hash ?? betterAuthHash(raw);
+	opened.sqlite.run(
+		`INSERT INTO apikey
+		   (id, referenceId, name, prefix, start, key, enabled, expiresAt, createdAt, lastRequest, metadata)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		[
+			id,
+			overrides.referenceId ?? 'user_1',
+			overrides.name === undefined ? 'Legacy CLI' : overrides.name,
+			overrides.prefix === undefined ? 'skif_' : overrides.prefix,
+			overrides.start === undefined ? 'skif_A' : overrides.start,
+			hash,
+			overrides.enabled === false ? 0 : 1,
+			overrides.expiresAt === undefined ? '2026-12-01T00:00:00.000Z' : overrides.expiresAt,
+			overrides.createdAt ?? '2026-11-01T00:00:00.000Z',
+			overrides.lastRequest ?? null,
+			overrides.metadata === undefined
+				? JSON.stringify({ scopes: ['project:read'], orgId: 'org_1' })
+				: overrides.metadata,
+		],
+	);
+	return { id, raw, hash };
+}
 
 function open(): Core {
 	return createCore({
@@ -58,6 +120,7 @@ function row(id: string): { hash: string; last_used_at: number | null; last_used
 
 beforeEach(() => {
 	now = Date.parse('2026-11-08T12:00:00Z');
+	apiKeySequence = 0;
 	opened.sqlite.exec(`
 		DELETE FROM access_keys;
 		DELETE FROM service_accounts;
@@ -69,6 +132,22 @@ beforeEach(() => {
 		DELETE FROM iam_state;
 		CREATE TABLE IF NOT EXISTS member (id TEXT PRIMARY KEY, organizationId TEXT, userId TEXT, role TEXT, createdAt TEXT);
 		DELETE FROM member;
+		CREATE TABLE IF NOT EXISTS user (id TEXT PRIMARY KEY, lastOrganizationId TEXT);
+		DELETE FROM user;
+		CREATE TABLE IF NOT EXISTS apikey (
+			id TEXT PRIMARY KEY,
+			referenceId TEXT NOT NULL,
+			name TEXT,
+			prefix TEXT,
+			start TEXT,
+			key TEXT NOT NULL,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			expiresAt TEXT,
+			createdAt TEXT NOT NULL,
+			lastRequest TEXT,
+			metadata TEXT
+		);
+		DELETE FROM apikey;
 	`);
 	core = open();
 });
@@ -323,5 +402,172 @@ describe('access keys', () => {
 		expect(core.ctx.accessKeys.list(accountPrincipal).map((key) => key.id)).toEqual([
 			created.accessKey.id,
 		]);
+	});
+});
+
+describe('Better Auth key migration (spike S1)', () => {
+	test('a Better Auth hash verifies, and scopes/expiry/start are preserved', () => {
+		addMembership('user_1');
+		const legacy = insertApiKey({
+			name: 'Legacy CLI',
+			start: 'skif_A',
+			metadata: JSON.stringify({
+				scopes: ['project:read', 'deployment:read', 'not-a-permission'],
+				orgId: 'org_1',
+			}),
+			expiresAt: '2026-12-01T00:00:00.000Z',
+			createdAt: '2026-11-01T00:00:00.000Z',
+		});
+		expect(legacy.hash).toMatch(/^[A-Za-z0-9_-]{43}$/);
+
+		// Better Auth's format is 43 base64url characters, not Skiff's 64 hex characters.
+		expect(legacy.hash).toBe(betterAuthHash(legacy.raw));
+
+		const result = core.ctx.accessKeys.migrateBetterAuthKeys('org_1', principal());
+		expect(result).toEqual({
+			examined: 1,
+			migrated: 1,
+			alreadyMigrated: 0,
+			disabled: 0,
+			skippedNoOrg: 0,
+			skippedOtherOrg: 0,
+			skippedInvalid: 0,
+		});
+
+		const verified = core.ctx.accessKeys.verify(legacy.raw);
+		expect(verified).toMatchObject({
+			orgId: 'org_1',
+			principalType: 'user',
+			principalId: 'user_1',
+			permissions: ['project:read', 'deployment:read'],
+			resources: undefined,
+		});
+		expect(verified?.keyId).toMatch(/^ak_/);
+
+		const stored = opened.sqlite
+			.query<{
+				hash: string;
+				hash_scheme: string;
+				name: string;
+				prefix: string;
+				start: string;
+				restriction_json: string;
+				expires_at: number | null;
+				created_at: number;
+			}, [string]>(
+				`SELECT hash, hash_scheme, name, prefix, start, restriction_json, expires_at, created_at
+				   FROM access_keys WHERE id = ?`,
+			)
+			.get(verified!.keyId)!;
+		expect(stored).toMatchObject({
+			hash: betterAuthHash(legacy.raw),
+			hash_scheme: 'better-auth',
+			name: 'Legacy CLI',
+			prefix: 'skif_',
+			start: 'skif_A',
+			expires_at: Date.parse('2026-12-01T00:00:00.000Z'),
+			created_at: Date.parse('2026-11-01T00:00:00.000Z'),
+		});
+		expect(JSON.parse(stored.restriction_json)).toEqual({
+			permissions: ['project:read', 'deployment:read'],
+		});
+	});
+
+	test('migration is idempotent by hash and leaves the apikey row for the fallback', () => {
+		addMembership('user_1');
+		const legacy = insertApiKey();
+
+		// Before the copy, `verify` has no row: the control plane's Better Auth fallback handles it.
+		expect(core.ctx.accessKeys.verify(legacy.raw)).toBeUndefined();
+
+		const first = core.ctx.accessKeys.migrateBetterAuthKeys(undefined, principal());
+		expect(first).toMatchObject({ examined: 1, migrated: 1, alreadyMigrated: 0 });
+		expect(core.ctx.accessKeys.verify(legacy.raw)).toBeDefined();
+
+		const second = core.ctx.accessKeys.migrateBetterAuthKeys(undefined, principal());
+		expect(second).toMatchObject({ examined: 1, migrated: 0, alreadyMigrated: 1 });
+		expect(
+			opened.sqlite.query<{ count: number }, []>('SELECT count(*) AS count FROM access_keys').get()?.count,
+		).toBe(1);
+		// The migration never deletes Better Auth's source rows.
+		expect(
+			opened.sqlite.query<{ count: number }, []>('SELECT count(*) AS count FROM apikey').get()?.count,
+		).toBe(1);
+	});
+
+	test('an expired Better Auth key keeps its expiry and still does not verify', () => {
+		addMembership('user_1');
+		const legacy = insertApiKey({ expiresAt: '2026-11-08T11:59:00.000Z' });
+
+		expect(core.ctx.accessKeys.migrateBetterAuthKeys('org_1', principal()).migrated).toBe(1);
+		expect(core.ctx.accessKeys.verify(legacy.raw)).toBeUndefined();
+		const stored = opened.sqlite
+			.query<{ expires_at: number | null }, [string]>('SELECT expires_at FROM access_keys WHERE hash = ?')
+			.get(betterAuthHash(legacy.raw));
+		expect(stored?.expires_at).toBe(Date.parse('2026-11-08T11:59:00.000Z'));
+	});
+
+	test('a disabled Better Auth key is migrated already revoked', () => {
+		addMembership('user_1');
+		const legacy = insertApiKey({ enabled: false });
+
+		const result = core.ctx.accessKeys.migrateBetterAuthKeys('org_1', principal());
+		expect(result).toMatchObject({ migrated: 1, disabled: 1 });
+		expect(core.ctx.accessKeys.verify(legacy.raw)).toBeUndefined();
+		const stored = opened.sqlite
+			.query<{ revoked_at: number | null }, [string]>('SELECT revoked_at FROM access_keys WHERE hash = ?')
+			.get(betterAuthHash(legacy.raw));
+		expect(stored?.revoked_at).toBe(now);
+	});
+
+	test('a key whose owner has no org is skipped, and an org read-all caller is pinned to its org', () => {
+		addMembership('user_1', 'org_2');
+		const otherOrg = insertApiKey({ referenceId: 'user_1' });
+		const noOrg = insertApiKey({ referenceId: 'user_without_org', start: 'skif_B' });
+
+		const orgOne = limited(['accessKey:read', 'accessKey:read-all']);
+		const result = core.ctx.accessKeys.migrateBetterAuthKeys('org_2', orgOne);
+		// The caller's own org wins over the argument, so org_2 is out of scope and no-org is skipped.
+		expect(result).toMatchObject({
+			examined: 2,
+			migrated: 0,
+			skippedOtherOrg: 1,
+			skippedNoOrg: 1,
+		});
+		expect(core.ctx.accessKeys.verify(otherOrg.raw)).toBeUndefined();
+		expect(core.ctx.accessKeys.verify(noOrg.raw)).toBeUndefined();
+	});
+
+	test('a raw or unhashed apikey row is reported as unmigratable', () => {
+		addMembership('user_1');
+		const raw = `skif_${'B'.repeat(64)}`;
+		const legacy = insertApiKey({ raw, hash: raw });
+
+		const result = core.ctx.accessKeys.migrateBetterAuthKeys('org_1', principal());
+		expect(result).toMatchObject({ examined: 1, migrated: 0, skippedInvalid: 1 });
+		expect(core.ctx.accessKeys.recognizes(legacy.raw)).toBe(false);
+	});
+
+	test('a revoked migrated key is still recognised, so the Better Auth fallback cannot revive it', () => {
+		addMembership('user_1');
+		const legacy = insertApiKey();
+
+		expect(core.ctx.accessKeys.recognizes(legacy.raw)).toBe(false);
+		core.ctx.accessKeys.migrateBetterAuthKeys('org_1', principal());
+		expect(core.ctx.accessKeys.recognizes(legacy.raw)).toBe(true);
+
+		const created = core.ctx.accessKeys.list(principal())[0]!;
+		core.ctx.accessKeys.revoke(principal(), created.id);
+		expect(core.ctx.accessKeys.verify(legacy.raw)).toBeUndefined();
+		// The principal.ts fallback gate uses this: `true` means the apikey row must not be tried.
+		expect(core.ctx.accessKeys.recognizes(legacy.raw)).toBe(true);
+	});
+
+	test('a non-platform caller without accessKey:read-all cannot run the migration', () => {
+		addMembership('user_1');
+		insertApiKey();
+		expect(() =>
+			core.ctx.accessKeys.migrateBetterAuthKeys(undefined, limited(['accessKey:read'])),
+		).toThrow(ForbiddenError);
 	});
 });

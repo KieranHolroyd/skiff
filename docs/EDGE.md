@@ -26,7 +26,9 @@ client IP is in `CF-Connecting-IP`.
 - Admin API: `unix//var/lib/caddy/admin.sock` only. TCP `:2019` is not bound.
 - Cloudflare token: `/etc/caddy/cloudflare.token` (`root:caddy`, `0640`), read at config load
   with `{file./etc/caddy/cloudflare.token}`. It needs `Zone:DNS:Edit` on both zones and is
-  required for DNS-01 renewals.
+  required for DNS-01 renewals. The installer asks for it whenever HTTPS is on and exports
+  `SKIFF_CLOUDFLARE_TOKEN_FILE` to the agent, which passes the token to Caddy's DNS-01 handler;
+  a host without it serves no wildcard certificate and every site fails at the edge with 525.
 
 `/etc/systemd/system/caddy.service.d/override.conf`:
 

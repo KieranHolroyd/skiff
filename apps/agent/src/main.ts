@@ -165,7 +165,7 @@ class AgentRuntime {
 	private projectByHost = new Map<string, string>();
 	private readonly usedTokens = new UsedTokenCache();
 	/** Brief cache of verified Skiff Access decisions (IAM.md §11.1, S6). */
-	private readonly accessCache = new AccessDecisionCache();
+	private readonly accessCache: AccessDecisionCache;
 
 	private caddyOk = false;
 	private running = true;
@@ -206,6 +206,7 @@ class AgentRuntime {
 
 	constructor(config: AgentConfig) {
 		this.config = config;
+		this.accessCache = new AccessDecisionCache(config.accessCacheMs);
 		this.store = new DesiredStateStore(config.dataDir);
 		this.releases = new ReleaseManager(config.dataDir);
 		this.caddy = new CaddyAdmin(config.caddyAdminSocket);
@@ -244,6 +245,14 @@ class AgentRuntime {
 		this.poolIdentity = new IdentityBridge({
 			socketPath: process.env.SKIFF_IDENTITY_SOCKET?.trim() || '/run/skiff/identity.sock',
 			helper: this.helper,
+			controlUrl: config.controlUrl,
+			nodeToken: config.nodeToken,
+			version: config.agentVersion,
+			onStatusChange: () => {
+				// Health changes the Caddy fallback decision, so converge even when desired state is
+				// unchanged (a recovered unit must get its assigned pools back).
+				this.convergedVersion = null;
+			},
 			log,
 		});
 		this.storage = new StorageRequester(config.storageStateFile, config.storageRequestFile);
@@ -853,7 +862,12 @@ class AgentRuntime {
 
 		const tls = this.config.tls ? this.tlsOptions(state) : undefined;
 		const caddyConfig = buildCaddyConfig({
-			state,
+			// An unhealthy identity unit falls back to the control plane's hosted/OIDC routes, so a
+			// restart loop cannot take every assigned pool offline (§11.2).
+			state:
+				state.identity && !this.poolIdentity.isHealthy
+					? { ...state, identity: null }
+					: state,
 			// With TLS enabled Caddy owns :443 and site-config adds the :80 redirect server.
 			listen: tls ? [':443'] : this.config.caddyListen,
 			dataDir: this.config.dataDir,
@@ -1288,6 +1302,7 @@ class AgentRuntime {
 			...(diskMountReport.diskMounts.length > 0 ? { diskMounts: diskMountReport.diskMounts } : {}),
 			...(diskMountReport.unmountedDisks.length > 0 ? { unmountedDisks: diskMountReport.unmountedDisks } : {}),
 			...(volumeProfileResults.length > 0 ? { volumeProfileResults } : {}),
+			...(this.poolIdentity.isActive ? { identityStatus: this.poolIdentity.status() } : {}),
 		};
 
 		const parsed = heartbeatSchema.safeParse(body);

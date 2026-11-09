@@ -2,13 +2,20 @@
  * Access keys in a Skiff table (IAM.md I14, §4, §7.2, §12).
  *
  * A key belongs to one org and one principal: a user or a service account (`sa_…`). The raw
- * `skif_…` key is returned exactly once, from `create`; only its SHA-256 hex hash is stored. The
+ * `skif_…` key is returned exactly once, from `create`; only its hash is stored. The
  * `prefix` (`skif_`) and `start` (the first eight visible characters) are kept so a key can be
  * recognised in the list without revealing it.
  *
- * Hash format decision: this table uses `sha256(raw)` hex. It deliberately does not try to match
- * Better Auth's `apikey` hash format. Migrating those rows (spike S1) is still open, so the control
- * plane keeps verifying Better Auth keys first and only falls through to `verify` here.
+ * Hash format decision (spike S1, answered): new Skiff keys are `skif_` + 43 base64url characters
+ * and are stored as `sha256(raw)` lowercase hex (`hash_scheme = 'sha256'`, 64 chars).
+ *
+ * Better Auth 1.7.15's `@better-auth/api-key` generates `skif_` + 64 ASCII letters
+ * (`defaultKeyLength = 64`, alphabet `a-z`/`A-Z`) and its `defaultKeyHasher` stores
+ * `base64url(sha256(raw))` without padding (43 chars). Its `apikey.key` column is already that
+ * hash. Because its format is distinguishable but not self-describing, migrated rows keep the
+ * original hash verbatim and carry `hash_scheme = 'better-auth'`; `verify` checks the explicit
+ * scheme column rather than guessing. A migrated key therefore verifies here without being
+ * reissued, and its `apikey` row is left untouched as the fallback for rows not migrated yet.
  *
  * `restriction_json` is the credential's ceiling (`{ permissions, resources }`, IAM.md §2): it never
  * adds access, only narrows the principal's bindings. `allowed_cidrs` is enforced by the same
@@ -16,13 +23,27 @@
  * carries no IP.
  */
 import type { Database } from 'bun:sqlite';
-import { ipInCidr, isHumanPrincipal, isPermission, type Permission, type Principal } from '@skiff/contracts';
+import { createHash } from 'node:crypto';
+import {
+	canMaintainPlatform,
+	ipInCidr,
+	isHumanPrincipal,
+	isPermission,
+	type Permission,
+	type Principal,
+} from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
 import { ForbiddenError, NotFoundError, ValidationError } from './errors.ts';
 import { newId, parseJson, randomToken, sha256Hex } from './util.ts';
 
 /** The visible prefix of every Skiff access key. */
 export const ACCESS_KEY_PREFIX = 'skif_';
+
+/** How a `access_keys.hash` value was produced. New rows always use `sha256`. */
+export type AccessKeyHashScheme = 'sha256' | 'better-auth';
+
+/** Better Auth's `base64url(sha256(raw))` without padding, as `defaultKeyHasher` emits it. */
+const BETTER_AUTH_HASH_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 const MAX_NAME = 100;
 /** At most one year; org policy may lower this when it lands (IAM.md §7.2). */
@@ -77,6 +98,39 @@ export interface AccessKeyVerification {
 	keyId: string;
 }
 
+/** Counts from one `migrateBetterAuthKeys` run. Safe to run repeatedly. */
+export interface AccessKeyMigrationResult {
+	/** `apikey` rows read. */
+	examined: number;
+	/** Rows inserted into `access_keys`. */
+	migrated: number;
+	/** Rows already present (idempotency is by hash), so nothing was written. */
+	alreadyMigrated: number;
+	/** Migrated rows that were disabled in Better Auth; they are inserted already revoked. */
+	disabled: number;
+	/** Rows skipped because the owner has no org membership, so no `org_id` can be chosen. */
+	skippedNoOrg: number;
+	/** Rows outside the requested org (only when an org filter was given). */
+	skippedOtherOrg: number;
+	/** Rows whose `apikey.key` is not a Better Auth base64url SHA-256 hash. */
+	skippedInvalid: number;
+}
+
+/** The subset of Better Auth's `apikey` row the migration reads. */
+interface BetterAuthApiKeyRow {
+	id: string;
+	referenceId: string;
+	name: string | null;
+	prefix: string | null;
+	start: string | null;
+	key: string;
+	enabled: number | boolean | string | null;
+	expiresAt: string | number | null;
+	createdAt: string | number | null;
+	lastRequest: string | number | null;
+	metadata: string | null;
+}
+
 interface AccessKeyRow {
 	id: string;
 	org_id: string;
@@ -86,6 +140,7 @@ interface AccessKeyRow {
 	prefix: string;
 	start: string;
 	hash: string;
+	hash_scheme: AccessKeyHashScheme;
 	restriction_json: string;
 	allowed_cidrs: string;
 	expires_at: number | null;
@@ -198,9 +253,10 @@ export class AccessKeyService {
 
 		this.#sqlite.run(
 			`INSERT INTO access_keys
-			   (id, org_id, principal_type, principal_id, name, prefix, start, hash, restriction_json,
-			    allowed_cidrs, expires_at, last_used_at, last_used_ip_hash, created_by, revoked_at, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, ?)`,
+			   (id, org_id, principal_type, principal_id, name, prefix, start, hash, hash_scheme,
+			    restriction_json, allowed_cidrs, expires_at, last_used_at, last_used_ip_hash,
+			    created_by, revoked_at, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'sha256', ?, ?, ?, NULL, NULL, ?, NULL, ?)`,
 			[
 				id,
 				principal.orgId,
@@ -305,13 +361,13 @@ export class AccessKeyService {
 	 * Verify a raw key. Returns `undefined` for an unknown, revoked or expired key, a mismatched
 	 * CIDR, a disabled service account, or an allowed-CIDR key presented without an IP.
 	 *
-	 * A successful use records `last_used_at` and a truncated IP hash, at most once a minute.
+	 * Both hash schemes are checked by their explicit `hash_scheme`, so a migrated Better Auth key
+	 * verifies with no change to the raw value. A successful use records `last_used_at` and a
+	 * truncated IP hash, at most once a minute.
 	 */
 	verify(raw: string, options: { ip?: string; now?: number } = {}): AccessKeyVerification | undefined {
 		if (!raw.startsWith(ACCESS_KEY_PREFIX)) return undefined;
-		const row = this.#sqlite
-			.query<AccessKeyRow, [string]>('SELECT * FROM access_keys WHERE hash = ?')
-			.get(sha256Hex(raw));
+		const row = this.#findByRaw(raw);
 		if (!row || row.principal_type !== 'user' && row.principal_type !== 'serviceAccount')
 			return undefined;
 
@@ -340,7 +396,153 @@ export class AccessKeyService {
 		};
 	}
 
+	/**
+	 * Whether this raw key belongs to an `access_keys` row, even one `verify` would reject
+	 * (revoked, expired, CIDR mismatch). The control plane uses this to decide whether the Better
+	 * Auth fallback may run: once a key is migrated, `access_keys` is authoritative, so revoking or
+	 * expiring it here cannot be undone by the untouched `apikey` row.
+	 */
+	recognizes(raw: string): boolean {
+		return raw.startsWith(ACCESS_KEY_PREFIX) && this.#findByRaw(raw) !== undefined;
+	}
+
+	// ---------------------------------------------------------------- Better Auth migration
+
+	/**
+	 * Copy Better Auth `apikey` rows into `access_keys` without reissuing keys (spike S1, IAM.md
+	 * §4/§14). The hash is preserved verbatim and marked `better-auth`, so `verify` accepts the same
+	 * raw key. Rows are idempotent by hash; `apikey` is never modified or deleted, which keeps the
+	 * control plane's Better Auth fallback working for anything this run skips.
+	 *
+	 * `orgId` filters the run (a platform admin may also omit it to migrate every org). A caller
+	 * without platform maintenance is pinned to its own org. Only user-referenced keys are
+	 * migrated: Better Auth's plugin here uses `references: 'user'` (auth.ts does not override it),
+	 * and a key with no resolvable membership has nowhere to belong.
+	 */
+	migrateBetterAuthKeys(orgId?: string, principal?: Principal): AccessKeyMigrationResult {
+		const maintainsPlatform = principal !== undefined && canMaintainPlatform(principal);
+		if (principal && !maintainsPlatform && !principal.permissions.has('accessKey:read-all'))
+			throw new ForbiddenError('accessKey:read-all');
+
+		const scopedOrgId = principal && !maintainsPlatform ? principal.orgId : (orgId?.trim() || undefined);
+		const result: AccessKeyMigrationResult = {
+			examined: 0,
+			migrated: 0,
+			alreadyMigrated: 0,
+			disabled: 0,
+			skippedNoOrg: 0,
+			skippedOtherOrg: 0,
+			skippedInvalid: 0,
+		};
+		const now = this.ctx.now();
+		const orgByUser = new Map<string, string | null>();
+
+		this.#sqlite.transaction(() => {
+			for (const apiKey of this.#betterAuthKeyRows()) {
+				result.examined++;
+
+				if (!BETTER_AUTH_HASH_PATTERN.test(apiKey.key)) {
+					result.skippedInvalid++;
+					continue;
+				}
+				const existing = this.#sqlite
+					.query<{ id: string }, [string]>('SELECT id FROM access_keys WHERE hash = ?')
+					.get(apiKey.key);
+				if (existing) {
+					result.alreadyMigrated++;
+					continue;
+				}
+
+				let userOrg = orgByUser.get(apiKey.referenceId);
+				if (userOrg === undefined) {
+					userOrg = preferredOrgForUser(this.#sqlite, apiKey.referenceId) ?? null;
+					orgByUser.set(apiKey.referenceId, userOrg);
+				}
+				if (!userOrg) {
+					result.skippedNoOrg++;
+					continue;
+				}
+				if (scopedOrgId && userOrg !== scopedOrgId) {
+					result.skippedOtherOrg++;
+					continue;
+				}
+
+				const permissions = betterAuthScopes(apiKey.metadata);
+				const restriction = JSON.stringify(permissions ? { permissions } : {});
+				const start = (apiKey.start ?? apiKey.prefix ?? ACCESS_KEY_PREFIX).slice(0, 8);
+				const disabled =
+					apiKey.enabled === 0 || apiKey.enabled === false || apiKey.enabled === '0' || apiKey.enabled === 'false';
+				this.#sqlite.run(
+					`INSERT INTO access_keys
+					   (id, org_id, principal_type, principal_id, name, prefix, start, hash, hash_scheme,
+					    restriction_json, allowed_cidrs, expires_at, last_used_at, last_used_ip_hash,
+					    created_by, revoked_at, created_at)
+					 VALUES (?, ?, 'user', ?, ?, ?, ?, ?, 'better-auth', ?, '[]', ?, ?, NULL, ?, ?, ?)`,
+					[
+						newId('ak_'),
+						userOrg,
+						apiKey.referenceId,
+						migratedName(apiKey.name, start),
+						apiKey.prefix?.trim() || ACCESS_KEY_PREFIX,
+						start,
+						apiKey.key,
+						restriction,
+						epochFrom(apiKey.expiresAt),
+						epochFrom(apiKey.lastRequest),
+						apiKey.referenceId,
+						disabled ? now : null,
+						epochFrom(apiKey.createdAt) ?? now,
+					],
+				);
+				result.migrated++;
+				if (disabled) result.disabled++;
+			}
+		})();
+
+		if (principal) {
+			this.ctx.audit.record({
+				principal,
+				action: 'access_key.migrate',
+				resource: 'access_key',
+				resourceId: scopedOrgId ?? 'all',
+				args: { orgId: scopedOrgId ?? null, ...result },
+				result: 'ok',
+			});
+		}
+		return result;
+	}
+
 	// ---------------------------------------------------------------- internals
+
+	#findByRaw(raw: string): AccessKeyRow | undefined {
+		return (
+			this.#findByHash(sha256Hex(raw), 'sha256') ??
+			this.#findByHash(betterAuthKeyHash(raw), 'better-auth')
+		);
+	}
+
+	#findByHash(hash: string, scheme: AccessKeyHashScheme): AccessKeyRow | undefined {
+		return this.#sqlite
+			.query<AccessKeyRow, [string, string]>(
+				'SELECT * FROM access_keys WHERE hash = ? AND hash_scheme = ?',
+			)
+			.get(hash, scheme) ?? undefined;
+	}
+
+	#betterAuthKeyRows(): BetterAuthApiKeyRow[] {
+		try {
+			return this.#sqlite
+				.query<BetterAuthApiKeyRow, []>(
+					`SELECT id, referenceId, name, prefix, start, key, enabled, expiresAt, createdAt,
+					        lastRequest, metadata
+					   FROM apikey`,
+				)
+				.all();
+		} catch {
+			// Better Auth's table is created at boot; a unit-test database may not have it.
+			return [];
+		}
+	}
 
 	#touch(row: AccessKeyRow, ip: string | undefined, now: number): void {
 		const ipHash = ip ? hashUsageIp(ip) : row.last_used_ip_hash;
@@ -500,6 +702,76 @@ function parseRestriction(json: string): { permissions?: Permission[]; resources
 function parseStringArray(json: string): string[] {
 	const value = parseJson<unknown>(json, []);
 	return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
+}
+
+/**
+ * Better Auth `@better-auth/api-key` 1.7.15 `defaultKeyHasher`: SHA-256 of the UTF-8 raw key,
+ * base64url-encoded without padding. This is the value stored in `apikey.key`; migrated rows keep
+ * it verbatim under `hash_scheme = 'better-auth'`.
+ */
+function betterAuthKeyHash(raw: string): string {
+	return createHash('sha256').update(raw).digest('base64url');
+}
+
+/** `metadata.scopes` from a Better Auth row, filtered to permissions this catalog knows. */
+function betterAuthScopes(metadata: string | null): Permission[] | undefined {
+	const value = parseJson<unknown>(metadata, null);
+	if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+	const scopes = (value as Record<string, unknown>).scopes;
+	if (!Array.isArray(scopes)) return undefined;
+	const out: Permission[] = [];
+	for (const scope of scopes) {
+		if (typeof scope !== 'string') continue;
+		const permission = scope.trim();
+		if (!isPermission(permission) || out.includes(permission)) continue;
+		out.push(permission);
+	}
+	return out.length > 0 ? out : undefined;
+}
+
+/**
+ * The org a migrated user key belongs to: the org the user last worked in, else their first
+ * membership (the same rule `principalFromSession` uses, IAM.md I5, §8.1). The `user` table is
+ * Better Auth's and may be absent in a unit-test database, so failures fall through.
+ */
+function preferredOrgForUser(sqlite: Database, userId: string): string | undefined {
+	try {
+		const preferred = sqlite
+			.query<{ orgId: string }, [string]>(
+				`SELECT m.organizationId AS orgId
+				   FROM user u
+				   JOIN member m ON m.userId = u.id AND m.organizationId = u.lastOrganizationId
+				  WHERE u.id = ?
+				  LIMIT 1`,
+			)
+			.get(userId);
+		if (preferred) return preferred.orgId;
+	} catch {
+		// No `user` table (unit tests / bootstrapping) or no lastOrganizationId column yet.
+	}
+	try {
+		return sqlite
+			.query<{ orgId: string }, [string]>(
+				'SELECT organizationId AS orgId FROM member WHERE userId = ? ORDER BY createdAt ASC LIMIT 1',
+			)
+			.get(userId)?.orgId;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Better Auth stores dates as ISO-8601 text through its SQLite adapter; accept epoch too. */
+function epochFrom(value: string | number | null): number | null {
+	if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+	if (typeof value !== 'string' || !value) return null;
+	const parsed = Date.parse(value);
+	return Number.isFinite(parsed) ? parsed : null;
+}
+
+/** A migrated row needs a display name; `apikey.name` is optional and capped at 32 by the plugin. */
+function migratedName(name: string | null, start: string): string {
+	const cleaned = (name ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
+	return (cleaned || `Migrated key ${start}`).slice(0, MAX_NAME);
 }
 
 /** Validation only; `ipInCidr` does the matching. IPv6 fails closed until the engine supports it. */

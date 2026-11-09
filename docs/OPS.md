@@ -431,9 +431,16 @@ checkout with `SKIFF_SOURCE_DIR=/path/to/skiff`.
    Bun's resolver otherwise). It shows each name as resolving to this server, resolving elsewhere
    (normal behind a Cloudflare proxy), or not resolving. If records are missing, an interactive
    run offers **re-check / continue anyway / quit**, so you can wait for propagation without
-   restarting. `--yes` warns and continues; `--skip-dns-check` skips it. The installer never
-   asks for a DNS API token. A `--cloudflare-token-file` (default
-   `/etc/caddy/cloudflare.token`) is used for DNS-01 only if that file already exists.
+   restarting. `--yes` warns and continues; `--skip-dns-check` skips it.
+   When HTTPS is on, the installer then asks for a **Cloudflare DNS token** (input is not echoed)
+   and writes it to `--cloudflare-token-file` (default `/etc/caddy/cloudflare.token`, `root:caddy`,
+   `0640`). Sites share the wildcard certificate `*.<content domain>`, which Let's Encrypt only
+   issues over DNS-01, and the Skiff Caddy build only has the Cloudflare provider, so the token is
+   not optional: without it every deployed site returns Cloudflare error 525. The token is checked
+   against `GET /user/tokens/verify` before anything is written; a rejected token stops the install,
+   while an unreachable Cloudflare only warns. Pass `--cloudflare-token-file <path>` (or
+   `SKIFF_CLOUDFLARE_TOKEN_FILE`) to skip the prompt on unattended installs; a fresh HTTPS install
+   with no token fails in preflight, an `--upgrade` warns so an existing host is never blocked.
 2. **Users/dirs** — `skiff` user (member of `caddy`), `/opt/skiff`, `/var/lib/skiff`,
    `/etc/skiff`, `/run/skiff` (2770 root:caddy).
 3. **Secrets** — generates the master key, sealed with `systemd-creds` into
@@ -456,7 +463,10 @@ checkout with `SKIFF_SOURCE_DIR=/path/to/skiff`.
    store current and never adds one unless `--clickhouse` is given.
 7. **Services** — writes hardened units (control plane, agent, helper), fixes Caddy's admin socket
    mode (`0660`, group `caddy`), adds the `skiff` supplementary group to Caddy so it can read
-   release artifacts, starts the helper, then the control plane.
+   release artifacts, starts the helper, then the control plane. The drop-in only applies to a
+   process systemd starts, so the installer inspects the **running** Caddy's groups (`/proc/<pid>`)
+   and restarts it when they are stale — otherwise Caddy cannot read `/var/lib/skiff/agent` and
+   every site answers 403 while the node looks healthy.
 8. **Caddy bootstrap fix** — points the platform vhost at `unix//run/skiff/control.sock`, then the
    agent takes over the whole Caddy config (platform + content routes) via the admin API.
 9. **Node enrolment** — creates the edge node (or reuses it), rotates its token, writes
@@ -488,9 +498,15 @@ checkout with `SKIFF_SOURCE_DIR=/path/to/skiff`.
    tier; the `microvm` tier needs a Podman-usable Kata runtime and `/dev/kvm`.
    `SKIFF_PIPELINE_CONTROL_URL` is the control-plane URL as seen from inside a job container when it
    differs. Jobs heartbeat every 15 s; a job whose node stops responding for 60 s fails.
-10. **Health** — waits for the public platform URL, then, while no owner exists, prints the
-   one-time setup link (`https://<platform>/setup?token=…`, §3.5). `--admin-email` only prefills
-   the wizard's email field.
+10. **Health** — waits for the public platform URL, then checks **site TLS**: it handshakes with
+   the origin on `127.0.0.1:443` using a random unused label under the content domain, which only
+   the wildcard certificate covers. If Caddy is not serving it within three minutes (missing or
+   revoked DNS token, wrong zone, Let's Encrypt rate limit), the installer prints the cause and the
+   commands to check (`journalctl -u caddy | grep tls.obtain`) and repeats the warning in the final
+   summary — the install still succeeds, because rolling it back would not fix a pending
+   certificate. Then, while no owner exists, it prints the one-time setup link
+   (`https://<platform>/setup?token=…`, §3.5). `--admin-email` only prefills the wizard's email
+   field.
 
 The installer is idempotent; re-running builds a new release and rolls back the symlink if the
 health check fails. `--dry-run` prints the plan, `--uninstall [--purge]` removes services/data.
@@ -500,9 +516,28 @@ health check fails. `--dry-run` prints the plan, `--uninstall [--purge]` removes
 ```sh
 systemctl status caddy skiff-control-plane skiff-agent --no-pager
 curl -sS https://control.example.com/api/setup/status
-curl -sS -o /dev/null -w '%{http_code}\n' https://anything.example.com/
+curl -sS -o /dev/null -w '%{http_code}\n' https://anything.example.com/   # 200/404, never 525
 ls -l /run/skiff /var/lib/caddy/admin.sock   # sockets 0660, group caddy
+
+# The wildcard certificate must answer for any unused label under the content domain.
+openssl s_client -connect 127.0.0.1:443 -servername anything.example.com </dev/null 2>/dev/null \
+  | openssl x509 -noout -subject -ext subjectAltName
+# The running Caddy process (not the unit file) must have the skiff group.
+grep '^Groups:' /proc/$(systemctl show caddy -p MainPID --value)/status
 ```
+
+**Sites return Cloudflare error 525.** The edge reached the origin, but the origin completed no TLS
+handshake for that hostname — almost always the wildcard certificate is missing. `journalctl -u
+caddy | grep tls.obtain` shows the ACME order and its error. If it says *no solvers available*, or
+the order fails, `/etc/caddy/cloudflare.token` is missing, empty, revoked, or lacks Zone → DNS →
+Edit on the content zone. Fix the file (`root:caddy`, `0640`), then `systemctl restart
+skiff-agent` (the agent rebuilds Caddy's config with the DNS-01 challenge) and watch for
+`certificate obtained successfully`. Cached assets can hide this: an image can serve from
+Cloudflare's cache while every HTML page returns 525.
+
+**Sites return 403 from Caddy.** The running Caddy lacks the `skiff` supplementary group, so it
+cannot read `/var/lib/skiff/agent`. `systemctl restart caddy` (the installer does this when it
+detects the stale process).
 
 Then open the setup link (§3.5) to create the owner. Create an API key in **Settings → API keys**
 for `skif`.

@@ -160,8 +160,103 @@ export interface SkiffToolDefinition {
 			idempotentHint?: boolean;
 		};
 	};
+	/** Permissions the tool needs. Absent means "no extra grant" (whoami, docs, request_access). */
+	permissions?: readonly Permission[];
 	handler: (...args: unknown[]) => unknown;
 }
+
+/**
+ * The write tool → permission map that the assistant used to filter with (IAM.md §9.3, §12).
+ * It stays as a fallback for tools whose `scopeChallenge` is decided from the call's arguments:
+ * a tool still lists when its base grant is empty, and this map hides the common writes.
+ */
+export const TOOL_PERMISSIONS: Record<string, Permission> = {
+	create_project: 'project:create',
+	update_project: 'project:update',
+	delete_project: 'project:delete',
+	delete_projects: 'project:delete',
+	restore_projects: 'project:update',
+	// Blueprints (plan 11): each step re-checks its own permission; this hides the tool from viewers.
+	apply_stack: 'project:update',
+	deploy_site: 'deployment:create',
+	deploy_files: 'deployment:create',
+	create_upload: 'deployment:create',
+	finalize_upload: 'deployment:create',
+	deploy_to_environment: 'deployment:create',
+	promote_deployment: 'deployment:promote',
+	rollback: 'deployment:rollback',
+	create_environment: 'project:update',
+	set_workload: 'project:update',
+	set_access: 'project:update',
+	create_share_link: 'shareLink:create',
+	revoke_share_link: 'shareLink:revoke',
+	revoke_site_session: 'shareLink:revoke',
+	sign_out_all_visitors: 'project:update',
+	create_database: 'database:create',
+	attach_database: 'database:update',
+	detach_database: 'database:update',
+	delete_database: 'database:delete',
+	create_database_credential: 'database:credentials',
+	rotate_database_credential: 'database:credentials',
+	revoke_database_credential: 'database:credentials',
+	create_volume: 'project:update',
+	attach_volume: 'project:update',
+	detach_volume: 'project:update',
+	create_storage: 'storage:create',
+	create_bucket: 'storage:update',
+	get_bucket_config: 'storage:read',
+	update_bucket_config: 'storage:update',
+	attach_storage: 'storage:update',
+	detach_storage: 'storage:update',
+	delete_storage: 'storage:delete',
+	create_storage_key: 'storage:update',
+	revoke_storage_key: 'storage:update',
+	create_email_domain: 'email:update',
+	send_email: 'email:send',
+	remove_email_suppression: 'email:update',
+	add_email_address: 'email:update',
+	remove_email_address: 'email:update',
+	// Queue and function tools (D124); peek is a read but needs broker:update (bodies are data).
+	create_queue: 'broker:update',
+	send_queue_message: 'broker:update',
+	peek_queue_messages: 'broker:update',
+	redrive_queue: 'broker:update',
+	invoke_function: 'deployment:create',
+	run_function_cron: 'deployment:create',
+	// Jobs (plan 09): definitions are project config, runs are deploys of a kind.
+	create_job: 'project:update',
+	update_job: 'project:update',
+	pause_job: 'project:update',
+	delete_job: 'project:update',
+	run_job: 'deployment:create',
+	run_command: 'deployment:create',
+	cancel_job_run: 'deployment:create',
+	// Dashboards (D101) are an org resource behind metrics:read; there is no separate write scope.
+	create_dashboard: 'metrics:read',
+	add_dashboard_panels: 'metrics:read',
+	update_dashboard_panel: 'metrics:read',
+	remove_dashboard_panels: 'metrics:read',
+	update_dashboard: 'metrics:read',
+	delete_dashboard: 'metrics:read',
+	// Alert rules (docs/ALERTS.md): the service further limits writes to owners/admins, silences to deployers.
+	create_alert_rule: 'metrics:read',
+	update_alert_rule: 'metrics:read',
+	delete_alert_rule: 'metrics:read',
+	silence_alerts: 'metrics:read',
+	acknowledge_alert: 'metrics:read',
+	// Log drains (DESIGN §8): the service further limits writes to owners and admins.
+	create_log_drain: 'logs:read',
+	test_log_drain: 'logs:read',
+	delete_log_drain: 'logs:read',
+	// Pipelines (docs/PIPELINES.md §8): a dispatch or re-run runs a workflow with the repository's secrets.
+	dispatch_workflow: 'build:create',
+	rerun_pipeline_run: 'build:create',
+	cancel_pipeline_run: 'build:cancel',
+	// IAM writes (IAM.md §9.3): a token without the permission is not offered the tool at all.
+	create_service_account: 'serviceAccount:create',
+	bind_role: 'iam:manage-bindings',
+	unbind_role: 'iam:manage-bindings',
+};
 
 /**
  * `registerTool` for a tool that is only offered while a platform feature flag is on
@@ -191,13 +286,16 @@ function principalFor(authInfo: AuthInfo | undefined): PrincipalResult {
 	return principal;
 }
 
+/** A scope challenge that also names the grants the tool needs, for `tools/list` filtering. */
+type ToolScopeChallenge = ScopeChallengeHandler & { permissions?: readonly Permission[] };
+
 /**
  * Ask the client to step up its grant when the token lacks a permission the tool needs.
- * The challenge lists the *complete* scope set (existing + required) per RFC 6750.
+ * The challenge lists the *complete* scope set (existing + required) per RFC 6750. The declared
+ * permissions let `visibleTools` hide a tool whose grant the principal does not hold (IAM.md §12).
  */
-const requires =
-	(...needed: Permission[]): ScopeChallengeHandler =>
-	({ authInfo }) => {
+const requires = (...needed: Permission[]): ToolScopeChallenge => {
+	const challenge: ToolScopeChallenge = ({ authInfo }) => {
 		const granted = new Set(authInfo?.scopes ?? []);
 		const missing = needed.filter((permission) => !granted.has(permission));
 		if (missing.length === 0) return undefined;
@@ -206,14 +304,20 @@ const requires =
 			errorDescription: `This tool needs ${missing.join(', ')}. Re-authorize to grant it.`,
 		};
 	};
+	challenge.permissions = needed;
+	return challenge;
+};
 
 /** `requires` plus permissions that depend on the call's arguments (e.g. attaching on create). */
 const requiresWith =
-	(base: Permission[], extra: (args: Record<string, unknown>) => Permission[]): ScopeChallengeHandler =>
-	(context) => {
-		const args = (context.request.params as { arguments?: unknown } | undefined)?.arguments;
-		const record = args && typeof args === 'object' ? (args as Record<string, unknown>) : {};
-		return requires(...base, ...extra(record))(context);
+	(base: Permission[], extra: (args: Record<string, unknown>) => Permission[]): ToolScopeChallenge => {
+		const challenge: ToolScopeChallenge = (context) => {
+			const args = (context.request.params as { arguments?: unknown } | undefined)?.arguments;
+			const record = args && typeof args === 'object' ? (args as Record<string, unknown>) : {};
+			return requires(...base, ...extra(record))(context);
+		};
+		challenge.permissions = base;
+		return challenge;
 	};
 
 const round = (value: number, digits: number) => Number(value.toFixed(digits));
@@ -576,6 +680,8 @@ function buildServer(
 	era: SkiffToolEra,
 	sink?: SkiffToolDefinition[],
 	auditPrefix: 'mcp' | 'assistant' = 'mcp',
+	/** Names `tools/list` may expose; absent means capture every tool (the catalog build). */
+	visible?: ReadonlySet<string>,
 ) {
 	// The assistant reuses the exact MCP definitions by capturing them instead of serving them.
 	const server = sink
@@ -595,7 +701,17 @@ function buildServer(
 	const tool = ((name: string, rawConfig: Record<string, unknown>, callback: (...args: unknown[]) => unknown) => {
 		const { feature, ...config } = rawConfig as Record<string, unknown> & { feature?: FeatureName };
 		if (feature && !featureEnabled(core.ctx.config, feature)) return {};
-		const challenge = config.scopeChallenge as ScopeChallengeHandler | undefined;
+		// `visible` is set for a real tools/list: a tool whose grant the principal lacks is not
+		// registered at all, so a client never sees an action it could only get a 403 for.
+		if (visible && !visible.has(name)) return {};
+		const challenge = config.scopeChallenge as ToolScopeChallenge | undefined;
+		const fallback = TOOL_PERMISSIONS[name];
+		const permissions: readonly Permission[] =
+			challenge?.permissions && challenge.permissions.length > 0
+				? challenge.permissions
+				: fallback
+					? [fallback]
+					: [];
 		const scopeChallenge: ScopeChallengeHandler | undefined = challenge
 			? async (context) => {
 					const result = await challenge(context);
@@ -610,7 +726,7 @@ function buildServer(
 					return result;
 				}
 			: undefined;
-		return server.registerTool(name, { ...config, scopeChallenge } as never, (async (...args: unknown[]) => {
+		const handler = (async (...args: unknown[]) => {
 			const input = config.inputSchema ? args[0] : undefined;
 			try {
 				const result = await callback(...args);
@@ -628,7 +744,17 @@ function buildServer(
 				auditTool(principal, name, input, (error as Error).message ?? String(error), auditPrefix);
 				throw error;
 			}
-		}) as never);
+		}) as never;
+		if (sink) {
+			sink.push({
+				name,
+				config: { ...config, scopeChallenge },
+				handler,
+				...(permissions.length > 0 ? { permissions } : {}),
+			});
+			return {};
+		}
+		return server.registerTool(name, { ...config, scopeChallenge } as never, handler);
 	}) as unknown as McpServer['registerTool'] & FeatureGatedTool;
 
 	tool(
@@ -6051,6 +6177,9 @@ function buildServer(
  * The dashboard assistant's tool catalog: every MCP tool, captured from the same registration
  * code. Handlers audit as `assistant.<tool>` so the audit log distinguishes a chat action from a
  * remote MCP client. Destructive tools run directly here because the chat UI confirms them first.
+ *
+ * This is the *full* catalog (used by tests and by `visibleTools`); the assistant and MCP
+ * `tools/list` expose only the subset the caller can actually use.
  */
 export function skiffToolDefinitions(principal: Principal): SkiffToolDefinition[] {
 	const sink: SkiffToolDefinition[] = [];
@@ -6058,8 +6187,83 @@ export function skiffToolDefinitions(principal: Principal): SkiffToolDefinition[
 	return sink;
 }
 
+/**
+ * Permissions compiled for the principal (IAM.md §5.2). `principal.permissions` is the fallback
+ * for a surface built before the engine is attached (and for the lightweight test doubles).
+ */
+function compiledPermissions(principal: Principal): ReadonlySet<Permission> {
+	const iam = core.iam as unknown as
+		| { compiledFor?: (value: Principal) => { index: ReadonlyMap<Permission, unknown> } }
+		| undefined;
+	if (iam && typeof iam.compiledFor === 'function') {
+		try {
+			return new Set(iam.compiledFor(principal).index.keys());
+		} catch {
+			// Fall through to the credential's effective set rather than hiding every tool.
+		}
+	}
+	return principal.permissions;
+}
+
+/** Whether one tool's required grants are all in `granted`; no declared permission means visible. */
+function toolVisible(granted: ReadonlySet<Permission>, definition: SkiffToolDefinition): boolean {
+	const fallback = TOOL_PERMISSIONS[definition.name];
+	const required =
+		definition.permissions && definition.permissions.length > 0
+			? definition.permissions
+			: fallback
+				? [fallback]
+				: [];
+	return required.every((permission) => granted.has(permission));
+}
+
+/**
+ * Every tool the principal may use, read tools included (IAM.md §12). Shared by the MCP server
+ * and the dashboard assistant so both surfaces offer the same actions.
+ */
+export function visibleTools(principal: Principal): SkiffToolDefinition[] {
+	const granted = compiledPermissions(principal);
+	return skiffToolDefinitions(principal).filter((definition) => toolVisible(granted, definition));
+}
+
+/** Names-only form for `tools/list`; cached by principal and `iamVersion` (IAM.md §5.2). */
+const visibilityCache = new Map<string, ReadonlySet<string>>();
+
+function visibilityCacheKey(principal: Principal): string {
+	let version = 0;
+	const iam = core.iam as { version?: (orgId: string) => number } | undefined;
+	if (iam && typeof iam.version === 'function') {
+		try {
+			version = iam.version(principal.orgId);
+		} catch {
+			// A missing `iam_state` row is version 0; a query failure must not cache the wrong set.
+		}
+	}
+	// Scopes can differ between two OAuth clients for the same person, so the effective set and
+	// the client id are part of the key alongside the org revision.
+	const fingerprint = createHash('sha256')
+		.update([...principal.permissions].sort().join(','))
+		.digest('hex')
+		.slice(0, 16);
+	return `${principal.orgId}|${principal.kind}|${principal.userId}|${principal.clientId ?? ''}|${version}|${fingerprint}`;
+}
+
+export function visibleToolNames(principal: Principal): ReadonlySet<string> {
+	const key = visibilityCacheKey(principal);
+	const cached = visibilityCache.get(key);
+	if (cached) return cached;
+	const names = new Set(visibleTools(principal).map((definition) => definition.name));
+	// Bounded like the other permission caches; a flood of MCP clients must not grow it forever.
+	if (visibilityCache.size >= 1_000) visibilityCache.clear();
+	visibilityCache.set(key, names);
+	return names;
+}
+
 export const mcpHandler = createMcpHandler(
-	({ authInfo, era }) => buildServer(principalFor(authInfo), era),
+	({ authInfo, era }) => {
+		const principal = principalFor(authInfo);
+		return buildServer(principal, era, undefined, 'mcp', visibleToolNames(principal));
+	},
 	{
 		legacy: 'stateless',
 		onerror: (error) => console.error('[mcp]', error),

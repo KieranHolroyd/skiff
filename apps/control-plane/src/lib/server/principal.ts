@@ -94,12 +94,16 @@ function membershipFrom(
 }
 
 /**
- * REST authentication: either a Better Auth API key (`skif_…`), a Skiff access key (`skif_…`,
- * IAM.md I14), a Skiff workload/STS token (IAM.md §7.3–§7.4), or the session cookie. Keys are
- * tried first so existing credentials keep working; its `apikey` rows are migrated to
- * `access_keys` only once spike S1 settles the hash format. Until then the dashboard
- * (settings/api-keys) and CLI login (api/v1/cli/token) still mint Better Auth rows; both now stamp
- * `metadata.orgId`, so a key stays in the org it was created in.
+ * REST authentication: a Skiff access key (`skif_…`, IAM.md I14), a Better Auth API key
+ * (`skif_…`) that has not been migrated yet, a Skiff workload/STS token (IAM.md §7.3–§7.4), or
+ * the session cookie.
+ *
+ * Access keys are tried first: `AccessKeyService.verify` accepts both Skiff's `sha256` rows and
+ * migrated Better Auth rows (`hash_scheme = 'better-auth'`, spike S1), so a migrated key never
+ * pays Better Auth's rate-limit/usage side effects. Anything it does not recognise falls back to
+ * `verifyApiKey` for an `apikey` row the one-time migration has not copied. Neither path deletes
+ * `apikey` rows. The dashboard (settings/api-keys) and CLI login (api/v1/cli/token) still mint
+ * Better Auth rows; both stamp `metadata.orgId`, so a key stays in the org it was created in.
  * MCP OAuth tokens are audience-bound to `/mcp` and verified there, not accepted by the REST API.
  */
 export async function principalFromRequest(request: Request): Promise<Principal | undefined> {
@@ -107,6 +111,16 @@ export async function principalFromRequest(request: Request): Promise<Principal 
 	if (authorization?.startsWith('Bearer ')) {
 		const key = authorization.slice(7).trim();
 		if (key.startsWith('skif_')) {
+			// The raw IP is only used for the CIDR check; the principal carries its hash.
+			const verified = core.ctx.accessKeys.verify(key, { ip: clientIp(request) });
+			if (verified) return principalFromAccessKey(verified, request);
+
+			// A migrated row is authoritative even when `verify` rejected it (revoked, expired or
+			// CIDR mismatch): falling back to Better Auth would revive a key Skiff just revoked.
+			if (core.ctx.accessKeys.recognizes(key)) return undefined;
+
+			// Not a migrated/Skiff access key: fall back to Better Auth for rows the one-time
+			// migration has not copied yet (spike S1). New keys are Skiff-only.
 			const result = await auth.api.verifyApiKey({ body: { key } }).catch(() => undefined);
 			if (result?.valid && result.key) {
 				const userId = result.key.referenceId;
@@ -123,11 +137,6 @@ export async function principalFromRequest(request: Request): Promise<Principal 
 				principal.keyId = result.key.id;
 				return principal;
 			}
-
-			// Not a Better Auth key: try Skiff's org-bound access keys. The raw IP is only used for the
-			// CIDR check; the principal carries its hash.
-			const verified = core.ctx.accessKeys.verify(key, { ip: clientIp(request) });
-			if (verified) return principalFromAccessKey(verified, request);
 			return undefined;
 		}
 

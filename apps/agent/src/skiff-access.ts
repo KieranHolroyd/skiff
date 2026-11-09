@@ -26,6 +26,11 @@ import { evaluateAccessEdge, sha256Hex, type RouteSpec } from '@skiff/contracts'
 export const MAX_ACCESS_CODE_SECONDS = 120;
 /** Default decision cache lifetime; short enough that key rotation is felt quickly. */
 export const ACCESS_DECISION_TTL_MS = 15_000;
+/**
+ * Denied and login decisions are cached for only a few seconds: enough to absorb an asset burst,
+ * short enough that a freshly minted cookie (or a just-revoked policy) takes effect promptly.
+ */
+export const ACCESS_NEGATIVE_DECISION_TTL_MS = 5_000;
 
 export interface AccessTokenClaims {
 	host: string;
@@ -105,17 +110,34 @@ export interface CachedDecision {
 	headers: Record<string, string>;
 }
 
+/** A login redirect or a hard deny; there are no headers to serve. */
+export type CachedNegativeDecision = 'login' | 'deny';
+
+interface CachedNegative {
+	expiresAt: number;
+	decision: CachedNegativeDecision;
+}
+
 /**
  * Verified decisions, keyed by host and cookie. Bounded and time-limited; a full cache fails open
- * to a fresh verification (which is cheap) rather than serving an unbounded map.
+ * to a fresh verification (which is cheap) rather than serving an unbounded map. A second, shorter
+ * map remembers denied/login decisions so an anonymous asset burst does not repeat the redirect
+ * work, while a new cookie (a different key) is never hidden by an old refusal.
  */
 export class AccessDecisionCache {
 	private readonly entries = new Map<string, CachedDecision>();
+	private readonly negatives = new Map<string, CachedNegative>();
 	private readonly ttlMs: number;
+	private readonly negativeTtlMs: number;
 	private readonly maxEntries: number;
 
-	constructor(ttlMs = ACCESS_DECISION_TTL_MS, maxEntries = 10_000) {
+	constructor(
+		ttlMs = ACCESS_DECISION_TTL_MS,
+		maxEntries = 10_000,
+		negativeTtlMs = Math.min(ACCESS_NEGATIVE_DECISION_TTL_MS, ttlMs),
+	) {
 		this.ttlMs = ttlMs;
+		this.negativeTtlMs = negativeTtlMs;
 		this.maxEntries = maxEntries;
 	}
 
@@ -137,9 +159,49 @@ export class AccessDecisionCache {
 		});
 	}
 
+	/** `login` or `deny` while the short negative entry is live, else null. */
+	getNegative(key: string, nowMs: number): CachedNegativeDecision | null {
+		const entry = this.negatives.get(key);
+		if (!entry) return null;
+		if (entry.expiresAt <= nowMs) {
+			this.negatives.delete(key);
+			return null;
+		}
+		return entry.decision;
+	}
+
+	setNegative(key: string, nowMs: number, decision: CachedNegativeDecision): void {
+		if (this.negatives.size >= this.maxEntries) this.negatives.clear();
+		this.negatives.set(key, {
+			expiresAt: nowMs + this.negativeTtlMs,
+			decision,
+		});
+	}
+
 	get size(): number {
 		return this.entries.size;
 	}
+
+	/** Exposed for tests and metrics; not used on the request path. */
+	get negativeSize(): number {
+		return this.negatives.size;
+	}
+}
+
+/**
+ * The cache key. The site key folds in the policy's revocation version (IAM.md §11.1), so a policy
+ * edit, a host reassignment or "sign out everyone" changes the key and the old decision cannot be
+ * served. A service-token fingerprint keeps a denied machine from poisoning a different token.
+ */
+export function accessDecisionCacheKey(
+	route: RouteSpec,
+	host: string,
+	cookie: string | null,
+	machineFingerprint = '',
+): string {
+	return `${host}|${route.access.policyId ?? ''}|${route.access.siteKey}|${cookie ?? ''}${
+		machineFingerprint ? `|${machineFingerprint}` : ''
+	}`;
 }
 
 export function hmacBase64url(secret: string, value: string): string {
@@ -204,6 +266,23 @@ export function handleSkiffAccessRequest(
 	if (!route.access.policyId) return textResponse(500, 'Route has no access policy');
 	if (route.access.policyEnabled === false) return textResponse(403, 'Access is closed');
 
+	const cookie = readCookie(request.headers.get('cookie'), options.accessCookieName);
+	const cache = options.cache;
+	// The site key already folds in the policy's revocation version: a bump on this policy must
+	// not serve an old allow, while another policy on the same host keeps its key and cached entry.
+	const cacheKey = accessDecisionCacheKey(
+		route,
+		host,
+		cookie,
+		machineCacheFingerprint(route, request.headers),
+	);
+	const nowMs = now * 1000;
+	const cached = cache?.get(cacheKey, nowMs);
+	if (cached) return new Response(null, { status: 200, headers: cached });
+	const negative = cache?.getNegative(cacheKey, nowMs);
+	if (negative === 'deny') return textResponse(403, 'Access denied');
+	if (negative === 'login') return redirectToAuthorize(route, host, forwardedUri, options.insecureHttp);
+
 	// Machines present a service token as a header pair; decide that before any redirect, so a CI
 	// job or webhook never lands on a browser login page (IAM.md I25, §11.1).
 	const machine = evaluateAccessEdge(
@@ -211,7 +290,10 @@ export function handleSkiffAccessRequest(
 		requestHeaders(request.headers),
 		route.access.hasPersonRules ?? true,
 	);
-	if (machine.decision === 'deny') return textResponse(403, 'Access denied');
+	if (machine.decision === 'deny') {
+		cache?.setNegative(cacheKey, nowMs, 'deny');
+		return textResponse(403, 'Access denied');
+	}
 	if (machine.decision === 'allow') {
 		// Reporting last use is fire-and-forget: a slow or unreachable platform must never delay the
 		// machine's request, and the decision above is already final.
@@ -220,17 +302,11 @@ export function handleSkiffAccessRequest(
 		return new Response(null, { status: 200, headers });
 	}
 
-	const cookie = readCookie(request.headers.get('cookie'), options.accessCookieName);
-	const cache = options.cache;
-	// The site key already folds in the policy's revocation version: a bump on this policy must
-	// not serve an old allow, while another policy on the same host keeps its key and cached entry.
-	const cacheKey = `${host}|${route.access.policyId ?? ''}|${route.access.siteKey}|${cookie ?? ''}`;
-	const nowMs = now * 1000;
-	const cached = cache?.get(cacheKey, nowMs);
-	if (cached) return new Response(null, { status: 200, headers: cached });
-
 	const visitor = verifyAccessCookie(route.access.siteKey, host, cookie, now);
-	if (!visitor) return redirectToAuthorize(route, host, forwardedUri, options.insecureHttp);
+	if (!visitor) {
+		cache?.setNegative(cacheKey, nowMs, 'login');
+		return redirectToAuthorize(route, host, forwardedUri, options.insecureHttp);
+	}
 
 	const headers = accessHeaders(route, host, visitor.email, now, options);
 	cache?.set(cacheKey, headers, nowMs, visitor.exp * 1000);
@@ -473,6 +549,22 @@ function requestHeaders(headers: Headers): Record<string, string> {
 		record[name.toLowerCase()] = value;
 	});
 	return record;
+}
+
+/**
+ * A stable fingerprint of every configured machine token header, with values hashed. Without it a
+ * denied token could poison the negative cache for a request carrying a different (or no) token.
+ * Routes without machine tokens add nothing to the key, so browser decisions still share one entry.
+ */
+function machineCacheFingerprint(route: RouteSpec, headers: Headers): string {
+	const tokens = route.access.serviceTokens ?? [];
+	if (tokens.length === 0) return '';
+	return tokens
+		.map((token) => {
+			const value = headers.get(token.header) ?? '';
+			return `${token.header.toLowerCase()}=${value ? sha256Hex(value) : ''}`;
+		})
+		.join('&');
 }
 
 function forwardedPath(uri: string | null): string | null {

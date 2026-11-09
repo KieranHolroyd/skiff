@@ -9,7 +9,7 @@ import { databaseStudioPrincipalResultSchema, databaseStudioPrincipalTaskSchema 
 import { accessModes, deploymentStatuses, nodeStatuses, runtimes } from './model.ts';
 import { domainKinds } from './domain.ts';
 import { mailDesiredSchema } from './email.ts';
-import { IDENTITY_CAPABILITY, identityDesiredSchema } from './identity.ts';
+import { IDENTITY_CAPABILITY, identityDesiredSchema, identityUnitStatusSchema } from './identity.ts';
 import { workloadDesiredSchema, workloadStatuses } from './workload.ts';
 import { STORAGE_STS_CAPABILITY } from './object-storage.ts';
 import { databaseMetricBucketSchema, databaseSnapshotSchema } from './database.ts';
@@ -472,6 +472,8 @@ export const heartbeatSchema = z.object({
 	storageReplication: z.array(storageReplicationReportSchema).max(100).optional(),
 	/** Root keys the agent proved (or saw refused) since the last heartbeat (§5). */
 	storageRootKeys: z.array(storageRootKeyReportSchema).max(200).optional(),
+	/** The identity unit's health on this node, so the fleet view can fall back to control-plane routes. */
+	identityStatus: identityUnitStatusSchema.nullable().optional(),
 });
 export type Heartbeat = z.infer<typeof heartbeatSchema>;
 

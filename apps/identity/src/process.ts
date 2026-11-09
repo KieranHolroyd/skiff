@@ -8,6 +8,7 @@ import { createIdentityRuntime } from './service.ts';
 export async function runIdentityProcess(): Promise<void> {
 	const config = loadIdentityConfig();
 	const runtime = await createIdentityRuntime(config, {
+		version: process.env.SKIFF_IDENTITY_VERSION?.trim() || process.env.SKIFF_AGENT_VERSION?.trim() || 'dev',
 		log: (level, message) => {
 			const line = `[skiff-identity ${new Date().toISOString()}] ${level.toUpperCase()} ${message}`;
 			if (level === 'error') console.error(line);
