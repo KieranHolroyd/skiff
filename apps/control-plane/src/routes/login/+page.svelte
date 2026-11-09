@@ -188,7 +188,7 @@
 		if (err) error = err.message ?? 'Could not send the link';
 		else
 			notice = data.emailToLog
-				? 'Sign-in link created. Email isn’t set up on this server, so it is in the server log: journalctl -u skiff-control-plane | grep magic-link'
+				? 'Sign-in link created. Email isn’t set up on this server, so the link is in the server log.'
 				: 'Check your email for a sign-in link.';
 	}
 </script>
@@ -203,7 +203,7 @@
 	description={step === 'code'
 		? useBackup
 			? 'Use one of the backup codes you saved when you set up the authenticator app.'
-			: 'Open your authenticator app and enter the 6-digit code for Skiff.'
+			: 'Open your authenticator app and enter the 6-digit code for this site.'
 		: step === 'email'
 			? 'Enter your work email. If your organisation uses single sign-on, you go straight to its identity provider.'
 			: 'No account? Ask an organisation owner for an invitation.'}

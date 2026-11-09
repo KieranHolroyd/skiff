@@ -1,10 +1,10 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
+	import CloudIcon from '@lucide/svelte/icons/cloud';
 	import RocketIcon from '@lucide/svelte/icons/rocket';
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
-	import Logo from './Logo.svelte';
 	import ThemeToggle from './ThemeToggle.svelte';
 
 	let {
@@ -61,7 +61,12 @@
 		</div>
 
 		<div class="flex items-center justify-between">
-			<Logo class="text-white" />
+			<span class="inline-flex items-center gap-2.5 text-white">
+				<span class="grid size-8 place-items-center rounded-lg bg-brand text-[#141a2a]">
+					<CloudIcon class="size-4" aria-hidden="true" />
+				</span>
+				<span class="text-base font-semibold tracking-tight">Your cloud</span>
+			</span>
 			<span
 				class="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-white/50"
 			>
@@ -83,8 +88,8 @@
 				Ship things on <span class="text-brand">your own</span> terms.
 			</h2>
 			<p class="mt-5 max-w-md text-[0.95rem] leading-relaxed text-white/55">
-				Skiff is a small, self-hosted control plane for sites, databases and agents. One box, your
-				domain, no per-seat pricing.
+				A small, self-hosted control plane for sites, databases and agents. One box, your domain, no
+				per-seat pricing.
 			</p>
 
 			<ul class="mt-9 grid gap-4">
@@ -117,10 +122,10 @@
 					<span class="ml-2 font-mono text-[10px] tracking-[0.16em] text-white/30 uppercase"
 						>deploy</span
 					>
-					<span class="ml-auto font-mono text-[10px] text-white/30">skif</span>
+					<span class="ml-auto font-mono text-[10px] text-white/30">shell</span>
 				</div>
 				<div class="space-y-2 px-4 py-4 font-mono text-[11.5px] leading-relaxed">
-					<p class="text-white/85"><span class="text-brand">$</span> skif deploy ./dist</p>
+					<p class="text-white/85"><span class="text-brand">$</span> deploy ./dist</p>
 					<p class="text-white/35">uploaded 42 files · 1.2 MB</p>
 					<p class="text-white/35">
 						preview <span class="text-white/65">launch-page--a1b2c3.example.com</span>
@@ -139,7 +144,12 @@
 		class="relative flex min-h-svh flex-col px-5 py-6 sm:px-8 lg:min-h-0 lg:px-14 lg:py-12 xl:px-20 xl:py-16"
 	>
 		<div class="flex items-center justify-between">
-			<Logo class="lg:hidden" />
+			<span class="inline-flex items-center gap-2.5 lg:hidden">
+				<span class="grid size-8 place-items-center rounded-lg bg-brand text-[#141a2a]">
+					<CloudIcon class="size-4" aria-hidden="true" />
+				</span>
+				<span class="text-base font-semibold tracking-tight">Your cloud</span>
+			</span>
 			<div class="ml-auto">
 				<ThemeToggle />
 			</div>

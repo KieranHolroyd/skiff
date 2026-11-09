@@ -110,7 +110,7 @@
 </script>
 
 <svelte:head>
-	<title>Two-factor verification · Skiff</title>
+	<title>Two-factor verification</title>
 </svelte:head>
 
 <AuthSplitShell eyebrow="Second factor" title={heading} description={intro}>
@@ -274,7 +274,7 @@
 				<ol class="list-decimal space-y-4 pl-5 text-sm">
 					<li class="space-y-2">
 						<p>
-							Add Skiff to your authenticator app. On a phone, <a
+							Add this site to your authenticator app. On a phone, <a
 								class="font-medium underline underline-offset-4"
 								href={enrolment.totpURI}>open the setup link</a
 							>; otherwise enter this key manually:
