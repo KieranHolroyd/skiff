@@ -1,4 +1,4 @@
-import { createDb } from '@yoal/db';
+import { createDb, platformDbPath } from '@yoal/db';
 import { dataDir } from './config';
 
 /**
@@ -6,7 +6,7 @@ import { dataDir } from './config';
  * here; Better Auth applies its own schema on boot in `hooks.server.ts` (TODO(release): replace
  * with forward-only migrations run by the updater after a snapshot — DESIGN §12).
  */
-const opened = createDb({ path: `${dataDir}/yoal.db` });
+const opened = createDb({ path: platformDbPath(dataDir) });
 
 export const sqlite = opened.sqlite;
 export const db = opened.db;

@@ -679,6 +679,13 @@ Because `/etc/yoal` is `0750 root:yoal`, the server never reads it: systemd pass
 `--config-file=%d/config.xml`. Edit nothing in `/etc/yoal/clickhouse` by hand; the next run
 overwrites it.
 
+On a host installed before the Yoal rename, the installer and updater stop and remove the old
+`skiff-clickhouse.service` before starting the new one. That service owns the same loopback port,
+so leaving it running would make `/ping` answer (from the old server) while the control plane
+authenticates as `yoal` against a server that only knows `skiff` — reported as
+`yoal: Authentication failed`. Its data stays in `/var/lib/skiff/clickhouse`; hot telemetry is not
+migrated.
+
 ```sh
 systemctl status yoal-clickhouse --no-pager
 journalctl -u yoal-clickhouse -n 100
@@ -2004,7 +2011,7 @@ the control plane.
 | Caddy can't reach the control plane | `ls -l /run/yoal`, `namei -l /run/yoal/control.sock` | `/run/yoal` must be `2770 root:caddy`; control plane needs `SupplementaryGroups=caddy`. |
 | Agent can't use Caddy admin | `ls -l /var/lib/caddy/admin.sock` | Socket must be `0660` and group `caddy`; agent needs that supplementary group. Never expose `:2019` as a workaround. |
 | Litestream exits immediately | `journalctl -u yoal-litestream` | Missing/incorrect `R2_*` in `yoal.env` (an old `litestream.yml` may still use `YOAL_R2_*`); `R2_ENDPOINT` must be the R2 S3 URL, region `auto`. |
-| Telemetry unavailable | `systemctl status yoal-clickhouse`, `curl -s 127.0.0.1:18123/ping`, `journalctl -u yoal-clickhouse -n 100` | Re-run `sudo yoal-platform-config telemetry on` (it repairs and restarts ClickHouse and prints why it could not). Not installed at all is normal: install it from Settings → Telemetry. `Authentication failed` in the control-plane log means `users.xml` and `yoal.env` disagree; the same command regenerates `users.xml`. |
+| Telemetry unavailable | `systemctl status yoal-clickhouse`, `curl -s 127.0.0.1:18123/ping`, `journalctl -u yoal-clickhouse -n 100`, and on a renamed host `systemctl status skiff-clickhouse` | Re-run `sudo yoal-platform-config telemetry on` (it repairs and restarts ClickHouse and prints why it could not). Not installed at all is normal: install it from Settings → Telemetry. `Authentication failed` in the control-plane log means `users.xml` and `yoal.env` disagree, or a pre-rename `skiff-clickhouse.service` still owns port 18123; the same command regenerates `users.xml` and retires the old unit. |
 | Restore says "no snapshots" | R2 prefix/lifecycle, credentials | The replica path is `yoal/sqlite` in `/etc/yoal/litestream.yml`; confirm objects exist there; run a drill. |
 | Update stuck at **Test boot** / canary | `yoal-update-self status`, `journalctl -u yoal-update-self -n 200` | Stop the unit, `yoal-update-self recover`, retry. Installs older than 0.6.7 need one `update --no-canary` bootstrap: [§4.1.1](#411-recovering-a-stuck-or-failed-update). |
 | `yoal-recover.sh` download returns 404 | `gh release list --repo KieranHolroyd/yoal` | `/releases/latest` can resolve to a CLI release; pin the platform tag instead: [§4.1.1](#411-recovering-a-stuck-or-failed-update). |

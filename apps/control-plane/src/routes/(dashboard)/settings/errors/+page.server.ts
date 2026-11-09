@@ -5,7 +5,15 @@ import {
 	type ServerErrorSource
 } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
-import { failStatus, toFormFailure } from '../../_lib/errors.js';
+import {
+	failStatus,
+	formBoolean,
+	formOptionalString,
+	formRawString,
+	formString,
+	toFormFailure
+} from '../../_lib/errors.js';
+import { reconfigureSentry, sendSentryTest, sentryRuntime } from '#lib/server/sentry.js';
 import { canChangeErrors, formStatus, requireErrorViewer } from './_lib/access.server.js';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -36,6 +44,8 @@ export const load: PageServerLoad = ({ locals, url }) => {
 		...list,
 		filters: { status, source: source ?? '', q: q ?? '', before: before ?? null },
 		canChange: canChangeErrors(principal),
+		sentry: core.sentry.view(principal),
+		sentryRuntime: sentryRuntime(),
 		now: Date.now()
 	};
 };
@@ -74,5 +84,48 @@ export const actions: Actions = {
 		} catch (caught) {
 			return fail(failStatus(caught), toFormFailure(caught));
 		}
+	},
+
+	/** Save the optional Sentry destination and apply it without restarting the process. */
+	saveSentry: async ({ request, locals }) => {
+		const principal = requireErrorViewer(locals);
+		const data = await request.formData();
+		const rate = Number(formString(data, 'tracesSampleRate') || '0');
+		try {
+			const view = core.sentry.save(principal, {
+				enabled: formBoolean(data, 'enabled'),
+				dsn: formOptionalString(data, 'dsn') ?? null,
+				environment: formString(data, 'environment') || 'production',
+				release: formOptionalString(data, 'release') ?? null,
+				tracesSampleRate: Number.isFinite(rate) ? rate : 0,
+				sendDefaultPii: formBoolean(data, 'sendDefaultPii'),
+				authToken: formRawString(data, 'authToken') || undefined,
+				clearAuthToken: formBoolean(data, 'clearAuthToken'),
+				organizationSlug: formOptionalString(data, 'organizationSlug') ?? null,
+				projectSlug: formOptionalString(data, 'projectSlug') ?? null
+			});
+			await reconfigureSentry();
+			return {
+				success: view.enabled
+					? 'Sentry forwarding is on. New errors are sent there as well.'
+					: 'Sentry forwarding is off. The saved DSN is kept for later.'
+			};
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	/** Send one real event to Sentry so an operator can see the integration end to end. */
+	testSentry: async ({ locals }) => {
+		const principal = requireErrorViewer(locals);
+		if (!canChangeErrors(principal))
+			return fail(403, { message: 'Only a platform admin can test Sentry.' });
+		const result = await sendSentryTest();
+		if (!result.ok) return fail(400, { message: result.error });
+		return {
+			success: result.eventId
+				? `Test event sent to Sentry (${result.eventId}, release ${result.release}).`
+				: `Test event handed to Sentry (release ${result.release}).`
+		};
 	}
 };

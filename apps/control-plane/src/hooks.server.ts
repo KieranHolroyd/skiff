@@ -22,12 +22,16 @@ import {
 	reportBackgroundError,
 	reportErrorResponse,
 	reportRequestError,
+	setServerErrorForwarder,
 	setServerErrorSink,
 	withErrorContext,
 } from '#lib/server/server-errors.js';
+import { forwardServerError, reconfigureSentry } from '#lib/server/sentry.js';
 
 // Settings → Server errors records into the core's store from here on (docs/SERVER-ERRORS.md).
 setServerErrorSink(core.serverErrors);
+// Optional Sentry forwarding reads its destination from the same settings (docs/SERVER-ERRORS.md §6).
+setServerErrorForwarder(forwardServerError);
 
 /**
  * Apply Better Auth's schema on boot.
@@ -44,6 +48,8 @@ export const init: ServerInit = async () => {
 	if (lifted > 0) console.info(`[auth] raised rate limit on ${lifted} API key(s)`);
 	const promoted = ensurePlatformAdmin();
 	if (promoted) console.info(`[auth] made the bootstrap user ${promoted} the platform admin`);
+	// Sentry is optional and configured from the dashboard; initialise it from whatever is saved.
+	await reconfigureSentry();
 	// A fresh install: say where to finish setup on every boot until an owner exists, so the link
 	// is always one `journalctl -u yoal-control-plane | grep setup` away (D102).
 	if (needsSetup(sqlite)) {

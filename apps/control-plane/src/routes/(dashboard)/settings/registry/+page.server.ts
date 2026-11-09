@@ -23,8 +23,11 @@ export const load: PageServerLoad = ({ locals }) => {
 		registry: core.registry.view(principal),
 		canAdminister,
 		nodes: canAdminister
-			? core.nodes.list(principal).map((node) => ({ id: node.id, name: node.name, status: node.status }))
-			: []
+			? core.nodes
+					.list(principal)
+					.map((node) => ({ id: node.id, name: node.name, status: node.status }))
+			: [],
+		storage: canAdminister ? core.registry.storageCandidates() : []
 	};
 };
 
@@ -41,26 +44,37 @@ function registryUpdate(data: FormData): RegistrySettingsUpdate {
 	const mirrors = data
 		.getAll('mirrors')
 		.map(String)
-		.filter((value): value is RegistryMirrorUpstream => (REGISTRY_MIRROR_UPSTREAMS as readonly string[]).includes(value));
+		.filter((value): value is RegistryMirrorUpstream =>
+			(REGISTRY_MIRROR_UPSTREAMS as readonly string[]).includes(value)
+		);
 	// Keys are separated by blank lines; an empty textarea keeps the stored keys.
 	const cosignKeys = String(data.get('cosignKeys') ?? '')
 		.split(/\r?\n\s*\r?\n/)
 		.map((key) => key.trim())
 		.filter(Boolean);
+	const mode = string(data, 's3Mode');
 	const endpoint = string(data, 's3Endpoint');
+	const bucket = string(data, 's3Bucket') || 'registry';
 	const s3: RegistrySettingsUpdate['s3'] =
-		data.get('s3Disk') === 'on'
+		mode === 'disk' || data.get('s3Disk') === 'on'
 			? null
-			: endpoint
+			: mode === 'managed'
 				? {
-						endpoint,
-						bucket: string(data, 's3Bucket'),
-						...(string(data, 's3Region') ? { region: string(data, 's3Region') } : {}),
-						accessKeyId: string(data, 's3AccessKeyId'),
-						secretAccessKey: String(data.get('s3SecretAccessKey') ?? ''),
-						cacheUrl: string(data, 's3CacheUrl')
+						mode: 'managed',
+						...(string(data, 's3Storage') ? { storage: string(data, 's3Storage') } : {}),
+						bucket
 					}
-				: undefined;
+				: endpoint
+					? {
+							mode: 'external',
+							endpoint,
+							bucket,
+							...(string(data, 's3Region') ? { region: string(data, 's3Region') } : {}),
+							accessKeyId: string(data, 's3AccessKeyId'),
+							secretAccessKey: String(data.get('s3SecretAccessKey') ?? ''),
+							...(string(data, 's3CacheUrl') ? { cacheUrl: string(data, 's3CacheUrl') } : {})
+						}
+					: undefined;
 	return {
 		enabled: data.get('enabled') === 'on',
 		...(string(data, 'node') ? { node: string(data, 'node') } : {}),
@@ -87,7 +101,9 @@ export const actions: Actions = {
 				username: string(data, 'username'),
 				password: String(data.get('password') ?? '')
 			});
-			return { success: `Saved ${credential.name}. Nodes pull ${credential.registry} images with it from the next deploy or retry.` };
+			return {
+				success: `Saved ${credential.name}. Nodes pull ${credential.registry} images with it from the next deploy or retry.`
+			};
 		} catch (cause) {
 			return fail(400, { message: (cause as Error).message });
 		}

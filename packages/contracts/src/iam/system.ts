@@ -35,6 +35,13 @@ export const systemPrincipals = {
 		// `deployImage` creates a deployment and saves the image into the workload spec.
 		permissions: ['deployment:create', 'project:update'],
 	},
+	'system:registry-storage': {
+		name: 'system:registry-storage',
+		description: "Provisions the registry's own RustFS instance, bucket and scoped key.",
+		// Only the identity the platform registry uses to wire its managed S3 backend; the key it
+		// creates is read-write on the registry's bucket and nothing else.
+		permissions: ['storage:create', 'storage:read', 'storage:update'],
+	},
 	'system:pipeline-deploy': {
 		name: 'system:pipeline-deploy',
 		description: 'Deploys a linked project from a trusted pipeline run.',

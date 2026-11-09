@@ -237,7 +237,7 @@
 - [x] G3: Pipelines `yoal/build-image` pushes with the job login, `registry/<name>` tags, GitHub Actions OIDC trusts (D158)
 - [x] G4: pull-through cache for docker.io / ghcr.io / quay.io with node mirrors (D159)
 - [x] G5: cosign signature policy at deploy, CVE scanning (D159)
-- [x] G6: S3 storage + Valkey cache, single replica (D159)
+- [x] G6: S3 storage + Valkey cache, single replica (D159); automatic bucket + scoped key on Yoal object storage, local BoltDB cache when no cache URL (D210)
 
 ## Identity and access ([IAM.md](./IAM.md), D168, D181–D207)
 - [x] Permission catalog with metadata, principal v2, named system principals, the lint guard, the owner/admin split and audit actor columns (D181)

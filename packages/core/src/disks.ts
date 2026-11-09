@@ -183,10 +183,10 @@ export class DiskService {
 			syncWriteIops: row.syncWriteIops,
 			syncWriteLatencyUs: row.syncWriteLatencyUs,
 			direct: row.direct,
-			notes: parseJson<string[]>(row.notesJson, []),
+			notes: stringArray(parseJson<unknown>(row.notesJson, [])),
 			error: row.error,
-			createdAt: new Date(row.createdAt).toISOString(),
-			finishedAt: row.finishedAt ? new Date(row.finishedAt).toISOString() : null,
+			createdAt: isoOrEpoch(row.createdAt),
+			finishedAt: isoOrNull(row.finishedAt),
 		};
 	}
 
@@ -890,11 +890,11 @@ export class DiskService {
 			message: row.message,
 			sizeBytes: row.sizeBytes,
 			freeBytes: row.freeBytes,
-			statsAt: row.statsAt ? new Date(row.statsAt).toISOString() : null,
+			statsAt: isoOrNull(row.statsAt),
 			holds: this.holds(row),
 			profile: this.latestProfile(row.id),
-			createdAt: new Date(row.createdAt).toISOString(),
-			updatedAt: new Date(row.updatedAt).toISOString(),
+			createdAt: isoOrEpoch(row.createdAt),
+			updatedAt: isoOrEpoch(row.updatedAt),
 		};
 	}
 
@@ -998,6 +998,22 @@ function parseInventory(json: string | null): VolumeInventory | null {
 	if (!json) return null;
 	const parsed = volumeInventorySchema.safeParse(parseJson(json, null));
 	return parsed.success ? parsed.data : null;
+}
+
+/** ISO for a stored timestamp; a malformed value must not take the whole page down. */
+function isoOrNull(value: unknown): string | null {
+	if (value === null || value === undefined || value === '') return null;
+	const date = new Date(value as string | number | Date);
+	return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function isoOrEpoch(value: unknown): string {
+	return isoOrNull(value) ?? new Date(0).toISOString();
+}
+
+/** `notes_json` is written as a string array, but an import or older row may hold anything. */
+function stringArray(value: unknown): string[] {
+	return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 }
 
 function canMount(node: NodeRow): boolean {

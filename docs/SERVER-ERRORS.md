@@ -75,7 +75,35 @@ platform maintenance. The dashboard and the REST API call the same `core.serverE
 | PATCH | `/api/v1/platform/errors/:id` | `{ status }` → the issue |
 | DELETE | `/api/v1/platform/errors/:id` | → `{ deleted }` |
 
-## 6. Not built
+## 6. Sentry (optional)
+
+Errors can be forwarded to Sentry as well as kept here. **Settings → Server errors → Sentry** holds
+the whole configuration, so enabling it needs no environment variable, restart or root access,
+and an install with no DSN never contacts Sentry.
+
+| Field | Required | Notes |
+|---|---|---|
+| Send errors to Sentry | – | Off until switched on. A saved DSN with it off keeps the settings. |
+| DSN | to enable | Project → Settings → Client Keys (DSN). Its public key is enough to send events. |
+| Environment | – | Defaults to `production`; use it to separate staging. |
+| Release | – | Defaults to `yoal@<running version>`; issues group by release. |
+| Performance sample rate | – | `0` off (default), `1` every request. |
+| Organisation / project slug | – | Optional; with an auth token, Yoal creates the release on boot. |
+| Auth token | – | Optional, sealed with the platform data key. Needs `project:releases` (`project:write`) to create releases. Events themselves only use the DSN. |
+| Include request metadata | – | Adds the client IP and request headers Sentry normally drops. Request bodies, cookies and `authorization` are always dropped. |
+
+Forwarding uses the same `ServerErrorCapture` as the local tracker, so every source in §1 is
+covered: dashboard loads and actions, REST 500s, bare 5xx responses and background loops. Each
+event carries `yoal.source`, `yoal.status`, `yoal.route`, `yoal.culprit` and `yoal.org` tags and a
+`yoal` context with method, path and route. The user id is set as Sentry's user; no email, IP
+(unless opted in), body or header is added.
+
+**Send test event** sends one real event with the saved configuration. The panel also shows the
+live status: whether the SDK is initialised, how many events this process handed to Sentry, when
+the last one went, and the last transport or release error. If Sentry is slow or down, the request
+path is unaffected: forwarding is fire-and-forget and every error is still stored locally.
+
+## 7. Not built
 
 - Browser (client-side) errors: they would need an unauthenticated, rate-limited intake.
 - Agent and helper errors: agents log to their own journal (`journalctl -u yoal-agent`).

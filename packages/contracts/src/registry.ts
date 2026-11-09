@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { bucketNameSchema } from './object-storage.ts';
 
 /**
  * Container images and registries (docs/REGISTRY.md).
@@ -207,20 +208,36 @@ export const registrySettingsUpdateSchema = z
 		/** G5: Trivy CVE scanning (needs local storage). */
 		cveScanning: z.boolean().optional(),
 		/**
-		 * G6: store blobs in S3 (any S3-compatible endpoint, e.g. a Yoal storage instance) with a
-		 * Redis/Valkey cache, so the registry can move to another node without copying data.
-		 * `null` returns to the node's disk (data is not migrated).
+		 * G6: store blobs in S3, so the registry can move to another node without copying data.
+		 * `managed` provisions a bucket on a Yoal storage instance (docs/OBJECT-STORAGE.md) and a
+		 * scoped access key; `external` is any S3-compatible endpoint. `null` returns to the node's
+		 * disk (data is not migrated).
 		 */
 		s3: z
-			.object({
-				endpoint: z.string().trim().url().max(255),
-				bucket: z.string().trim().regex(/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/),
-				region: z.string().trim().min(1).max(64).default('us-east-1'),
-				accessKeyId: z.string().trim().min(3).max(128),
-				secretAccessKey: z.string().min(8).max(256),
-				/** `redis://` or `rediss://` URL of the dedupe/metadata cache (a managed Valkey works). */
-				cacheUrl: z.string().trim().regex(/^rediss?:\/\//, 'Use a redis:// or rediss:// URL').max(512),
-			})
+			.union([
+				z
+					.object({
+						mode: z.literal('managed'),
+						/** A live Yoal storage instance id; omitted creates a dedicated one on the registry node. */
+						storage: z.string().trim().min(1).max(100).optional(),
+						/** Bucket to create or reuse; `registry` when omitted. */
+						bucket: bucketNameSchema.default('registry'),
+					})
+					.strict(),
+				z
+					.object({
+						/** Absent on payloads older dashboards send; `external` is the default then. */
+						mode: z.literal('external').optional(),
+						endpoint: z.string().trim().url().max(255),
+						bucket: z.string().trim().regex(/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/),
+						region: z.string().trim().min(1).max(64).default('us-east-1'),
+						accessKeyId: z.string().trim().min(3).max(128),
+						secretAccessKey: z.string().min(8).max(256),
+						/** `redis://` or `rediss://` URL of the dedupe/metadata cache; omitted uses a local BoltDB cache. */
+						cacheUrl: z.string().trim().regex(/^rediss?:\/\//, 'Use a redis:// or rediss:// URL').max(512).optional(),
+					})
+					.strict(),
+			])
 			.nullable()
 			.optional(),
 	})
@@ -230,6 +247,16 @@ export const registrySettingsUpdateSchema = z
 			ctx.addIssue({ code: 'custom', path: ['cveScanning'], message: 'zot cannot scan for CVEs with S3 storage; turn one off.' });
 	});
 export type RegistrySettingsUpdate = z.input<typeof registrySettingsUpdateSchema>;
+
+/** Where the registry keeps its blobs: a Yoal-provisioned bucket or any S3-compatible endpoint. */
+export interface RegistryS3View {
+	mode: 'managed' | 'external';
+	endpoint: string;
+	bucket: string;
+	region: string;
+	/** The Yoal storage instance holding the bucket (managed only). */
+	storage: { id: string; name: string } | null;
+}
 
 export interface RegistryView {
 	enabled: boolean;
@@ -249,8 +276,8 @@ export interface RegistryView {
 	cosignKeys: number;
 	cosignKeysPending: boolean;
 	cveScanning: boolean;
-	/** S3 storage (endpoint and bucket only; credentials are never returned). */
-	s3: { endpoint: string; bucket: string; region: string } | null;
+	/** S3 storage (endpoint, bucket and, for managed storage, the instance; credentials are never returned). */
+	s3: RegistryS3View | null;
 }
 
 /** A pull-through mirror a node configures in `registries.conf.d` (G4). */

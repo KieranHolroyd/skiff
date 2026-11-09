@@ -1,7 +1,7 @@
 import { readFileSync, statfsSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { and, desc, eq, isNull } from 'drizzle-orm';
-import { backupRuns, databases, migrations, nodes } from '@yoal/db';
+import { backupRuns, databases, migrations, nodes, platformDbPath } from '@yoal/db';
 import type { CoreContext } from './context.ts';
 import {
 	buildReadyzReport,
@@ -82,7 +82,7 @@ export class UpgradeService {
 		private readonly options: UpgradeServiceOptions
 	) {
 		this.dataDir = options.dataDir ?? ctx.config.dataDir;
-		this.dbPath = options.dbPath ?? process.env.YOAL_DB_PATH ?? join(this.dataDir, 'yoal.db');
+		this.dbPath = options.dbPath ?? process.env.YOAL_DB_PATH ?? platformDbPath(this.dataDir);
 		this.backupsDir =
 			options.backupsDir ?? process.env.YOAL_BACKUPS_DIR ?? join(dirname(this.dataDir), 'backups');
 		this.envDir = options.envDir ?? process.env.YOAL_ETC_DIR ?? '/etc/yoal';

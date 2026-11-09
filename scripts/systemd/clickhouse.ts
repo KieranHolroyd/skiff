@@ -41,6 +41,13 @@ export const CLICKHOUSE_SHA512: Record<ClickHouseArch, string> = {
 };
 
 export const CLICKHOUSE_UNIT = 'yoal-clickhouse.service';
+/**
+ * Installs from before the Yoal rename run ClickHouse as `skiff-clickhouse.service`. It binds the
+ * same loopback port, so leaving it running makes the new server fail to bind while `/ping` still
+ * answers (from the old server) and the control plane then authenticates as `yoal` against the old
+ * `skiff` user. Retire it before starting ours.
+ */
+const LEGACY_CLICKHOUSE_UNIT = 'skiff-clickhouse.service';
 export const CLICKHOUSE_SYSTEM_USER = 'yoal-clickhouse';
 export const CLICKHOUSE_HTTP_PORT = 18123;
 export const CLICKHOUSE_DATABASE = 'yoal';
@@ -654,6 +661,28 @@ function writeIfChanged(path: string, body: string, mode: number): boolean {
 	return true;
 }
 
+/**
+ * Stop and remove the pre-rename unit if it is still installed. Its data is left where it was
+ * (hot telemetry is disposable and is not migrated); only the unit and its port are released.
+ */
+function retireLegacyClickHouseUnit(systemdDir: string, run: EnsureClickHouseOptions['run'], log: (message: string) => void): boolean {
+	const path = join(systemdDir, LEGACY_CLICKHOUSE_UNIT);
+	if (!existsSync(path)) return false;
+	try {
+		run(['systemctl', 'disable', '--now', LEGACY_CLICKHOUSE_UNIT]);
+	} catch {
+		// Already stopped, or systemd does not know it: the unit file still has to go.
+	}
+	rmSync(path, { force: true });
+	try {
+		run(['systemctl', 'daemon-reload']);
+	} catch {
+		// The next start will notice the missing unit anyway.
+	}
+	log(`removed the pre-rename ${LEGACY_CLICKHOUSE_UNIT}; its data stays in /var/lib/skiff/clickhouse`);
+	return true;
+}
+
 /** Installed version directories, newest first (by numeric version). */
 function installedVersions(installRoot: string): string[] {
 	if (!existsSync(installRoot)) return [];
@@ -725,20 +754,40 @@ async function installBinary(options: EnsureClickHouseOptions, arch: ClickHouseA
 	return { binary, changed: true };
 }
 
-async function waitForPing(url: string, options: EnsureClickHouseOptions): Promise<boolean> {
+type ClickHouseProbe = 'serving' | 'unauthorized' | 'unreachable';
+
+/**
+ * Wait until the server answers *as the configured writer*, not just `/ping`. `/ping` needs no
+ * credentials and any ClickHouse on the port answers it, so it cannot tell our server from an
+ * older one. A 401/403 is final: the credentials will not change while we wait, and it is the
+ * signal that users.xml and yoal.env disagree (or another server owns the port).
+ */
+async function waitForReady(url: string, user: string, password: string, options: EnsureClickHouseOptions): Promise<ClickHouseProbe> {
 	const fetcher = options.fetch ?? fetch;
 	const sleep = options.sleep ?? ((ms: number) => Bun.sleep(ms));
 	const deadline = Date.now() + (options.readyTimeoutMs ?? 60_000);
 	do {
 		try {
-			const response = await fetcher(`${url.replace(/\/$/, '')}/ping`, { signal: AbortSignal.timeout(2_000) });
-			if (response.ok && (await response.text()).trim() === 'Ok.') return true;
+			const response = await fetcher(`${url.replace(/\/$/, '')}/?query=SELECT%201`, {
+				method: 'POST',
+				headers: { 'x-clickhouse-user': user, 'x-clickhouse-key': password },
+				signal: AbortSignal.timeout(2_000),
+			});
+			if (response.status === 401 || response.status === 403) return 'unauthorized';
+			if (response.ok && (await response.text()).trim() === '1') return 'serving';
 		} catch {
 			// not listening yet
 		}
 		await sleep(500);
 	} while (Date.now() < deadline);
-	return false;
+	return 'unreachable';
+}
+
+/** The warning that explains an authenticated probe failure to the operator. */
+function readinessWarning(probe: ClickHouseProbe, url: string, user: string, envFile: string): string {
+	if (probe === 'unauthorized')
+		return `ClickHouse is answering on ${url} but rejected the ${user} credentials from ${envFile}; users.xml and the env disagree, or a ClickHouse from an older install still owns the port (check systemctl status ${LEGACY_CLICKHOUSE_UNIT})`;
+	return `ClickHouse did not answer ${url} after the restart (journalctl -u ${CLICKHOUSE_UNIT})`;
 }
 
 /**
@@ -820,17 +869,30 @@ export async function ensureClickHouse(options: EnsureClickHouseOptions): Promis
 			options.run(['chown', `root:${user}`, path]);
 		}
 
+		// A pre-rename install may still own port 18123; free it before starting ours.
+		const legacyRetired = retireLegacyClickHouseUnit(systemdDir, options.run, log);
+
 		const unitPath = join(systemdDir, CLICKHOUSE_UNIT);
 		const previousUnit = existsSync(unitPath) ? readFileSync(unitPath, 'utf8') : null;
 		const unit = clickhouseUnit({ binary, configDir, dataDir, user, memory, alert: existsSync(join(systemdDir, 'yoal-alert@.service')) });
 		const unitChanged = writeIfChanged(unitPath, unit, 0o644);
 		if (unitChanged) options.run(['systemctl', 'daemon-reload']);
 		options.run(['systemctl', 'enable', CLICKHOUSE_UNIT]);
-		const changed = binaryChanged || configChanged || unitChanged;
+		const changed = legacyRetired || binaryChanged || configChanged || unitChanged;
 		result.changed = changed;
+		if (!changed) {
+			// A restart loop that exhausted StartLimitBurst leaves the unit failed; clear it so a
+			// repair re-run actually starts the server.
+			try {
+				options.run(['systemctl', 'reset-failed', CLICKHOUSE_UNIT]);
+			} catch {
+				// not in a failed state
+			}
+		}
 		options.run(['systemctl', changed ? 'restart' : 'start', CLICKHOUSE_UNIT]);
 
-		if (await waitForPing(env.url, options)) {
+		const probe = await waitForReady(env.url, env.user, env.password, options);
+		if (probe === 'serving') {
 			// The new version is serving: drop older ones.
 			for (const version of installedVersions(installRoot))
 				if (join(installRoot, version, 'clickhouse') !== binary) rmSync(join(installRoot, version), { recursive: true, force: true });
@@ -838,15 +900,19 @@ export async function ensureClickHouse(options: EnsureClickHouseOptions): Promis
 			return { ...result, ok: true };
 		}
 
+		// Credential rejection is not fixed by putting the previous unit back: users.xml and
+		// yoal.env are the problem (or another server owns the port).
+		if (probe === 'unauthorized') return warn(readinessWarning(probe, env.url, env.user, envFile));
+
 		// A new binary or unit that does not come up: put the previous unit back.
 		if (previousUnit && unitChanged) {
 			writeIfChanged(unitPath, previousUnit, 0o644);
 			options.run(['systemctl', 'daemon-reload']);
 			options.run(['systemctl', 'restart', CLICKHOUSE_UNIT]);
-			const recovered = await waitForPing(env.url, options);
+			const recovered = (await waitForReady(env.url, env.user, env.password, options)) === 'serving';
 			return warn(`ClickHouse did not answer ${env.url}/ping after the change; ${recovered ? 'reverted to the previous unit' : 'the previous unit did not come up either'} (journalctl -u ${CLICKHOUSE_UNIT})`);
 		}
-		return warn(`ClickHouse did not answer ${env.url}/ping (journalctl -u ${CLICKHOUSE_UNIT})`);
+		return warn(readinessWarning(probe, env.url, env.user, envFile));
 	} catch (error) {
 		return warn(`ClickHouse setup failed: ${(error as Error).message}`);
 	}
@@ -861,22 +927,28 @@ export async function restartClickHouse(
 ): Promise<{ ok: boolean; warning?: string }> {
 	const systemdDir = options.systemdDir ?? CLICKHOUSE_PATHS.systemdDir;
 	if (!clickhouseInstalled(systemdDir)) return { ok: false, warning: `${CLICKHOUSE_UNIT} is not installed` };
-	const url = readEnvFile(options.envFile ?? CLICKHOUSE_PATHS.envFile).get(CLICKHOUSE_ENV.url) ?? `http://127.0.0.1:${CLICKHOUSE_HTTP_PORT}`;
+	const envFile = options.envFile ?? CLICKHOUSE_PATHS.envFile;
+	const env = readEnvFile(envFile);
+	const url = env.get(CLICKHOUSE_ENV.url) ?? `http://127.0.0.1:${CLICKHOUSE_HTTP_PORT}`;
+	const user = env.get(CLICKHOUSE_ENV.user) ?? CLICKHOUSE_WRITER;
+	const password = env.get(CLICKHOUSE_ENV.password) ?? '';
 	try {
 		try {
 			options.run(['systemctl', 'reset-failed', CLICKHOUSE_UNIT]);
 		} catch {
 			// not in a failed state
 		}
+		retireLegacyClickHouseUnit(systemdDir, options.run, options.log ?? (() => {}));
 		options.run(['systemctl', 'restart', CLICKHOUSE_UNIT]);
 	} catch (error) {
 		return { ok: false, warning: `systemctl restart ${CLICKHOUSE_UNIT} failed: ${(error as Error).message}` };
 	}
-	if (await waitForPing(url, options as EnsureClickHouseOptions)) {
+	const probe = await waitForReady(url, user, password, options as EnsureClickHouseOptions);
+	if (probe === 'serving') {
 		options.log?.(`restarted ${CLICKHOUSE_UNIT}`);
 		return { ok: true };
 	}
-	return { ok: false, warning: `ClickHouse did not answer ${url}/ping after the restart (journalctl -u ${CLICKHOUSE_UNIT})` };
+	return { ok: false, warning: readinessWarning(probe, url, user, envFile) };
 }
 
 /** Stop and remove the unit (installer --uninstall). Data and binaries stay unless purged. */

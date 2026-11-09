@@ -41,11 +41,11 @@ describe('ChaCha20-Poly1305 (RFC 8439)', () => {
 describe('age (scrypt recipient)', () => {
 	// Produced by the reference JS implementation (age-encryption / typage) with work factor 10.
 	const TYPAGE_FIXTURE = `-----BEGIN AGE ENCRYPTED FILE-----
-YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IHNjcnlwdCBRalM5Ty9qVWljWVVHdXVw
-TnByR1BnIDEwCkpKZkhTSThFWXVlNktFcjhuZWhoMnN1OXdpWmZldnF0Q1l3V2R0
-Zy8rdFEKLS0tIG44Nlo3L0JxUlRMM01Ja3p6eFhHa0RpbWNZVnZrU1hXSFc2UW14
-Uy83bDQKZBEwkEh4b5iv+o5vMfFxLQy1zE69GNDegcMbS1wcdgdjqJwH92ZxyNdY
-tKASeAAfUfs7pMzsSTc=
+YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IHNjcnlwdCB4MU1jUWR0eUN6ZEdOUmkx
+aDlyZXdBIDEwCmFwT3NXTkpnLzdMbUc3WWhPa212ZlV2bDRvSFRUSWFQZytBWmVL
+TU8vSVUKLS0tIHJXcTJUSDlyZmJEemV6V0VIRUkxbzlINXBIMzV2Ri9ScDFOSXJo
+TnVENFUK+t4NhaB+tkRYS/ceSTwSeoAL7vJNowG+B6U10XZvTvBHX8oFdF+xwQpS
+JaAw0LMtaQL1Tv0DTRg=
 -----END AGE ENCRYPTED FILE-----
 `;
 

@@ -1,5 +1,17 @@
-import { and, eq } from 'drizzle-orm';
-import { deployments, nodes, pipelineRuns, projects, registryOidcTrusts, registryPins, registryRepositories, settings, workloads } from '@yoal/db';
+import { and, eq, isNull } from 'drizzle-orm';
+import {
+	deployments,
+	nodes,
+	pipelineRuns,
+	projects,
+	registryOidcTrusts,
+	registryPins,
+	registryRepositories,
+	settings,
+	storageInstances,
+	storageKeys,
+	workloads,
+} from '@yoal/db';
 import {
 	REGISTRY_DEFAULT_PORT,
 	REGISTRY_DEFAULT_VERSION,
@@ -11,6 +23,7 @@ import {
 	REGISTRY_PIN_TAG_PREFIX,
 	REGISTRY_REPOSITORY_PATTERN,
 	hasPermission,
+	orgNetworkName,
 	parseImageReference,
 	registryImageTag,
 	registryOidcTrustCreateSchema,
@@ -24,6 +37,7 @@ import {
 	type RegistryOidcTrustView,
 	type RegistryPinView,
 	type RegistryRepositoryView,
+	type RegistryS3View,
 	type RegistrySettingsUpdate,
 	type RegistryTagView,
 	type RegistryUsageView,
@@ -32,6 +46,7 @@ import {
 	type WorkloadActivation,
 	type WorkloadDesired,
 } from '@yoal/contracts';
+import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
 import { CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { buildSystemPrincipal } from './iam/system.ts';
@@ -39,6 +54,7 @@ import { tokenRestrictionAllows } from './iam/token-consumers.ts';
 import { MANIFEST_ACCEPT } from './oci-client.ts';
 import { OidcError, refMatches, verifyGithubOidc, verifyGitlabOidc } from './registry-oidc.ts';
 import { certificateFromPrivateKeyPem, type RegistryAccess } from './registry-token.ts';
+import type { StorageRow } from './storage-instances.ts';
 import { hmac, newId, parseJson, randomBytes, randomToken, safeEqual, sha256Hex } from './util.ts';
 
 /**
@@ -56,6 +72,10 @@ import { hmac, newId, parseJson, randomBytes, randomToken, safeEqual, sha256Hex 
  */
 
 const CONFIG_KEY = 'registry.config';
+/** Managed S3: the dedicated RustFS instance, its bucket and the scoped key. */
+export const REGISTRY_STORAGE_NAME = 'registry-storage';
+export const REGISTRY_STORAGE_BUCKET = 'registry';
+export const REGISTRY_STORAGE_KEY = 'registry';
 /**
  * Legacy (D155): the registry key and certificate sealed in `settings` before the ring. The realm
  * no longer signs with it, but the row stays readable so tokens minted before I15 remain valid
@@ -94,8 +114,19 @@ interface RegistryConfig {
 	/** G5: zot's admin password (sealed), for the key-upload routes bearer tokens cannot use. */
 	adminPasswordSealed: string | null;
 	cveScanning: boolean;
-	/** G6: S3 storage with a Redis/Valkey cache; secrets sealed. */
-	s3: { endpoint: string; bucket: string; region: string; accessKeyId: string; secretSealed: string; cacheUrlSealed: string } | null;
+	/** G6: S3 storage; secrets sealed. `managed` means Yoal provisioned the bucket and key. */
+	s3: {
+		mode: 'managed' | 'external';
+		endpoint: string;
+		bucket: string;
+		region: string;
+		accessKeyId: string;
+		secretSealed: string;
+		cacheUrlSealed: string | null;
+		storageId: string | null;
+		/** The storage instance's org, so the registry can join its network when needed. */
+		storageOrgId: string | null;
+	} | null;
 }
 
 export interface RegistryTokenResponse {
@@ -139,7 +170,19 @@ export class RegistryService {
 			cosignKeysSyncedHash: stored.cosignKeysSyncedHash ?? null,
 			adminPasswordSealed: stored.adminPasswordSealed ?? null,
 			cveScanning: stored.cveScanning ?? false,
-			s3: stored.s3 ?? null,
+			s3: stored.s3
+				? {
+						mode: stored.s3.mode ?? 'external',
+						endpoint: stored.s3.endpoint,
+						bucket: stored.s3.bucket,
+						region: stored.s3.region,
+						accessKeyId: stored.s3.accessKeyId,
+						secretSealed: stored.s3.secretSealed,
+						cacheUrlSealed: stored.s3.cacheUrlSealed ?? null,
+						storageId: stored.s3.storageId ?? null,
+						storageOrgId: stored.s3.storageOrgId ?? null,
+					}
+				: null,
 		};
 	}
 
@@ -195,7 +238,26 @@ export class RegistryService {
 			cosignKeys: config.cosignKeys.length,
 			cosignKeysPending: config.cosignKeys.length > 0 && config.cosignKeysSyncedHash !== this.keysHash(config),
 			cveScanning: config.cveScanning,
-			s3: config.s3 ? { endpoint: config.s3.endpoint, bucket: config.s3.bucket, region: config.s3.region } : null,
+			s3: this.s3View(config),
+		};
+	}
+
+	private s3View(config: RegistryConfig): RegistryS3View | null {
+		if (!config.s3) return null;
+		const storage =
+			config.s3.mode === 'managed' && config.s3.storageId
+				? (this.ctx.db
+						.select({ id: storageInstances.id, name: storageInstances.name })
+						.from(storageInstances)
+						.where(eq(storageInstances.id, config.s3.storageId))
+						.get() ?? null)
+				: null;
+		return {
+			mode: config.s3.mode,
+			endpoint: config.s3.endpoint,
+			bucket: config.s3.bucket,
+			region: config.s3.region,
+			storage,
 		};
 	}
 
@@ -258,19 +320,22 @@ export class RegistryService {
 			config.cosignKeys = input.cosignKeys.map((key) => key.trim());
 		}
 		if (input.cveScanning !== undefined) config.cveScanning = input.cveScanning;
-		if (input.s3 !== undefined) {
-			config.s3 = input.s3
-				? {
-						endpoint: input.s3.endpoint,
-						bucket: input.s3.bucket,
-						region: input.s3.region ?? 'us-east-1',
-						accessKeyId: input.s3.accessKeyId,
-						secretSealed: this.ctx.secrets.seal(PLATFORM_KEY_ORG, input.s3.secretAccessKey),
-						cacheUrlSealed: this.ctx.secrets.seal(PLATFORM_KEY_ORG, input.s3.cacheUrl),
-					}
-				: null;
-		}
+		if (input.s3 !== undefined) config.s3 = input.s3 ? this.resolveS3(config, input.s3) : null;
 		if (config.cveScanning && config.s3) throw new ValidationError('zot cannot scan for CVEs with S3 storage; turn one off.');
+		if (
+			(input.node !== undefined || input.s3 !== undefined) &&
+			config.s3?.mode === 'managed' &&
+			config.s3.storageId &&
+			config.nodeId
+		) {
+			// A missing instance or a moved node blocks a node/storage change, but never an
+			// unrelated settings update (or turning the registry off to recover).
+			const instance = this.ctx.storage.byId(config.s3.storageId);
+			if (instance && instance.nodeId !== config.nodeId)
+				throw new ValidationError(
+					`The registry's bucket lives on "${instance.name}", which runs on another node. Keep the registry on that node, or switch its storage.`,
+				);
+		}
 		if ((config.signatures !== 'off' || config.cosignKeys.length > 0) && !config.adminPasswordSealed)
 			config.adminPasswordSealed = this.ctx.secrets.seal(PLATFORM_KEY_ORG, randomToken(24));
 		if (config.enabled && !config.nodeId) throw new ValidationError('Choose the node the registry runs on.');
@@ -288,13 +353,124 @@ export class RegistryService {
 			args: {
 				...audited,
 				...(input.cosignKeys ? { cosignKeys: input.cosignKeys.length } : {}),
-				...(s3Input !== undefined ? { s3: s3Input ? { endpoint: s3Input.endpoint, bucket: s3Input.bucket } : null } : {}),
+				...(s3Input !== undefined
+					? {
+							s3: s3Input
+								? s3Input.mode === 'managed'
+									? { mode: 'managed', storage: s3Input.storage ?? null, bucket: s3Input.bucket }
+									: { mode: 'external', endpoint: s3Input.endpoint, bucket: s3Input.bucket }
+								: null,
+						}
+					: {}),
 			},
 			result: 'ok',
 		});
 		// Keys go to zot as soon as it runs; the maintenance sweep retries until they land.
 		void this.syncTrustKeys().catch(() => undefined);
 		return this.view(principal);
+	}
+
+	/**
+	 * Turn the S3 settings into stored config. `managed` asks Yoal to create (or reuse) a bucket on
+	 * one of its own RustFS instances, with a scoped key; `external` keeps the caller's credentials.
+	 */
+	private resolveS3(config: RegistryConfig, input: NonNullable<RegistrySettingsUpdate['s3']>): RegistryConfig['s3'] {
+		if (input.mode === 'managed') return this.configureManagedS3(config, input);
+		return {
+			mode: 'external',
+			endpoint: input.endpoint,
+			bucket: input.bucket,
+			region: input.region ?? 'us-east-1',
+			accessKeyId: input.accessKeyId,
+			secretSealed: this.ctx.secrets.seal(PLATFORM_KEY_ORG, input.secretAccessKey),
+			cacheUrlSealed: input.cacheUrl ? this.ctx.secrets.seal(PLATFORM_KEY_ORG, input.cacheUrl) : null,
+			storageId: null,
+			storageOrgId: null,
+		};
+	}
+
+	/**
+	 * Automatic S3 setup: ensure a RustFS instance on the registry node, a bucket and a read-write
+	 * key scoped to that bucket, then store only the endpoint and sealed key here. The key can
+	 * reach nothing else, so a registry compromise is a bucket compromise, not the instance's.
+	 */
+	private configureManagedS3(
+		config: RegistryConfig,
+		input: { storage?: string; bucket?: string },
+	): NonNullable<RegistryConfig['s3']> {
+		if (!config.nodeId) throw new ValidationError('Choose the node the registry runs on before using Yoal object storage.');
+		const bucket = input.bucket ?? REGISTRY_STORAGE_BUCKET;
+		let instance = input.storage
+			? this.ctx.storage.byId(input.storage, { includeDeleted: true })
+			: this.ctx.storage.byName(PLATFORM_KEY_ORG, REGISTRY_STORAGE_NAME, { includeDeleted: true });
+		if (input.storage && !instance) throw new NotFoundError('Storage instance');
+		if (instance?.deletedAt)
+			throw new ValidationError(
+				`Storage "${instance.name}" is in the trash. Restore it or purge it before using it for the registry.`,
+			);
+		instance ??= this.provisionRegistryStorage(config.nodeId, bucket);
+		if (instance.nodeId !== config.nodeId)
+			throw new ValidationError(
+				`"${instance.name}" runs on another node. A private S3 instance is reachable only from its own node; pick one on the registry node or let Yoal create one there.`,
+			);
+		const system = buildSystemPrincipal('system:registry-storage', instance.orgId);
+		const view = this.ctx.storage.get(system, instance.name);
+		if (!view.buckets.some((item) => item.name === bucket))
+			this.ctx.storage.createBucket(system, instance.name, { name: bucket });
+		// One named key, recreated when its grant no longer covers the bucket. Its secret lives in
+		// `storage_keys` (sealed) and a copy here; neither is ever returned by a surface.
+		let key = this.ctx.storage
+			.listKeys(system, instance.name)
+			.find((item) => item.name === REGISTRY_STORAGE_KEY && item.status === 'active');
+		const grantsBucket = key?.grants.some((grant) => grant.bucket === bucket && grant.mode === 'read-write');
+		if (!key || !grantsBucket) {
+			if (key) this.ctx.storage.revokeKey(system, instance.name, key.id);
+			key = this.ctx.storage.createKey(system, instance.name, {
+				name: REGISTRY_STORAGE_KEY,
+				grants: [{ bucket, mode: 'read-write' }],
+				purpose: 'Registry blobs',
+			});
+		}
+		const row = this.ctx.db.select().from(storageKeys).where(eq(storageKeys.id, key.id)).get();
+		if (!row) throw new ValidationError('The registry storage key could not be created.');
+		return {
+			mode: 'managed',
+			endpoint: view.internalEndpoint.container,
+			bucket,
+			region: view.region,
+			accessKeyId: row.accessKeyId,
+			secretSealed: this.ctx.secrets.seal(PLATFORM_KEY_ORG, this.ctx.secrets.open(instance.orgId, row.secretSealed)),
+			cacheUrlSealed: null,
+			storageId: instance.id,
+			storageOrgId: instance.orgId,
+		};
+	}
+
+	/** A dedicated RustFS on the registry node, in the platform org so no tenant can see or delete it. */
+	private provisionRegistryStorage(nodeId: string, bucket: string): StorageRow {
+		const system = buildSystemPrincipal('system:registry-storage', PLATFORM_KEY_ORG);
+		const view = this.ctx.storage.create(system, {
+			name: REGISTRY_STORAGE_NAME,
+			placement: nodeId,
+			buckets: [bucket],
+		});
+		const row = this.ctx.storage.byId(view.id);
+		if (!row) throw new ValidationError('The registry storage instance could not be created.');
+		return row;
+	}
+
+	/** Live storage instances a platform admin can point the registry's managed S3 at. */
+	storageCandidates(): Array<{ id: string; name: string; nodeId: string; nodeName: string | null; status: string }> {
+		return this.ctx.db
+			.select()
+			.from(storageInstances)
+			.where(isNull(storageInstances.deletedAt))
+			.all()
+			.map((row) => {
+				const node = this.ctx.db.select({ name: nodes.name }).from(nodes).where(eq(nodes.id, row.nodeId)).get();
+				return { id: row.id, name: row.name, nodeId: row.nodeId, nodeName: node?.name ?? null, status: row.status };
+			})
+			.sort((a, b) => a.name.localeCompare(b.name));
 	}
 
 	signaturePolicy(): 'off' | 'warn' | 'enforce' {
@@ -515,12 +691,17 @@ export class RegistryService {
 	desiredForNode(nodeId: string): WorkloadDesired[] {
 		const config = this.config();
 		if (!config.enabled || config.nodeId !== nodeId || !config.workloadId) return [];
+		// Managed S3 keeps the registry next to its private RustFS instance. On installs with
+		// per-org networks both must join the storage's network or DNS aliases stop resolving.
+		const managedOrg = config.s3?.mode === 'managed' ? config.s3.storageOrgId : null;
+		const isolated = Boolean(managedOrg) && featureEnabled(this.ctx.config, 'ORG_NETWORKS');
 		return [
 			{
 				id: config.workloadId,
 				projectId: config.workloadId,
 				projectSlug: 'registry',
 				deploymentId: config.workloadId,
+				...(isolated && managedOrg ? { orgId: managedOrg, networkName: orgNetworkName(managedOrg) } : {}),
 				runtime: 'container',
 				status: 'running',
 				release: null,
@@ -582,7 +763,9 @@ export class RegistryService {
 					? {
 							YOAL_REGISTRY_S3_ACCESS_KEY: config.s3.accessKeyId,
 							YOAL_REGISTRY_S3_SECRET_KEY: this.ctx.secrets.open(PLATFORM_KEY_ORG, config.s3.secretSealed),
-							YOAL_REGISTRY_CACHE_URL: this.ctx.secrets.open(PLATFORM_KEY_ORG, config.s3.cacheUrlSealed),
+							...(config.s3.cacheUrlSealed
+								? { YOAL_REGISTRY_CACHE_URL: this.ctx.secrets.open(PLATFORM_KEY_ORG, config.s3.cacheUrlSealed) }
+								: {}),
 						}
 					: {}),
 			},

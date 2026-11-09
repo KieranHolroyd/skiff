@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import * as schema from './schema.ts';
 import { migrations } from './migrations.ts';
@@ -57,7 +57,68 @@ export function createDb(options: OpenOptions) {
 	return { sqlite, db: drizzle(sqlite, { schema }) };
 }
 
+/**
+ * The platform database file, keeping an install that predates the Yoal rename on its data.
+ * `yoal.db` is used from now on; a data directory that only has the old `skiff.db` keeps it. When
+ * a failed upgrade left an empty `yoal.db` beside a populated `skiff.db`, the populated one wins.
+ */
+export function platformDbPath(dataDir: string): string {
+	const current = `${dataDir}/yoal.db`;
+	const legacy = `${dataDir}/skiff.db`;
+	try {
+		if (!existsSync(legacy)) return current;
+		if (!existsSync(current)) return legacy;
+		if (hasSetupUser(current) || !hasSetupUser(legacy)) return current;
+		return legacy;
+	} catch {
+		// A read-only or missing data directory: `createDb` reports the real error.
+		return current;
+	}
+}
+
+/** True when the file holds a Better Auth `user` row, i.e. an install that has been set up. */
+function hasSetupUser(path: string): boolean {
+	try {
+		const db = new Database(path, { readonly: true, create: false, strict: true });
+		try {
+			const hasTable = db
+				.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'user'")
+				.get();
+			if (!hasTable) return false;
+			return Boolean(db.query('SELECT 1 FROM user LIMIT 1').get());
+		} finally {
+			db.close();
+		}
+	} catch {
+		return false;
+	}
+}
+
+function hasTable(sqlite: Database, name: string): boolean {
+	return Boolean(
+		sqlite.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name),
+	);
+}
+
+/**
+ * Keep the migration ledger across the Skiff → Yoal rename (D171 follow-up). An install that has
+ * already run migrations must not run them again: every mid-history migration is a non-idempotent
+ * `ALTER TABLE`, so a fresh ledger would answer every page with a 500. Rename the old table, or
+ * merge it when a broken upgrade already created an empty `yoal_migrations`.
+ */
+function adoptLegacyMigrations(sqlite: Database): void {
+	if (!hasTable(sqlite, 'skiff_migrations')) return;
+	if (!hasTable(sqlite, 'yoal_migrations')) {
+		sqlite.run('ALTER TABLE skiff_migrations RENAME TO yoal_migrations');
+		return;
+	}
+	sqlite.run(
+		'INSERT OR IGNORE INTO yoal_migrations (id, applied_at) SELECT id, applied_at FROM skiff_migrations',
+	);
+}
+
 export function migrate(sqlite: Database): string[] {
+	adoptLegacyMigrations(sqlite);
 	sqlite.run(
 		'CREATE TABLE IF NOT EXISTS yoal_migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)',
 	);

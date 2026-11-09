@@ -277,6 +277,7 @@ function harness(name: string, overrides: Partial<EnsureClickHouseOptions> = {})
 	const downloads: string[] = [];
 	const logs: string[] = [];
 	let pingOk = true;
+	let authOk = true;
 	const options: EnsureClickHouseOptions = {
 		installRoot: join(dir, 'opt'),
 		configDir: join(dir, 'etc', 'clickhouse'),
@@ -303,6 +304,11 @@ function harness(name: string, overrides: Partial<EnsureClickHouseOptions> = {})
 				if (!pingOk) throw new Error('connection refused');
 				return new Response('Ok.\n');
 			}
+			// The readiness probe authenticates as the writer; downloads are the other callers.
+			if (url.includes('query=SELECT')) {
+				if (!pingOk) throw new Error('connection refused');
+				return authOk ? new Response('1\n') : new Response('unauthorized', { status: 401 });
+			}
 			downloads.push(url);
 			return new Response(release.archive);
 		},
@@ -310,7 +316,15 @@ function harness(name: string, overrides: Partial<EnsureClickHouseOptions> = {})
 		readyTimeoutMs: 20,
 		...overrides,
 	};
-	return { dir, options, calls, downloads, logs, setPing: (ok: boolean) => (pingOk = ok) };
+	return {
+		dir,
+		options,
+		calls,
+		downloads,
+		logs,
+		setPing: (ok: boolean) => (pingOk = ok),
+		setAuth: (ok: boolean) => (authOk = ok),
+	};
 }
 
 describe('ensureClickHouse', () => {
@@ -343,6 +357,26 @@ describe('ensureClickHouse', () => {
 		expect(privileged).toContain(`chown yoal-clickhouse:yoal-clickhouse ${join(h.dir, 'var', 'clickhouse')}`);
 		expect(privileged).toContain(`chown root:yoal-clickhouse ${join(h.dir, 'etc', 'clickhouse', 'users.xml')}`);
 		expect(privileged.slice(-3)).toEqual(['systemctl daemon-reload', `systemctl enable ${CLICKHOUSE_UNIT}`, `systemctl restart ${CLICKHOUSE_UNIT}`]);
+	});
+
+	test('retires the pre-rename unit before taking port 18123', async () => {
+		const h = harness('legacy-unit');
+		const legacy = join(h.dir, 'systemd', 'skiff-clickhouse.service');
+		writeFileSync(legacy, '[Unit]\nDescription=old\n');
+		const result = await ensureClickHouse(h.options);
+		expect(result).toMatchObject({ ok: true, changed: true });
+		expect(existsSync(legacy)).toBe(false);
+		expect(h.calls).toContain('systemctl disable --now skiff-clickhouse.service');
+		expect(h.logs.join('\n')).toContain('pre-rename skiff-clickhouse.service');
+	});
+
+	test('a server that answers /ping but rejects the credentials is not reported as installed', async () => {
+		const h = harness('wrong-creds');
+		h.setAuth(false);
+		const result = await ensureClickHouse(h.options);
+		expect(result.ok).toBe(false);
+		expect(result.warning).toContain('rejected the yoal credentials');
+		expect(result.warning).toContain('users.xml');
 	});
 
 	test('a re-run changes nothing: no download, no reload, start instead of restart', async () => {
@@ -393,7 +427,7 @@ describe('ensureClickHouse', () => {
 		const result = await ensureClickHouse({
 			...h.options,
 			version: '26.8.99.1',
-			fetch: async (url) => (url.endsWith('/ping') ? new Response('Ok.\n') : new Response('', { status: 404 })),
+			fetch: async (url) => (url.includes('/ping') || url.includes('query=SELECT') ? new Response(url.includes('/ping') ? 'Ok.\n' : '1\n') : new Response('', { status: 404 })),
 		});
 		expect(result.ok).toBe(true);
 		expect(result.binary).toBe(join(h.dir, 'opt', CLICKHOUSE_VERSION, 'clickhouse'));
@@ -488,7 +522,7 @@ describe('memory ceiling (YOAL_CLICKHOUSE_MEMORY_MB)', () => {
 		expect(h.calls).toContain(`systemctl start ${CLICKHOUSE_UNIT}`);
 	});
 
-	test('restartClickHouse clears a failed unit, restarts it and waits for /ping', async () => {
+	test('restartClickHouse clears a failed unit, restarts it and waits for an authenticated answer', async () => {
 		const h = harness('restart');
 		expect(await restartClickHouse(h.options)).toMatchObject({ ok: false, warning: expect.stringContaining('not installed') });
 		await ensureClickHouse(h.options);
@@ -496,6 +530,6 @@ describe('memory ceiling (YOAL_CLICKHOUSE_MEMORY_MB)', () => {
 		expect(await restartClickHouse(h.options)).toEqual({ ok: true });
 		expect(h.calls).toEqual([`systemctl reset-failed ${CLICKHOUSE_UNIT}`, `systemctl restart ${CLICKHOUSE_UNIT}`]);
 		h.setPing(false);
-		expect((await restartClickHouse(h.options)).warning).toContain('/ping');
+		expect((await restartClickHouse(h.options)).warning).toContain('did not answer');
 	});
 });

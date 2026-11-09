@@ -8,18 +8,24 @@
 	import EyeOffIcon from '@lucide/svelte/icons/eye-off';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import SearchIcon from '@lucide/svelte/icons/search';
+	import SendIcon from '@lucide/svelte/icons/send';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import ZapIcon from '@lucide/svelte/icons/zap';
 	import { serverErrorSources, type ServerErrorStatus } from '@yoal/contracts';
+	import { untrack } from 'svelte';
 	import { toast } from 'svelte-sonner';
+	import { notify } from '#lib/actions.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
+	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
+	import { Switch } from '#lib/components/ui/switch/index.js';
 	import * as Table from '#lib/components/ui/table/index.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import EmptyState from '../../_lib/EmptyState.svelte';
+	import Panel from '../../_lib/Panel.svelte';
 	import StatStrip from '../../_lib/service/StatStrip.svelte';
 	import type { Stat } from '../../_lib/service/sections.js';
 	import { formatDateTime, formatRelative } from '../../_lib/format.js';
@@ -29,6 +35,16 @@
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
+
+	// The Sentry form is local until saved; the page data resets it after a successful save.
+	let sentryEnabled = $state(untrack(() => data.sentry.enabled));
+	let sentryPii = $state(untrack(() => data.sentry.sendDefaultPii));
+	let sentryClearToken = $state(false);
+	$effect(() => {
+		sentryEnabled = data.sentry.enabled;
+		sentryPii = data.sentry.sendDefaultPii;
+		sentryClearToken = false;
+	});
 
 	const TABS = [
 		{ id: 'unresolved', label: 'Unresolved' },
@@ -370,6 +386,210 @@
 			</div>
 		{/if}
 	{/if}
+
+	<Panel
+		title="Sentry"
+		icon={BugIcon}
+		description="Optional. Forward the same errors to Sentry as well as keeping them here. Nothing leaves this install until a DSN is saved and switched on."
+	>
+		{#snippet actions()}
+			<Badge variant={data.sentry.enabled ? 'success' : 'outline'}
+				>{data.sentry.enabled ? 'On' : 'Off'}</Badge
+			>
+		{/snippet}
+		<form
+			method="POST"
+			action="?/saveSentry"
+			use:enhance={() => {
+				return async ({ result, update }) => {
+					notify(result);
+					await update({ reset: false });
+				};
+			}}
+		>
+			<div class="space-y-4">
+				<Field.Group>
+					<Field.Field orientation="horizontal" class="gap-2">
+						<input type="hidden" name="enabled" value={sentryEnabled ? 'true' : ''} />
+						<Switch id="sentry-enabled" bind:checked={sentryEnabled} />
+						<Field.Content>
+							<Field.Label for="sentry-enabled" class="font-normal">
+								Send errors to Sentry
+							</Field.Label>
+							<Field.Description>
+								The local issue list above is always kept. If Sentry is unreachable, errors are still
+								recorded and alerts still fire.
+							</Field.Description>
+						</Field.Content>
+					</Field.Field>
+				</Field.Group>
+
+				<div class="grid gap-4 sm:grid-cols-2">
+					<Field.Field class="sm:col-span-2">
+						<Field.Label for="sentry-dsn">DSN</Field.Label>
+						<Input
+							id="sentry-dsn"
+							name="dsn"
+							value={data.sentry.dsn ?? ''}
+							placeholder="https://public-key@o123.ingest.sentry.io/456"
+							class="font-mono text-xs"
+							autocomplete="off"
+						/>
+						<Field.Description>
+							Project → Settings → Client Keys (DSN). The public key is enough to send events.
+						</Field.Description>
+					</Field.Field>
+					<Field.Field>
+						<Field.Label for="sentry-environment">Environment</Field.Label>
+						<Input
+							id="sentry-environment"
+							name="environment"
+							value={data.sentry.environment}
+							placeholder="production"
+						/>
+						<Field.Description>Separate production from staging in Sentry.</Field.Description>
+					</Field.Field>
+					<Field.Field>
+						<Field.Label for="sentry-release">Release</Field.Label>
+						<Input
+							id="sentry-release"
+							name="release"
+							value={data.sentry.release ?? ''}
+							placeholder="yoal@1.2.3"
+							class="font-mono text-xs"
+						/>
+						<Field.Description>
+							Defaults to the running Yoal version. Issues group by release when set.
+						</Field.Description>
+					</Field.Field>
+					<Field.Field>
+						<Field.Label for="sentry-traces">Performance sample rate</Field.Label>
+						<Input
+							id="sentry-traces"
+							name="tracesSampleRate"
+							type="number"
+							min={0}
+							max={1}
+							step="0.01"
+							value={data.sentry.tracesSampleRate}
+						/>
+						<Field.Description>
+							0 turns performance tracing off (the default). 1 traces every request; start around
+							0.05 on a busy install.
+						</Field.Description>
+					</Field.Field>
+					<Field.Field>
+						<Field.Label for="sentry-org">Organisation slug</Field.Label>
+						<Input
+							id="sentry-org"
+							name="organizationSlug"
+							value={data.sentry.organizationSlug ?? ''}
+							placeholder="acme"
+							class="font-mono text-xs"
+						/>
+						<Field.Description>
+							Optional. With a project slug and token, Yoal creates the release on boot.
+						</Field.Description>
+					</Field.Field>
+					<Field.Field>
+						<Field.Label for="sentry-project">Project slug</Field.Label>
+						<Input
+							id="sentry-project"
+							name="projectSlug"
+							value={data.sentry.projectSlug ?? ''}
+							placeholder="yoal-control-plane"
+							class="font-mono text-xs"
+						/>
+					</Field.Field>
+					<Field.Field class="sm:col-span-2">
+						<Field.Label for="sentry-token">Auth token</Field.Label>
+						<Input
+							id="sentry-token"
+							name="authToken"
+							type="password"
+							value=""
+							placeholder={data.sentry.hasAuthToken
+								? `Saved (${data.sentry.authTokenHint}) · leave blank to keep`
+								: 'Optional, for release creation'}
+							autocomplete="off"
+							class="font-mono text-xs"
+						/>
+						<Field.Description>
+							Stored encrypted and never shown again. Needs <code class="font-mono text-xs"
+								>project:releases</code
+							>
+							(or <code class="font-mono text-xs">project:write</code>) to create the release; events
+							themselves only need the DSN.
+						</Field.Description>
+					</Field.Field>
+				</div>
+
+				<Field.Group>
+					<Field.Field orientation="horizontal" class="gap-2">
+						<input type="hidden" name="sendDefaultPii" value={sentryPii ? 'true' : ''} />
+						<Switch id="sentry-pii" bind:checked={sentryPii} />
+						<Field.Content>
+							<Field.Label for="sentry-pii" class="font-normal">
+								Include request metadata
+							</Field.Label>
+							<Field.Description>
+								Adds the client IP and request headers Sentry normally drops. Request bodies, cookies
+								and authorisation headers are never sent, whatever this is set to.
+							</Field.Description>
+						</Field.Content>
+					</Field.Field>
+					{#if data.sentry.hasAuthToken}
+						<Field.Field orientation="horizontal" class="gap-2">
+							<input type="hidden" name="clearAuthToken" value={sentryClearToken ? 'true' : ''} />
+							<Checkbox id="sentry-clear-token" bind:checked={sentryClearToken} />
+							<Field.Content>
+								<Field.Label for="sentry-clear-token" class="font-normal">
+									Remove the saved auth token
+								</Field.Label>
+							</Field.Content>
+						</Field.Field>
+					{/if}
+				</Field.Group>
+
+				<div class="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
+					<p class="text-xs text-muted-foreground">
+						{#if !data.canChange}
+							Read-only: only a platform admin can change these settings.
+						{:else if data.sentryRuntime.active}
+							Forwarding to Sentry · {data.sentryRuntime.eventsSent} event{data.sentryRuntime
+								.eventsSent === 1
+								? ''
+								: 's'} this process
+							{#if data.sentryRuntime.lastEventAt}
+								· last {formatRelative(data.sentryRuntime.lastEventAt)}
+							{/if}
+						{:else if data.sentry.enabled}
+							Not initialised yet. Save to apply the current settings.
+						{:else}
+							Off. Errors stay in this database only.
+						{/if}
+						{#if data.sentryRuntime.lastError}
+							<span class="block text-destructive">{data.sentryRuntime.lastError}</span>
+						{/if}
+					</p>
+					<div class="flex gap-2">
+						<Button
+							type="submit"
+							formaction="?/testSentry"
+							variant="outline"
+							size="sm"
+							disabled={!data.canChange}
+						>
+							<SendIcon />Send test event
+						</Button>
+						<Button type="submit" size="sm" disabled={!data.canChange}>
+							Save Sentry settings
+						</Button>
+					</div>
+				</div>
+			</div>
+		</form>
+	</Panel>
 
 	<p class="text-xs text-muted-foreground">
 		Messages and stacks are scrubbed of credentials, paths never keep their query string, and no

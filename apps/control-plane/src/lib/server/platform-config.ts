@@ -10,6 +10,7 @@ import {
 	writeFileSync
 } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { platformDbPath } from '@yoal/db';
 import {
 	PLATFORM_CONFIG_DEFAULTS,
 	PLATFORM_CONFIG_SECRET_KEYS,
@@ -68,7 +69,7 @@ const paths = {
 	litestreamBin: PLATFORM_CONFIG_DEFAULTS.litestreamBin,
 	litestreamConfig: env.YOAL_LITESTREAM_CONFIG ?? PLATFORM_CONFIG_DEFAULTS.litestreamConfig,
 	backupsDir: join(dirname(env.YOAL_DATA_DIR ?? '/var/lib/yoal/data'), 'backups'),
-	dbPath: join(env.YOAL_DATA_DIR ?? '.data', 'yoal.db')
+	dbPath: platformDbPath(env.YOAL_DATA_DIR ?? '.data')
 };
 
 /**

@@ -364,7 +364,7 @@ export const SECTIONS: Section[] = [
 		group: 'observability',
 		label: 'Server errors',
 		summary:
-			'Exceptions and 5xx answers from the control plane itself, grouped into issues you can resolve or ignore.',
+			'Exceptions and 5xx answers from the control plane itself, grouped into issues, with optional forwarding to Sentry.',
 		// See `SectionHref`: the route is real, but `resolve()` cannot infer past 25 members.
 		href: '/(dashboard)/settings/errors' as unknown as SectionHref,
 		path: '/settings/errors',

@@ -73,6 +73,7 @@ import type { UserPoolService } from './user-pools.ts';
 import type { UserPoolEngineService, UserPoolMailer } from './user-pool-engine.ts';
 import type { ScimTokenService } from './iam/scim.ts';
 import type { ServerErrorService } from './server-errors.ts';
+import type { SentryService } from './sentry.ts';
 
 /**
  * Shared dependency object. Service instances are attached after construction (in `createCore`)
@@ -175,6 +176,8 @@ export interface CoreContext {
 	authPolicy: AuthPolicyService;
 	/** The control plane's own error tracker (docs/SERVER-ERRORS.md). */
 	serverErrors: ServerErrorService;
+	/** Optional Sentry forwarding for the errors above (docs/SERVER-ERRORS.md §6). */
+	sentry: SentryService;
 	/** Platform roles and bindings at `{ type: 'platform' }` (IAM.md I24, D129). */
 	platformIam: PlatformIamService;
 	/** Service accounts: org-owned machine principals (`sa_…`, IAM.md I13). */

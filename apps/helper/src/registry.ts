@@ -73,7 +73,8 @@ export interface RegistrySecrets {
 	certificatePem: string;
 	eventsUrl: string | null;
 	adminHtpasswd: string | null;
-	s3: { accessKey: string; secretKey: string; cacheUrl: string } | null;
+	/** S3 credentials; `cacheUrl` is null for a single replica using zot's local BoltDB cache. */
+	s3: { accessKey: string; secretKey: string; cacheUrl: string | null } | null;
 }
 
 const HOST_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?::[0-9]{1,5})?$/;
@@ -188,8 +189,10 @@ export function renderZotConfig(registry: WorkloadRegistry, secretsOrEventsUrl: 
 			? secretsOrEventsUrl
 			: { certificatePem: '', eventsUrl: secretsOrEventsUrl, adminHtpasswd: null, s3: null };
 	const eventsUrl = secrets.eventsUrl;
-	if (registry.s3 && !secrets.s3) throw new RegistryValidationError('S3 storage needs its credentials and cache URL');
+	if (registry.s3 && !secrets.s3) throw new RegistryValidationError('S3 storage needs its credentials');
 	if (registry.trust && !secrets.adminHtpasswd) throw new RegistryValidationError('Signature verification needs the admin htpasswd');
+	const cacheUrl = registry.s3 ? (secrets.s3?.cacheUrl ?? null) : null;
+	const remoteCache = cacheUrl ? { remoteCache: true, cacheDriver: { name: 'redis', url: cacheUrl, keyprefix: 'zot' } } : {};
 	const config = {
 		distSpecVersion: '1.1.1',
 		storage: {
@@ -197,8 +200,9 @@ export function renderZotConfig(registry: WorkloadRegistry, secretsOrEventsUrl: 
 			dedupe: true,
 			...(registry.s3 && secrets.s3
 				? {
-						remoteCache: true,
-						cacheDriver: { name: 'redis', url: secrets.s3.cacheUrl, keyprefix: 'zot' },
+						// A single replica can dedupe through zot's local BoltDB cache (in the data dir).
+						// A remote Redis/Valkey is only needed when several replicas share the bucket.
+						...remoteCache,
 						storageDriver: {
 							name: 's3',
 							rootdirectory: '/zot',

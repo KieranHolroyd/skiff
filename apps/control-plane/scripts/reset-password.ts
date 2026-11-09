@@ -19,7 +19,7 @@
 import { parseArgs } from 'node:util';
 import { existsSync } from 'node:fs';
 import { betterAuth } from 'better-auth';
-import { createDb } from '@yoal/db';
+import { createDb, platformDbPath } from '@yoal/db';
 import { AuditService, type CoreContext } from '@yoal/core';
 import { deleteResetTokens, recordPasswordReset } from '../src/lib/server/password-reset';
 
@@ -57,7 +57,7 @@ const email = positionals[0]!.trim().toLowerCase();
 if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) fail(`a valid email is required\n${usage}`);
 
 const dataDir = process.env.YOAL_DATA_DIR ?? '.data';
-const dbPath = `${dataDir}/yoal.db`;
+const dbPath = platformDbPath(dataDir);
 if (!existsSync(dbPath))
 	fail(`no database at ${dbPath}. Set YOAL_DATA_DIR to the control plane's data directory.`);
 

@@ -1,6 +1,107 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { migrate, migrations } from './index.ts';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { migrate, migrations, platformDbPath } from './index.ts';
+
+describe('platform database file', () => {
+	test('uses the legacy skiff.db when it is the only file', () => {
+		const dir = mkdtempSync(join(tmpdir(), 'yoal-db-path-'));
+		try {
+			const legacy = join(dir, 'skiff.db');
+			new Database(legacy, { create: true, strict: true }).close();
+			expect(platformDbPath(dir)).toBe(legacy);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test('prefers a populated skiff.db over an empty yoal.db from a failed upgrade', () => {
+		const dir = mkdtempSync(join(tmpdir(), 'yoal-db-path-'));
+		try {
+			const current = join(dir, 'yoal.db');
+			const legacy = join(dir, 'skiff.db');
+			const empty = new Database(current, { create: true, strict: true });
+			empty.run('CREATE TABLE user (id TEXT PRIMARY KEY)');
+			empty.close();
+			const populated = new Database(legacy, { create: true, strict: true });
+			populated.run('CREATE TABLE user (id TEXT PRIMARY KEY)');
+			populated.run("INSERT INTO user (id) VALUES ('user_1')");
+			populated.close();
+
+			expect(platformDbPath(dir)).toBe(legacy);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test('keeps yoal.db when it is set up, or when there is no legacy database', () => {
+		const dir = mkdtempSync(join(tmpdir(), 'yoal-db-path-'));
+		try {
+			const current = join(dir, 'yoal.db');
+			const legacy = join(dir, 'skiff.db');
+			for (const path of [current, legacy]) {
+				const db = new Database(path, { create: true, strict: true });
+				db.run('CREATE TABLE user (id TEXT PRIMARY KEY)');
+				db.run("INSERT INTO user (id) VALUES ('user_1')");
+				db.close();
+			}
+			expect(platformDbPath(dir)).toBe(current);
+			rmSync(legacy);
+			expect(platformDbPath(dir)).toBe(current);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+/**
+ * The Skiff → Yoal rename must not replay the migration stream on an existing install: most
+ * migrations are non-idempotent `ALTER TABLE`s, so a fresh ledger answers every page with a 500.
+ */
+describe('legacy migration ledger', () => {
+	test('renames skiff_migrations instead of rerunning every migration', () => {
+		const sqlite = new Database(':memory:', { create: true, strict: true });
+		sqlite.run('CREATE TABLE skiff_migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)');
+		for (const migration of migrations)
+			sqlite.run('INSERT INTO skiff_migrations (id, applied_at) VALUES (?, ?)', [
+				migration.id,
+				Date.now()
+			]);
+
+		const ran = migrate(sqlite);
+
+		expect(ran).toEqual([]);
+		expect(
+			sqlite.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'yoal_migrations'").get()
+		).toBeTruthy();
+		expect(
+			sqlite.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'skiff_migrations'").get()
+		).toBeNull();
+		expect(sqlite.query('SELECT count(*) AS n FROM yoal_migrations').get()).toEqual({
+			n: migrations.length
+		});
+		sqlite.close();
+	});
+
+	test('merges a legacy ledger when an empty yoal_migrations already exists', () => {
+		const sqlite = new Database(':memory:', { create: true, strict: true });
+		sqlite.run('CREATE TABLE skiff_migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)');
+		for (const migration of migrations)
+			sqlite.run('INSERT INTO skiff_migrations (id, applied_at) VALUES (?, ?)', [
+				migration.id,
+				Date.now()
+			]);
+		sqlite.run('CREATE TABLE yoal_migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)');
+
+		expect(migrate(sqlite)).toEqual([]);
+		expect(sqlite.query('SELECT count(*) AS n FROM yoal_migrations').get()).toEqual({
+			n: migrations.length
+		});
+		sqlite.close();
+	});
+});
 
 /**
  * A v2 install that ran the promotion migration while it was numbered 0003 must not fail when the

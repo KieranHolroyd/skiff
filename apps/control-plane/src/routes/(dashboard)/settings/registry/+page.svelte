@@ -35,6 +35,7 @@
 	let registryOpen = $state(false);
 	let editOpen = $state(false);
 	let editing = $state<RegistryCredentialView | null>(null);
+	let s3Mode = $state<'disk' | 'managed' | 'external'>(data.registry.s3?.mode ?? 'disk');
 	function edit(credential: RegistryCredentialView) {
 		editing = credential;
 		editOpen = true;
@@ -106,7 +107,9 @@
 				<dt>Storage</dt>
 				<dd class="font-mono text-xs">
 					{data.registry.s3
-						? `s3 ${data.registry.s3.bucket}@${data.registry.s3.endpoint}`
+						? data.registry.s3.mode === 'managed'
+							? `Yoal storage ${data.registry.s3.storage?.name ?? '…'} · bucket ${data.registry.s3.bucket}`
+							: `s3 ${data.registry.s3.bucket}@${data.registry.s3.endpoint}`
 						: "node's disk"}
 				</dd>
 			</DetailList>
@@ -254,8 +257,8 @@
 						value={data.registry.keepTags}
 					/>
 					<p class="text-xs text-muted-foreground">
-						zot's own retention keeps these. A prune in Settings → Maintenance can also remove
-						older tags beyond them; deployment pins and images a workload still uses are always kept.
+						zot's own retention keeps these. A prune in Settings → Maintenance can also remove older
+						tags beyond them; deployment pins and images a workload still uses are always kept.
 					</p>
 				</Field.Field>
 				<Field.Field class="sm:col-span-2">
@@ -337,86 +340,140 @@
 			<Field.Set>
 				<Field.Legend variant="label">Storage</Field.Legend>
 				<Field.Description>
-					{data.registry.s3
-						? `Blobs are in s3 ${data.registry.s3.bucket}@${data.registry.s3.endpoint}. Fill the endpoint to change it.`
-						: "Blobs are on the node's disk. An S3 bucket with a Redis cache lets the registry move nodes without copying data."}
+					{#if data.registry.s3}
+						{data.registry.s3.mode === 'managed'
+							? `Blobs are in bucket ${data.registry.s3.bucket} on ${data.registry.s3.storage?.name ?? 'a Yoal storage instance'}.`
+							: `Blobs are in s3 ${data.registry.s3.bucket}@${data.registry.s3.endpoint}.`}
+					{:else}
+						Blobs are on the node's disk.
+					{/if}
 					Existing data is not migrated either way.
 				</Field.Description>
-				{#if data.registry.s3}
-					<Field.Field orientation="horizontal">
-						<Checkbox id="registry-s3-disk" name="s3Disk" />
-						<Field.Label for="registry-s3-disk">Use the node's disk instead</Field.Label>
-					</Field.Field>
-				{/if}
-				<div class="grid gap-4 sm:grid-cols-2">
-					<Field.Field class="sm:col-span-2">
-						<Field.Label for="registry-s3-endpoint">S3 endpoint</Field.Label>
-						<Input
-							id="registry-s3-endpoint"
-							name="s3Endpoint"
-							type="url"
-							placeholder="https://s3.example.com"
-							autocapitalize="off"
-							spellcheck="false"
-							class="font-mono text-sm"
-						/>
-					</Field.Field>
-					<Field.Field>
-						<Field.Label for="registry-s3-bucket">Bucket</Field.Label>
-						<Input
-							id="registry-s3-bucket"
-							name="s3Bucket"
-							autocapitalize="off"
-							spellcheck="false"
-							class="font-mono text-sm"
-						/>
-					</Field.Field>
-					<Field.Field>
-						<Field.Label for="registry-s3-region">Region</Field.Label>
-						<Input
-							id="registry-s3-region"
-							name="s3Region"
-							placeholder="us-east-1"
-							autocapitalize="off"
-							spellcheck="false"
-							class="font-mono text-sm"
-						/>
-					</Field.Field>
-					<Field.Field>
-						<Field.Label for="registry-s3-key">Access key ID</Field.Label>
-						<Input
-							id="registry-s3-key"
-							name="s3AccessKeyId"
-							autocomplete="off"
-							spellcheck="false"
-							class="font-mono text-sm"
-						/>
-					</Field.Field>
-					<Field.Field>
-						<Field.Label for="registry-s3-secret">Secret access key</Field.Label>
-						<Input
-							id="registry-s3-secret"
-							name="s3SecretAccessKey"
-							type="password"
-							autocomplete="new-password"
-							class="font-mono text-sm"
-						/>
-					</Field.Field>
-					<Field.Field class="sm:col-span-2">
-						<Field.Label for="registry-s3-cache">Cache URL</Field.Label>
-						<Input
-							id="registry-s3-cache"
-							name="s3CacheUrl"
-							placeholder="redis://:password@valkey.internal:6379"
-							autocapitalize="off"
-							spellcheck="false"
-							class="font-mono text-sm"
-						/>
-						<Field.Description
-							>A redis:// or rediss:// URL; a managed Valkey works. Sealed, never shown again.</Field.Description
+				<Field.Field>
+					<Field.Label for="registry-s3-mode">Where blobs live</Field.Label>
+					<NativeSelect.Root id="registry-s3-mode" name="s3Mode" bind:value={s3Mode}>
+						<NativeSelect.Option value="disk">The node's disk</NativeSelect.Option>
+						<NativeSelect.Option value="managed"
+							>Yoal object storage (automatic)</NativeSelect.Option
 						>
-					</Field.Field>
-				</div>
+						<NativeSelect.Option value="external">Another S3 endpoint</NativeSelect.Option>
+					</NativeSelect.Root>
+					<Field.Description>
+						Yoal object storage creates a RustFS instance on the registry node when needed, a
+						bucket, and a key that can reach only that bucket.
+					</Field.Description>
+				</Field.Field>
+				{#if s3Mode === 'managed'}
+					<div class="grid gap-4 sm:grid-cols-2">
+						<Field.Field>
+							<Field.Label for="registry-s3-storage">Storage instance</Field.Label>
+							<NativeSelect.Root
+								id="registry-s3-storage"
+								name="s3Storage"
+								value={data.registry.s3?.storage?.id ?? ''}
+							>
+								<NativeSelect.Option value="">Create a dedicated one</NativeSelect.Option>
+								{#each data.storage as instance (instance.id)}
+									<NativeSelect.Option value={instance.id}>
+										{instance.name}{instance.nodeName ? ` (${instance.nodeName})` : ''}
+									</NativeSelect.Option>
+								{/each}
+							</NativeSelect.Root>
+							<Field.Description
+								>A private instance must run on the registry node; Yoal creates the bucket and key.</Field.Description
+							>
+						</Field.Field>
+						<Field.Field>
+							<Field.Label for="registry-s3-managed-bucket">Bucket</Field.Label>
+							<Input
+								id="registry-s3-managed-bucket"
+								name="s3Bucket"
+								value={data.registry.s3?.mode === 'managed' ? data.registry.s3.bucket : 'registry'}
+								autocapitalize="off"
+								spellcheck="false"
+								class="font-mono text-sm"
+							/>
+							<Field.Description
+								>Created if it does not exist. Path-style, private.</Field.Description
+							>
+						</Field.Field>
+					</div>
+				{:else if s3Mode === 'external'}
+					<div class="grid gap-4 sm:grid-cols-2">
+						<Field.Field class="sm:col-span-2">
+							<Field.Label for="registry-s3-endpoint">S3 endpoint</Field.Label>
+							<Input
+								id="registry-s3-endpoint"
+								name="s3Endpoint"
+								type="url"
+								placeholder="https://s3.example.com"
+								autocapitalize="off"
+								spellcheck="false"
+								class="font-mono text-sm"
+							/>
+						</Field.Field>
+						<Field.Field>
+							<Field.Label for="registry-s3-bucket">Bucket</Field.Label>
+							<Input
+								id="registry-s3-bucket"
+								name="s3Bucket"
+								autocapitalize="off"
+								spellcheck="false"
+								class="font-mono text-sm"
+							/>
+						</Field.Field>
+						<Field.Field>
+							<Field.Label for="registry-s3-region">Region</Field.Label>
+							<Input
+								id="registry-s3-region"
+								name="s3Region"
+								placeholder="us-east-1"
+								autocapitalize="off"
+								spellcheck="false"
+								class="font-mono text-sm"
+							/>
+						</Field.Field>
+						<Field.Field>
+							<Field.Label for="registry-s3-key">Access key ID</Field.Label>
+							<Input
+								id="registry-s3-key"
+								name="s3AccessKeyId"
+								autocomplete="off"
+								spellcheck="false"
+								class="font-mono text-sm"
+							/>
+						</Field.Field>
+						<Field.Field>
+							<Field.Label for="registry-s3-secret">Secret access key</Field.Label>
+							<Input
+								id="registry-s3-secret"
+								name="s3SecretAccessKey"
+								type="password"
+								autocomplete="new-password"
+								class="font-mono text-sm"
+							/>
+						</Field.Field>
+						<Field.Field class="sm:col-span-2">
+							<Field.Label for="registry-s3-cache">Cache URL</Field.Label>
+							<Input
+								id="registry-s3-cache"
+								name="s3CacheUrl"
+								placeholder="redis://:password@valkey.internal:6379"
+								autocapitalize="off"
+								spellcheck="false"
+								class="font-mono text-sm"
+							/>
+							<Field.Description
+								>Optional. Omit for a single replica (zot keeps its dedupe cache on the node); a
+								redis:// URL is only needed when several replicas share the bucket.</Field.Description
+							>
+						</Field.Field>
+					</div>
+				{:else}
+					<Field.Description>
+						Existing bucket data is left in place. Switch back to keep serving the same images.
+					</Field.Description>
+				{/if}
 			</Field.Set>
 		</Field.Group>
 	</FormDialog>

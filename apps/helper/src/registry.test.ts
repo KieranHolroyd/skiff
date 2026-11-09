@@ -56,6 +56,19 @@ describe('zot config (G4–G6)', () => {
 		expect(config.extensions.sync.downloadDir).toBe('/var/lib/registry/.sync');
 	});
 
+	test('S3 without a cache URL uses zot’s local BoltDB dedupe cache', () => {
+		const registry = parseRegistryProfile({
+			...base,
+			s3: { endpoint: 's3-registry:9000', bucket: 'registry', region: 'us-east-1', secure: false },
+		});
+		const config = JSON.parse(
+			renderZotConfig(registry, { certificatePem: '', eventsUrl: null, adminHtpasswd: null, s3: { accessKey: 'AK', secretKey: 'SK', cacheUrl: null } }),
+		);
+		expect(config.storage.remoteCache).toBeUndefined();
+		expect(config.storage.cacheDriver).toBeUndefined();
+		expect(config.storage.storageDriver).toMatchObject({ bucket: 'registry', regionendpoint: 's3-registry:9000', secure: false });
+	});
+
 	test('validates the profile and the htpasswd line', () => {
 		expect(() => parseRegistryProfile({ ...base, mirrors: ['evil.io'] })).toThrow(/mirrors/);
 		expect(() => parseRegistryProfile({ ...base, s3: { endpoint: 'http://x', bucket: 'bkt', region: 'r', secure: true } })).toThrow(/endpoint/);

@@ -199,6 +199,25 @@ export class StorageService {
 		return row;
 	}
 
+	/**
+	 * Internal: an instance by id, whatever its org. Only the platform registry uses this to wire
+	 * its managed S3 backend; public surfaces always go through `requireRow` and a permission check.
+	 */
+	byId(id: string, options: { includeDeleted?: boolean } = {}): StorageRow | null {
+		const row = this.ctx.db.select().from(storageInstances).where(eq(storageInstances.id, id)).get();
+		return row && (!row.deletedAt || options.includeDeleted) ? row : null;
+	}
+
+	/** Internal: an instance by org and name, for idempotent platform provisioning. */
+	byName(orgId: string, name: string, options: { includeDeleted?: boolean } = {}): StorageRow | null {
+		const row = this.ctx.db
+			.select()
+			.from(storageInstances)
+			.where(and(eq(storageInstances.orgId, orgId), eq(storageInstances.name, name)))
+			.get();
+		return row && (!row.deletedAt || options.includeDeleted) ? row : null;
+	}
+
 	// ---------------------------------------------------------------- lifecycle
 
 	create(principal: Principal, raw: StorageCreate): StorageView {

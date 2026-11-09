@@ -19,7 +19,7 @@
 import { parseArgs } from 'node:util';
 import { existsSync } from 'node:fs';
 import { betterAuth } from 'better-auth';
-import { createDb } from '@yoal/db';
+import { createDb, platformDbPath } from '@yoal/db';
 import { isRole } from '@yoal/core';
 
 const usage =
@@ -64,7 +64,7 @@ const role = values.role ?? 'viewer';
 if (!isRole(role)) fail(`unknown role "${role}" (owner, admin, deployer, viewer)`);
 
 const dataDir = process.env.YOAL_DATA_DIR ?? '.data';
-const dbPath = `${dataDir}/yoal.db`;
+const dbPath = platformDbPath(dataDir);
 if (!existsSync(dbPath))
 	fail(`no database at ${dbPath}. Start the control plane once (or set YOAL_DATA_DIR).`);
 

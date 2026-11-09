@@ -70,6 +70,7 @@
 		"@better-auth/scim": "1.7.15",
 		"@better-auth/sso": "1.7.15",
 		"@modelcontextprotocol/server": "2.4.0",
+		"@sentry/node": "^11.11.0",
 		"@yoal/contracts": "workspace:*",
 		"@yoal/core": "workspace:*",
 		"@yoal/db": "workspace:*",

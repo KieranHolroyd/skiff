@@ -600,8 +600,8 @@ export class ShareService {
 			username: row.credentialsUsername,
 			grants,
 			mounts: this.mountViews(row),
-			createdAt: new Date(row.createdAt).toISOString(),
-			updatedAt: new Date(row.updatedAt).toISOString(),
+			createdAt: isoOrEpoch(row.createdAt),
+			updatedAt: isoOrEpoch(row.updatedAt),
 		};
 	}
 
@@ -626,4 +626,11 @@ export class ShareService {
 		if (this.ctx.platformIam.allows(principal, 'platform:storage')) return;
 		this.ctx.iam.require(principal, permission, { type: 'platform' });
 	}
+}
+
+/** ISO for a stored timestamp; a malformed row must not take Settings → Storage down. */
+function isoOrEpoch(value: unknown): string {
+	if (value === null || value === undefined || value === '') return new Date(0).toISOString();
+	const date = new Date(value as string | number | Date);
+	return Number.isNaN(date.getTime()) ? new Date(0).toISOString() : date.toISOString();
 }

@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDb } from '@yoal/db';
-import { DEFAULT_FEATURES } from '@yoal/contracts';
+import { DEFAULT_FEATURES, storageAlias } from '@yoal/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { serviceAccountPrincipalFromYoalToken, verifyYoalToken } from './iam/token-consumers.ts';
@@ -491,7 +491,13 @@ describe('mirrors, signatures, CVEs, S3 and quotas (G2, G4–G6)', () => {
 		const view = core.registry.update(admin, {
 			s3: { endpoint: 'https://s3.example.com:9000', bucket: 'images', accessKeyId: 'AKIA1', secretAccessKey: 'secret-123', cacheUrl: 'redis://cache:6379/0' },
 		});
-		expect(view.s3).toEqual({ endpoint: 'https://s3.example.com:9000', bucket: 'images', region: 'us-east-1' });
+		expect(view.s3).toEqual({
+			mode: 'external',
+			endpoint: 'https://s3.example.com:9000',
+			bucket: 'images',
+			region: 'us-east-1',
+			storage: null,
+		});
 		expect(JSON.stringify(view)).not.toContain('secret-123');
 		const [desired] = core.registry.desiredForNode(workerId);
 		expect(desired!.registry!.s3).toEqual({ endpoint: 's3.example.com:9000', bucket: 'images', region: 'us-east-1', secure: true });
@@ -502,6 +508,51 @@ describe('mirrors, signatures, CVEs, S3 and quotas (G2, G4–G6)', () => {
 			YOAL_REGISTRY_CACHE_URL: 'redis://cache:6379/0',
 		});
 		core.registry.update(admin, { s3: null });
+	});
+
+	test('managed S3: creates a bucket and a scoped key on a Yoal storage instance', () => {
+		const instance = core.storage.create(admin, { name: 'registry-media', placement: workerId, memoryMb: 256 });
+		const keyView = core.registry.update(admin, { s3: { mode: 'managed', storage: instance.id } });
+		expect(keyView.s3).toMatchObject({
+			mode: 'managed',
+			bucket: 'registry',
+			storage: { id: instance.id, name: 'registry-media' },
+		});
+		const bucket = core.storage.get(admin, 'registry-media').buckets.find((item) => item.name === 'registry');
+		expect(bucket).toMatchObject({ name: 'registry', access: 'private' });
+		const key = core.storage.listKeys(admin, 'registry-media').find((item) => item.name === 'registry');
+		expect(key).toMatchObject({ grants: [{ bucket: 'registry', mode: 'read-write' }], status: 'active' });
+
+		const [desired] = core.registry.desiredForNode(workerId);
+		expect(desired!.registry!.s3).toEqual({
+			endpoint: `${storageAlias(instance.id)}:9000`,
+			bucket: 'registry',
+			region: 'us-east-1',
+			secure: false,
+		});
+		const activation = core.workloads.activation(workerId, desired!.id);
+		expect(activation.env.YOAL_REGISTRY_S3_ACCESS_KEY).toBe(key!.accessKeyId);
+		expect(activation.env.YOAL_REGISTRY_S3_SECRET_KEY).toMatch(/^[A-Za-z0-9+/=_-]{20,}$/);
+		expect(activation.env.YOAL_REGISTRY_CACHE_URL).toBeUndefined();
+		expect(JSON.stringify(keyView)).not.toContain(activation.env.YOAL_REGISTRY_S3_SECRET_KEY!);
+
+		// Re-saving reuses the same key rather than minting another one.
+		core.registry.update(admin, { s3: { mode: 'managed', storage: instance.id } });
+		expect(core.storage.listKeys(admin, 'registry-media').filter((item) => item.name === 'registry')).toHaveLength(1);
+	});
+
+	test('managed S3 without an instance provisions a dedicated RustFS on the registry node', () => {
+		const view = core.registry.update(admin, { s3: { mode: 'managed' } });
+		const [candidate] = core.registry.storageCandidates().filter((item) => item.name === 'registry-storage');
+		expect(candidate).toMatchObject({ name: 'registry-storage', nodeId: workerId, nodeName: 'homelab' });
+		expect(view.s3).toMatchObject({ mode: 'managed', bucket: 'registry', storage: { id: candidate!.id, name: candidate!.name } });
+		expect(core.registry.desiredForNode(edgeId)).toEqual([]);
+		core.registry.update(admin, { s3: null });
+	});
+
+	test('managed S3 refuses a storage instance on another node', () => {
+		const instance = core.storage.create(admin, { name: 'edge-media', placement: edgeId });
+		expect(() => core.registry.update(admin, { s3: { mode: 'managed', storage: instance.id } })).toThrow(/another node/);
 	});
 
 	test('signatures: keys upload as the zot admin; enforce refuses an unsigned own image, warn deploys it', async () => {
