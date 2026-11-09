@@ -47,6 +47,7 @@ import { profileCommand } from './commands/profile.ts';
 import { projectsCommand } from './commands/projects.ts';
 import { promoteCommand } from './commands/promote.ts';
 import { pruneCommand } from './commands/prune.ts';
+import { runnersCommand } from './commands/runners.ts';
 import { rollbackCommand } from './commands/rollback.ts';
 import { statusCommand } from './commands/status.ts';
 import { usageCommand } from './commands/usage.ts';
@@ -81,6 +82,7 @@ const commands: Record<string, (argv: string[]) => Promise<void>> = {
 	shell: shellCommand,
 	open: openCommand,
 	prune: pruneCommand,
+	runners: runnersCommand,
 	blueprint: blueprintCommand,
 	blueprints: blueprintCommand,
 	operations: operationsCommand,
@@ -177,6 +179,9 @@ Commands:
   shell <project>                            Interactive shell inside a container project
   open <project>                             Open the site in a browser
   prune [--apply] [--plan <id>]              Find and remove orphaned data (dry run by default)
+  runners prune                              Delete stale GitHub Actions runner registrations
+  registry prune                             Delete old registry tags by retention
+  volume prune                               Delete old unpinned volume snapshots
   operations [list|show|watch|cancel]        Inspect and follow bulk and prune operations
   blueprint <validate|plan|apply> [file]     Declare a stack in one file; plan shows the diff, apply runs it
   db [list|create|info|attach|detach|…]      Managed PostgreSQL databases (\`skif db --help\`)

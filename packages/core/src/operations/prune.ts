@@ -3,6 +3,7 @@ import {
 	hasPermission,
 	operationActions,
 	operationLimits,
+	parseImageReference,
 	pruneCategoryInfo,
 	type Principal,
 	type PruneCategory,
@@ -13,6 +14,7 @@ import type { DomainRow } from '../domains.ts';
 import type { ActionDefinition, ItemResult, OperationParams, PlannedItem, RunContext, StoredItem } from './types.ts';
 import type { PlatformIamService } from '../platform-iam.ts';
 
+const DAY_MS = 86_400_000;
 const ACTIVE_WORKLOAD = "('pending','starting','running')";
 /** Tables cleaned up under `project_rows`, plus share links (their redemptions go with them). */
 const ORPHAN_TABLES = [...projectOwnedTables, 'share_links'] as const;
@@ -308,6 +310,161 @@ const categories: Category[] = [
 		},
 	},
 	{
+		id: 'registry_images',
+		async *scan(run, scope) {
+			const registry = run.ctx.registry;
+			if (!registry.enabled()) {
+				yield {
+					category: 'registry_images',
+					targetKind: 'registry',
+					targetId: 'registry',
+					label: 'The platform registry is off, so there are no images to prune.',
+					verdict: 'skip',
+					reason: 'registry_off',
+				};
+				return;
+			}
+			const retention = run.params.olderThanDays
+				? run.params.olderThanDays * DAY_MS
+				: run.ctx.policies.registryRetentionMs();
+			const cutoff = run.ctx.now() - retention;
+			const keepTags = run.params.keepTags ?? registry.keepTagCount();
+			const inUse = registryTagsInUse(run, scope);
+			const repositories = run.ctx.sqlite
+				.query<{ name: string }, string[]>(`SELECT name FROM registry_repositories WHERE 1 = 1${scope.where()}`)
+				.all(...scope.args());
+			for (const repository of repositories) {
+				if (run.cancelled()) return;
+				run.phase(`Listing tags in ${repository.name}`);
+				let tags: Awaited<ReturnType<typeof registry.describeTags>>;
+				try {
+					tags = await registry.describeTags(repository.name);
+				} catch (error) {
+					yield {
+						category: 'registry_images',
+						targetKind: 'registryRepository',
+						targetId: repository.name,
+						label: `${repository.name}: the registry could not be read (${(error as Error).message})`,
+						verdict: 'skip',
+						reason: 'registry_unreachable',
+					};
+					continue;
+				}
+				const used = inUse.get(repository.name) ?? new Set<string>();
+				const keep = newestRegistryTags(tags, keepTags, used);
+				const keptDigests = new Set(tags.filter((tag) => keep.has(tag.tag) && tag.digest).map((tag) => tag.digest!));
+				for (const tag of tags) {
+					if (keep.has(tag.tag) || tag.createdAt === null || tag.createdAt >= cutoff) continue;
+					// A tag shares its manifest with a kept tag (e.g. `latest`): deleting it could
+					// remove the kept tag too, so leave the shared manifest alone.
+					if (!tag.digest || keptDigests.has(tag.digest)) continue;
+					yield {
+						category: 'registry_images',
+						targetKind: 'registryTag',
+						targetId: `${repository.name}:${tag.tag}`,
+						label: `${repository.name}:${tag.tag} (${new Date(tag.createdAt).toISOString().slice(0, 10)})`,
+						verdict: 'ok',
+						bytes: tag.bytes,
+						data: { repository: repository.name, tag: tag.tag, cutoff, keepTags },
+					};
+				}
+			}
+		},
+		async apply(run, item) {
+			const repository = String(item.data?.repository ?? '');
+			const tag = String(item.data?.tag ?? '');
+			const cutoff = Number(item.data?.cutoff ?? 0);
+			const keepTags = Number(item.data?.keepTags ?? 0);
+			const tags = await run.ctx.registry.describeTags(repository);
+			const current = tags.find((entry) => entry.tag === tag);
+			if (!current) return changed('already_removed');
+			if (current.createdAt === null) return changed('creation_time_unknown');
+			if (current.createdAt >= cutoff) return changed('younger_than_retention');
+			const keep = newestRegistryTags(tags, keepTags, registryTagsInUse(run, scopeFor(run)).get(repository) ?? new Set());
+			if (keep.has(tag)) return changed('still_kept');
+			if (!current.digest || tags.some((entry) => keep.has(entry.tag) && entry.digest === current.digest))
+				return changed('shared_manifest');
+			const deleted = await run.ctx.registry.deleteTagAsSystem(repository, tag);
+			return deleted ? { status: 'succeeded', bytes: item.bytes ?? 0 } : changed('already_removed');
+		},
+	},
+	{
+		id: 'runner_registrations',
+		async *scan(run, scope) {
+			const rows = runnerRegistrationRows(run, scope).filter((row) => runnerRegistrationIsStale(row));
+			const cutoff = run.ctx.now() - (run.params.olderThanDays ? run.params.olderThanDays * DAY_MS : run.ctx.policies.runnerRegistrationRetentionMs());
+			for (const row of rows) {
+				if (row.created_at >= cutoff) continue;
+				yield {
+					category: 'runner_registrations',
+					targetKind: 'githubRunner',
+					targetId: row.id,
+					label: `${row.runner_name} (${row.target}${row.project_slug ? `, ${row.project_slug}` : ''})`,
+					verdict: 'ok',
+					data: { cutoff },
+				};
+			}
+		},
+		async apply(run, item) {
+			const cutoff = Number(item.data?.cutoff ?? 0);
+			const row = runnerRegistrationRows(run, scopeFor(run)).find((entry) => entry.id === item.targetId);
+			if (!row) return changed('already_removed');
+			if (row.created_at >= cutoff) return changed('younger_than_retention');
+			if (!runnerRegistrationIsStale(row)) return changed('runner_still_live');
+			const removed = await run.ctx.githubRunners.deregisterRegistration(row.id);
+			return removed ? { status: 'succeeded' } : changed('already_removed');
+		},
+	},
+	{
+		id: 'volume_snapshots',
+		async *scan(run, scope) {
+			if (!run.ctx.appVolumes.enabled()) {
+				yield {
+					category: 'volume_snapshots',
+					targetKind: 'appVolume',
+					targetId: 'app-volumes',
+					label: 'App volumes are not enabled on this platform.',
+					verdict: 'skip',
+					reason: 'feature_disabled',
+				};
+				return;
+			}
+			const cutoff =
+				run.ctx.now() - (run.params.olderThanDays ? run.params.olderThanDays * DAY_MS : run.ctx.policies.volumeSnapshotRetentionMs());
+			const rows = run.ctx.sqlite
+				.query<
+					{ id: string; volume_id: string; volume_name: string | null; created_at: number; size_bytes: number | null },
+					Array<string | number>
+				>(
+					`SELECT s.id, s.volume_id, v.name AS volume_name, s.created_at, s.size_bytes
+					 FROM app_volume_snapshots s LEFT JOIN app_volumes v ON v.id = s.volume_id
+					 WHERE s.pinned = 0 AND s.status IN ('ok','failed') AND s.created_at < ?${scope.where('s.org_id')}
+					 AND NOT EXISTS (SELECT 1 FROM app_volumes r WHERE r.restore_snapshot_id = s.id)`,
+				)
+				.all(cutoff, ...scope.args());
+			for (const row of rows)
+				yield {
+					category: 'volume_snapshots',
+					targetKind: 'appVolumeSnapshot',
+					targetId: row.id,
+					label: `${row.volume_name ?? row.volume_id} snapshot ${row.id} (${new Date(row.created_at).toISOString().slice(0, 10)})`,
+					verdict: 'ok',
+					bytes: row.size_bytes ?? 0,
+					data: { cutoff },
+				};
+		},
+		async apply(run, item) {
+			const cutoff = Number(item.data?.cutoff ?? 0);
+			const orgId = scopeFor(run).orgId;
+			const row = run.ctx.sqlite
+				.query<{ org_id: string }, [string]>('SELECT org_id FROM app_volume_snapshots WHERE id = ?')
+				.get(item.targetId);
+			if (!row || (orgId && row.org_id !== orgId)) return changed('already_removed');
+			const result = await run.ctx.appVolumes.lifecycle.pruneSnapshot(item.targetId, cutoff);
+			return result.removed ? { status: 'succeeded', bytes: result.bytes } : changed('not_removable');
+		},
+	},
+	{
 		id: 'objects',
 		async *scan(run, scope) {
 			const store = run.ctx.objectStore;
@@ -419,6 +576,88 @@ export const pruneAction: ActionDefinition = {
 		run.ctx.projects.bump(run.params.scope === 'platform' ? undefined : run.principal.orgId);
 	},
 };
+
+/** Repository → tags a live workload names, so a prune never removes an image still in use. */
+function registryTagsInUse(run: RunContext, scope: Scope): Map<string, Set<string>> {
+	const used = new Map<string, Set<string>>();
+	const rows = run.ctx.sqlite
+		.query<{ spec_json: string | null }, string[]>(
+			`SELECT w.spec_json FROM workloads w JOIN projects p ON p.id = w.project_id
+			 WHERE p.deleted_at IS NULL${scope.where('w.org_id')}`,
+		)
+		.all(...scope.args());
+	for (const row of rows) {
+		let image: unknown;
+		try {
+			image = (JSON.parse(row.spec_json ?? '{}') as { image?: unknown }).image;
+		} catch {
+			continue;
+		}
+		if (typeof image !== 'string' || !run.ctx.registry.isOwnImage(image)) continue;
+		const ref = parseImageReference(image);
+		if (!ref?.tag) continue;
+		const tags = used.get(ref.repository) ?? new Set<string>();
+		tags.add(ref.tag);
+		used.set(ref.repository, tags);
+	}
+	return used;
+}
+
+/** The tags a registry prune always keeps: the newest N by creation time, `latest`, and in-use tags. */
+function newestRegistryTags(
+	tags: ReadonlyArray<{ tag: string; createdAt: number | null }>,
+	keepTags: number,
+	inUse: ReadonlySet<string>,
+): Set<string> {
+	const keep = new Set(inUse);
+	keep.add('latest');
+	const sorted = [...tags].sort((a, b) => (b.createdAt ?? Number.NEGATIVE_INFINITY) - (a.createdAt ?? Number.NEGATIVE_INFINITY));
+	for (const tag of sorted.slice(0, Math.max(0, keepTags))) keep.add(tag.tag);
+	return keep;
+}
+
+interface RunnerRegistrationRow {
+	id: string;
+	runner_name: string;
+	target: string;
+	created_at: number;
+	replica: number;
+	project_id: string | null;
+	project_slug: string | null;
+	project_deleted_at: number | null;
+	workload_id: string | null;
+	workload_status: string | null;
+	spec_json: string | null;
+}
+
+function runnerRegistrationRows(run: RunContext, scope: Scope): RunnerRegistrationRow[] {
+	return run.ctx.sqlite
+		.query<RunnerRegistrationRow, string[]>(
+			`SELECT r.id, r.runner_name, r.target, r.created_at, r.replica, r.project_id,
+			        p.slug AS project_slug, p.deleted_at AS project_deleted_at,
+			        r.workload_id, w.status AS workload_status, w.spec_json
+			 FROM github_runner_registrations r
+			 LEFT JOIN projects p ON p.id = r.project_id
+			 LEFT JOIN workloads w ON w.id = r.workload_id
+			 WHERE 1 = 1${scope.where('r.org_id')}`,
+		)
+		.all(...scope.args());
+}
+
+/** A registration no live project, workload, runner profile or replica still expects. */
+function runnerRegistrationIsStale(row: RunnerRegistrationRow): boolean {
+	if (!row.project_id || row.project_deleted_at !== null || !row.workload_id || !row.workload_status) return true;
+	if (!ACTIVE_WORKLOAD.includes(`'${row.workload_status}'`)) return true;
+	let spec: { replicas?: unknown; runner?: unknown } | null = null;
+	try {
+		spec = JSON.parse(row.spec_json ?? '{}') as { replicas?: unknown; runner?: unknown };
+	} catch {
+		return true;
+	}
+	if (!spec?.runner) return true;
+	const replicas = typeof spec.replicas === 'number' ? spec.replicas : 1;
+	return row.replica >= replicas;
+}
 
 function domainRow(raw: Record<string, unknown>): DomainRow {
 	const camel = (key: string) => key.replace(/_([a-z])/g, (_match, letter: string) => letter.toUpperCase());

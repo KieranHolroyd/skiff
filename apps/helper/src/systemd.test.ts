@@ -1031,6 +1031,7 @@ describe('platform registry (docs/REGISTRY.md G1)', () => {
 	});
 
 	test('refuses another image, a missing certificate, and app ids with the registry prefix', async () => {
+
 		expect(() => parseWorkload(registryWorkload({ image: 'docker.io/library/registry:2' }))).toThrow(/workload.image must be/);
 		expect(() => parseWorkload(registryWorkload({ registry: { engine: 'zot', version: '9.9.9', service: 'r.example.com', realm: 'https://x/t' } }))).toThrow(
 			/version/,
@@ -1040,5 +1041,123 @@ describe('platform registry (docs/REGISTRY.md G1)', () => {
 		await expect(
 			f.driver.apply(parseWorkload(registryWorkload()), registryActivation({ SKIFF_REGISTRY_TOKEN_CERT: 'not a cert' })),
 		).rejects.toThrow(/PEM certificate/);
+	});
+});
+
+describe('compose stacks (level 4)', () => {
+	const composeWorkload = (overrides: Record<string, unknown> = {}) =>
+		parseWorkload({
+			id: 'wld_compose1',
+			projectId: 'prj_compose1',
+			projectSlug: 'shop',
+			deploymentId: 'dep_compose1',
+			runtime: 'compose',
+			status: 'running',
+			release: SHA,
+			upstream: '127.0.0.1:30001',
+			memoryMb: 512,
+			cpus: 1.5,
+			port: 30001,
+			healthPath: '/health',
+			socketActivation: false,
+			activationVersion: 'b'.repeat(64),
+			env: { SHARED: 'yes' },
+			secrets: [],
+			dataSizeMb: null,
+			compose: {
+				volumes: [{ name: 'uploads' }],
+				services: [
+					{
+						name: 'web',
+						image: 'nginx:1.27',
+						command: ['nginx', '-g', 'daemon off;'],
+						env: { PORT: '3000' },
+						secrets: [],
+						ports: [3000],
+						dependsOn: ['db'],
+						volumes: [{ name: 'uploads', mountPath: '/app/uploads', readOnly: false }],
+						memoryMb: 256,
+						cpus: 1,
+					},
+					{
+						name: 'db',
+						image: 'postgres:17-alpine',
+						env: {},
+						secrets: [],
+						ports: [],
+						dependsOn: [],
+						volumes: [{ name: 'uploads', mountPath: '/var/lib/postgresql/data', readOnly: false }],
+						memoryMb: 256,
+						cpus: 0.5,
+					},
+				],
+				routes: [{ service: 'web', port: 3000, healthPath: '/health', primary: true, hostPort: 30001 }],
+			},
+			...overrides,
+		});
+
+	test('renders one unit per service on the workload network with routing and ordering', async () => {
+		const f = await fixture();
+		await f.driver.apply(composeWorkload(), activation({ workloadId: 'wld_compose1', env: { DATABASE_URL: 'postgres://db/app' } }));
+
+		const web = await fs.readFile(join(f.quadletDir, 'skiff-workload-wld_compose1--web.container'), 'utf8');
+		const db = await fs.readFile(join(f.quadletDir, 'skiff-workload-wld_compose1--db.container'), 'utf8');
+		expect(web).toContain('ContainerName=skiff-workload-wld_compose1--web');
+		expect(web).toContain('NetworkAlias=web');
+		expect(web).toContain('PublishPort=127.0.0.1:30001:3000');
+		expect(web).toContain('Exec="nginx" "-g" "daemon off;"');
+		expect(web).toContain('After=skiff-workload-wld_compose1--db.service');
+		expect(web).toContain('Requires=skiff-workload-wld_compose1--db.service');
+		expect(web).toContain('Volume=');
+		expect(web).toContain(':/app/uploads:Z,U');
+		expect(db).not.toContain('PublishPort=');
+		expect(db).toContain('NetworkAlias=db');
+		// Every service sees the stack's shared activation env plus its own plain env.
+		const webEnv = await fs.readFile(join(f.runtimeDir, 'wld_compose1', 'web', 'env'), 'utf8');
+		expect(webEnv).toContain('SHARED=yes');
+		expect(webEnv).toContain('PORT=3000');
+		expect(webEnv).toContain('DATABASE_URL=postgres://db/app');
+		expect(await fs.readFile(join(f.runtimeDir, 'wld_compose1', 'compose.json'), 'utf8')).toContain('web');
+		expect(f.runner.calls).toContainEqual(['/usr/bin/systemctl', 'restart', '--no-block', 'skiff-workload-wld_compose1--web.service']);
+		expect(f.runner.calls).toContainEqual(['/usr/bin/systemctl', 'restart', '--no-block', 'skiff-workload-wld_compose1--db.service']);
+	});
+
+	test('removes every service unit and its container', async () => {
+		const f = await fixture();
+		await f.driver.apply(composeWorkload(), activation({ workloadId: 'wld_compose1' }));
+		await f.driver.remove('wld_compose1');
+		expect((await fs.readdir(f.quadletDir)).filter((name) => name.startsWith('skiff-workload-wld_compose1--'))).toEqual([]);
+		expect(f.runner.calls).toContainEqual([
+			'/usr/bin/systemctl',
+			'disable',
+			'--now',
+			'skiff-workload-wld_compose1--web.service',
+		]);
+		expect(await fs.stat(join(f.runtimeDir, 'wld_compose1')).catch(() => null)).toBeNull();
+	});
+
+	test('refuses undeclared volumes and a route port the service does not publish', () => {
+		expect(() =>
+			parseWorkload({
+				...composeWorkload(),
+				compose: {
+					volumes: [],
+					services: [
+						{
+							name: 'web',
+							image: 'nginx:1.27',
+							env: {},
+							secrets: [],
+							ports: [3000],
+							dependsOn: [],
+							volumes: [{ name: 'missing', mountPath: '/x', readOnly: false }],
+							memoryMb: 256,
+							cpus: 1,
+						},
+					],
+					routes: [],
+				},
+			}),
+		).toThrow(/undeclared volume missing/);
 	});
 });

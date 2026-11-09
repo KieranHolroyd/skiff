@@ -78,6 +78,9 @@ export const pruneCategoryInfo: ReadonlyArray<{ id: string; label: string; scope
 	{ id: 'upload_sessions', label: 'Abandoned uploads', scope: 'org' },
 	{ id: 'config_snapshots', label: 'Config snapshots', scope: 'org' },
 	{ id: 'releases', label: 'Unused releases', scope: 'org' },
+	{ id: 'registry_images', label: 'Old registry images', scope: 'org' },
+	{ id: 'runner_registrations', label: 'Stale runner registrations', scope: 'org' },
+	{ id: 'volume_snapshots', label: 'Old volume snapshots', scope: 'org' },
 	{ id: 'objects', label: 'Unreferenced objects', scope: 'platform' },
 ];
 export const pruneCategoryIds = pruneCategoryInfo.map((info) => info.id);

@@ -19,6 +19,9 @@ import {
 	WORKLOAD_IDENTITY_URL_ENV,
 	workloadEnvIssues,
 	workloadIdentityUrl,
+	composeSpecSchema,
+	type ComposeRoute,
+	type ComposeSpec,
 	type GithubRunnerPoolView,
 	workloadReplicaId,
 	workloadSpecSchema,
@@ -67,6 +70,14 @@ export interface ReplicaCopy {
 
 const ACTIVE_STATUSES: WorkloadStatus[] = ['pending', 'starting', 'running'];
 
+/**
+ * Loopback ports Skiff assigns to compose services (Caddy dials one per exposed service). The
+ * range is deliberately above the managed-service ranges so a stack never steals a database,
+ * broker or storage port. Ports are stable for a service until the stack changes.
+ */
+const COMPOSE_PORT_MIN = 30_000;
+const COMPOSE_PORT_MAX = 39_999;
+
 export interface ResolvedWorkload {
 	spec: WorkloadSpec;
 	nodeId: string;
@@ -99,6 +110,10 @@ export class WorkloadService {
 			throw new ValidationError(
 				`Project "${project.slug}" needs a skiff-function.json bundle before it can deploy.`,
 			);
+		if (runtime === 'compose')
+			throw new ValidationError(
+				`Project "${project.slug}" needs a docker-compose file before it can deploy.`,
+			);
 		if (runtime === 'container')
 			throw new ValidationError(
 				`Project "${project.slug}" needs a workload spec with an image before it can deploy.`,
@@ -115,7 +130,7 @@ export class WorkloadService {
 	plan(principal: Principal, project: ProjectRow, input?: Partial<WorkloadSpec>): ResolvedWorkload {
 		this.ctx.iam.require(principal, 'deployment:create', { type: 'project', id: project.id });
 		const runtime = effectiveRuntime(project);
-		const spec = withEngineCommand(
+		let spec = withEngineCommand(
 			workloadSpecSchema.parse({
 				...(this.projectSpec(project) ?? this.defaultSpec(project)),
 				...input,
@@ -124,10 +139,28 @@ export class WorkloadService {
 		);
 		if (runtime === 'static')
 			throw new ValidationError(
-				`Project "${project.slug}" is static. Create it with runtime "process", "container" or "function" to run a workload.`,
+				`Project "${project.slug}" is static. Create it with runtime "process", "container", "function" or "compose" to run a workload.`,
 			);
 		if (runtime === 'function' && !featureEnabled(this.ctx.config, 'FUNCTIONS'))
 			throw new ValidationError('Functions are not enabled on this platform (SKIFF_FEATURE_FUNCTIONS).');
+		if (runtime === 'compose') {
+			if (!featureEnabled(this.ctx.config, 'COMPOSE'))
+				throw new ValidationError('Compose stacks are not enabled on this platform (SKIFF_FEATURE_COMPOSE).');
+			if (!spec.compose) throw new ValidationError('A compose project needs a parsed compose spec.');
+			// Admission is the whole stack: every service reserves its own memory and CPU share.
+			spec = {
+				...spec,
+				memoryMb: composeMemoryMb(spec.compose),
+				cpus: composeCpus(spec.compose),
+				// Set after placement assigns the loopback ports; a stale stored value is replaced.
+				port: spec.port,
+				healthPath: primaryComposeRoute(spec.compose)?.healthPath ?? '/',
+				// Services are containers; the helper rejects socket activation for a stack.
+				socketActivation: false,
+				// A stack with no exposed port is a worker: no route and no health probe.
+				ingress: spec.compose.routes.length === 0 ? ('none' as const) : ('http' as const),
+			};
+		}
 		if (this.ctx.moves.quiescedProjectIds().has(project.id))
 			throw new ConflictError(
 				`"${project.slug}" is stopped while a database it uses moves to another node. Deploy again once the move finishes.`,
@@ -192,6 +225,11 @@ export class WorkloadService {
 		if (spec.runtime === 'process' && spec.engine === 'node')
 			for (const nodeId of new Set([decision.nodeId, ...(replicas ?? []).map((replica) => replica.nodeId)]))
 				this.assertNodeEngineTarget(nodeId);
+		if (spec.compose) spec = { ...spec, compose: this.assignComposePorts(project, spec.compose, decision.nodeId) };
+		if (spec.compose) {
+			const primary = primaryComposeRoute(spec.compose);
+			spec = { ...spec, port: primary?.hostPort ?? spec.port, healthPath: primary?.healthPath ?? spec.healthPath };
+		}
 		const current = this.ctx.db
 			.select({ memoryMb: workloads.memoryMb })
 			.from(workloads)
@@ -213,17 +251,59 @@ export class WorkloadService {
 		};
 	}
 
+	/**
+	 * Give every exposed compose service a stable loopback port on its node. Skiff assigns these
+	 * (never the compose file): a host port is host-global, so two stacks on one node must not
+	 * collide. An existing port is kept when it is still free, which keeps redeploys quiet.
+	 */
+	private assignComposePorts(project: ProjectRow, spec: ComposeSpec, nodeId: string): ComposeSpec {
+		const used = new Set<number>();
+		for (const row of this.ctx.db.select().from(workloads).where(eq(workloads.nodeId, nodeId)).all()) {
+			if (row.projectId === project.id) continue;
+			const other = workloadSpecSchema.safeParse(parseJson<unknown>(row.specJson, null)).data;
+			if (!other) continue;
+			if (other.compose) {
+				for (const route of other.compose.routes) if (route.hostPort) used.add(route.hostPort);
+			} else if (other.runtime === 'container') used.add(other.port);
+		}
+		const next = { ...spec, routes: spec.routes.map((route) => ({ ...route })) };
+		for (const route of next.routes) {
+			let port = route.hostPort;
+			if (!port || used.has(port)) {
+				port = undefined;
+				for (let candidate = COMPOSE_PORT_MIN; candidate <= COMPOSE_PORT_MAX; candidate++)
+					if (!used.has(candidate)) {
+						port = candidate;
+						break;
+					}
+				if (port === undefined) throw new ValidationError('This node has no free ports left for compose services.');
+			}
+			route.hostPort = port;
+			used.add(port);
+		}
+		return next;
+	}
+
 	/** Persist the project-level spec (validated); placement is still resolved at deploy time. */
 	setSpec(principal: Principal, project: ProjectRow, input: WorkloadSpecInput): WorkloadView | null {
 		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		const runtime = effectiveRuntime(project);
 		if (runtime === 'static')
 			throw new ValidationError(
-				`Project "${project.slug}" is static. Create it with runtime "process", "container" or "function" to run a workload.`,
+				`Project "${project.slug}" is static. Create it with runtime "process", "container", "function" or "compose" to run a workload.`,
 			);
+		if (runtime === 'compose' && !featureEnabled(this.ctx.config, 'COMPOSE'))
+			throw new ValidationError('Compose stacks are not enabled on this platform (SKIFF_FEATURE_COMPOSE).');
 		// The digest is Skiff's to set at deploy time (R1); an input never carries one.
 		const { imageDigest: _ignored, ...specInput } = input as WorkloadSpecInput & { imageDigest?: string };
-		const spec = workloadSpecSchema.parse({ ...specInput, runtime });
+		let spec = workloadSpecSchema.parse({ ...specInput, runtime });
+		if (spec.compose)
+			spec = {
+				...spec,
+				memoryMb: composeMemoryMb(spec.compose),
+				cpus: composeCpus(spec.compose),
+				socketActivation: false,
+			};
 		this.assertEnvResolvable(project, spec);
 		this.assertRunnerResolvable(project, spec);
 		const existing = this.ctx.db.select().from(workloads).where(eq(workloads.projectId, project.id)).get();
@@ -308,6 +388,10 @@ export class WorkloadService {
 	 */
 	private assertEnvResolvable(project: ProjectRow, spec: WorkloadSpec, pending: Set<string> = new Set()): void {
 		const issues = workloadEnvIssues(spec);
+		const check = (name: string) => {
+			const resolved = this.ctx.secrets.resolve(project.orgId, project.id, name);
+			if (!resolved) issues.push(`Secret ${name} does not exist for this project or the organisation.`);
+		};
 		for (const ref of spec.secrets) {
 			if (pending.has(ref.name) && ref.version === undefined) continue;
 			const resolved = this.ctx.secrets.resolve(project.orgId, project.id, ref.name);
@@ -315,6 +399,9 @@ export class WorkloadService {
 			else if (ref.version !== undefined && !resolved.versions.includes(ref.version))
 				issues.push(`Secret ${ref.name} has no version ${ref.version}.`);
 		}
+		// Compose services name their own secrets; the value is shared at the project level.
+		for (const service of spec.compose?.services ?? [])
+			for (const name of service.secrets) if (!pending.has(name)) check(name);
 		if (issues.length > 0) throw new ValidationError(issues.join(' '), issues);
 	}
 
@@ -576,7 +663,7 @@ export class WorkloadService {
 				cpus: workload.cpus,
 				port: spec.port,
 				healthPath: spec.healthPath,
-				socketActivation: worker ? false : spec.socketActivation,
+				socketActivation: worker || spec.runtime === 'compose' ? false : spec.socketActivation,
 				// Scale to zero for process apps (D121); only sent when it applies, so every other
 				// workload's desired state is byte-for-byte what it was.
 				...(spec.idleStopSeconds && processIdleStopIssue(spec) === null
@@ -590,6 +677,8 @@ export class WorkloadService {
 				...(worker ? { ingress: 'none' as const } : {}),
 				...(spec.runner ? { runner: { provider: 'github' as const } } : {}),
 				...(spec.function ? { function: spec.function } : {}),
+				// Compose services, volumes and routes. Host ports were assigned at deploy time.
+				...(spec.compose ? { compose: spec.compose } : {}),
 				// A marker only; the token arrives through activation. Old agents never see it.
 				...(identityNode && workloadGetsIdentity(spec) ? { identity: true as const } : {}),
 			};
@@ -744,14 +833,36 @@ export class WorkloadService {
 			...spec.env,
 		};
 		const files: Record<string, string> = {};
+		// A compose service may name secrets the top-level workload does not; resolve the union.
+		const secretNames = new Set(spec.secrets.map((ref) => ref.name));
+		for (const service of spec.compose?.services ?? []) for (const name of service.secrets) secretNames.add(name);
 		for (const ref of spec.secrets) {
 			const value = this.ctx.secrets.getValue(row.orgId, ref.name, ref.version, row.projectId);
 			if (!value) continue;
 			if (ref.delivery === 'file') files[ref.name] = value.value;
 			else env[ref.name] = value.value;
 		}
+		// Compose services declare names only (secrets are delivered as env for containers).
+		for (const name of secretNames) {
+			if (Object.hasOwn(env, name)) continue;
+			const value = this.ctx.secrets.getValue(row.orgId, name, undefined, row.projectId);
+			if (value) env[name] = value.value;
+		}
 		// Containers pull with the org's credential for the image's registry (R2), if it has one.
-		const registryAuth = spec.runtime === 'container' ? this.ctx.registryCredentials.authForImage(row.orgId, spec.image, desiredId) : [];
+		const registryAuth =
+			spec.runtime === 'container'
+				? this.ctx.registryCredentials.authForImage(row.orgId, spec.image, desiredId)
+				: spec.compose
+					? [
+							...new Map(
+								spec.compose.services.flatMap((service) =>
+									this.ctx.registryCredentials
+										.authForImage(row.orgId, service.image, `${desiredId}--${service.name}`)
+										.map((entry) => [`${entry.registry}:${entry.username}`, entry] as const),
+								),
+							).values(),
+						]
+					: [];
 		return {
 			workloadId: desiredId,
 			activationVersion: activationVersion(spec, this.attachmentsVersion(row.projectId, row.nodeId, spec.runtime, row.orgId, spec)),
@@ -794,7 +905,8 @@ export class WorkloadService {
 		if (!workloadGetsIdentity(spec) || !this.nodeHasCapability(nodeId, WORKLOAD_IDENTITY_CAPABILITY))
 			return activation;
 		const identity = await this.ctx.workloadIdentity.activation(row.id, WORKLOAD_IDENTITY_AUDIENCE);
-		const identityUrl = workloadIdentityUrl(spec.runtime);
+		// Identity is only for process and container workloads; compose returns before this.
+		const identityUrl = workloadIdentityUrl(spec.runtime === 'process' ? 'process' : 'container');
 		// Attached storage gets short-lived STS credentials when the node understands them. Any
 		// failure keeps the sealed attachment key already present in `activation.env` (IAM.md §7.4).
 		const storage = await this.ctx.storage.workloadConsumerEnv(
@@ -1199,10 +1311,32 @@ export function aggregateReplicaReports(
 export function upstreamFor(id: string, spec: WorkloadSpec): string {
 	// Workers have no route; the value is never dialled and marks the row in listings.
 	if (spec.ingress === 'none') return 'none';
+	// A compose stack's primary route is the project's own host; other routes carry their own
+	// loopback port in the desired-state route list.
+	if (spec.runtime === 'compose') {
+		const route = spec.compose ? primaryComposeRoute(spec.compose) : null;
+		return `127.0.0.1:${route?.hostPort ?? spec.port}`;
+	}
 	// Functions are socket-activated like a process app (D110): workerd takes the listener.
 	if ((spec.runtime === 'process' || spec.runtime === 'function') && spec.socketActivation)
 		return `unix//run/skiff-workloads/${id}.sock`;
 	return `127.0.0.1:${spec.port}`;
+}
+
+/** The route the project's own host serves (the first one when the file marked none). */
+/** The route the project's own host serves; null for a fully private stack. */
+export function primaryComposeRoute(spec: Pick<ComposeSpec, 'routes'>): ComposeRoute | null {
+	return spec.routes.find((route) => route.primary) ?? spec.routes[0] ?? null;
+}
+
+/** Whole-stack admission: every service reserves its own memory. */
+export function composeMemoryMb(spec: Pick<ComposeSpec, 'services'>): number {
+	return spec.services.reduce((total, service) => total + service.memoryMb, 0);
+}
+
+/** Whole-stack CPU reservation, rounded like a single workload's. */
+export function composeCpus(spec: Pick<ComposeSpec, 'services'>): number {
+	return spec.services.reduce((total, service) => total + service.cpus, 0);
 }
 
 /**
@@ -1231,6 +1365,8 @@ export function activationVersion(spec: WorkloadSpec, databases = ''): string {
 			// An override changes the service account the token names, so it must re-apply. The token
 			// itself is never hashed: a refresh must not restart the workload.
 			...(spec.identity ? { identity: spec.identity } : {}),
+			// Services, images, commands and routes are the compose program; any change re-renders.
+			...(spec.compose ? { compose: spec.compose } : {}),
 		}),
 	);
 }

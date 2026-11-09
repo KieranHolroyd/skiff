@@ -54,6 +54,8 @@ import { ensureFrankenphp, frankenphpArch, FRANKENPHP_LINK, FRANKENPHP_PINNED_VE
 import { ensureNode, nodeArch, NODE_OPT_OUT_MARKER, NODE_PINNED_VERSION } from './node.ts';
 import { pythonBundleEras, warmPyodideCache } from './pyodide.ts';
 import { checkDns, digLookup, dnsTargets, parseServerAddresses, resolverLookup, type DnsResult } from './dns-check.ts';
+import { parseGetentGroupId, processHasGroup } from './caddy-access.ts';
+import { probeServedCertificate, tlsPortFromListen, wildcardProbeHost } from './tls-check.ts';
 import {
 	CONTROL_SOCKET,
 	isDomainName,
@@ -297,6 +299,20 @@ async function ask(question: string, fallback = ''): Promise<string> {
 	return answer || fallback;
 }
 
+/** A line read without echo, for secrets that must not end up in the terminal scrollback. */
+async function askSecret(question: string): Promise<string> {
+	if (!rl) return '';
+	const stty = (args: string[]) =>
+		Bun.spawnSync({ cmd: ['stty', ...args], stdin: 'inherit', stdout: 'ignore', stderr: 'ignore' });
+	stty(['-echo']);
+	try {
+		return (await rl.question(`${question}: `)).trim();
+	} finally {
+		stty(['echo']);
+		process.stdout.write('\n');
+	}
+}
+
 /** An interactive Yes / No toggle (scripts/install/confirm.ts); `fallback` when not interactive. */
 /**
  * Hand the terminal to a child process. readline (and the yes/no toggle) keep stdin in raw mode,
@@ -411,6 +427,7 @@ async function promptOptions(): Promise<void> {
 	);
 	if (isDomainName(options.platformHost) && (!options.contentDomain || !isTemporaryContentDomain(options.contentDomain)))
 		options.acmeEmail = await ask(`Let's Encrypt email for HTTPS ${color.dim('(blank: HTTP only)')}`, options.acmeEmail);
+	if (httpsWanted()) await promptCloudflareToken();
 	options.adminEmail = await ask('Owner email (prefills the setup wizard; optional)', options.adminEmail);
 	if (options.clickhouse === undefined && !clickhouseInstalled(SYSTEMD_DIR)) {
 		log(
@@ -427,6 +444,98 @@ async function promptOptions(): Promise<void> {
 /** The DNS-01 token file, only when one is actually there; the agent refuses to start on a missing path. */
 function cloudflareTokenFile(): string {
 	return options.cloudflareTokenFile && existsSync(options.cloudflareTokenFile) ? options.cloudflareTokenFile : '';
+}
+
+/** HTTPS needs real domains for both hosts plus an ACME email; mirrors resolveDomains(). */
+function httpsWanted(): boolean {
+	return (
+		isDomainName(options.platformHost) &&
+		!isTemporaryContentDomain(options.platformHost) &&
+		isDomainName(options.contentDomain) &&
+		!isTemporaryContentDomain(options.contentDomain) &&
+		Boolean(options.acmeEmail)
+	);
+}
+
+/**
+ * Sites share the wildcard certificate `*.<content domain>`, which Let's Encrypt only issues over
+ * DNS-01. Caddy's Cloudflare provider is the only solver in the Skiff build, so without this token
+ * the install looks healthy while every deployed site returns Cloudflare error 525.
+ */
+async function promptCloudflareToken(): Promise<void> {
+	if (cloudflareTokenFile()) return;
+	log(
+		color.dim(
+			'Sites share one wildcard certificate, which Let\'s Encrypt only issues over DNS.\n' +
+				'Create an API token with Zone → DNS → Edit for the sites domain\n' +
+				'(Cloudflare dashboard → My Profile → API Tokens) so Caddy can answer the challenge.',
+		),
+	);
+	const token = await askSecret('Cloudflare DNS token');
+	if (!token) {
+		log(
+			color.yellow(
+				'warning: no DNS token, so the wildcard certificate cannot be issued; deployed sites will fail HTTPS (error 525)',
+			),
+		);
+		return;
+	}
+	writeCloudflareToken(token);
+}
+
+/** The agent reads this file as the `skiff` user through the caddy group. */
+function writeCloudflareToken(token: string): void {
+	const path = options.cloudflareTokenFile;
+	if (options.dryRun) {
+		log(`would write the Cloudflare DNS token to ${path}`);
+		return;
+	}
+	mkdirSync(dirname(path), { recursive: true });
+	writeFileSync(path, `${token.trim()}\n`, { mode: 0o640 });
+	run('chown', ['root:caddy', path], { allowFailure: true });
+	log(`Cloudflare DNS token written to ${path}`);
+}
+
+/**
+ * A token Cloudflare rejects is worse than a missing one: the install would finish and the wildcard
+ * would silently never issue. Only a network failure is non-fatal, because the host may be offline
+ * or restricted at install time.
+ */
+async function verifyCloudflareToken(): Promise<void> {
+	let token = '';
+	try {
+		token = readFileSync(cloudflareTokenFile(), 'utf8').trim();
+	} catch {
+		/* reported below */
+	}
+	if (!token) fail(`The Cloudflare DNS token file ${cloudflareTokenFile()} is empty.`);
+	let response: Response;
+	try {
+		response = await fetch('https://api.cloudflare.com/client/v4/user/tokens/verify', {
+			headers: { authorization: `Bearer ${token}` },
+			signal: AbortSignal.timeout(15_000),
+		});
+	} catch (error) {
+		log(
+			color.yellow(
+				`warning: could not reach Cloudflare to verify the DNS token (${(error as Error).message}); continuing`,
+			),
+		);
+		return;
+	}
+	const body = (await response.json().catch(() => ({}))) as {
+		success?: boolean;
+		errors?: Array<{ message?: string }>;
+	};
+	if (response.ok && body.success) {
+		log('Cloudflare DNS token verified');
+		return;
+	}
+	const detail = body.errors?.map((error) => error.message).filter(Boolean).join('; ') || `HTTP ${response.status}`;
+	fail(
+		`Cloudflare rejected the DNS token in ${cloudflareTokenFile()}: ${detail}.\n` +
+			`  Create a token with Zone → DNS → Edit for ${options.contentDomain}, or pass --cloudflare-token-file <path>.`,
+	);
 }
 
 function dnsLine(result: DnsResult): string {
@@ -790,6 +899,22 @@ async function preflight(): Promise<void> {
 	if (options.platformHost === options.contentDomain) fail('The dashboard and sites need different domains.');
 	log(`${options.tls ? 'https' : 'http'}://${options.platformHost}, sites at *.${options.contentDomain}`);
 
+	// Sites share the wildcard certificate, and only DNS-01 can issue it. Fail a fresh install here
+	// rather than finishing one whose every deployed site returns Cloudflare error 525. An upgrade
+	// only warns: a host with working certificates must not be blocked from updating.
+	if (options.tls) {
+		if (!cloudflareTokenFile()) {
+			const message =
+				`HTTPS for sites needs a Cloudflare DNS-01 token, because they share the wildcard certificate *.${options.contentDomain}.\n` +
+				`  Put a Zone → DNS → Edit token in ${options.cloudflareTokenFile} (root:caddy, 0640),\n` +
+				'  or pass --cloudflare-token-file <path>. Without it every site returns Cloudflare error 525.';
+			if (!options.upgrade) fail(message);
+			log(color.yellow(`warning: ${message.replace(/\n\s*/g, ' ')}`));
+		} else {
+			await verifyCloudflareToken();
+		}
+	}
+
 	const disk = Bun.spawnSync({ cmd: ['df', '-Pk', '/'], stdout: 'pipe' });
 	const line = new TextDecoder().decode(disk.stdout).split('\n')[1] ?? '';
 	const availableKb = Number(line.trim().split(/\s+/)[3] ?? 0);
@@ -1074,9 +1199,23 @@ function ensureCaddyAccess(): void {
 	);
 	run('systemctl', ['daemon-reload'], { allowFailure: true });
 	if (existsSync(socket)) run('chmod', ['0660', socket], { allowFailure: true });
-	const groups = capture('systemctl', ['show', 'caddy', '-p', 'SupplementaryGroups', '--value']) ?? '';
-	if (!groups.split(/\s+/).includes('skiff'))
+	// `systemctl show -p SupplementaryGroups` reports the unit file, which already lists skiff once
+	// the drop-in is written, so it cannot tell whether the running process has it. A Caddy started
+	// before this drop-in does not, and then it cannot read release artifacts: every site is a 403
+	// while the node otherwise looks healthy. Inspect the process, and restart only when it is stale.
+	const pid = (capture('systemctl', ['show', 'caddy', '-p', 'MainPID', '--value']) ?? '').trim();
+	const gid = parseGetentGroupId(capture('getent', ['group', 'skiff']) ?? '');
+	let status = '';
+	try {
+		if (pid && pid !== '0') status = readFileSync(`/proc/${pid}/status`, 'utf8');
+	} catch {
+		/* no running process yet: startServices/reload picks the unit up */
+	}
+	const running = pid !== '' && pid !== '0';
+	if (running && gid !== null && !processHasGroup(status, gid)) {
+		log('restarting caddy so it picks up the skiff group');
 		run('systemctl', ['restart', 'caddy'], { allowFailure: true });
+	}
 }
 
 function switchCurrent(release: string): void {
@@ -1406,6 +1545,50 @@ function publicHealth(env: Map<string, string>): void {
 }
 
 /**
+ * The last thing that can fail quietly: DNS is right, the agent is healthy, deploys succeed, and
+ * every site still returns Cloudflare error 525 because Caddy has no certificate for its hostname.
+ * Probe the origin with an unused label under the content domain, which only the wildcard covers.
+ * Never fatal: the install itself succeeded, and rolling it back over a pending certificate would
+ * be worse than telling the operator exactly what is wrong.
+ */
+async function verifySiteTls(): Promise<boolean> {
+	if (options.dryRun || !options.tls || options.noAgent) return true;
+	step('Site TLS');
+	let listen = process.env.SKIFF_CADDY_LISTEN;
+	if (!listen) {
+		try {
+			listen = readEnvFile(AGENT_ENV_FILE).get('SKIFF_CADDY_LISTEN');
+		} catch {
+			/* the default below is the packaged listen address */
+		}
+	}
+	const port = tlsPortFromListen(listen);
+	const servername = wildcardProbeHost(options.contentDomain);
+	const deadline = Date.now() + 180_000;
+	let announced = false;
+	while (Date.now() < deadline) {
+		const probe = await probeServedCertificate({ host: '127.0.0.1', port, servername });
+		if (probe.covers) {
+			log(`*.${options.contentDomain} certificate served (expires ${probe.notAfter ?? 'unknown'})`);
+			return true;
+		}
+		if (!announced) {
+			log(color.dim(`waiting for Caddy to serve *.${options.contentDomain} (DNS-01 through Cloudflare)`));
+			announced = true;
+		}
+		await Bun.sleep(2_000);
+	}
+	log(color.red(`✗ Caddy is not serving a certificate for *.${options.contentDomain}`));
+	log('  Every deployed site returns Cloudflare error 525 until it does. Usual causes:');
+	log(`  • no DNS-01 token at ${options.cloudflareTokenFile} (Zone → DNS → Edit for the zone)`);
+	log('  • the token was revoked, or does not allow DNS edits on that zone');
+	log("  • Let's Encrypt rate limits: Caddy retries automatically, usually within minutes");
+	log(color.dim('  Check the ACME order: journalctl -u caddy | grep tls.obtain'));
+	log(color.dim('  Re-run the installer with --upgrade after fixing the token to re-check.'));
+	return false;
+}
+
+/**
  * First-run setup (D102): while no owner exists, print the one-time setup link. The wizard at
  * `/setup` creates the owner, so this never depends on email or on scraping the journal.
  */
@@ -1517,6 +1700,8 @@ async function install(): Promise<void> {
 	let snapshot: string | null = null;
 	let snapshotBundle: string | null = null;
 	let release: string | null = null;
+	/** False when Caddy is not yet serving the site wildcard certificate. */
+	let siteTls = true;
 	try {
 		// Any re-run against an existing database (with or without --upgrade) may apply
 		// migrations, so always take a sealed bundle the rollback/operator can restore.
@@ -1560,6 +1745,8 @@ async function install(): Promise<void> {
 		if (!options.noAgent) {
 			// Wait for the agent to reconcile and Caddy to serve the platform route.
 			publicHealth(env);
+			// Then the wildcard certificate, which a healthy install can still be missing.
+			siteTls = await verifySiteTls();
 		}
 		printSetupLink(env);
 		if (!options.dryRun && snapshotBundle) {
@@ -1568,6 +1755,13 @@ async function install(): Promise<void> {
 		}
 		step('Installed');
 		console.log(`${color.green('Skiff is installed.')} Platform: ${env.get('SKIFF_PLATFORM_ORIGIN')}`);
+		if (!siteTls) {
+			console.log(
+				color.yellow(
+					'warning: site HTTPS is not working yet — deployed sites will return Cloudflare error 525 until the certificate issues (see Site TLS above).',
+				),
+			);
+		}
 		console.log(`Logs: ${color.dim('journalctl -u skiff-control-plane -u skiff-agent -f')}`);
 		await offerRecoveryKit();
 	} catch (error) {

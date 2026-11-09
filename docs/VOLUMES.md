@@ -134,5 +134,9 @@ trashed volume can still be listed and restored until it is purged.
 - fails snapshots and restores no node finished within 6 hours.
 
 Deleting a single snapshot deletes the archive first and is refused while it runs, while a volume
-is restored from it, or on a write-only target. There is no automatic snapshot retention yet;
-`pinned` is recorded for when there is.
+is restored from it, or on a write-only target.
+
+On demand, `skif volume prune` (or `skif prune --only volume_snapshots`) removes unpinned finished
+snapshots older than `volumeSnapshotRetentionDays` (default 30, Settings → Retention & defaults)
+and snapshots whose volume is gone. Pinned snapshots and one a restore is reading are always
+kept. It uses the same plan-then-apply flow as every prune, so nothing is deleted unseen.

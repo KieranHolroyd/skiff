@@ -1,6 +1,7 @@
-import { and, desc, eq, inArray, isNotNull, lte, ne } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, lte, ne } from 'drizzle-orm';
 import { builds, configSnapshots, deployments, environments, nodes, projects, releases } from '@skiff/db';
 import {
+	checkSlug,
 	contentUrl,
 	parseImageReference,
 	workloadSpecSchema,
@@ -10,6 +11,7 @@ import {
 	type WorkloadSpec,
 } from '@skiff/contracts';
 import { entriesFromFiles, type FileEntry } from './artifact.ts';
+import { assertComposeSupported, parseComposeDocument } from './compose.ts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, NotFoundError, ValidationError } from './errors.ts';
 import { resolveImageDigest } from './oci-client.ts';
@@ -113,6 +115,8 @@ type EnvironmentLike = Pick<EnvironmentRow, 'slug' | 'isProduction' | 'name'>;
 
 /** The one file of an image deploy's release: names the image, for the deployment record. */
 export const IMAGE_MARKER_PATH = 'skiff-image.json';
+/** The one file of a compose deploy's release: the normalised stack, for the deployment record. */
+export const COMPOSE_MARKER_PATH = 'skiff-compose.json';
 
 /** Release + config snapshot; immutable, preview URL always, production pointer moved explicitly (D13, D17). */
 export class DeploymentService {
@@ -177,6 +181,65 @@ export class DeploymentService {
 		const fresh = this.ctx.db.select().from(projects).where(eq(projects.id, project.id)).get() ?? project;
 		const marker = new TextEncoder().encode(`${JSON.stringify({ image }, null, 2)}\n`);
 		return this.deployEntries(principal, fresh as ProjectRow, entriesFromFiles([{ path: IMAGE_MARKER_PATH, data: marker }]), {
+			promote: input.promote,
+			message: input.message,
+			environment: input.environment,
+		});
+	}
+
+	/**
+	 * Point a compose project at a `docker-compose.yml` and deploy it. The stack is parsed and
+	 * checked before anything is stored; unsupported compose features fail the deploy instead of
+	 * running a partial stack. The release is a one-file marker; the project's workload spec holds
+	 * the services and routes, so a rollback restores the whole stack (docs/COMPOSE.md).
+	 */
+	async deployCompose(
+		principal: Principal,
+		project: ProjectRow,
+		input: { document: string | Record<string, unknown>; promote?: boolean; message?: string; environment?: string },
+	): Promise<DeploymentView> {
+		this.ctx.iam.require(principal, 'deployment:create', { type: 'project', id: project.id });
+		if (effectiveRuntime(project) !== 'compose')
+			throw new ValidationError(`"${project.slug}" is not a compose project; create it with runtime "compose".`);
+		const parsed = parseComposeDocument(input.document);
+		const compose = assertComposeSupported(parsed);
+		// A route host is served by the content domain's wildcard certificate. A verified custom
+		// domain already maps to the project (and therefore the primary route); a per-service custom
+		// host needs its own domain record, which this slice does not have yet.
+		const contentDomain = this.ctx.config.contentDomain.toLowerCase();
+		for (const route of compose.routes) {
+			if (!route.host) continue;
+			const label = route.host.endsWith(`.${contentDomain}`)
+				? route.host.slice(0, -(contentDomain.length + 1))
+				: null;
+			if (!label || label.includes('.') || !checkSlug(label).ok)
+				throw new ValidationError(
+					`Route host "${route.host}" is not a single label under ${contentDomain}. Per-service custom domains are not supported yet; use a project custom domain for the primary route, or a host like "${route.service}.${contentDomain}".`,
+				);
+			// A label under the content domain is another project's production host. Do not let a
+			// compose file claim it (Caddy route order would decide which project wins).
+			const clash = this.ctx.db
+				.select({ id: projects.id })
+				.from(projects)
+				.where(and(eq(projects.slug, label), ne(projects.id, project.id), isNull(projects.deletedAt)))
+				.get();
+			if (clash)
+				throw new ValidationError(
+					`Route host "${route.host}" is already the production host of another project. Choose a different label.`,
+				);
+		}
+		const current = this.ctx.workloads.projectSpec(project);
+		this.ctx.workloads.setSpec(principal, project, {
+			...(current ?? {}),
+			runtime: 'compose',
+			compose,
+			// The stack's shared env/secrets stay; a compose file does not carry credentials.
+			env: current?.env ?? {},
+			secrets: current?.secrets ?? [],
+		} as WorkloadSpec);
+		const fresh = this.ctx.db.select().from(projects).where(eq(projects.id, project.id)).get() ?? project;
+		const marker = new TextEncoder().encode(`${JSON.stringify({ compose }, null, 2)}\n`);
+		return this.deployEntries(principal, fresh as ProjectRow, entriesFromFiles([{ path: COMPOSE_MARKER_PATH, data: marker }]), {
 			promote: input.promote,
 			message: input.message,
 			environment: input.environment,

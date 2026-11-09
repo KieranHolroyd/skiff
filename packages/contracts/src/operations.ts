@@ -67,6 +67,9 @@ export const pruneCategories = [
 	'upload_sessions',
 	'config_snapshots',
 	'releases',
+	'registry_images',
+	'runner_registrations',
+	'volume_snapshots',
 	'objects',
 ] as const;
 export type PruneCategory = (typeof pruneCategories)[number];
@@ -130,6 +133,24 @@ export const pruneCategoryInfo: readonly PruneCategoryInfo[] = [
 		id: 'releases',
 		label: 'Unused releases',
 		description: 'Releases no live deployment references, and their stored artifacts.',
+		scope: 'org',
+	},
+	{
+		id: 'registry_images',
+		label: 'Old registry images',
+		description: 'Registry tags older than the retention window beyond the newest tags kept per repository; deployment pins and tags in use are never removed.',
+		scope: 'org',
+	},
+	{
+		id: 'runner_registrations',
+		label: 'Stale runner registrations',
+		description: 'GitHub Actions runner registrations for a deleted project or workload, a removed runner or a replica below the current pool size.',
+		scope: 'org',
+	},
+	{
+		id: 'volume_snapshots',
+		label: 'Old volume snapshots',
+		description: 'Unpinned app-volume snapshots older than the retention window, and snapshots of volumes that are gone.',
 		scope: 'org',
 	},
 	{
@@ -235,6 +256,10 @@ export const operationCreateSchema = z.object({
 	/** Prune parameters. */
 	scope: z.enum(pruneScopes).optional(),
 	categories: z.array(z.enum(pruneCategories)).optional(),
+	/** Prune: override the retention window for every selected category (days). */
+	olderThanDays: z.number().int().min(1).max(3650).optional(),
+	/** Prune: keep at least this many newest tags per registry repository (default: the registry setting). */
+	keepTags: z.number().int().min(0).max(1000).optional(),
 	/** `plan` stops at `planned` for review; `apply` runs straight through (bulk only). */
 	stage: z.enum(['plan', 'apply']).default('plan'),
 });
@@ -271,7 +296,13 @@ export interface OperationView {
 	failed: number;
 	summary: OperationSummary;
 	actor: { type: string; id: string | null; clientId: string | null };
-	params: { targets?: string[]; scope?: PruneScope; categories?: PruneCategory[] };
+	params: {
+		targets?: string[];
+		scope?: PruneScope;
+		categories?: PruneCategory[];
+		olderThanDays?: number;
+		keepTags?: number;
+	};
 	createdAt: string;
 	startedAt: string | null;
 	finishedAt: string | null;

@@ -91,6 +91,15 @@ export const FEATURE_FLAGS = {
 		description:
 			'Open the native database studio (per-engine plugins in the on-demand skiff-studio process, D96). Set 0 to hide it.'
 	},
+	COMPOSE: {
+		name: 'COMPOSE',
+		// Level 4: a docker-compose file rendered as a private container group. Default on: it only
+		// runs when a project is created with runtime "compose".
+		default: true,
+		area: 'workloads',
+		description:
+			'Deploy a docker-compose file as a private group of containers with per-service routing (docs/COMPOSE.md). Set 0 to refuse new compose stacks.'
+	},
 	CONTAINER_CONSOLE: {
 		name: 'CONTAINER_CONSOLE',
 		// D127: inspect, read-only files and shells for project containers. A kill switch.

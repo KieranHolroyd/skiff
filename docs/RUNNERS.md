@@ -64,7 +64,10 @@ GitHub ◀── generate-jitconfig ── control plane ── activation (JIT 
   it in memory and a `0400` env file. Desired state never contains it.
 - **Cleanup.** Before minting a replica's next runner, the control plane deletes that replica's
   previous registration. Deleting or purging the project deregisters whatever is left. GitHub also
-  removes offline ephemeral runners on its own.
+  removes offline ephemeral runners on its own. `skif runners prune` (or
+  `skif prune --only runner_registrations`) removes registrations a crash or a shrunk pool left
+  behind after `runnerRegistrationRetentionDays` (default 7, Settings → Retention & defaults);
+  registrations a live workload still expects are never touched.
 - **Failures back off.** A clean exit (job done) is replaced immediately. A failed start (bad
   credential, broken image) takes the agent's normal 60 s retry. The project's Runtime tab shows the
   GitHub error, for example *GitHub rejected the credential*.

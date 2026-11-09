@@ -27,16 +27,20 @@ const flags: FlagSpec = {
 	plan: { type: 'string' },
 	scope: { type: 'string' },
 	only: { type: 'string' },
+	'older-than': { type: 'string' },
+	'keep-tags': { type: 'string' },
 	yes: { type: 'boolean', short: 'y' },
 	json: { type: 'boolean' },
 	help: { type: 'boolean', short: 'h' },
 };
 
-const usage = `Usage: skif prune [--apply] [--plan <op_id>] [--scope org|platform] [--only <categories>] [--yes] [--json]
+const usage = `Usage: skif prune [--apply] [--plan <op_id>] [--scope org|platform] [--only <categories>]
+                  [--older-than <days>] [--keep-tags <n>] [--yes] [--json]
 
 Find and remove data no live project references: leftover rows of deleted projects, orphaned
 domains, stale workload reservations, old deleted deployments, abandoned uploads, unused
-config snapshots and releases, and (platform scope) unreferenced stored objects.
+config snapshots and releases, old registry images, stale GitHub runner registrations, old
+unpinned volume snapshots, and (platform scope) unreferenced stored objects.
 
 Without --apply this is a dry run: it scans, prints what it found per category, and prints
 the command that applies exactly that plan. Plans expire after 1 hour.
@@ -46,6 +50,8 @@ Options:
       --plan <op_id>         Use an existing scan instead of scanning again
       --scope org|platform   org (default) or platform; platform needs a platform admin
       --only <list>          Comma-separated categories to scan or apply
+      --older-than <days>    Override the retention window for every selected category
+      --keep-tags <n>        Keep at least this many newest tags per registry repository
   -y, --yes                  Don't ask for confirmation (required when stdin isn't a terminal)
       --json                 NDJSON progress events on stdout
   -h, --help                 Show this help
@@ -68,9 +74,13 @@ export async function pruneCommand(argv: string[]): Promise<void> {
 	const scope = args.string('scope');
 	if (scope !== undefined && scope !== 'org' && scope !== 'platform')
 		throw new UsageError('--scope must be org or platform.');
+	const olderThanDays = parsePositiveInt(args.string('older-than'), '--older-than', 3650);
+	const keepTags = parsePositiveInt(args.string('keep-tags'), '--keep-tags', 1000, true);
 	const planId = args.string('plan');
 	if (planId !== undefined && scope !== undefined)
 		throw new UsageError('--scope is fixed by the plan; drop it when you pass --plan.');
+	if (planId !== undefined && (olderThanDays !== undefined || keepTags !== undefined))
+		throw new UsageError('--older-than and --keep-tags are fixed by the plan; drop them when you pass --plan.');
 
 	const client = await authenticatedClient();
 	let plan: OperationView;
@@ -82,7 +92,13 @@ export async function pruneCommand(argv: string[]): Promise<void> {
 	} else {
 		plan = await createPlan(
 			client,
-			{ action: 'prune', ...(scope ? { scope: scope as 'org' | 'platform' } : {}), ...(only ? { categories: only } : {}) },
+			{
+				action: 'prune',
+				...(scope ? { scope: scope as 'org' | 'platform' } : {}),
+				...(only ? { categories: only } : {}),
+				...(olderThanDays !== undefined ? { olderThanDays } : {}),
+				...(keepTags !== undefined ? { keepTags } : {}),
+			},
 			mode,
 			{ waitSeconds: 1, showProgress: true },
 		);
@@ -138,6 +154,16 @@ export async function pruneCommand(argv: string[]): Promise<void> {
 	}
 	console.log(outcomeLine(final));
 	if (final.status !== 'succeeded') console.log(`Details: skif operations show ${final.id}`);
+}
+
+/** A whole number; `allowZero` lets `--keep-tags 0` mean "keep only in-use tags and latest". */
+function parsePositiveInt(value: string | undefined, flag: string, max: number, allowZero = false): number | undefined {
+	if (value === undefined) return undefined;
+	const number = Number(value);
+	const min = allowZero ? 0 : 1;
+	if (!Number.isInteger(number) || number < min || number > max)
+		throw new UsageError(`${flag} must be a whole number from ${min} to ${max}.`);
+	return number;
 }
 
 function parseCategories(value: string | undefined): string[] | undefined {

@@ -236,6 +236,9 @@ parents, rows before objects):
 | `upload_sessions` | `expired/failed` for more than 24 h | org | the object is handled under `objects` |
 | `config_snapshots` | not referenced by any deployment | org | L4 |
 | `releases` | not referenced by any non-deleted deployment | org | reuses `runGc`'s guarded delete |
+| `registry_images` | a tag older than the retention window (default 90 days) beyond the newest tags kept per repository | org | never removes `latest`, a deployment pin (`skiff-d-*`), or a tag a live workload still names. Blobs go when zot's GC finds them unreferenced |
+| `runner_registrations` | a GitHub Actions runner registration for a deleted project/workload, a workload with no runner profile, or a replica below the current pool size, **older than 7 days** | org | deletes the runner on GitHub best-effort, then the row |
+| `volume_snapshots` | an unpinned app-volume snapshot older than the retention window (default 30 days), or one whose volume is gone | org | never removes pinned snapshots or one a restore is reading |
 | `objects` | a key in the store under `releases/` or `uploads/` with no `releases`/`upload_sessions` row, **and older than 24 h** | platform | needs `ObjectStore.list(prefix)` (L6). Keys are content-addressed and shared across orgs, so this is platform-only |
 | `node_caches` | release dirs on an agent that no desired state references | platform | **later**: an agent verb. Listed so the registry has the slot |
 
@@ -300,7 +303,10 @@ skif projects delete <slug…> [--match <glob>] [--not-deployed] [--older-than 3
 skif projects restore <slug…> [--yes] [--json]
 skif projects trash [--json]                       # list the trash with purge dates
 skif projects purge <slug…> [--yes]                # irreversible; trash only
-skif prune [--apply] [--scope org|platform] [--only releases,objects,…] [--yes] [--json]
+skif prune [--apply] [--scope org|platform] [--only releases,registry_images,…] [--older-than <days>] [--keep-tags <n>] [--yes] [--json]
+skif registry prune [--apply] [--older-than <days>] [--keep-tags <n>]   # --only registry_images
+skif runners prune [--apply] [--older-than <days>]                       # --only runner_registrations
+skif volume prune [--apply] [--older-than <days>]                        # --only volume_snapshots
 skif operations [list | show <id> | watch <id> | cancel <id>]
 ```
 

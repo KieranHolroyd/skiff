@@ -14,6 +14,10 @@ export interface OperationParams {
 	targets?: string[];
 	scope?: PruneScope;
 	categories?: PruneCategory[];
+	/** Prune: override the retention window for every selected category. */
+	olderThanDays?: number;
+	/** Prune: keep at least this many newest tags per registry repository. */
+	keepTags?: number;
 	/**
 	 * `blueprint.apply` only: the normalised document and the plan it produced. Internal: set by
 	 * the blueprint service, never accepted from `POST /operations`, never shown in a view.

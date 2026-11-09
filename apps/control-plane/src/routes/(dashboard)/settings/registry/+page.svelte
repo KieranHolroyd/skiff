@@ -82,7 +82,11 @@
 				<dd class="font-mono text-xs">{data.registry.engine} {data.registry.version}</dd>
 				<dt>Retention</dt>
 				<dd class="text-sm">
-					newest {data.registry.keepTags} tags per repository, plus every deployed digest
+					newest {data.registry.keepTags} tags per repository, plus every deployed digest.
+					<a
+						href={resolve('/(dashboard)/settings/maintenance')}
+						class="underline underline-offset-4">Prune old tags</a
+					>
 				</dd>
 				<dt>Mirrors</dt>
 				<dd class="font-mono text-xs">
@@ -249,6 +253,10 @@
 						max={1000}
 						value={data.registry.keepTags}
 					/>
+					<p class="text-xs text-muted-foreground">
+						zot's own retention keeps these. A prune in Settings → Maintenance can also remove
+						older tags beyond them; deployment pins and images a workload still uses are always kept.
+					</p>
 				</Field.Field>
 				<Field.Field class="sm:col-span-2">
 					<Field.Label for="registry-host">Host</Field.Label>

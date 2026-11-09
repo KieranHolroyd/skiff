@@ -28,6 +28,12 @@ const policyFields = {
 	deletedHistoryDays: int(1, 365),
 	/** Finished maintenance operations (Settings → Maintenance) are kept this long. */
 	operationHistoryDays: int(1, 365),
+	/** Registry tags older than this are prunable (the newest `keepTags` per repository always stay). */
+	registryRetentionDays: int(1, 3650),
+	/** GitHub Actions runner registrations with no live replica are prunable after this. */
+	runnerRegistrationRetentionDays: int(1, 365),
+	/** Unpinned app-volume snapshots are prunable after this. */
+	volumeSnapshotRetentionDays: int(1, 3650),
 
 	// ---------------------------------------------------------------- alerts
 	/** Warn when a certificate is this close to expiry… */
@@ -84,6 +90,9 @@ export const PLATFORM_POLICY_DEFAULTS: PlatformPolicies = {
 	logRetentionDays: 7,
 	deletedHistoryDays: 30,
 	operationHistoryDays: 90,
+	registryRetentionDays: 90,
+	runnerRegistrationRetentionDays: 7,
+	volumeSnapshotRetentionDays: 30,
 	certWarnDays: 14,
 	certCriticalDays: 3,
 	nodeAlertMinutes: 2,

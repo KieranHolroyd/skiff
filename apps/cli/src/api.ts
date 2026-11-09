@@ -168,6 +168,8 @@ export interface OperationCreateInput {
 	targets?: string[];
 	scope?: 'org' | 'platform';
 	categories?: string[];
+	olderThanDays?: number;
+	keepTags?: number;
 	stage: 'plan' | 'apply';
 }
 
@@ -338,7 +340,7 @@ export interface ProjectCreateInput {
 	slug: string;
 	name?: string;
 	/** `function` for a wrangler project (docs/FUNCTIONS.md); the server defaults to `static`. */
-	runtime?: 'static' | 'process' | 'container' | 'function';
+	runtime?: 'static' | 'process' | 'container' | 'function' | 'compose';
 	productionAccess?: 'public' | 'password' | 'platform';
 	previewAccess?: 'public' | 'password' | 'platform';
 }
@@ -1617,6 +1619,23 @@ export class ApiClient {
 			'DELETE',
 			`/api/v1/registry/tags?repository=${encodeURIComponent(repository)}&tag=${encodeURIComponent(tag)}`,
 		);
+	}
+
+	/** Deploy a docker-compose file to a level-4 project (docs/COMPOSE.md). */
+	async deployCompose(
+		project: string,
+		input: { document: string; promote?: boolean; message?: string; environment?: string },
+	): Promise<{ deployment: DeploymentView; workload: unknown; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/projects/${encodeURIComponent(project)}/deploy-compose`, {
+			body: input,
+			timeoutMs: 120_000,
+		});
+		const record = asRecord(raw);
+		return {
+			deployment: (record?.deployment ?? {}) as DeploymentView,
+			workload: record?.workload ?? null,
+			raw,
+		};
 	}
 
 	/** Set a container project's image and deploy it; the server pins the tag to a digest. */

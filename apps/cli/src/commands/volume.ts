@@ -10,6 +10,7 @@ import {
 	volumeTable,
 } from '../volumes.ts';
 import { authenticatedClient } from './common.ts';
+import { pruneCommand } from './prune.ts';
 import { confirmOrRefuse } from './run-operation.ts';
 
 /**
@@ -31,6 +32,7 @@ Commands:
   restore <name> <snapshot>    Restore a snapshot into a NEW volume (--to <new-name>)
   snapshot-delete <name> <snapshot>
                                Delete a snapshot and its archive
+  prune                        Delete old unpinned snapshots by retention (dry run by default)
 
 Create options:
   -p, --project <slug>         Project that owns the volume (required)
@@ -124,6 +126,7 @@ const subcommands: Record<string, (argv: string[]) => Promise<void>> = {
 	snapshots: listSnapshots,
 	restore: restoreVolume,
 	'snapshot-delete': deleteSnapshot,
+	prune: (argv) => pruneCommand(['--only', 'volume_snapshots', ...argv]),
 	attach: attachVolume,
 	detach: detachVolume,
 	delete: deleteVolume,

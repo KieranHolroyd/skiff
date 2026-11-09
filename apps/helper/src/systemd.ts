@@ -592,6 +592,7 @@ export class SystemdDriver {
 			throw new ValidationError(
 				`A point-in-time restore into ${workload.id} is in progress; the helper starts it when the restore ends.`,
 			);
+		if (workload.runtime === 'compose') return this.applyCompose(workload, activation);
 
 		// Resolve everything that can fail before writing a secret or a unit to disk.
 		let releaseDir: string | null = null;
@@ -931,6 +932,169 @@ export class SystemdDriver {
 			await this.ensureNetworkMembership(workload, networkName);
 		}
 
+		return this.status(workload.id);
+	}
+
+	/** Where a compose stack records the service names it rendered, for stale-unit cleanup. */
+	private composeManifestPath(id: string): string {
+		return join(this.runtimeDir, id, 'compose.json');
+	}
+
+	private async readComposeManifest(id: string): Promise<string[] | null> {
+		const text = await fs.readFile(this.composeManifestPath(id), 'utf8').catch(() => null);
+		if (text === null) return null;
+		try {
+			const parsed = JSON.parse(text) as { services?: unknown };
+			if (!Array.isArray(parsed.services) || !parsed.services.every((entry) => typeof entry === 'string')) return null;
+			return parsed.services as string[];
+		} catch {
+			return null;
+		}
+	}
+
+	/** One compose service unit id: `<workload id>--<service name>`. */
+	private composeServiceId(id: string, service: string): string {
+		return `${id}--${service}`;
+	}
+
+	/** Topological order for `depends_on`; validation already rejected cycles. */
+	private composeOrder(services: WorkloadDesired['compose']): Array<{ name: string }> {
+		if (!services) return [];
+		const byName = new Map(services.services.map((service) => [service.name, service]));
+		const done = new Set<string>();
+		const order: Array<{ name: string }> = [];
+		const visit = (name: string): void => {
+			if (done.has(name)) return;
+			done.add(name);
+			for (const dependency of byName.get(name)?.dependsOn ?? []) visit(dependency);
+			order.push({ name });
+		};
+		for (const service of services.services) visit(service.name);
+		return order;
+	}
+
+	/**
+	 * Level 4: render one rootless Quadlet per compose service on the workload network, with the
+	 * service name as a DNS alias. Each service has its own env file, resource caps and named
+	 * volume mounts; only the primary route's service publishes a loopback port for Caddy.
+	 */
+	private async applyCompose(workload: WorkloadDesired, activation: WorkloadActivation): Promise<HelperWorkloadStatus> {
+		const compose = workload.compose;
+		if (!compose) throw new ValidationError('Compose workloads need workload.compose');
+		if (compose.services.length === 0) throw new ValidationError('A compose stack needs at least one service');
+		if (Object.keys(activation.files).length > 0)
+			throw new ValidationError('Compose services take environment secrets; file delivery is not supported');
+		const runtimeDir = join(this.runtimeDir, workload.id);
+		await fs.mkdir(runtimeDir, { recursive: true, mode: 0o700 });
+		await fs.chmod(runtimeDir, 0o700).catch(() => undefined);
+
+		const env = { ...workload.env, ...activation.env };
+		const authFile = join(runtimeDir, 'auth.json');
+		const registryAuth = activation.registryAuth ?? [];
+		if (registryAuth.length > 0) await this.writeAtomic(authFile, renderRegistryAuthFile(registryAuth), 0o400);
+		else await this.removeIfExists(authFile);
+
+		const composeRoot = join(runtimeDir, 'compose');
+		await fs.mkdir(composeRoot, { recursive: true, mode: 0o700 });
+		for (const volume of compose.volumes) {
+			const directory = join(composeRoot, 'volumes', volume.name);
+			await fs.mkdir(directory, { recursive: true, mode: 0o777 });
+			// Compose volumes are shared by every container in the stack; each container's userns
+			// maps its own root onto a host range, so the directory must be writable by those ids.
+			await fs.chmod(directory, 0o777).catch(() => undefined);
+		}
+		if (this.containerSubids) await ensureContainerSubids(this.containerSubids);
+
+		const networkName = workloadNetworkName(workload);
+		let changed = await this.ensureNetworkUnit(networkName);
+		const units = new Map<string, string>();
+		for (const service of compose.services) units.set(service.name, serviceUnitName(this.composeServiceId(workload.id, service.name)));
+
+		for (const service of compose.services) {
+			const serviceId = this.composeServiceId(workload.id, service.name);
+			const paths = this.unitPaths(serviceId);
+			const serviceRuntimeDir = join(runtimeDir, service.name);
+			await fs.mkdir(serviceRuntimeDir, { recursive: true, mode: 0o700 });
+			const envFile = join(serviceRuntimeDir, 'env');
+			// Activation values (platform attachments and secret values) win over the compose file's
+			// plain environment, matching a single workload.
+			await this.writeAtomic(envFile, renderContainerEnvFile({ ...service.env, ...env }), 0o400);
+			const routes = compose.routes.filter((route) => route.service === service.name);
+			const ingress = routes.find((route) => route.primary) ?? routes[0];
+			const volumeMounts = service.volumes.map((volume) => ({
+				hostPath: join(composeRoot, 'volumes', volume.name),
+				mountPath: volume.mountPath,
+				readOnly: volume.readOnly,
+			}));
+			const synthetic: WorkloadDesired = {
+				id: serviceId,
+				projectId: workload.projectId,
+				projectSlug: workload.projectSlug,
+				deploymentId: workload.deploymentId,
+				...(workload.orgId ? { orgId: workload.orgId } : {}),
+				...(workload.networkName ? { networkName: workload.networkName } : {}),
+				runtime: 'container',
+				status: workload.status,
+				release: null,
+				upstream: workload.upstream,
+				memoryMb: service.memoryMb,
+				cpus: service.cpus,
+				port: ingress?.hostPort ?? service.ports[0] ?? workload.port,
+				healthPath: ingress?.healthPath ?? workload.healthPath,
+				socketActivation: false,
+				activationVersion: workload.activationVersion,
+				env: service.env,
+				secrets: [],
+				dataSizeMb: null,
+			};
+			changed =
+				(await this.writeIfChanged(
+					paths.container,
+					renderContainerUnit({
+						workload: synthetic,
+						image: service.image,
+						authFile: registryAuth.length > 0 ? authFile : null,
+						envFile,
+						dataDir: join(serviceRuntimeDir, 'data'),
+						secretsDir: null,
+						volumeMounts,
+						apparmorProfile: this.apparmorProfile,
+						dataMount: false,
+						networkAliases: [service.name],
+						afterUnits: service.dependsOn.map((name) => units.get(name)!),
+						publish: ingress?.hostPort ? { hostPort: ingress.hostPort, containerPort: ingress.port } : null,
+						...(service.command ? { exec: service.command } : {}),
+					}),
+					0o644,
+				)) || changed;
+			changed = (await this.removeIfExists(paths.service)) || changed;
+			changed = (await this.removeIfExists(paths.socket)) || changed;
+		}
+
+		// Services removed from the file must stop and lose their Quadlets.
+		const previous = (await this.readComposeManifest(workload.id)) ?? [];
+		const current = new Set(compose.services.map((service) => service.name));
+		for (const service of previous) {
+			if (current.has(service)) continue;
+			const serviceId = this.composeServiceId(workload.id, service);
+			await this.systemctl(['disable', '--now', serviceUnitName(serviceId)], { allowFailure: true });
+			const paths = this.unitPaths(serviceId);
+			for (const path of [paths.container, paths.service, paths.socket]) changed = (await this.removeIfExists(path)) || changed;
+		}
+		await this.writeAtomic(
+			this.composeManifestPath(workload.id),
+			`${JSON.stringify({ services: [...current] })}\n`,
+			0o600,
+		);
+		if (changed) await this.daemonReload();
+
+		// Start in dependency order. Images pull on first start, so do not hold the apply request:
+		// the agent probes the primary route and reports `starting` until it answers.
+		for (const service of this.composeOrder(compose)) {
+			const unit = units.get(service.name)!;
+			await this.systemctl(['enable', unit], { allowFailure: true });
+			await this.systemctl(['restart', '--no-block', unit]);
+		}
 		return this.status(workload.id);
 	}
 
@@ -2468,6 +2632,22 @@ END $$;`];
 		await this.systemctl(['disable', '--now', poolerServiceName(id)], { allowFailure: true });
 
 		let changed = false;
+		// Compose: remove every rendered service unit, using the manifest and a directory scan so a
+		// half-written manifest still cannot leave a container behind.
+		const services = new Set<string>((await this.readComposeManifest(id)) ?? []);
+		const prefix = `skiff-workload-${id}--`;
+		for (const name of await fs.readdir(this.quadletDir).catch(() => [] as string[])) {
+			if (!name.startsWith(prefix) || !name.endsWith('.container')) continue;
+			const service = name.slice(prefix.length, -'.container'.length);
+			if (/^[a-z0-9][a-z0-9-]*$/.test(service)) services.add(service);
+		}
+		for (const service of services) {
+			const serviceId = this.composeServiceId(id, service);
+			await this.systemctl(['disable', '--now', serviceUnitName(serviceId)], { allowFailure: true });
+			const servicePaths = this.unitPaths(serviceId);
+			for (const path of [servicePaths.container, servicePaths.service, servicePaths.socket])
+				changed = (await this.removeIfExists(path)) || changed;
+		}
 		for (const path of [paths.service, paths.socket, paths.container, paths.pooler]) {
 			changed = (await this.removeIfExists(path)) || changed;
 		}
@@ -2484,6 +2664,12 @@ END $$;`];
 	 */
 	async stop(id: string): Promise<void> {
 		assertId(id, 'workload id');
+		const compose = await this.readComposeManifest(id);
+		if (compose) {
+			for (const service of compose)
+				await this.systemctl(['stop', serviceUnitName(this.composeServiceId(id, service))], { allowFailure: true });
+			return;
+		}
 		await this.systemctl(['stop', serviceUnitName(id)], { allowFailure: true });
 	}
 
@@ -2494,6 +2680,12 @@ END $$;`];
 	 */
 	async restart(id: string): Promise<void> {
 		assertId(id, 'workload id');
+		const compose = await this.readComposeManifest(id);
+		if (compose) {
+			for (const service of compose)
+				await this.systemctl(['restart', serviceUnitName(this.composeServiceId(id, service))], { allowFailure: true });
+			return;
+		}
 		await this.systemctl(['restart', serviceUnitName(id)]);
 		await this.systemctl(['restart', socketUnitName(id)]);
 	}
@@ -2501,10 +2693,29 @@ END $$;`];
 	/** Actual service state, mapped onto the workload status vocabulary. */
 	async status(id: string): Promise<HelperWorkloadStatus> {
 		assertId(id, 'workload id');
+		const manifest = await this.readComposeManifest(id);
+		if (manifest) return this.composeStatus(id, manifest);
+		const unit = await this.unitStatus(serviceUnitName(id));
+		const tls = id.startsWith('db_') ? await readDatabaseTlsState(this.runtimeDir, id) : null;
+		return {
+			id,
+			status: unit.status,
+			restarts: unit.restarts,
+			...(unit.memoryBytes !== undefined ? { memoryBytes: unit.memoryBytes } : {}),
+			...(tls ? { tls } : {}),
+		};
+	}
+
+	/** One unit's ActiveState/NRestarts/memory, without the workload envelope. */
+	private async unitStatus(unit: string): Promise<{
+		status: WorkloadStatus;
+		restarts: number;
+		memoryBytes?: number;
+	}> {
 		const result = await this.systemctl(
 			[
 				'show',
-				serviceUnitName(id),
+				unit,
 				'--no-pager',
 				'--property=ActiveState',
 				'--property=SubState',
@@ -2514,7 +2725,7 @@ END $$;`];
 			],
 			{ allowFailure: true },
 		);
-		if (result.code !== 0) return { id, status: 'stopped', restarts: 0 };
+		if (result.code !== 0) return { status: 'stopped', restarts: 0 };
 		const properties = parseProperties(result.stdout);
 		const active = properties.ActiveState ?? '';
 		const restarts = parseRestarts(properties.NRestarts);
@@ -2542,14 +2753,26 @@ END $$;`];
 		// A systemd restart loop shows up as `failed` only between attempts; NRestarts makes it
 		// visible to the control plane even when the unit is momentarily active.
 		if (status === 'running' && restarts >= 5) status = 'failed';
-		const tls = id.startsWith('db_') ? await readDatabaseTlsState(this.runtimeDir, id) : null;
-		return {
-			id,
-			status,
-			restarts,
-			...(memoryBytes !== null ? { memoryBytes } : {}),
-			...(tls ? { tls } : {}),
-		};
+		return { status, restarts, ...(memoryBytes !== null ? { memoryBytes } : {}) };
+	}
+
+	/** A compose stack is running when every service is; the worst status wins. */
+	private async composeStatus(id: string, services: string[]): Promise<HelperWorkloadStatus> {
+		const rank: Record<WorkloadStatus, number> = { running: 0, starting: 1, stopped: 2, pending: 3, failed: 4 };
+		let status: WorkloadStatus = 'stopped';
+		let restarts = 0;
+		let memoryBytes = 0;
+		let seenMemory = false;
+		for (const service of services) {
+			const unit = await this.unitStatus(serviceUnitName(this.composeServiceId(id, service)));
+			if (rank[unit.status] > rank[status]) status = unit.status;
+			restarts += unit.restarts;
+			if (unit.memoryBytes !== undefined) {
+				memoryBytes += unit.memoryBytes;
+				seenMemory = true;
+			}
+		}
+		return { id, status, restarts, ...(seenMemory ? { memoryBytes } : {}) };
 	}
 
 	/**
@@ -2560,10 +2783,14 @@ END $$;`];
 	async logs(id: string, options: LogReadOptions = {}): Promise<HelperLogResult> {
 		assertId(id, 'workload id');
 		const lines = Math.max(1, Math.min(Math.floor(options.lines ?? 200), 1_000));
+		// Compose logs are the union of every service unit, oldest first within the requested tail.
+		const compose = await this.readComposeManifest(id);
+		const units = compose
+			? compose.map((service) => serviceUnitName(this.composeServiceId(id, service)))
+			: [serviceUnitName(id)];
 		const args = [
 			this.journalctlPath,
-			'-u',
-			serviceUnitName(id),
+			...units.flatMap((unit) => ['-u', unit]),
 			'--no-pager',
 			'-o',
 			'json',

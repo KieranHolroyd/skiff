@@ -86,7 +86,9 @@
 			? 'Process app'
 			: project.runtime === 'container'
 				? 'Container'
-				: 'Static'
+				: project.runtime === 'compose'
+					? 'Compose stack'
+					: 'Static'
 	);
 
 	function openEditor() {
@@ -123,6 +125,33 @@
 		title="Static project"
 		description="Static projects serve files from a release and have no workload. Create a project with runtime “process” or “container” to run an app with a command, port, memory budget and environment variables."
 	/>
+{:else if project.runtime === 'compose'}
+	<div class="space-y-5">
+		<Card.Root class="gap-0 py-0">
+			<Card.Header class="py-4">
+				<div class="flex items-start gap-3">
+					<span
+						class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
+					>
+						<BoxesIcon class="size-4" />
+					</span>
+					<div class="space-y-1">
+						<Card.Title class="flex flex-wrap items-center gap-2">
+							Runtime
+							<Badge variant="outline">{runtimeLabel}</Badge>
+							{#if workload}<StatusBadge status={workload.status} />{/if}
+						</Card.Title>
+						<Card.Description>
+							A docker-compose file rendered as one rootless container per service on the workload
+							network. Deploy it with <code>skif deploy</code> from the project directory, or
+							<code>POST /api/v1/projects/{project.slug}/deploy-compose</code>. Services, volumes and
+							routes are edited in the file, not here.
+						</Card.Description>
+					</div>
+				</div>
+			</Card.Header>
+		</Card.Root>
+	</div>
 {:else}
 	<div class="space-y-5">
 		<Card.Root class="gap-0 py-0">

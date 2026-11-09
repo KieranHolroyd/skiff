@@ -18,8 +18,9 @@ Options:
                               Also SKIFF_SKIP_DEPS=1.
   --admin-email <email>       Prefills the owner email in the setup wizard (optional).
   --cloudflare-token-file <path>
-                              Optional Caddy DNS-01 token file, used only if it exists
-                              (default /etc/caddy/cloudflare.token). Not prompted for.
+                              Caddy DNS-01 token file (default /etc/caddy/cloudflare.token).
+                              Asked for when HTTPS is on: the sites wildcard certificate needs it.
+                              Also SKIFF_CLOUDFLARE_TOKEN_FILE.
   --skip-dns-check            Skip checking that the domains resolve before installing.
   --github-client-id <id>     Optional GitHub OAuth app.
   --github-client-secret <s>  Optional GitHub OAuth secret.

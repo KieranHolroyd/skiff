@@ -16,6 +16,9 @@ spikes/**/tmp/
 # local data
 .data*/
 
+# local-only examples (not part of the published repo)
+local-examples/
+
 # security audits (sensitive; keep local)
 reports/security/
 **/[Ss]ecurity[-_ ][Aa]udit*

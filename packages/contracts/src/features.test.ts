@@ -20,6 +20,7 @@ describe('feature registry', () => {
 			'OBJECT_BROWSER',
 			'POOLER',
 			'DB_STUDIO',
+			'COMPOSE',
 			'CONTAINER_CONSOLE',
 			'DB_TLS',
 			'ORG_NETWORKS',

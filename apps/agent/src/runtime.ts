@@ -1159,6 +1159,8 @@ export function workloadFingerprint(workload: WorkloadDesired): string {
 		// A function's bindings, compatibility date and assets are part of the rendered workerd
 		// config, so a change must re-render and restart the host.
 		...(workload.function ? { function: workload.function } : {}),
+		// Every compose unit and route is rendered from this block; a service change must re-apply.
+		...(workload.compose ? { compose: workload.compose } : {}),
 		env: Object.entries(workload.env).sort(([a], [b]) => a.localeCompare(b)),
 		secrets: workload.secrets
 			.map((secret) => ({ name: secret.name, delivery: secret.delivery, version: secret.version ?? null }))
@@ -1181,10 +1183,13 @@ export function withOptionalSpec(workload: WorkloadDesired): WorkloadDesired {
 		database?: WorkloadDesired['database'];
 		objectStorage?: WorkloadDesired['objectStorage'];
 		broker?: WorkloadDesired['broker'];
+		compose?: WorkloadDesired['compose'];
 	} = {};
 	if (Array.isArray(candidate.command) && candidate.command.every((arg) => typeof arg === 'string'))
 		extras.command = candidate.command as string[];
 	if (typeof candidate.image === 'string') extras.image = candidate.image;
+	// Compose services are validated by the control plane; the helper validates the wire shape again.
+	if (workload.compose) extras.compose = workload.compose;
 	// The helper derives image, user and mounts from this profile (D61).
 	const database = candidate.database as { engine?: unknown; version?: unknown; variant?: unknown } | undefined;
 	if (database && typeof database.engine === 'string' && typeof database.version === 'string')

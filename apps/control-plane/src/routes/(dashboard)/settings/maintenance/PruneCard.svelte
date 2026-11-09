@@ -20,6 +20,7 @@
 	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
+	import { Input } from '#lib/components/ui/input/index.js';
 	import { Label } from '#lib/components/ui/label/index.js';
 	import { Progress } from '#lib/components/ui/progress/index.js';
 	import { Spinner } from '#lib/components/ui/spinner/index.js';
@@ -62,6 +63,15 @@
 	const chosen = new SvelteSet<PruneCategory>(
 		pruneCategoryInfo.filter((info) => info.scope === 'org').map((info) => info.id)
 	);
+	/** Blank means each category uses its retention policy (Settings → Retention & defaults). */
+	let olderThanInput = $state<string | number>('');
+	let keepTagsInput = $state<string | number>('');
+
+	function optionalNumber(value: string | number, min: number, max: number): number | undefined {
+		if (value === '') return undefined;
+		const number = Number(value);
+		return Number.isInteger(number) && number >= min && number <= max ? number : undefined;
+	}
 
 	let operation = $state<OperationView | null>(untrack(() => active));
 	let starting = $state(false);
@@ -173,11 +183,15 @@
 		if (starting) return;
 		starting = true;
 		const picked = available.filter((info) => chosen.has(info.id)).map((info) => info.id);
+		const olderThanDays = optionalNumber(olderThanInput, 1, 3650);
+		const keepTags = optionalNumber(keepTagsInput, 0, 1000);
 		try {
 			operation = await createOperation({
 				action: 'prune',
 				scope,
 				categories: picked.length === available.length ? undefined : picked,
+				...(olderThanDays !== undefined ? { olderThanDays } : {}),
+				...(keepTags !== undefined ? { keepTags } : {}),
 				stage: 'plan'
 			});
 			skipped = [];
@@ -273,7 +287,7 @@
 <Panel
 	title="Prune"
 	icon={SparklesIcon}
-	description="Find and remove data nothing references any more: leftovers of deleted projects, unused releases, stale reservations. You review the plan before anything is removed."
+	description="Find and remove data nothing references any more: leftovers of deleted projects, unused releases, stale reservations, old registry images, stale runner registrations and old volume snapshots. You review the plan before anything is removed."
 >
 	{#if stage === 'idle'}
 		<div class="space-y-4">
@@ -294,6 +308,39 @@
 					</ToggleGroup.Root>
 				</div>
 			{/if}
+			<div class="grid gap-3 sm:grid-cols-2">
+				<div class="grid gap-1.5">
+					<Label for="prune-older">Only items older than</Label>
+					<div class="flex items-center gap-2">
+						<Input
+							id="prune-older"
+							type="number"
+							min={1}
+							max={3650}
+							placeholder="Retention default"
+							bind:value={olderThanInput}
+						/>
+						<span class="text-sm text-muted-foreground">days</span>
+					</div>
+				</div>
+				{#if chosen.has('registry_images')}
+					<div class="grid gap-1.5">
+						<Label for="prune-keep">Keep newest registry tags</Label>
+						<Input
+							id="prune-keep"
+							type="number"
+							min={0}
+							max={1000}
+							placeholder="Registry setting"
+							bind:value={keepTagsInput}
+						/>
+					</div>
+				{/if}
+			</div>
+			<p class="-mt-2 text-xs text-muted-foreground">
+				Leave both blank to use the retention windows in Settings → Retention &amp; defaults. Pinned
+				images and snapshots are never pruned.
+			</p>
 			<fieldset class="space-y-2">
 				<legend class="mb-2 text-sm font-medium">What to look for</legend>
 				<div class="grid gap-2 sm:grid-cols-2">

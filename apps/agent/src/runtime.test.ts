@@ -1047,3 +1047,59 @@ describe('runner replicas (plan 21)', () => {
 		expect(workloadFingerprint(workload('wld_ci', runnerOverrides))).toContain('"runner":"github"');
 	});
 });
+
+describe('compose workloads (level 4)', () => {
+	const composeWorkload = (overrides: Record<string, unknown> = {}) =>
+		workload('app', {
+			runtime: 'compose',
+			release: SHA,
+			socketActivation: false,
+			port: 30001,
+			healthPath: '/healthz',
+			compose: {
+				volumes: [],
+				services: [
+					{
+						name: 'web',
+						image: 'nginx:1.27',
+						env: {},
+						secrets: [],
+						ports: [3000],
+						dependsOn: [],
+						volumes: [],
+						memoryMb: 256,
+						cpus: 1,
+					},
+				],
+				routes: [{ service: 'web', port: 3000, healthPath: '/healthz', primary: true, hostPort: 30001 }],
+			},
+			...overrides,
+		});
+
+	test('validates and fingerprints the stack', () => {
+		const spec = composeWorkload();
+		expect(spec.compose?.services[0]?.name).toBe('web');
+		const changed = composeWorkload({
+			compose: {
+				...spec.compose!,
+				services: [{ ...spec.compose!.services[0]!, image: 'nginx:1.28' }],
+			},
+		});
+		expect(workloadFingerprint(spec)).not.toBe(workloadFingerprint(changed));
+	});
+
+	test('health probes the primary loopback route, not a socket', async () => {
+		const urls: string[] = [];
+		const healthy = await probeWorkloadHealth(
+			composeWorkload(),
+			'/run/skiff-workloads',
+			AbortSignal.timeout(1000),
+			(async (input: string | URL | Request) => {
+				urls.push(String(input));
+				return new Response('ok');
+			}) as typeof fetch,
+		);
+		expect(healthy).toBe(true);
+		expect(urls).toEqual(['http://127.0.0.1:30001/healthz']);
+	});
+});

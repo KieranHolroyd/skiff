@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { composeSpecSchema } from './compose.ts';
 import { databaseExtensionAllowlist, databaseMonitorSchema, workloadDatabaseSchema } from './database.ts';
 import { storageAdminSchema, workloadObjectStorageSchema, workloadStorageStsSchema } from './object-storage.ts';
 import { workloadBrokerSchema } from './broker.ts';
@@ -24,7 +25,7 @@ import {
  * shell: the helper takes structured fields and never interpolates a command line.
  */
 
-export const workloadRuntimes = ['process', 'container', 'function'] as const;
+export const workloadRuntimes = ['process', 'container', 'function', 'compose'] as const;
 
 /**
  * `http` workloads listen on `port`, get a Caddy route and an HTTP health probe. `none` is a
@@ -199,8 +200,40 @@ export const workloadSpecSchema = z
 		 * this; the agent renders a workerd config from it and the helper starts the pinned binary.
 		 */
 		function: functionRuntimeSpecSchema.optional(),
+		/**
+		 * Compose only: every service, named volume and exposed route in the stack. The release is
+		 * only a marker; the services are the program.
+		 */
+		compose: composeSpecSchema.optional(),
 	})
 	.superRefine((spec, ctx) => {
+		if (spec.runtime === 'compose' && !spec.compose)
+			ctx.addIssue({ code: 'custom', path: ['compose'], message: 'Compose workloads need a parsed compose spec.' });
+		if (spec.compose && spec.runtime !== 'compose')
+			ctx.addIssue({ code: 'custom', path: ['runtime'], message: 'A compose spec needs runtime "compose".' });
+		if (spec.runtime === 'compose') {
+			for (const field of ['command', 'engine', 'image', 'imageDigest', 'runner', 'function', 'data'] as const)
+				if (spec[field] !== undefined)
+					ctx.addIssue({
+						code: 'custom',
+						path: [field],
+						message: 'Compose services carry their own image and command; the workload cannot set this.',
+					});
+			if (spec.replicas > 1)
+				ctx.addIssue({
+					code: 'custom',
+					path: ['replicas'],
+					message: 'A compose stack is one host; scale individual services in the compose file.',
+				});
+			// Services receive secret values as environment variables; there is no per-service file
+			// mount to point a file-delivery reference at.
+			if (spec.secrets.some((secret) => secret.delivery === 'file'))
+				ctx.addIssue({
+					code: 'custom',
+					path: ['secrets'],
+					message: 'Compose services take env secrets; file delivery is not supported.',
+				});
+		}
 		if (spec.runtime === 'function' && !spec.function)
 			ctx.addIssue({ code: 'custom', path: ['function'], message: 'Function workloads need a resolved function spec.' });
 		if (spec.function && spec.runtime !== 'function')
@@ -544,6 +577,12 @@ export const workloadDesiredSchema = z.object({
 	 * a workerd config from it; the helper writes that config and starts the binary.
 	 */
 	function: functionRuntimeSpecSchema.optional(),
+	/**
+	 * Compose only: the services this stack runs and the routes that reach them. `hostPort` is the
+	 * loopback port the helper publishes; each service is a rootless container on the shared
+	 * workload network, addressed by service name.
+	 */
+	compose: composeSpecSchema.optional(),
 	/**
 	 * Which copy this is when the spec asks for replicas; replica 0 keeps the workload id and the
 	 * others are `<id>-r<index>`. The count is deliberately absent so scaling never restarts a copy.

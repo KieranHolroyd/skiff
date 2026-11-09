@@ -1,4 +1,5 @@
-import { basename, resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { basename, join, resolve } from 'node:path';
 import { ApiError, CliError } from '../errors.ts';
 import { parseArgs, rejectExtraPositionals, type FlagSpec } from '../args.ts';
 import { formatBytes, printJson } from '../output.ts';
@@ -29,8 +30,30 @@ import {
 /** The API surface `deploy` needs; tests inject a fake that satisfies it. */
 export type DeployClient = Pick<
 	ApiClient,
-	'getProject' | 'createProject' | 'listSecrets' | 'createUpload' | 'putUpload' | 'finalizeUpload'
+	| 'getProject'
+	| 'createProject'
+	| 'listSecrets'
+	| 'createUpload'
+	| 'putUpload'
+	| 'finalizeUpload'
+	| 'deployCompose'
 >;
+
+/** Compose file names Skiff looks for, in order, when `--compose` is not given. */
+const COMPOSE_FILE_NAMES = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'] as const;
+
+async function findComposeFile(dir: string): Promise<string | null> {
+	for (const name of COMPOSE_FILE_NAMES) {
+		const path = join(dir, name);
+		try {
+			await readFile(path);
+			return path;
+		} catch {
+			// Try the next conventional name.
+		}
+	}
+	return null;
+}
 
 export interface DeployCommandDeps {
 	client?: DeployClient;
@@ -47,6 +70,8 @@ const flags: FlagSpec = {
 	create: { type: 'boolean', default: true },
 	wrangler: { type: 'string' },
 	'no-wrangler': { type: 'boolean' },
+	compose: { type: 'string' },
+	'no-compose': { type: 'boolean' },
 	'wrangler-bin': { type: 'string' },
 	help: { type: 'boolean', short: 'h' },
 };
@@ -69,6 +94,8 @@ Options:
       --no-create        Fail if the project does not exist
       --wrangler <path>  Use this wrangler config instead of auto-detecting one
       --no-wrangler      Deploy the plain directory even if a wrangler config exists
+      --compose <path>   Deploy this docker-compose file (level 4)
+      --no-compose       Deploy the directory even if a compose file exists
       --json             Print the finalize response as JSON
   -h, --help             Show this help
 
@@ -117,12 +144,37 @@ export async function deployCommand(
 	if (wranglerConfig)
 		log(`Detected ${wranglerConfig.path}; deploying as a function.`);
 
+	// A compose file in the directory is a level-4 deploy. Wrangler wins when both exist so a
+	// Functions project that happens to vendor a compose file keeps its old behaviour.
+	const composeFlag = args.string('compose');
+	const composePath =
+		composeFlag !== undefined
+			? resolve(composeFlag)
+			: !wranglerConfig && !args.boolean('no-compose')
+				? await findComposeFile(dir)
+				: null;
+	if (composePath) log(`Detected ${basename(composePath)}; deploying as a compose stack.`);
+	if (composePath && wranglerConfig)
+		throw new CliError('A compose file and a wrangler config were both found; pass --no-compose or --no-wrangler.', {
+			code: 'usage',
+		});
+
 	const client = deps.client ?? (await authenticatedClient());
 	let project = await findProject(client, slug);
 
 	if (wranglerConfig && project?.runtime && project.runtime !== 'function')
 		throw new CliError(
 			`Project "${slug}" uses runtime "${project.runtime}", but ${basename(wranglerConfig.path)} is a Functions project. Use a project created with runtime "function" (or create a new one).`,
+			{ code: 'runtime_mismatch' },
+		);
+	if (composePath && project?.runtime && project.runtime !== 'compose')
+		throw new CliError(
+			`Project "${slug}" uses runtime "${project.runtime}", but ${basename(composePath)} is a compose stack. Use a project created with runtime "compose" (or create a new one).`,
+			{ code: 'runtime_mismatch' },
+		);
+	if (!composePath && !wranglerConfig && project?.runtime === 'compose')
+		throw new CliError(
+			`Project "${slug}" is a compose stack, but no compose file was found. Pass --compose <path> or run from the directory containing docker-compose.yml.`,
 			{ code: 'runtime_mismatch' },
 		);
 
@@ -139,7 +191,11 @@ export async function deployCommand(
 				name,
 				productionAccess: 'public',
 				previewAccess: 'platform',
-				...(wranglerConfig ? { runtime: 'function' as const } : {}),
+				...(composePath
+					? { runtime: 'compose' as const }
+					: wranglerConfig
+						? { runtime: 'function' as const }
+						: {}),
 			});
 			project = created.project;
 			log(`Created project ${project.slug}.`);
@@ -154,11 +210,28 @@ export async function deployCommand(
 						`Project "${slug}" uses runtime "${project.runtime}", but ${basename(wranglerConfig.path)} is a Functions project. Use a project created with runtime "function" (or create a new one).`,
 						{ code: 'runtime_mismatch' },
 					);
+				if (composePath && project.runtime && project.runtime !== 'compose')
+					throw new CliError(
+						`Project "${slug}" uses runtime "${project.runtime}", but ${basename(composePath)} is a compose stack. Use a project created with runtime "compose" (or create a new one).`,
+						{ code: 'runtime_mismatch' },
+					);
 				log(`Project ${slug} already exists; continuing.`);
 			} else {
 				throw error;
 			}
 		}
+	}
+
+	if (composePath) {
+		const document = await readFile(composePath, 'utf8');
+		log('Deploying compose stack...');
+		const result = await client.deployCompose(slug, { document, promote, message });
+		if (json) {
+			printJson(result.raw);
+			return;
+		}
+		log(`Deployed ${slug} (${result.deployment.previewUrl}).`);
+		return;
 	}
 
 	let bundle: BuiltFunctionBundle | null = null;

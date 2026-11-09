@@ -127,8 +127,9 @@ identical permission checks. No surface can do something another can't.
 | Tier | v1? | systemd driver | docker driver (v2) |
 |---|---|---|---|
 | 1 Static | ✅ | Caddy `file_server` on `/srv/skiff/releases/<sha>` | Caddy container + volume |
-| 2 Process (Bun/Node SSR) | v2 | Sandboxed unit: `DynamicUser`, `ProtectSystem=strict`, `MemoryMax`, `CPUQuota`, optional socket activation | Sibling container, read-only artifact mount, cap-drop all |
+| 2 Process (Bun/Node SSR; Functions are the managed variant) | v2 | Sandboxed unit: `DynamicUser`, `ProtectSystem=strict`, `MemoryMax`, `CPUQuota`, optional socket activation | Sibling container, read-only artifact mount, cap-drop all |
 | 3 Container | v2 | Podman Quadlet (rootful, per-container user namespace, no daemon) | Native |
+| 4 Compose | v2 | One Quadlet per service from a `docker-compose.yml`, on the workload network; see [COMPOSE.md](./COMPOSE.md) | Native |
 
 ```ts
 interface RuntimeDriver {

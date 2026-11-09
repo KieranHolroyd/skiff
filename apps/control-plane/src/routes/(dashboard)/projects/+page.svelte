@@ -60,7 +60,9 @@
 	/** `?new=1&runtime=process` (from the /new hub) opens the dialog with a runtime chosen. */
 	const requestedRuntime = page.url.searchParams.get('runtime');
 	let runtime = $state(
-		requestedRuntime === 'process' || requestedRuntime === 'container' ? requestedRuntime : 'static'
+		requestedRuntime === 'process' || requestedRuntime === 'container' || requestedRuntime === 'compose'
+			? requestedRuntime
+			: 'static'
 	);
 	let placement = $state('edge');
 	let productionAccess = $state('public');
@@ -521,16 +523,19 @@
 						bind:value={runtime}
 						class="w-full"
 					>
-						<NativeSelect.Option value="static">Static files</NativeSelect.Option>
-						<NativeSelect.Option value="process">Process app (Bun/Node)</NativeSelect.Option>
-						<NativeSelect.Option value="container">Container image</NativeSelect.Option>
+						<NativeSelect.Option value="static">Level 1 — Static files</NativeSelect.Option>
+						<NativeSelect.Option value="process">Level 2 — Process app (Bun/Node)</NativeSelect.Option>
+						<NativeSelect.Option value="container">Level 3 — Container image</NativeSelect.Option>
+						<NativeSelect.Option value="compose">Level 4 — Compose stack (docker-compose.yml)</NativeSelect.Option>
 					</NativeSelect.Root>
 					<Field.Description>
 						{runtime === 'static'
 							? 'Served by Caddy from an immutable release.'
 							: runtime === 'process'
 								? 'Runs a command from the release in a sandboxed systemd unit.'
-								: 'Runs an OCI image in a rootless container.'}
+								: runtime === 'compose'
+									? 'Runs several containers from a docker-compose file on a private network, with per-service routing.'
+									: 'Runs an OCI image in a rootless container.'}
 					</Field.Description>
 				</Field.Field>
 				<Field.Field>

@@ -597,3 +597,66 @@ describe('resource-scoped access', () => {
 		expect(() => core.registry.pins(guest, 'scope/hidden')).toThrow(/image:pull/);
 	});
 });
+
+describe('registry image prune', () => {
+	test('describes tag age and deletes only tags past retention beyond the keep count', async () => {
+		core.registry.update(admin, { enabled: true, node: 'homelab', keepTags: 1 });
+		opened.sqlite.run(
+			`INSERT OR IGNORE INTO registry_repositories (id, org_id, name, created_by, created_at)
+			 VALUES ('rr_prune_shop', 'org_a', 'acme/prune', 'user_1', ?)`,
+			[Date.now()],
+		);
+		const old = new Date(Date.now() - 120 * 86_400_000).toISOString();
+		const now = new Date().toISOString();
+		const deleted: string[] = [];
+		const pruneFetch = (async (input: string | URL | Request, init: RequestInit = {}) => {
+			const url = String(input instanceof Request ? input.url : input);
+			if (url.endsWith('/v2/acme/prune/tags/list')) return Response.json({ tags: ['latest', 'new', 'old'] });
+			const manifest = /\/v2\/acme\/prune\/manifests\/(.+)$/.exec(url);
+			if (manifest) {
+				if (init.method === 'DELETE') {
+					deleted.push(manifest[1]!);
+					return new Response(null, { status: 202 });
+				}
+				const created = manifest[1] === 'old' ? old : now;
+				const digest = `sha256:${(manifest[1] === 'old' ? 'a' : manifest[1] === 'new' ? 'b' : 'c').repeat(64)}`;
+				return Response.json(
+					{
+						schemaVersion: 2,
+						config: { digest: 'sha256:cfg', size: 10 },
+						layers: [{ digest: 'sha256:layer', size: 100 }],
+						annotations: { 'org.opencontainers.image.created': created },
+					},
+					{ headers: { 'Docker-Content-Digest': digest } },
+				);
+			}
+			return new Response(null, { status: 404 });
+		}) as typeof fetch;
+		const previous = (core.ctx.config as { registryFetch?: typeof fetch }).registryFetch;
+		(core.ctx.config as { registryFetch?: typeof fetch }).registryFetch = pruneFetch;
+		try {
+			const described = await core.registry.describeTags('acme/prune');
+			expect(described.find((tag) => tag.tag === 'old')?.createdAt).toBe(Date.parse(old));
+			expect(described.find((tag) => tag.tag === 'old')?.bytes).toBe(100);
+
+			const created = core.operations.create(admin, {
+				action: 'prune',
+				categories: ['registry_images'],
+				keepTags: 1,
+			});
+			await core.operations.settled(created.id);
+			const planned = core.operations.get(admin, created.id);
+			expect(planned.status).toBe('planned');
+			const items = core.operations.items(admin, planned.id).items;
+			expect(items.map((item) => item.targetId)).toEqual(['acme/prune:old']);
+
+			core.operations.apply(admin, planned.id);
+			await core.operations.settled(planned.id);
+			const done = core.operations.get(admin, planned.id);
+			expect(done.status).toBe('succeeded');
+			expect(deleted).toEqual(['old']);
+		} finally {
+			(core.ctx.config as { registryFetch?: typeof fetch }).registryFetch = previous;
+		}
+	});
+});

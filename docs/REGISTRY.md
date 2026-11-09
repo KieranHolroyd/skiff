@@ -262,8 +262,12 @@ insecure = true                  # plain HTTP on loopback only
 ### 6.1 Retention and GC (R11)
 
 - zot: `gcDelay 1h`, `deleteUntagged: true` after 24 h, and `keepTags: [{patterns: ["^skiff-d-"]}]`
-  plus per-repo defaults (keep the newest 20 tags, keep anything pulled in 30 days). Each is
-  editable in Settings.
+  plus per-repo defaults (keep the newest `keepTags` tags, default 20). The count is editable in
+  Settings → Container registries.
+- On demand, `skif prune --only registry_images` (or `skif registry prune`) plans then deletes
+  user tags older than `registryRetentionDays` (default 90, Settings → Retention & defaults) that
+  are beyond the newest `keepTags` per repository. `latest`, deployment pins, and tags a live
+  workload still names are always kept. zot's GC then frees the blobs no manifest references.
 - Skiff: when a deployment is created on a registry image it writes `skiff-d-<deploymentId>` →
   digest and a `registry_pins` row. When D13 retention drops the deployment, it removes both. So a
   digest stays while any retained or pinned deployment uses it, whatever happens to the user's

@@ -18,7 +18,7 @@ import {
 } from './registry.ts';
 import { volumePathProblem } from './volumes.ts';
 
-export const WORKLOAD_RUNTIMES = ['process', 'container', 'function'] as const;
+export const WORKLOAD_RUNTIMES = ['process', 'container', 'function', 'compose'] as const;
 export type WorkloadRuntime = (typeof WORKLOAD_RUNTIMES)[number];
 
 /** Module kinds workerd's `Worker.modules` union can load (docs/FUNCTIONS.md §4.3). */
@@ -201,6 +201,34 @@ export function functionNeedsDurableStorage(fn: WorkloadFunction): boolean {
 	);
 }
 
+/** One container in a compose stack. Names are DNS labels; images are validated below. */
+export interface WorkloadComposeService {
+	name: string;
+	image: string;
+	command?: string[];
+	env: Record<string, string>;
+	secrets: string[];
+	ports: number[];
+	dependsOn: string[];
+	volumes: Array<{ name: string; mountPath: string; readOnly: boolean }>;
+	memoryMb: number;
+	cpus: number;
+}
+
+/** The compose block the helper renders into one Quadlet per service (docs/COMPOSE.md). */
+export interface WorkloadCompose {
+	volumes: Array<{ name: string }>;
+	services: WorkloadComposeService[];
+	routes: Array<{
+		service: string;
+		port: number;
+		host?: string;
+		healthPath: string;
+		primary: boolean;
+		hostPort?: number;
+	}>;
+}
+
 export interface WorkloadDesired {
 	id: string;
 	projectId: string;
@@ -264,6 +292,8 @@ export interface WorkloadDesired {
 	 * command line.
 	 */
 	function?: WorkloadFunction;
+	/** Compose only: services and their routes, validated by `parseWorkloadCompose`. */
+	compose?: WorkloadCompose;
 	/**
 	 * Ephemeral CI runner profile (plan 21). The helper derives the fixed entrypoint, `Restart=no`,
 	 * `Pull=newer` and a writable, throwaway root from it; nothing about it comes from the wire.
@@ -1122,6 +1152,123 @@ export function parseWorkloadFunction(value: unknown, label = 'workload.function
 }
 
 /** Validate the fixed workload half of `POST /v1/workloads`. */
+/** Compose block from desired state. Every image and argv is validated before it reaches a unit. */
+export function parseWorkloadCompose(value: unknown): WorkloadCompose {
+	const record = assertRecord(value, 'workload.compose');
+	const rawVolumes = record.volumes === undefined ? [] : record.volumes;
+	if (!Array.isArray(rawVolumes) || rawVolumes.length > 20)
+		throw new ValidationError('workload.compose.volumes must be an array of at most 20 entries');
+	const volumes = rawVolumes.map((entry, index) => {
+		const volume = assertRecord(entry, `workload.compose.volumes[${index}]`);
+		const name = assertString(volume.name, `workload.compose.volumes[${index}].name`, { max: 63 });
+		if (!/^[a-z0-9][a-z0-9_-]*$/.test(name))
+			throw new ValidationError(`workload.compose.volumes[${index}].name is not a valid volume name`);
+		return { name };
+	});
+	const declaredVolumes = new Set(volumes.map((volume) => volume.name));
+
+	if (!Array.isArray(record.services) || record.services.length === 0 || record.services.length > 20)
+		throw new ValidationError('workload.compose.services must contain 1–20 services');
+	const names = new Set<string>();
+	const services = record.services.map((entry, index) => {
+		const service = assertRecord(entry, `workload.compose.services[${index}]`);
+		const name = assertString(service.name, `workload.compose.services[${index}].name`, { max: 40 });
+		if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(name))
+			throw new ValidationError(`workload.compose.services[${index}].name is not a valid service name`);
+		if (names.has(name)) throw new ValidationError(`Duplicate compose service ${name}`);
+		names.add(name);
+		const image = assertImage(service.image, `workload.compose.services[${index}].image`);
+		const command = service.command === undefined ? undefined : assertCommand(service.command, `workload.compose.services[${index}].command`);
+		const env = parseEnvRecord(service.env, `workload.compose.services[${index}].env`);
+		const secrets = service.secrets === undefined ? [] : service.secrets;
+		if (!Array.isArray(secrets) || secrets.length > 64)
+			throw new ValidationError(`workload.compose.services[${index}].secrets must be an array`);
+		const secretNames = secrets.map((secret, secretIndex) => assertSecretName(secret, `workload.compose.services[${index}].secrets[${secretIndex}]`));
+		if (new Set(secretNames).size !== secretNames.length)
+			throw new ValidationError(`workload.compose.services[${index}].secrets contains duplicates`);
+		for (const secret of secretNames)
+			if (Object.hasOwn(env, secret)) throw new ValidationError(`${secret} is both a plain env and a secret in ${name}`);
+		const ports = service.ports === undefined ? [] : service.ports;
+		if (!Array.isArray(ports) || ports.length > 16)
+			throw new ValidationError(`workload.compose.services[${index}].ports must be an array`);
+		const parsedPorts = ports.map((port, portIndex) => assertPort(port, `workload.compose.services[${index}].ports[${portIndex}]`));
+		if (new Set(parsedPorts).size !== parsedPorts.length)
+			throw new ValidationError(`workload.compose.services[${index}].ports contains duplicates`);
+		const dependsOn = service.dependsOn === undefined ? [] : service.dependsOn;
+		if (!Array.isArray(dependsOn) || dependsOn.length > 20)
+			throw new ValidationError(`workload.compose.services[${index}].dependsOn must be an array`);
+		const dependencies = dependsOn.map((dependency, dependencyIndex) =>
+			assertString(dependency, `workload.compose.services[${index}].dependsOn[${dependencyIndex}]`, { max: 40 }),
+		);
+		const rawServiceVolumes = service.volumes === undefined ? [] : service.volumes;
+		if (!Array.isArray(rawServiceVolumes) || rawServiceVolumes.length > 20)
+			throw new ValidationError(`workload.compose.services[${index}].volumes must be an array`);
+		const serviceVolumes = rawServiceVolumes.map((volumeEntry, volumeIndex) => {
+			const volume = assertRecord(volumeEntry, `workload.compose.services[${index}].volumes[${volumeIndex}]`);
+			const volumeName = assertString(volume.name, `workload.compose.services[${index}].volumes[${volumeIndex}].name`, { max: 63 });
+			if (!declaredVolumes.has(volumeName))
+				throw new ValidationError(`Compose service ${name} mounts undeclared volume ${volumeName}`);
+			const mountPath = assertString(
+				volume.mountPath,
+				`workload.compose.services[${index}].volumes[${volumeIndex}].mountPath`,
+				{ max: 200 },
+			);
+			if (!mountPath.startsWith('/')) throw new ValidationError('A compose volume mount path must be absolute');
+			if (volume.readOnly !== undefined && typeof volume.readOnly !== 'boolean')
+				throw new ValidationError(`workload.compose.services[${index}].volumes[${volumeIndex}].readOnly must be a boolean`);
+			return { name: volumeName, mountPath, readOnly: volume.readOnly === true };
+		});
+		const memoryMb = service.memoryMb === undefined ? 256 : assertMemoryMb(service.memoryMb, `workload.compose.services[${index}].memoryMb`);
+		const cpus = service.cpus === undefined ? 1 : assertCpus(service.cpus, `workload.compose.services[${index}].cpus`);
+		return {
+			name,
+			image,
+			...(command ? { command } : {}),
+			env,
+			secrets: secretNames,
+			ports: parsedPorts,
+			dependsOn: dependencies,
+			volumes: serviceVolumes,
+			memoryMb,
+			cpus,
+		};
+	});
+	for (const service of services)
+		for (const dependency of service.dependsOn) {
+			if (dependency === service.name) throw new ValidationError(`Compose service ${service.name} cannot depend on itself`);
+			if (!names.has(dependency)) throw new ValidationError(`Compose service ${service.name} depends on unknown service ${dependency}`);
+		}
+
+	const rawRoutes = record.routes === undefined ? [] : record.routes;
+	if (!Array.isArray(rawRoutes) || rawRoutes.length > 20)
+		throw new ValidationError('workload.compose.routes must be an array of at most 20 entries');
+	const routes = rawRoutes.map((entry, index) => {
+		const route = assertRecord(entry, `workload.compose.routes[${index}]`);
+		const service = assertString(route.service, `workload.compose.routes[${index}].service`, { max: 40 });
+		const target = services.find((candidate) => candidate.name === service);
+		if (!target) throw new ValidationError(`workload.compose.routes[${index}] names unknown service ${service}`);
+		const port = assertPort(route.port, `workload.compose.routes[${index}].port`);
+		if (!target.ports.includes(port))
+			throw new ValidationError(`Compose service ${service} does not declare port ${port}`);
+		const healthPath = route.healthPath === undefined ? '/' : assertHealthPath(route.healthPath, `workload.compose.routes[${index}].healthPath`);
+		if (route.host !== undefined) assertString(route.host, `workload.compose.routes[${index}].host`, { max: 253 });
+		if (route.primary !== undefined && typeof route.primary !== 'boolean')
+			throw new ValidationError(`workload.compose.routes[${index}].primary must be a boolean`);
+		const hostPort = route.hostPort === undefined ? undefined : assertPort(route.hostPort, `workload.compose.routes[${index}].hostPort`);
+		return {
+			service,
+			port,
+			...(route.host !== undefined ? { host: route.host as string } : {}),
+			healthPath,
+			primary: route.primary === true,
+			...(hostPort ? { hostPort } : {}),
+		};
+	});
+	if (routes.filter((route) => route.primary).length > 1)
+		throw new ValidationError('Only one compose route can be primary');
+	return { volumes, services, routes };
+}
+
 export function parseWorkload(value: unknown): WorkloadDesired {
 	const record = assertRecord(value, 'workload');
 	const runtime = record.runtime as WorkloadRuntime;
@@ -1152,6 +1299,19 @@ export function parseWorkload(value: unknown): WorkloadDesired {
 			throw new ValidationError(
 				'Container workloads need an image; the control plane must include workload.image',
 			);
+	}
+	let workloadCompose: WorkloadCompose | undefined;
+	if (runtime === 'compose') {
+		if (record.compose === undefined) throw new ValidationError('Compose workloads need workload.compose');
+		workloadCompose = parseWorkloadCompose(record.compose);
+		// Services carry their own images and commands; the workload-level fields would be ignored
+		// or, worse, silently shadow one service's setting.
+		for (const key of ['image', 'command', 'database', 'objectStorage', 'broker', 'registry', 'runner', 'pooler', 'volumeId'] as const)
+			if (record[key] !== undefined) throw new ValidationError(`Compose workloads cannot set workload.${key}`);
+		if (record.socketActivation === true)
+			throw new ValidationError('Compose services are containers; socket activation is for process apps');
+		if (workloadCompose.routes.length === 0 && record.ingress !== 'none')
+			throw new ValidationError('A compose stack with no routes must be a worker (ingress "none")');
 	}
 	let workloadFunction: WorkloadFunction | undefined;
 	if (runtime === 'function') {
@@ -1289,6 +1449,7 @@ export function parseWorkload(value: unknown): WorkloadDesired {
 		workload.engine = 'node';
 	}
 	if (image) workload.image = image;
+	if (workloadCompose) workload.compose = workloadCompose;
 	if (workloadFunction) workload.function = workloadFunction;
 	if (database) workload.database = database;
 	if (record.pooler !== undefined) {

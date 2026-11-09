@@ -27,6 +27,7 @@ interface FakeState {
 	createUploads: Array<{ project: string; fileCount: number; totalBytes: number }>;
 	uploads: Uint8Array[];
 	finalized: Array<{ uploadId: string; project: string; promote: boolean; message?: string }>;
+	composes: Array<{ project: string; document: string }>;
 	listSecretsCalls: number;
 	listSecretsError?: Error;
 }
@@ -64,6 +65,14 @@ function fakeClient(state: FakeState): DeployClient {
 		async putUpload(_ticket, bytes) {
 			state.uploads.push(bytes);
 		},
+		async deployCompose(project, input) {
+			state.composes.push({ project, document: input.document });
+			return {
+				deployment: { previewUrl: 'https://compose.example.com' } as never,
+				workload: null,
+				raw: { ok: true },
+			};
+		},
 		async finalizeUpload(uploadId, input): Promise<FinalizeOutcome> {
 			state.finalized.push({ uploadId, ...input });
 			return {
@@ -88,6 +97,7 @@ function emptyState(overrides: Partial<FakeState> = {}): FakeState {
 		createUploads: [],
 		uploads: [],
 		finalized: [],
+		composes: [],
 		listSecretsCalls: 0,
 		...overrides,
 	};
@@ -347,3 +357,18 @@ function readZip(zip: Uint8Array): Map<string, string> {
 	}
 	return out;
 }
+
+describe('skif deploy with a compose file', () => {
+	test('detects docker-compose.yml, creates a level-4 project and sends the document', async () => {
+		const dir = await projectDir({
+			'docker-compose.yml': 'services:\n  web:\n    image: nginx:1.27\n    ports: ["80"]\n',
+		});
+		const state = emptyState();
+		await deployCommand([dir, '--json'], { client: fakeClient(state), log: () => {} });
+		expect(state.created[0]?.runtime).toBe('compose');
+		expect(state.composes).toHaveLength(1);
+		expect(state.composes[0]!.document).toContain('nginx:1.27');
+		expect(state.createUploads).toHaveLength(0);
+		expect(state.finalized).toHaveLength(0);
+	});
+});

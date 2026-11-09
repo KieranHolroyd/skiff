@@ -670,7 +670,7 @@ export const projects = sqliteTable(
 		 * Effective tier, including the fourth one (D110): a function stores `runtime = "process"`
 		 * here as `"function"` so the legacy CHECK keeps accepting the row. NULL on pre-0039 rows.
 		 */
-		runtimeName: text('runtime_name', { enum: ['static', 'process', 'container', 'function'] }),
+		runtimeName: text('runtime_name', { enum: ['static', 'process', 'container', 'function', 'compose'] }),
 		/** `edge`, `auto`, or a specific node id. */
 		placement: text('placement').notNull().default('edge'),
 		/** Optional constraint spec (`PlacementSpec`); the shorthand above still wins when null. */
@@ -807,7 +807,7 @@ export const deployments = sqliteTable(
 			.notNull()
 			.default('static'),
 		/** Effective tier including `function` (D110); NULL on pre-0039 rows. */
-		runtimeName: text('runtime_name', { enum: ['static', 'process', 'container', 'function'] }),
+		runtimeName: text('runtime_name', { enum: ['static', 'process', 'container', 'function', 'compose'] }),
 		/** Runtime spec snapshot; rollback restores code and config (D17). */
 		workloadJson: text('workload_json'),
 		status: text('status', { enum: ['pending', 'active', 'inactive', 'failed', 'deleted'] })
@@ -940,7 +940,7 @@ export const workloads = sqliteTable(
 		nodeId: text('node_id'),
 		runtime: text('runtime', { enum: ['process', 'container'] }).notNull(),
 		/** Effective tier including `function` (D110); NULL on pre-0039 rows. */
-		runtimeName: text('runtime_name', { enum: ['static', 'process', 'container', 'function'] }),
+		runtimeName: text('runtime_name', { enum: ['static', 'process', 'container', 'function', 'compose'] }),
 		status: text('status', { enum: ['pending', 'starting', 'running', 'failed', 'stopped'] })
 			.notNull()
 			.default('pending'),

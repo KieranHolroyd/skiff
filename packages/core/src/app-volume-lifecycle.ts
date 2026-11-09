@@ -401,6 +401,37 @@ export class AppVolumeLifecycle {
 		this.ctx.nodes.bump();
 	}
 
+	/**
+	 * Prune support: delete one unpinned, finished snapshot older than `cutoff` and its archive.
+	 * Returns the freed bytes; zero when it is gone, too new, pinned, still being restored or its
+	 * backup target is unavailable.
+	 */
+	async pruneSnapshot(snapshotId: string, cutoff: number): Promise<{ removed: boolean; bytes: number }> {
+		const snapshot = this.ctx.db
+			.select()
+			.from(appVolumeSnapshots)
+			.where(
+				and(
+					eq(appVolumeSnapshots.id, snapshotId),
+					eq(appVolumeSnapshots.pinned, false),
+					inArray(appVolumeSnapshots.status, ['ok', 'failed']),
+					lt(appVolumeSnapshots.createdAt, cutoff),
+				),
+			)
+			.get();
+		if (!snapshot) return { removed: false, bytes: 0 };
+		const restoring = this.ctx.db
+			.select({ name: appVolumes.name })
+			.from(appVolumes)
+			.where(eq(appVolumes.restoreSnapshotId, snapshot.id))
+			.get();
+		if (restoring) return { removed: false, bytes: 0 };
+		const objectDeleted = await this.deleteObject(snapshot, false);
+		if (!objectDeleted) return { removed: false, bytes: 0 };
+		this.ctx.db.delete(appVolumeSnapshots).where(eq(appVolumeSnapshots.id, snapshot.id)).run();
+		return { removed: true, bytes: snapshot.sizeBytes ?? 0 };
+	}
+
 	// ---------------------------------------------------------------- maintenance
 
 	/**

@@ -4,6 +4,7 @@ import {
 	checkSlug,
 	deriveSlug,
 	contentUrl,
+	deployLevelFor,
 	suggestSlugs,
 	type Principal,
 	type ProjectCreate,
@@ -56,6 +57,8 @@ export interface ProjectView {
 	slug: string;
 	name: string;
 	runtime: string;
+	/** Product-facing deploy level: 1 static, 2 process/function, 3 container, 4 compose. */
+	level: import('@skiff/contracts').DeployLevel;
 	placement: string;
 	placementSpec: import('@skiff/contracts').PlacementSpec | null;
 	productionDeploymentId: string | null;
@@ -129,6 +132,7 @@ export class ProjectService {
 			slug: row.slug,
 			name: row.name,
 			runtime: effectiveRuntime(row),
+			level: deployLevelFor(effectiveRuntime(row)),
 			placement: row.placement,
 			placementSpec: parsePlacementSpec(row.placementJson),
 			productionDeploymentId: row.productionDeploymentId,
@@ -152,6 +156,8 @@ export class ProjectService {
 		// SKIFF_FEATURE_FUNCTIONS=0; refuse a project it could never run.
 		if (input.runtime === 'function' && !featureEnabled(this.ctx.config, 'FUNCTIONS'))
 			throw new ValidationError('Functions are not enabled on this platform (SKIFF_FEATURE_FUNCTIONS).');
+		if (input.runtime === 'compose' && !featureEnabled(this.ctx.config, 'COMPOSE'))
+			throw new ValidationError('Compose stacks are not enabled on this platform (SKIFF_FEATURE_COMPOSE).');
 		const name = input.name?.trim() || input.slug || 'Untitled project';
 		const slug = input.slug ?? this.deriveSlug(name);
 		const taken = this.takenSlugs();

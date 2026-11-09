@@ -15,6 +15,7 @@ const dir = mkdtempSync(join(tmpdir(), 'skiff-workloads-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 let clock = Date.now();
+let edgeToken = '';
 
 const core: Core = createCore({
 	db: opened.db,
@@ -48,6 +49,7 @@ describe('tier 2 workloads', () => {
 	test('registers an edge node with a workload budget', () => {
 		const joined = core.nodes.join({ token: core.nodes.createJoinToken(principal, 'edge').token, name: 'edge' });
 		nodeToken = joined.token;
+		edgeToken = joined.token;
 		nodeId = joined.nodeId;
 		expect(core.nodes.list(principal).find((node) => node.id === nodeId)?.mode).toBe('edge');
 	});
@@ -331,5 +333,66 @@ describe('resource-scoped access', () => {
 
 		expect(core.workloads.get(guest, visible)).toBeNull();
 		expect(() => core.workloads.get(guest, hidden)).toThrow(/deployment:read/);
+	});
+});
+
+describe('level 4 compose workloads', () => {
+	const yaml = `
+services:
+  web:
+    image: nginx:1.27
+    ports: ["3000"]
+    depends_on: [api]
+  api:
+    image: node:22-alpine
+    expose: ["8080"]
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+x-skiff:
+  routes:
+    - service: web
+      port: 3000
+      primary: true
+    - service: api
+      port: 8080
+      host: api-app.sites.test
+`;
+
+	test('deploys a compose file as one admitted stack with per-service routes', async () => {
+		await core.projects.create(principal, {
+			name: 'shop',
+			slug: 'shop',
+			runtime: 'compose',
+			placement: 'edge',
+			productionAccess: 'public',
+			previewAccess: 'platform',
+		});
+		const document = yaml;
+		const project = core.projects.requireRow(principal, 'shop');
+		const deployment = await core.deployments.deployCompose(principal, project, { document, promote: true });
+		expect(deployment.runtime).toBe('compose');
+
+		const spec = core.workloads.projectSpec(core.projects.requireRow(principal, 'shop'));
+		expect(spec?.runtime).toBe('compose');
+		expect(spec?.memoryMb).toBe(768);
+		expect(spec?.cpus).toBe(1.5);
+
+		const workload = core.workloads.view(core.projects.requireRow(principal, 'shop'));
+		expect(workload).toMatchObject({ runtime: 'compose', memoryMb: 768 });
+
+		const state = await core.nodes.desiredState(edgeToken);
+		const stack = state.workloads.find((entry) => entry.projectSlug === 'shop');
+		expect(stack?.compose?.services.map((service) => service.name)).toEqual(['web', 'api']);
+		expect(stack?.compose?.routes.some((route) => route.host === 'api-app.sites.test' || route.service === 'api')).toBe(true);
+		const primaryPort = stack?.compose?.routes.find((route) => route.primary)?.hostPort;
+		expect(primaryPort).toBeGreaterThanOrEqual(30_000);
+		expect(stack?.port).toBe(primaryPort);
+		const apiRoute = state.routes.find((route) => route.host === 'api-app.sites.test' && route.production === true);
+		const apiPort = stack?.compose?.routes.find((route) => route.service === 'api')?.hostPort;
+		expect(apiRoute?.upstream).toBe(`127.0.0.1:${apiPort}`);
+		expect(state.routes.some((route) => route.host === 'shop.sites.test' && route.production === true)).toBe(true);
 	});
 });

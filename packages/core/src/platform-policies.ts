@@ -74,6 +74,18 @@ export class PlatformPolicyService {
 		return this.get().operationHistoryDays * DAY_MS;
 	}
 
+	registryRetentionMs(): number {
+		return this.get().registryRetentionDays * DAY_MS;
+	}
+
+	runnerRegistrationRetentionMs(): number {
+		return this.get().runnerRegistrationRetentionDays * DAY_MS;
+	}
+
+	volumeSnapshotRetentionMs(): number {
+		return this.get().volumeSnapshotRetentionDays * DAY_MS;
+	}
+
 	certWarnMs(): number {
 		return this.get().certWarnDays * DAY_MS;
 	}

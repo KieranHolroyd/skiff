@@ -1160,6 +1160,8 @@ export class NodeService {
 		const releaseShas = new Set<string>();
 		/** Route body per deployment, reused for that deployment's preview and environment routes. */
 		const baseByDeployment = new Map<string, Omit<RouteSpec, 'host' | 'access' | 'accessMode'>>();
+		/** Compose stacks per deployment: extra service hosts are emitted for the production pointer. */
+		const composeByDeployment = new Map<string, import('@skiff/contracts').ComposeSpec>();
 		const workloadByProject = new Map(
 			this.ctx.db
 				.select()
@@ -1279,6 +1281,7 @@ export class NodeService {
 					...functionRoute,
 				} satisfies Omit<RouteSpec, 'host' | 'access' | 'accessMode'>;
 				baseByDeployment.set(deployment.id, base);
+				if (deploymentSpec?.compose) composeByDeployment.set(deployment.id, deploymentSpec.compose);
 
 				// Every deployment always gets its immutable preview URL, whatever its environment.
 				const previewPolicyId = project.previewAccessPolicyId ?? null;
@@ -1366,6 +1369,42 @@ export class NodeService {
 						...accessEdge(environmentPolicyId),
 					},
 				});
+				// Compose: every other exposed service gets its own host on the production pointer.
+				// The project's own host always serves the primary route; a service's declared host
+				// must be a single label under the content domain so the wildcard certificate covers
+				// it. Per-service custom domains are a later, verified surface.
+				const compose = environment.isProduction ? composeByDeployment.get(deploymentId) : undefined;
+				if (compose) {
+					const target = targetOf(project) ?? node.id;
+					const local = target === node.id;
+					const nodeUpstream = `http://${nodeById.get(target)?.publicAddress ?? '127.0.0.1:1'}`;
+					const primary = compose.routes.find((route) => route.primary) ?? compose.routes[0];
+					const projectHost = this.ctx.environments.hostFor(project, environment);
+					for (const route of compose.routes) {
+						const declared = route.host?.toLowerCase().replace(/\.$/, '');
+						const underContent = declared?.endsWith(`.${this.ctx.config.contentDomain.toLowerCase()}`);
+						const host =
+							declared && underContent && !declared.slice(0, -(this.ctx.config.contentDomain.length + 1)).includes('.')
+								? declared
+								: `${project.slug}--${route.service}.${this.ctx.config.contentDomain}`;
+						if (route === primary && (!declared || host === projectHost)) continue;
+						routes.push({
+							...base,
+							host,
+							production: true,
+							accessMode,
+							upstream: local && route.hostPort ? `127.0.0.1:${route.hostPort}` : nodeUpstream,
+							healthPath: route.healthPath,
+							access: {
+								mode: accessMode,
+								siteKey: this.ctx.access.siteKeyFor(project, environmentPolicyId),
+								loginUrl: loginUrlFor(this.ctx.config.platformOrigin, accessMode, project.id),
+								policyId: environmentPolicyId,
+								...accessEdge(environmentPolicyId),
+							},
+						});
+					}
+				}
 				if (environment.isProduction) productionProjectIds.add(project.id);
 			}
 		}

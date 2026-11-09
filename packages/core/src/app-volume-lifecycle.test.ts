@@ -261,6 +261,19 @@ describe('app volume lifecycle', () => {
 		expect(core.appVolumes.lifecycle.listSnapshots(owner, project(), 'data').map((item) => item.id)).toEqual([snapshotId]);
 	});
 
+	test('prune removes an old unpinned finished snapshot and leaves a new one', async () => {
+		const extra = core.appVolumes.lifecycle.createSnapshot(owner, project(), 'data');
+		heartbeat({ appVolumeTaskResults: [result({ snapshotId: extra.id, volumeId, sizeBytes: 2048, sha256: SHA, method: 'reflink' })] });
+		clock += DAY;
+		expect(await core.appVolumes.lifecycle.pruneSnapshot(extra.id, clock - 30 * DAY)).toEqual({ removed: false, bytes: 0 });
+		const archive = join(dir, 'named-target', appVolumeSnapshotObjectKey('org_1', volumeId, extra.id));
+		mkdirSync(join(archive, '..'), { recursive: true });
+		writeFileSync(archive, 'gz');
+		expect(await core.appVolumes.lifecycle.pruneSnapshot(extra.id, clock)).toEqual({ removed: true, bytes: 2048 });
+		expect(existsSync(archive)).toBe(false);
+		expect(core.appVolumes.lifecycle.listSnapshots(owner, project(), 'data').map((item) => item.id)).toEqual([snapshotId]);
+	});
+
 	test('a trashed volume is purged on its node after the window, then its snapshots go', async () => {
 		core.appVolumes.detach(owner, project(), 'data', { workload: 'vol-api' });
 		core.appVolumes.delete(owner, project(), 'data');

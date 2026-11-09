@@ -81,6 +81,32 @@ export const POLICY_GROUPS: Record<PolicyGroupId, PolicyGroup> = {
 				min: 1,
 				max: 365,
 				description: 'Finished bulk operations and prunes shown under Settings → Maintenance.'
+			},
+			{
+				key: 'registryRetentionDays',
+				label: 'Registry image retention',
+				unit: 'days',
+				min: 1,
+				max: 3650,
+				description:
+					'Registry tags older than this can be pruned. The newest tags per repository (Settings → Container registries), deployment pins and images still used by a workload are always kept.'
+			},
+			{
+				key: 'runnerRegistrationRetentionDays',
+				label: 'Stale runner retention',
+				unit: 'days',
+				min: 1,
+				max: 365,
+				description:
+					'GitHub Actions runner registrations for a deleted project, a removed runner or a shrunk pool are prunable after this.'
+			},
+			{
+				key: 'volumeSnapshotRetentionDays',
+				label: 'Volume snapshot retention',
+				unit: 'days',
+				min: 1,
+				max: 3650,
+				description: 'Unpinned app-volume snapshots older than this can be pruned; pinned snapshots are always kept.'
 			}
 		]
 	},

@@ -168,6 +168,8 @@ export class OperationService {
 		} else {
 			params.scope = parsed.scope ?? 'org';
 			if (parsed.categories?.length) params.categories = [...new Set(parsed.categories)];
+			if (parsed.olderThanDays !== undefined) params.olderThanDays = parsed.olderThanDays;
+			if (parsed.keepTags !== undefined) params.keepTags = parsed.keepTags;
 			// Prune is always reviewed before it runs (docs/OPERATIONS.md §5.3).
 			if (parsed.stage === 'apply') throw new ValidationError('Prune must be planned first, then applied.');
 		}
@@ -827,11 +829,13 @@ export class OperationService {
 
 /** The parameters a view shows: internal ones (a blueprint's document) stay server-side. */
 function publicParams(params: OperationParams): OperationView['params'] {
-	const { targets, scope, categories } = params;
+	const { targets, scope, categories, olderThanDays, keepTags } = params;
 	return {
 		...(targets ? { targets } : {}),
 		...(scope ? { scope } : {}),
 		...(categories ? { categories } : {}),
+		...(olderThanDays !== undefined ? { olderThanDays } : {}),
+		...(keepTags !== undefined ? { keepTags } : {}),
 	};
 }
 

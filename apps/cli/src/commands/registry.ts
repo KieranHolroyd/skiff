@@ -6,6 +6,7 @@ import type { RegistryCredentialView } from '../api.ts';
 import { authenticatedClient, authenticatedContext } from './common.ts';
 import { spawn } from 'node:child_process';
 import { confirmOrRefuse } from './run-operation.ts';
+import { pruneCommand } from './prune.ts';
 
 /**
  * Container registries (docs/REGISTRY.md). Credentials let nodes pull private images from GHCR,
@@ -20,6 +21,7 @@ Commands:
   repos                                Your organisation's repositories, with the last push
   tags <org>/<name>                    Tags of one repository
   untag <org>/<name> <tag>             Delete a tag (needs image:delete; the registry frees unused layers later)
+  prune                                Delete old tags by retention (dry run by default; see \`skif prune --help\`)
   autodeploy <org>/<name> <project>    Deploy every push of --tag (default latest) to a container project; --off stops it
   scan <org>/<name>[:<tag>]            Vulnerabilities from the registry's scan (when a platform admin turned it on)
   trust [list|add|rm]                  Let a GitHub repository's workflows push with their OIDC token (no stored secret)
@@ -81,6 +83,7 @@ export async function registryCommand(argv: string[]): Promise<void> {
 	if (first === 'repos' || first === 'repositories' || first === 'ls') return listRepositories(rest);
 	if (first === 'tags') return listTags(rest);
 	if (first === 'untag') return untag(rest);
+	if (first === 'prune') return pruneCommand(['--only', 'registry_images', ...rest]);
 	if (first === 'autodeploy' || first === 'auto-deploy') return autoDeploy(rest);
 	if (first === 'scan') return scan(rest);
 	if (first === 'trust' || first === 'trusts') return trust(rest);

@@ -1282,10 +1282,12 @@ export class RegistryService {
 		return this.ctx.config.registryFetch ?? fetch;
 	}
 
-	/** Tags of one repository, read from zot; deployment pins are hidden. */
-	async tags(principal: Principal, name: string): Promise<RegistryTagView[]> {
-		const row = this.requireRepository(principal, name);
-		this.ctx.iam.require(principal, 'image:pull', { type: 'repository', id: row.id });
+	/** How many newest tags each repository keeps (the retention setting). */
+	keepTagCount(): number {
+		return this.config().keepTags;
+	}
+
+	private async rawTags(name: string): Promise<string[]> {
 		const token = this.internalToken(name);
 		const response = await this.transport()(this.registryUrl(`/v2/${name}/tags/list`), {
 			headers: { Authorization: `Bearer ${token}` },
@@ -1294,10 +1296,91 @@ export class RegistryService {
 		if (response.status === 404) return [];
 		if (!response.ok) throw new CoreError('upstream', `The registry answered ${response.status}.`, 502);
 		const body = (await response.json()) as { tags?: string[] | null };
-		return (body.tags ?? [])
+		return body.tags ?? [];
+	}
+
+	/** Tags of one repository, read from zot; deployment pins are hidden. */
+	async tags(principal: Principal, name: string): Promise<RegistryTagView[]> {
+		const row = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'image:pull', { type: 'repository', id: row.id });
+		return (await this.rawTags(name))
 			.filter((tag) => !tag.startsWith(REGISTRY_PIN_TAG_PREFIX))
 			.sort()
 			.map((tag) => ({ tag, digest: null }));
+	}
+
+	/**
+	 * Prune support: every user-visible tag with the digest, creation time and layer bytes zot
+	 * reports. Creation time comes from the OCI config blob (`created`), falling back to the
+	 * manifest's `org.opencontainers.image.created` annotation; null means "unknown, keep it".
+	 */
+	async describeTags(name: string): Promise<Array<{ tag: string; digest: string | null; createdAt: number | null; bytes: number }>> {
+		const token = this.internalToken(name);
+		const headers = { Authorization: `Bearer ${token}`, Accept: MANIFEST_ACCEPT };
+		const getManifest = async (reference: string): Promise<{ body: Record<string, unknown>; digest: string | null } | null> => {
+			const response = await this.transport()(this.registryUrl(`/v2/${name}/manifests/${encodeURIComponent(reference)}`), {
+				headers,
+				signal: AbortSignal.timeout(15_000),
+			}).catch(() => null);
+			if (!response?.ok) return null;
+			try {
+				return { body: (await response.json()) as Record<string, unknown>, digest: response.headers.get('docker-content-digest') };
+			} catch {
+				return null;
+			}
+		};
+		const configCreatedAt = async (digest: string): Promise<number | null> => {
+			const response = await this.transport()(this.registryUrl(`/v2/${name}/blobs/${digest}`), {
+				headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+				signal: AbortSignal.timeout(15_000),
+			}).catch(() => null);
+			if (!response?.ok) return null;
+			try {
+				const created = Date.parse(String(((await response.json()) as { created?: unknown }).created ?? ''));
+				return Number.isFinite(created) ? created : null;
+			} catch {
+				return null;
+			}
+		};
+		const annotationCreatedAt = (manifest: Record<string, unknown>): number | null => {
+			const annotations = manifest.annotations as Record<string, string> | undefined;
+			const created = Date.parse(String(annotations?.['org.opencontainers.image.created'] ?? ''));
+			return Number.isFinite(created) ? created : null;
+		};
+		const descriptions: Array<{ tag: string; digest: string | null; createdAt: number | null; bytes: number }> = [];
+		for (const tag of (await this.rawTags(name)).filter((entry) => !entry.startsWith(REGISTRY_PIN_TAG_PREFIX)).sort()) {
+			const manifest = await getManifest(tag);
+			let leaf = manifest?.body ?? null;
+			let createdAt = leaf ? annotationCreatedAt(leaf) : null;
+			if (leaf && Array.isArray(leaf.manifests) && typeof (leaf.manifests[0] as { digest?: unknown })?.digest === 'string')
+				leaf = (await getManifest((leaf.manifests[0] as { digest: string }).digest))?.body ?? leaf;
+			let bytes = 0;
+			if (leaf) {
+				for (const layer of (leaf.layers as Array<{ size?: unknown }> | undefined) ?? [])
+					if (typeof layer.size === 'number') bytes += layer.size;
+				const configDigest = (leaf.config as { digest?: unknown } | undefined)?.digest;
+				if (createdAt === null && typeof configDigest === 'string') createdAt = await configCreatedAt(configDigest);
+				createdAt ??= annotationCreatedAt(leaf);
+			}
+			descriptions.push({ tag, digest: manifest?.digest ?? null, createdAt, bytes });
+		}
+		return descriptions;
+	}
+
+	/**
+	 * Delete a tag without checking the caller's `image:delete` permission: prune authorises the
+	 * operation once and calls this per item. Deployment pins are refused.
+	 */
+	async deleteTagAsSystem(name: string, tag: string): Promise<boolean> {
+		if (tag.startsWith(REGISTRY_PIN_TAG_PREFIX)) return false;
+		const response = await this.transport()(this.registryUrl(`/v2/${name}/manifests/${encodeURIComponent(tag)}`), {
+			method: 'DELETE',
+			headers: { Authorization: `Bearer ${this.internalToken(name, ['pull', 'delete'])}` },
+			signal: AbortSignal.timeout(15_000),
+		});
+		if (response.status === 404) return false;
+		if (!response.ok && response.status !== 202) throw new CoreError('upstream', `The registry answered ${response.status}.`, 502);
+		return true;
 	}
 
 	/** Delete one tag (the manifest goes once nothing else points at it; GC frees the blobs). */

@@ -1,10 +1,11 @@
 import { createSign } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
-import { githubRunnerRegistrations, workloads } from '@skiff/db';
+import { githubRunnerRegistrations, projects, workloads } from '@skiff/db';
 import {
 	GITHUB_RUNNER_JITCONFIG_ENV,
 	githubRunnerLabels,
 	githubRunnerTarget,
+	workloadSpecSchema,
 	type GithubRunner,
 	type GithubRunnerPoolView,
 	type GithubRunnerView,
@@ -13,7 +14,7 @@ import {
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
 import { CoreError } from './errors.ts';
-import { newId } from './util.ts';
+import { newId, parseJson } from './util.ts';
 import type { ProjectRow } from './projects.ts';
 
 const GITHUB_API = 'https://api.github.com';
@@ -177,6 +178,32 @@ export class GithubRunnerService {
 			}
 		}
 		this.ctx.db.delete(githubRunnerRegistrations).where(eq(githubRunnerRegistrations.projectId, project.id)).run();
+	}
+
+	/**
+	 * Prune support: remove one registration row, best-effort deleting the runner on GitHub when
+	 * its workload still carries a runner profile. Returns false when the row is already gone.
+	 */
+	async deregisterRegistration(rowId: string): Promise<boolean> {
+		const row = this.ctx.db.select().from(githubRunnerRegistrations).where(eq(githubRunnerRegistrations.id, rowId)).get();
+		if (!row) return false;
+		const workload = this.ctx.db.select({ specJson: workloads.specJson }).from(workloads).where(eq(workloads.id, row.workloadId)).get();
+		const project = this.ctx.db
+			.select({ id: projects.id, deletedAt: projects.deletedAt })
+			.from(projects)
+			.where(eq(projects.id, row.projectId))
+			.get();
+		const runner = workload ? workloadSpecSchema.safeParse(parseJson<unknown>(workload.specJson, null)).data?.runner : undefined;
+		if (runner && project && !project.deletedAt) {
+			try {
+				const token = await this.accessToken(row.orgId, row.projectId, runner);
+				await this.deleteRunner(token, runner, row.runnerId);
+			} catch {
+				// Credential gone or GitHub unreachable: GitHub removes offline ephemeral runners itself.
+			}
+		}
+		this.ctx.db.delete(githubRunnerRegistrations).where(eq(githubRunnerRegistrations.id, rowId)).run();
+		return true;
 	}
 
 	/** Record a GitHub failure on the workload row so the dashboard can say why runners are down. */

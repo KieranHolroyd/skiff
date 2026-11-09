@@ -461,6 +461,31 @@ describe('prune', () => {
 		expect(await store.exists('releases/new-orphan.zip')).toBe(true);
 		expect(await store.exists('releases/bbb.zip')).toBe(true);
 	});
+
+	test('stale GitHub runner registrations are pruned, recent ones are kept', async () => {
+		sql.run(
+			`INSERT INTO github_runner_registrations
+			 (id, org_id, project_id, workload_id, replica, runner_id, runner_name, target, created_at)
+			 VALUES ('ghr_stale', 'org_ops', 'prj_gone', 'wl_gone', 0, 42, 'skiff-old-0-abc', 'acme/api', ?)`,
+			[clock - 8 * DAY],
+		);
+		sql.run(
+			`INSERT INTO github_runner_registrations
+			 (id, org_id, project_id, workload_id, replica, runner_id, runner_name, target, created_at)
+			 VALUES ('ghr_fresh', 'org_ops', 'prj_gone', 'wl_gone', 1, 43, 'skiff-old-1-def', 'acme/api', ?)`,
+			[clock - DAY],
+		);
+
+		const plan = await run(owner, { action: 'prune', categories: ['runner_registrations'] });
+		expect(plan.status).toBe('planned');
+		expect(plan.summary.categories?.runner_registrations?.planned).toBe(1);
+		expect(core.operations.items(owner, plan.id).items.map((item) => item.targetId)).toEqual(['ghr_stale']);
+
+		const done = await settle(owner, core.operations.apply(owner, plan.id));
+		expect(done.status).toBe('succeeded');
+		expect(count("github_runner_registrations WHERE id = 'ghr_stale'")).toBe(0);
+		expect(count("github_runner_registrations WHERE id = 'ghr_fresh'")).toBe(1);
+	});
 });
 
 describe('object store listing', () => {
