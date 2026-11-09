@@ -18,7 +18,7 @@ import type { Core } from './index.ts';
  * pool users and invites, audit history, and every secret value (secrets are listed by name).
  */
 
-type Sources = Omit<Core, 'configExport'>;
+type Sources = Omit<Core, 'configExport' | 'configImport'>;
 
 export interface ConfigExportOptions {
 	/** Limit `projects` to these slugs. Org-level sections are exported either way. */
@@ -74,7 +74,7 @@ export class ConfigExportService {
 				function: view.runtime === 'function' ? read(at('function'), () => core.functions.view(principal, row)) : undefined,
 				jobs: read(at('jobs'), () => core.jobs.list(principal, row)),
 				volumes: read(at('volumes'), () => core.appVolumes.list(principal, row)),
-				secrets: read(at('secrets'), () => core.secrets.list(principal, { projectId: row.id }).filter((s) => s.projectId === row.id)),
+				secrets: read(at('secrets'), () => latestSecrets(core.secrets.list(principal, { projectId: row.id }).filter((s) => s.projectId === row.id))),
 				attachments: {
 					databases: read(at('attachments.databases'), () => core.databases.attachments(principal, row)),
 					storage: read(at('attachments.storage'), () => core.storage.attachments(principal, row)),
@@ -86,9 +86,11 @@ export class ConfigExportService {
 		const iam = read('iam', () => {
 			core.iam.require(principal, 'iam:read', org);
 			return {
+				// Who the user ids below are, so an import can map them by email on another instance.
+				members: this.members(principal.orgId),
 				roles: core.iam.listRoles(principal.orgId),
 				bindings: core.iam.listBindings(principal.orgId),
-				groups: core.iam.listGroups(principal.orgId),
+				groups: core.iam.listGroups(principal.orgId).map((group) => ({ ...group, memberUserIds: this.groupMembers(group.id) })),
 				guardrails: read('iam.guardrails', () => core.governance.list(principal)),
 				authPolicy: read('iam.authPolicy', () => core.authPolicy.get(principal)),
 			};
@@ -100,7 +102,7 @@ export class ConfigExportService {
 
 		const body = {
 			projects,
-			secrets: read('secrets', () => core.secrets.list(principal, { projectId: null }).filter((s) => s.projectId === null)),
+			secrets: read('secrets', () => latestSecrets(core.secrets.list(principal, { projectId: null }).filter((s) => s.projectId === null))),
 			databases: read('databases', () => core.databases.list(principal)),
 			storage: read('storage', () => core.storage.list(principal)),
 			brokers: read('brokers', () => core.brokers.list(principal)),
@@ -109,10 +111,11 @@ export class ConfigExportService {
 			accessKeys: read('accessKeys', () => core.accessKeys.list(principal)),
 			federationTrusts: read('federationTrusts', () => core.federation.list(principal)),
 			accessPolicies: read('accessPolicies', () => core.accessPolicies.list(principal)),
-			// Clients are configuration; pool users and invites are people, not config.
+			// Clients and groups are configuration; pool users and invites are people, not config.
 			userPools: each('userPools', pools, (pool) => ({
 				...pool,
 				clients: read(`userPools.${pool.id}.clients`, () => core.userPools.listClients(principal, pool.id)),
+				groups: read(`userPools.${pool.id}.groups`, () => core.userPools.listGroups(principal, pool.id)),
 			})),
 			logDrains: read('logDrains', () => core.logDrains.list(principal)),
 			backupTargets: read('backupTargets', () => core.backupTargets.list(principal)),
@@ -158,6 +161,30 @@ export class ConfigExportService {
 		};
 	}
 
+	/** Org members with their email: the key an import uses to find the same people again. */
+	private members(orgId: string): { userId: string; email: string | null; name: string | null; role: string }[] {
+		try {
+			return this.core.ctx.sqlite
+				.query<{ userId: string; email: string | null; name: string | null; role: string }, [string]>(
+					'SELECT m.userId AS userId, u.email AS email, u.name AS name, m.role AS role FROM member m LEFT JOIN "user" u ON u.id = m.userId WHERE m.organizationId = ? ORDER BY u.email',
+				)
+				.all(orgId);
+		} catch {
+			return [];
+		}
+	}
+
+	private groupMembers(groupId: string): string[] {
+		try {
+			return this.core.ctx.sqlite
+				.query<{ user_id: string }, [string]>('SELECT user_id FROM iam_group_members WHERE group_id = ? ORDER BY user_id')
+				.all(groupId)
+				.map((row) => row.user_id);
+		} catch {
+			return [];
+		}
+	}
+
 	/** The org's name and slug live in the auth tables, which a bare core database lacks. */
 	private orgRow(orgId: string): { name: string | null; slug: string | null } | null {
 		try {
@@ -176,6 +203,13 @@ export class ConfigExportService {
 	private now(): number {
 		return this.core.ctx.now();
 	}
+}
+
+/** `secrets.list` returns every live version; the export lists each name once, at its latest. */
+function latestSecrets<T extends { name: string; version: number }>(rows: T[]): T[] {
+	const latest = new Map<string, T>();
+	for (const row of rows) if ((latest.get(row.name)?.version ?? -1) < row.version) latest.set(row.name, row);
+	return [...latest.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** Drop keys whose section was skipped (`undefined`) so YAML and JSON agree. */

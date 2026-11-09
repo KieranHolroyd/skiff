@@ -129,7 +129,7 @@
 	<Panel
 		title="What the file holds"
 		icon={ListChecksIcon}
-		description="Configuration only. It is not a backup and cannot be restored. To recover the whole platform, use skiff-restore with a recovery kit."
+		description="Configuration only, no data. Recreate it on another instance with skif import. To recover the whole platform with its data, use skiff-restore with a recovery kit."
 	>
 		<dl class="divide-y text-sm">
 			{#each INCLUDED as [label, detail] (label)}
@@ -149,9 +149,16 @@
 		</dl>
 	</Panel>
 
-	<Panel title="From the CLI" icon={TerminalIcon} description="The same export, written to a file.">
+	<Panel
+		title="From the CLI"
+		icon={TerminalIcon}
+		description="The same export, written to a file, and the import that recreates it elsewhere. Import only creates what is missing and is safe to run again."
+	>
 		<pre class="overflow-x-auto px-4 py-3 font-mono text-xs leading-relaxed">skif export
-skif export --out skiff-config.json
-skif export --project shop-web,shop-api --out -</pre>
+skif export --project shop-web,shop-api --out -
+
+# on the new instance: see the plan, then apply it with the secret values
+skif import skiff-config-acme-2026-11-09.yaml
+skif import skiff-config-acme-2026-11-09.yaml --secrets secrets.env --apply</pre>
 	</Panel>
 </div>

@@ -786,7 +786,7 @@ skif export [options]
 
 Writes your organisation's configuration to one file. The file covers every project's settings, environments, domains, workload spec, jobs, volumes and attachments. It also covers the managed databases, storage and brokers, IAM, service accounts, access keys, federation, access policies, user pools and their clients, log drains, backup targets, event and alert rules, email, pipelines, registry logins, forges, shares and templates.
 
-The file holds configuration only. It has no deployments, database rows, objects, logs or pool users. Secrets appear by name and never by value. Each section is read with your own permissions. A section you cannot read, or whose feature is off, is listed under `skipped` and does not fail the export. You can download the same file from **Settings → Config export** in the dashboard. The export is not a backup and cannot be restored. To recover the whole platform, see [platform backups](/self-hosting/platform-backups).
+The file holds configuration only. It has no deployments, database rows, objects, logs or pool users. Secrets appear by name and never by value. Each section is read with your own permissions. A section you cannot read, or whose feature is off, is listed under `skipped` and does not fail the export. You can download the same file from **Settings → Config export** in the dashboard. To recreate the configuration on another instance, use [`skif import`](#import). The export is not a backup: to recover the whole platform with its data, see [platform backups](/self-hosting/platform-backups).
 
 | Flag | Meaning |
 | --- | --- |
@@ -801,6 +801,35 @@ skif export --out skiff-config.json
 skif export --project shop-web,shop-api --out -
 ```
 
+
+### import
+
+```sh
+skif import <file> [options]
+```
+
+Recreates the configuration in a `skif export` file on the platform you are signed in to, for example when you move to a new server. Without `--apply` it only shows the plan.
+
+Import only creates. Each resource is matched by its name: the project slug, the database, role or group name, the hostname, and so on. A resource that already exists is left exactly as it is, and nothing is updated or deleted. Running the import again only creates what is still missing, so you can fix a problem and run it again.
+
+The export holds no secret values and no data. Pass the values with `--secrets`, or set them later and run the import again. Workload settings that need a missing secret are skipped until it exists. Databases, buckets and volumes start empty, and each app needs a deploy. Projects that had a password are imported as platform-only. People are matched by email, so invite your members first and their grants are imported with them. Anything the import cannot recreate is listed under **By hand afterwards**, with what to do.
+
+| Flag | Meaning |
+| --- | --- |
+| `--apply` | Create everything the plan lists. It asks first unless you pass `--yes`. |
+| `-y`, `--yes` | Do not ask for confirmation. |
+| `--secrets <file>` | Secret values, one per line: `NAME=value` for the organisation, or `project-slug/NAME=value` for one project. |
+| `--only <sections>`, `--skip <sections>` | Only these sections, or every section but these, for example `projects,databases`. |
+| `-p`, `--project <slug>` | Only these projects, repeated or comma-separated. |
+| `--all` | Also list the resources that already exist. |
+| `--json` | Print the plan or the result as JSON. |
+
+The command exits with code 3 when any step failed. The steps that depend on a failed step are skipped, and everything else is created.
+
+```sh
+skif import skiff-config-acme-2026-11-09.yaml
+skif import skiff-config-acme-2026-11-09.yaml --secrets secrets.env --apply
+```
 ### function
 
 ```sh

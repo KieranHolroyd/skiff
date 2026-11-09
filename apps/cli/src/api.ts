@@ -59,6 +59,7 @@ import type { EventDeliveryView, EventRuleCreateInput, EventRuleUpdateInput, Eve
 import type { AuditEntryView, LogDrainCreateInput, LogDrainTestResult, LogDrainUpdateInput, LogDrainView } from './log-drains.ts';
 import type { BlueprintPlanView, BlueprintRunView, BlueprintValidation } from './blueprints.ts';
 import type { ConfigExportDocument } from './config-export.ts';
+import type { ImportView } from './config-import.ts';
 import type { OperationItemView, OperationView } from './operations.ts';
 import type { HaStatusView } from './ha.ts';
 import type { DomainCheckResult, DomainView } from './domains.ts';
@@ -1678,6 +1679,18 @@ export class ApiClient {
 		const doc = asRecord(record?.export);
 		if (!doc || typeof doc.apiVersion !== 'string') throw new Error('The platform returned no export. Is it running a version with `GET /api/v1/export`?');
 		return { ...doc, skipped: (asArray(doc.skipped) ?? []) as ConfigExportDocument['skipped'] } as ConfigExportDocument;
+	}
+
+	/** `POST /import/plan|apply` (OPERATIONS.md §14). The server parses the export text. */
+	async configImport(
+		mode: 'plan' | 'apply',
+		body: { document: string; only?: string[]; skip?: string[]; projects?: string[]; secrets?: Record<string, string> },
+		options: { timeoutMs?: number } = {},
+	): Promise<ImportView> {
+		const record = asRecord(await this.request('POST', `/api/v1/import/${mode}`, { body, ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}) }));
+		const view = asRecord(record?.import);
+		if (!view || !Array.isArray(view.steps)) throw new Error('The platform returned no import result. Is it running a version with `POST /api/v1/import`?');
+		return view as unknown as ImportView;
 	}
 
 	async auditLog(

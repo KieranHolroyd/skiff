@@ -52,6 +52,7 @@ import { PipelineService } from './pipelines.ts';
 import { LogService } from './logs.ts';
 import { LogDrainService } from './log-drains.ts';
 import { ConfigExportService } from './config-export.ts';
+import { ConfigImportService } from './config-import/service.ts';
 import { EnvironmentService } from './environments.ts';
 import { SourceService } from './source.ts';
 import { createOperationService, type OperationService } from './operations/index.ts';
@@ -178,6 +179,7 @@ export * from './webhook-signature.ts';
 export * from './upgrades.ts';
 export * from './blueprints.ts';
 export * from './config-export.ts';
+export { ConfigImportService, parseDocument as parseConfigExportDocument } from './config-import/service.ts';
 
 export interface CoreOptions {
 	db: SkiffDb;
@@ -303,6 +305,8 @@ export interface Core {
 	logDrains: LogDrainService;
 	/** Read-only snapshot of an org's configuration, secrets by name only (OPERATIONS.md §13). */
 	configExport: ConfigExportService;
+	/** Recreate a config export on this instance; create-only (OPERATIONS.md §14). */
+	configImport: ConfigImportService;
 }
 
 function defaultEmailOptions(): EmailServiceOptions {
@@ -421,7 +425,7 @@ export function createCore(options: CoreOptions): Core {
 	const observability = new ObservabilityService(ctx);
 	ctx.alerts = new AlertService(ctx, observability);
 
-	const core: Omit<Core, 'configExport'> = {
+	const core: Omit<Core, 'configExport' | 'configImport'> = {
 		ctx,
 		projects: ctx.projects,
 		releases: ctx.releases,
@@ -501,5 +505,9 @@ export function createCore(options: CoreOptions): Core {
 		scim: ctx.scim,
 		logDrains: new LogDrainService(ctx, options.version)
 	};
-	return { ...core, configExport: new ConfigExportService(core, options.version ?? '0.0.0') };
+	return {
+		...core,
+		configExport: new ConfigExportService(core, options.version ?? '0.0.0'),
+		configImport: new ConfigImportService(core)
+	};
 }

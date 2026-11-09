@@ -65,6 +65,7 @@ export * from './app-volume.ts';
 export * from './job.ts';
 export * from './blueprint.ts';
 export * from './config-export.ts';
+export * from './config-import.ts';
 export * from './preview.ts';
 export * from './quota.ts';
 export * from './mcp-data.ts';

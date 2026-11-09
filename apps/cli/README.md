@@ -51,6 +51,7 @@ skif deploy ./dist --project my-site --json
 | `prune [--apply] [--plan <id>]` | Find and remove orphaned data (dry run by default) |
 | `operations [list\|show\|watch\|cancel]` | Inspect and follow bulk and prune operations |
 | `blueprint <validate\|plan\|apply> [file]` | Declare a stack in one file; `plan` shows the diff, `apply` runs it |
+| `import <file> [--apply] [--secrets <file>]` | Recreate an export's configuration on this platform; create-only and repeatable, plan by default |
 | `export [--out <file>\|-] [--format yaml\|json] [--project <slug>]` | Write the org's configuration (projects, services, IAM, drains, pipelines, …) to one file; no data, secrets by name only |
 | `db [list\|create\|info\|attach\|detach\|delete\|restore\|purge\|credentials]` | Managed PostgreSQL databases (see below) |
 | `storage [list\|create\|info\|update\|buckets\|attach\|grants\|detach\|delete\|restore\|purge\|credentials\|metrics]` | Managed S3-compatible object storage (see below) |

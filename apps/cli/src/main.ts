@@ -31,6 +31,7 @@ import { accessPoliciesCommand } from './commands/access-policies.ts';
 import { registryCommand } from './commands/registry.ts';
 import { auditCommand } from './commands/audit.ts';
 import { exportCommand } from './commands/export.ts';
+import { importCommand } from './commands/import.ts';
 import { volumeCommand } from './commands/volume.ts';
 import { deployCommand } from './commands/deploy.ts';
 import { deploymentsCommand } from './commands/deployments.ts';
@@ -141,6 +142,7 @@ const commands: Record<string, (argv: string[]) => Promise<void>> = {
 	images: registryCommand,
 	audit: auditCommand,
 	export: exportCommand,
+	import: importCommand,
 	volume: volumeCommand,
 	volumes: volumeCommand,
 	ha: haCommand,
@@ -206,6 +208,7 @@ Commands:
   registry [status|login|repos|credentials|deploy]  The platform registry, private registry logins, image deploys (\`skif registry --help\`)
   audit [--from] [--to] [--all]              Org audit log, newest first, with a date range and paging
   export [--out <file>] [--project <slug>]   Write the org's configuration to one YAML/JSON file; no data, no secret values
+  import <file> [--apply] [--secrets <f>]   Recreate an export's configuration here (create-only; plan by default)
   volume [list|show|snapshot|restore|…]      Persistent app volumes and their snapshots (\`skif volume --help\`)
   ha status                                  Failover controller: lease, lost nodes, recent failovers (platform admin)
 

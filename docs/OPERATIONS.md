@@ -508,7 +508,8 @@ publishing, compensation on failure and Compose import (plan 14) are not impleme
 
 Status: **implemented, 2026-11-09** (D198). A read-only snapshot of one organisation's
 configuration in one document (`apiVersion: skiff.export/v1`), for keeping in git, diffing
-between dates or rebuilding by hand. It is not a backup and not a blueprint: it restores nothing.
+between dates, or moving to another instance with `skif import` (§14). It is not a backup: it holds
+no data and no secret values.
 Platform disaster recovery remains `skiff-restore` with a recovery kit
 ([platform backups](../packages/docs/content/self-hosting/platform-backups.md)). Service:
 `packages/core/src/config-export.ts`. Header contract: `packages/contracts/src/config-export.ts`.
@@ -516,7 +517,8 @@ Platform disaster recovery remains `skiff-restore` with a recovery kit
 **What it holds.** Every live project with its settings, environments, domains, stored workload
 spec (`workload`, or null for static), function view, jobs, app volumes, project secret *names*
 and database/storage/broker attachments. Org-level sections: secrets (names), databases, storage
-(with buckets), brokers, `iam` (roles, bindings, groups, guardrails, auth policy), service
+(with buckets), brokers, `iam` (members with their email, roles, bindings, groups with member ids,
+guardrails, auth policy), service
 accounts, access keys (metadata), federation trusts, access policies, user pools with their
 clients, log drains, backup targets, event rules, alert rules (full rule, not firing state), email
 (org settings and domains), pipeline repositories with variables, secret names, environments and
@@ -545,3 +547,47 @@ written when the file is downloaded.
 `skiff-config-<org>-<date>.yaml` (mode 0600) and prints a section summary plus the skipped list.
 The CLI runs on Node, so YAML is emitted by `apps/cli/src/config-export.ts`. Strings that are
 not plainly safe are JSON-quoted, and a test round-trips the output through `Bun.YAML.parse`.
+
+## 14. Config import (`POST /import/plan|apply`, `skif import`)
+
+Status: **implemented, 2026-11-09** (D199). Recreates a config export (§13) on another instance,
+for example after moving to a new server. Code: `packages/core/src/config-import/` (`engine.ts`
+plan/run machinery, `context.ts` old-id → name → new-id resolvers, `stack.ts`, `identity.ts`,
+`integrations.ts`, `service.ts`). Contract: `packages/contracts/src/config-import.ts`.
+
+**Semantics.** Create-only and repeatable. Every resource is matched by its natural name (project
+slug, database/storage/broker/role/group/service-account/pool/repository/drain name, alert rule
+name, hostname, …); one that already exists is reported `exists` and left exactly as it is.
+Nothing is updated or deleted, so a second run only does what is still missing. Ids from the old
+instance are never used: references are translated through names and looked up live at apply time,
+and users are matched by email (`iam.members`), never by id.
+
+**Plan and apply.** `plan` reads only and returns steps (`create`/`exists`/`skip`), `manual`
+items and warnings. `apply` builds the same plan and runs the `create` steps in order through the
+normal services with the caller's principal (permissions, quotas, feature flags and per-resource
+audit rows as usual). A failed step records its error; steps that depend on it are skipped with
+`<key> failed`, and everything else carries on. One `config.import` audit row records the summary.
+
+**Order.** Org secrets → members (reported), custom roles, groups and members, service accounts,
+federation trusts, user pools and clients → projects and environments → project secrets →
+databases, storage and buckets, brokers (placed next to a sibling service the same project uses,
+else the project's placement, so later attaches meet D56) → workload settings, jobs, volumes,
+domains, attachments → access policies and their assignments → guardrails, bindings, auth policy →
+pipelines (repository, variables, environments, links), alert rules (ids inside queries rewritten),
+event rules (alert-rule ids remapped), log drains, email domains, local backup targets.
+
+**What cannot be carried over** (each listed under `manual` with what to do):
+- Secret values. Pass them with `secrets: { NAME | project/NAME: value }` (CLI `--secrets <file>`,
+  dotenv style). A workload whose secret refs do not resolve is skipped until they exist.
+- Passwords on projects and environments: imported as `platform`, never `public`.
+- Deployments, function bundles, database/bucket/volume data, pool users, access keys, pipeline
+  secrets and webhook/status tokens, drain header values (the drain is created disabled), S3 backup
+  target keys, registry passwords, forge tokens, SSO providers, network shares (platform-level).
+- Volume attachments (they need a deployed workload) and database backup policies (they need a
+  backup target).
+- Temporary (JIT) and system bindings are skipped; grants for people who are not members here yet
+  are skipped and their invitation is listed.
+
+**CLI.** `skif import <file> [--apply] [-y] [--secrets <file>] [--only a,b] [--skip a,b]
+[--project <slug>] [--all] [--json]`: shows the plan; `--apply` asks, then applies (15-minute
+request timeout) and exits 3 if any step failed. The server parses the file (YAML or JSON).
