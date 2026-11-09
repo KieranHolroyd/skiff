@@ -273,7 +273,7 @@
 - [ ] The dashboard binding editor's inline simulation diff
 - [ ] A Caddy-side Skiff Access decision cache (S6)
 - [x] Per-repository pipeline service accounts: `pipeline-<repo>` with managed roles and reconciled project bindings (D205)
-- [ ] Better Auth `apikey` migration (S1, deliberately deferred, D207)
+- [x] Better Auth `apikey` migration (S1 resolved; `skif iam migrate-keys`, D208)
 - [ ] Automatic cloud-provider setup (AWS OIDC provider, GCP pool/provider, Azure federated credential and role)
 - [ ] Scope-filtered MCP `tools/list`
 
