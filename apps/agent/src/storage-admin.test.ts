@@ -200,6 +200,7 @@ function target(_api: FakeApi, overrides: Partial<StorageTarget> = {}): StorageT
 		status: 'running',
 		admin,
 		desired: desired(),
+		notificationsTarget: false,
 		...overrides,
 	};
 }
@@ -226,8 +227,7 @@ describe('storage bucket configuration convergence', () => {
 			'cors:1',
 			`quota:${1024 * 1024}`,
 			'lock:governance:30',
-			// Asserted off too, so a rule removed while the agent was down still clears RustFS.
-			'notify:uploads:off',
+			// No notification target on this instance, so the call RustFS would reject is skipped.
 		]);
 		expect(api.lock).toEqual(objectLock);
 	});
@@ -235,7 +235,7 @@ describe('storage bucket configuration convergence', () => {
 	test('a watched bucket points its events at the yoal target; unwatching clears it (D122)', async () => {
 		const api = new FakeApi();
 		const reconciler = new StorageReconciler({
-			source: { storageTargets: () => [{ ...target(api), desired: desired({ notifications: true }) }] },
+			source: { storageTargets: () => [{ ...target(api, { notificationsTarget: true }), desired: desired({ notifications: true }) }] },
 			apiFor: () => api,
 			now: () => 1_000_000,
 		});
@@ -249,7 +249,7 @@ describe('storage bucket configuration convergence', () => {
 		const old = new FakeApi();
 		old.unsupported.add('notifications');
 		await new StorageReconciler({
-			source: { storageTargets: () => [{ ...target(old), desired: desired({ notifications: true }) }] },
+			source: { storageTargets: () => [{ ...target(old, { notificationsTarget: true }), desired: desired({ notifications: true }) }] },
 			apiFor: () => old,
 			now: () => 1_000_000,
 		}).reconcile();
@@ -282,6 +282,23 @@ describe('storage bucket configuration convergence', () => {
 		await reconciler.reconcile();
 		expect(api.calls.filter((call) => call.startsWith('create:'))).toHaveLength(1);
 		expect(api.calls.length).toBeGreaterThan(before);
+	});
+
+	test('enabling the yoal target re-asserts notifications without a rule change', async () => {
+		const api = new FakeApi();
+		let current = target(api);
+		const reconciler = new StorageReconciler({
+			source: { storageTargets: () => [current] },
+			apiFor: () => api,
+			now: () => 1_000_000,
+		});
+		await reconciler.reconcile();
+		expect(api.calls.some((call) => call.startsWith('notify:'))).toBe(false);
+
+		// A rule appears, so the instance is restarted with the target; the bucket config follows.
+		current = target(api, { notificationsTarget: true, activationVersion: 'v2' });
+		await reconciler.reconcile();
+		expect(api.calls).toContain('notify:uploads:off');
 	});
 
 	test('reports unsupported capabilities instead of silently ignoring them', async () => {

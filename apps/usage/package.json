@@ -1,0 +1,24 @@
+{
+	"name": "@yoal/usage",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"description": "Yoal's anonymous usage analytics collector (usage.yoal.dev).",
+	"exports": {
+		".": "./src/index.ts",
+		"./process": "./src/process.ts"
+	},
+	"scripts": {
+		"dev": "bun --watch src/process.ts",
+		"start": "bun src/process.ts",
+		"check": "tsc -p . --noEmit",
+		"test": "bun test"
+	},
+	"dependencies": {
+		"@yoal/contracts": "workspace:*",
+		"zod": "^4.6.7"
+	},
+	"engines": {
+		"bun": ">=1.4"
+	}
+}

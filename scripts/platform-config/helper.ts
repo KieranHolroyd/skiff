@@ -539,6 +539,10 @@ export class PlatformConfigHelper {
 			envFile: paths.envFile,
 			systemdDir: paths.systemdDir,
 			run: (cmd) => void this.host.run(cmd),
+			capture: (cmd) => {
+				const out = this.host.run(cmd, { allowFailure: true });
+				return out.code === 0 ? out.stdout : null;
+			},
 			sleep: (ms) => this.host.sleep(ms),
 			log: (message) => this.host.log(message),
 		});

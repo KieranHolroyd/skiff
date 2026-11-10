@@ -99,6 +99,7 @@ export const SECTIONS: DocsSection[] = [
 			'self-hosting/platform-backups',
 			'self-hosting/upgrades',
 			'self-hosting/quotas-and-limits',
+			'self-hosting/usage-analytics',
 			'self-hosting/troubleshooting'
 		]
 	}

@@ -79,6 +79,17 @@ The control plane is the dashboard, API, MCP endpoint and sign-in service. It re
 | `YOAL_CONTAINER_CONSOLE_PORT` | `8084` | Loopback port of the container console front on every node. Nodes learn it from the control plane, so set it only here. |
 | `YOAL_STANDBY` | unset | Set to `1` to make this process serve requests only. Background work stays with the primary. Used during zero-downtime updates. |
 
+### Usage analytics
+
+| Variable | Default | Description |
+|---|---|---|
+| `YOAL_USAGE_ANALYTICS_ENDPOINT` | unset | Pins the collector endpoint and overrides the dashboard field. Must be an absolute `http(s)` URL with no credentials. The built-in default is `https://yoal-analytics-engine.kierancloud.dev/api/v1/ping`; nothing is sent unless an owner opts in under **Settings → Usage analytics**. |
+
+The opt-in itself, the install id and the endpoint chosen in the dashboard live in the platform
+database under the `usage.analytics` key, not in this file. See
+[usage analytics](/self-hosting/usage-analytics) for what a ping contains and how to run the
+collector yourself.
+
 ### Domains
 
 | Variable | Default | Description |
@@ -356,6 +367,7 @@ Some settings can be changed in the dashboard, under **Settings**, instead of by
 | **Settings → Assistant** | `YOAL_ASSISTANT_*`. |
 | **Settings → Telemetry** | Installs or removes ClickHouse and writes the `YOAL_CLICKHOUSE_*` values. |
 | **Settings → Domains** | The dashboard host, content domain and HTTPS settings, and the Cloudflare token. |
+| **Settings → Usage analytics** | Nothing in a file: the opt-in, install id and optional endpoint are database settings. `YOAL_USAGE_ANALYTICS_ENDPOINT` still overrides the endpoint. |
 
 The rules that apply to these pages are:
 

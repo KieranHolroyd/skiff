@@ -56,7 +56,7 @@ describe('zot config (G4–G6)', () => {
 		expect(config.extensions.sync.downloadDir).toBe('/var/lib/registry/.sync');
 	});
 
-	test('S3 without a cache URL uses zot’s local BoltDB dedupe cache', () => {
+	test('S3 without a cache URL disables dedupe, which zot requires a remote database for', () => {
 		const registry = parseRegistryProfile({
 			...base,
 			s3: { endpoint: 's3-registry:9000', bucket: 'registry', region: 'us-east-1', secure: false },
@@ -64,6 +64,7 @@ describe('zot config (G4–G6)', () => {
 		const config = JSON.parse(
 			renderZotConfig(registry, { certificatePem: '', eventsUrl: null, adminHtpasswd: null, s3: { accessKey: 'AK', secretKey: 'SK', cacheUrl: null } }),
 		);
+		expect(config.storage.dedupe).toBe(false);
 		expect(config.storage.remoteCache).toBeUndefined();
 		expect(config.storage.cacheDriver).toBeUndefined();
 		expect(config.storage.storageDriver).toMatchObject({ bucket: 'registry', regionendpoint: 's3-registry:9000', secure: false });

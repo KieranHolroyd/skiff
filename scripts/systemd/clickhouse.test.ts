@@ -370,6 +370,36 @@ describe('ensureClickHouse', () => {
 		expect(h.logs.join('\n')).toContain('pre-rename skiff-clickhouse.service');
 	});
 
+	test('kills a pre-rename server that is still holding 18123 with no unit file left', async () => {
+		const h = harness('legacy-process');
+		const base = h.options.capture!;
+		const result = await ensureClickHouse({
+			...h.options,
+			capture: (cmd) => (cmd[0] === 'id' && cmd[2] === 'skiff-clickhouse' ? '994' : base(cmd)),
+		});
+		expect(result).toMatchObject({ ok: true, changed: true });
+		expect(h.calls).toContain('pkill -u skiff-clickhouse -x clickhouse');
+		expect(h.logs.join('\n')).toContain('stopped a pre-rename ClickHouse still holding 127.0.0.1:18123');
+	});
+
+	test('takes ownership of a store left behind by the pre-rename account', async () => {
+		const h = harness('legacy-owner');
+		const base = h.options.capture!;
+		const stray = join(h.dir, 'var', 'clickhouse', 'data', 'system', 'part_log');
+		const result = await ensureClickHouse({
+			...h.options,
+			capture: (cmd) => (cmd[0] === 'find' ? stray : base(cmd)),
+		});
+		expect(result.ok).toBe(true);
+		expect(h.calls).toContain(`chown -R yoal-clickhouse:yoal-clickhouse ${join(h.dir, 'var', 'clickhouse')}`);
+		expect(h.logs.join('\n')).toContain('took ownership of');
+		// One walk decides; a store that is already ours is left alone.
+		const clean = harness('owned-store');
+		const before = clean.calls.length;
+		await ensureClickHouse(clean.options);
+		expect(clean.calls.slice(before).some((call) => call.startsWith('chown -R'))).toBe(false);
+	});
+
 	test('a server that answers /ping but rejects the credentials is not reported as installed', async () => {
 		const h = harness('wrong-creds');
 		h.setAuth(false);

@@ -197,7 +197,9 @@ export function renderZotConfig(registry: WorkloadRegistry, secretsOrEventsUrl: 
 		distSpecVersion: '1.1.1',
 		storage: {
 			rootDirectory: '/var/lib/registry',
-			dedupe: true,
+			// Dedupe needs a shared database. Local storage uses zot's BoltDB cache; S3 does too only
+			// with an explicit Redis cache, otherwise zot refuses to start (managed S3 has no Redis).
+			dedupe: !registry.s3 || Boolean(cacheUrl),
 			...(registry.s3 && secrets.s3
 				? {
 						// A single replica can dedupe through zot's local BoltDB cache (in the data dir).

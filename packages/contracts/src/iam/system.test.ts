@@ -3,12 +3,18 @@ import { allPermissions, isPermission } from './catalog.ts';
 import { systemPermissions, systemPrincipals } from './system.ts';
 
 describe('system principals', () => {
-	test('every spec has a non-empty permission list from the catalog', () => {
+	/**
+	 * Internal actors that only record audit rows and call no permissioned service. Their empty
+	 * permission list is the point: granting one would be a lie about what they can do.
+	 */
+	const AUDIT_ONLY: ReadonlySet<string> = new Set(['system:usage-analytics', 'system:whats-new']);
+
+	test('every spec has a permission list from the catalog', () => {
 		for (const name of Object.keys(systemPrincipals) as Array<keyof typeof systemPrincipals>) {
 			const spec = systemPrincipals[name];
 			expect(spec.name).toBe(name);
 			expect(spec.description.length).toBeGreaterThan(0);
-			expect(spec.permissions.length).toBeGreaterThan(0);
+			if (!AUDIT_ONLY.has(name)) expect(spec.permissions.length).toBeGreaterThan(0);
 			for (const permission of spec.permissions) {
 				expect(isPermission(permission)).toBe(true);
 				expect(allPermissions).toContain(permission);

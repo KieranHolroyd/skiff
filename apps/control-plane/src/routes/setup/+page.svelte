@@ -16,6 +16,7 @@
 	import CopyButton from '#lib/components/yoal/CopyButton.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
+	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import type { PageProps } from './$types';
@@ -33,6 +34,8 @@
 		totpError?: string;
 		enrolment?: Enrolment;
 		totpVerified?: boolean;
+		usageAnalyticsSaved?: boolean;
+		usageAnalyticsError?: string;
 	}
 
 	let { data, form }: PageProps = $props();
@@ -91,6 +94,8 @@
 	});
 
 	let pending = $state(false);
+	let usageSaving = $state(false);
+	let usageSaved = $state(false);
 	let passkeyError = $state('');
 	let enrolment = $state<Enrolment | null>(null);
 	$effect(() => {
@@ -578,6 +583,47 @@
 						</li>
 					</ul>
 				</div>
+
+				<div class="space-y-2 rounded-lg border p-3 text-sm">
+					<p class="font-medium">Anonymous usage data</p>
+					<p class="text-muted-foreground">
+						Optional: send one small ping a day so we can see how Yoal is used and where to add
+						features. It contains counts only — no hostname, address, user, organisation, project or
+						domain name. Off unless you tick it, and changeable later under
+						<a class="underline underline-offset-4" href="/settings/usage-analytics">Settings → Usage analytics</a>.
+					</p>
+					<form
+						method="POST"
+						action="?/usageAnalytics"
+						use:enhance={() => {
+							usageSaving = true;
+							return async ({ result, update }) => {
+								await update({ reset: false });
+								await invalidateAll();
+								usageSaving = false;
+								if (result.type === 'success') usageSaved = true;
+							};
+						}}
+						class="flex flex-wrap items-center gap-3 pt-1"
+					>
+						<Checkbox
+							id="setup-usage-analytics"
+							name="enabled"
+							value="on"
+							checked={'usageAnalytics' in data ? (data.usageAnalytics?.enabled ?? false) : false}
+						/>
+						<label for="setup-usage-analytics" class="font-normal">
+							Send anonymous usage data
+						</label>
+						<Button type="submit" variant="outline" size="sm" disabled={usageSaving}>
+							{usageSaved ? 'Saved' : usageSaving ? 'Saving…' : 'Save preference'}
+						</Button>
+					</form>
+					{#if result?.usageAnalyticsError}
+						<p class="text-sm text-destructive">{result.usageAnalyticsError}</p>
+					{/if}
+				</div>
+
 				<Button size="lg" class="h-10 w-full" href="/overview">
 					Open the dashboard
 					<ArrowRightIcon aria-hidden="true" />

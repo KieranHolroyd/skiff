@@ -18,6 +18,8 @@ import { MetricsService } from './metrics.ts';
 import { MetricsExporter } from './metrics-export.ts';
 import { ServerErrorService } from './server-errors.ts';
 import { SentryService } from './sentry.ts';
+import { UsageAnalyticsService } from './usage-analytics.ts';
+import { WhatsNewService } from './whats-new.ts';
 import { PlatformPolicyService } from './platform-policies.ts';
 import { ObservabilityService } from './observability.ts';
 import { AlertService } from './alerts.ts';
@@ -124,6 +126,8 @@ export * from './metrics.ts';
 export * from './metrics-export.ts';
 export * from './server-errors.ts';
 export * from './sentry.ts';
+export * from './usage-analytics.ts';
+export * from './whats-new.ts';
 export * from './platform-policies.ts';
 export * from './observability.ts';
 export * from './observability-query.ts';
@@ -206,6 +210,10 @@ export interface Core {
 	serverErrors: ServerErrorService;
 	/** Optional Sentry forwarding for the errors above (docs/SERVER-ERRORS.md §6). */
 	sentry: SentryService;
+	/** Opt-in anonymous usage pings (docs/USAGE-ANALYTICS.md, D211). */
+	usageAnalytics: UsageAnalyticsService;
+	/** Post-update onboarding for platform admins (docs/WHATS-NEW.md, D212). */
+	whatsNew: WhatsNewService;
 	secrets: SecretService;
 	metrics: MetricsService;
 	metricsExport: MetricsExporter;
@@ -344,6 +352,8 @@ export function createCore(options: CoreOptions): Core {
 	ctx.authPolicy = new AuthPolicyService(ctx);
 	ctx.serverErrors = new ServerErrorService(ctx, options.version ?? null);
 	ctx.sentry = new SentryService(ctx);
+	ctx.usageAnalytics = new UsageAnalyticsService(ctx, { version: options.version ?? '0.0.0' });
+	ctx.whatsNew = new WhatsNewService(ctx, { version: options.version ?? '0.0.0' });
 	ctx.platformIam = new PlatformIamService(ctx);
 	// Seed `platform-admin` from the Better Auth admin flag once, best effort. A boot before Better
 	// Auth's tables exist is covered by `sync(userId)` on demand; this is not a schema migration.
@@ -499,6 +509,8 @@ export function createCore(options: CoreOptions): Core {
 		authPolicy: ctx.authPolicy,
 		serverErrors: ctx.serverErrors,
 		sentry: ctx.sentry,
+		usageAnalytics: ctx.usageAnalytics,
+		whatsNew: ctx.whatsNew,
 		platformIam: ctx.platformIam,
 		serviceAccounts: ctx.serviceAccounts,
 		accessKeys: ctx.accessKeys,

@@ -1,7 +1,14 @@
 import { fail, redirect, type Cookies } from '@sveltejs/kit';
 import { auth, githubSignIn, gitlabSignIn } from '#lib/server/auth.js';
 import { core } from '#lib/server/core.js';
-import { contentDomain, features, objectStoreKind, platformOrigin, sharedDomain, smtp } from '#lib/server/config.js';
+import {
+	contentDomain,
+	features,
+	objectStoreKind,
+	platformOrigin,
+	sharedDomain,
+	smtp
+} from '#lib/server/config.js';
 import { sqlite } from '#lib/server/db.js';
 import {
 	enforceOwnerSecondFactor,
@@ -13,7 +20,12 @@ import {
 import { secondFactorState } from '#lib/server/second-factor-policy.js';
 import { SETUP_COOKIE, needsSetup, parseClaimInput } from '#lib/server/setup.js';
 import { currentSetupToken, isValidSetupToken } from '#lib/server/setup-token.js';
-import { formPassword, startTotpEnrolment, totpCode, verifyTotpCode } from '#lib/server/totp-enrolment.js';
+import {
+	formPassword,
+	startTotpEnrolment,
+	totpCode,
+	verifyTotpCode
+} from '#lib/server/totp-enrolment.js';
 import { authErrorMessage } from '#lib/server/user-settings.js';
 import { platformVersion } from '#lib/server/version.js';
 import type { Actions, PageServerLoad, RequestEvent } from './$types';
@@ -63,12 +75,16 @@ function instanceFacts() {
 function storageStep() {
 	const state = core.disks.onboardingState();
 	const rows = sqlite
-		.query<{ name: string; volume_inventory_json: string | null }, []>('SELECT name, volume_inventory_json FROM nodes ORDER BY created_at')
+		.query<{ name: string; volume_inventory_json: string | null }, []>(
+			'SELECT name, volume_inventory_json FROM nodes ORDER BY created_at'
+		)
 		.all();
 	let mounts = 0;
 	for (const row of rows) {
 		try {
-			mounts += (JSON.parse(row.volume_inventory_json ?? '{}') as { mounts?: unknown[] }).mounts?.length ?? 0;
+			mounts +=
+				(JSON.parse(row.volume_inventory_json ?? '{}') as { mounts?: unknown[] }).mounts?.length ??
+				0;
 		} catch {
 			// An unreadable inventory counts as none.
 		}
@@ -94,7 +110,10 @@ export const load: PageServerLoad = ({ url, locals, cookies }) => {
 		});
 		// An existing owner signing in again answers the normal challenge, not the wizard.
 		if (state === 'challenge') redirect(303, '/two-factor?redirect=%2Fsetup');
-		if (state === 'satisfied' && !(locals.principal && core.ctx.platformIam.canAdminister(locals.principal)))
+		if (
+			state === 'satisfied' &&
+			!(locals.principal && core.ctx.platformIam.canAdminister(locals.principal))
+		)
 			redirect(303, '/overview');
 		return {
 			phase: state === 'enrol' ? ('secure' as const) : ('done' as const),
@@ -105,18 +124,30 @@ export const load: PageServerLoad = ({ url, locals, cookies }) => {
 			hasPassword: userHasPassword(userId),
 			instance: instanceFacts(),
 			/** Storage is the last onboarding step (docs/STORAGE.md §4). */
-			storage: storageStep()
+			storage: storageStep(),
+			/** Off unless the owner ticks it; shown again under Settings → Usage analytics. */
+			usageAnalytics: core.ctx.platformIam.canAdminister(locals.principal!)
+				? core.usageAnalytics.view(locals.principal!)
+				: null
 		};
 	}
 
 	if (url.host.toLowerCase() !== platformHost.toLowerCase())
-		return { phase: 'wrong-host' as const, platformUrl: `${platformOrigin}/setup${url.search}`, platformOrigin };
+		return {
+			phase: 'wrong-host' as const,
+			platformUrl: `${platformOrigin}/setup${url.search}`,
+			platformOrigin
+		};
 
 	const email = url.searchParams.get('email') ?? '';
 	const fromQuery = url.searchParams.get('token');
 	if (fromQuery !== null) {
 		if (!isValidSetupToken(fromQuery))
-			return { phase: 'locked' as const, tokenFile: currentSetupToken().file, error: 'That setup link is not valid.' };
+			return {
+				phase: 'locked' as const,
+				tokenFile: currentSetupToken().file,
+				error: 'That setup link is not valid.'
+			};
 		setupCookie(cookies, url, fromQuery.trim());
 		// Drop the token from the address bar (history, screenshots, Referer).
 		redirect(303, email ? `/setup?email=${encodeURIComponent(email)}` : '/setup');
@@ -144,7 +175,8 @@ export const actions: Actions = {
 			// Not a URL: the token itself.
 		}
 		if (!needsSetup(sqlite)) redirect(303, '/login');
-		if (!isValidSetupToken(token)) return fail(400, { unlockError: 'That token does not match this install.' });
+		if (!isValidSetupToken(token))
+			return fail(400, { unlockError: 'That token does not match this install.' });
 		setupCookie(cookies, url, token.trim());
 		redirect(303, '/setup');
 	},
@@ -161,15 +193,29 @@ export const actions: Actions = {
 		const password = String(data.get('password') ?? '');
 		const passwordConfirm = String(data.get('passwordConfirm') ?? '');
 		const token = cookies.get(SETUP_COOKIE);
-		if (!needsSetup(sqlite)) return fail(409, { values, claimError: 'Setup is already complete. Sign in instead.' });
+		if (!needsSetup(sqlite))
+			return fail(409, { values, claimError: 'Setup is already complete. Sign in instead.' });
 		if (!isValidSetupToken(token))
-			return fail(403, { values, claimError: 'Your setup link expired. Reopen the link the installer printed.' });
+			return fail(403, {
+				values,
+				claimError: 'Your setup link expired. Reopen the link the installer printed.'
+			});
 		const parsed = parseClaimInput({ ...values, password, passwordConfirm });
 		if (!parsed.ok) return fail(400, { values, field: parsed.field, claimError: parsed.message });
 		try {
 			await auth.api.claimSetup({ body: { ...parsed.value, token }, headers: request.headers });
 		} catch (error) {
-			return fail(400, { values, claimError: authErrorMessage(error, 'Could not create the owner account.') });
+			return fail(400, {
+				values,
+				claimError: authErrorMessage(error, 'Could not create the owner account.')
+			});
+		}
+		// Start the post-update ledger at this release: a fresh install has no history to review.
+		try {
+			core.whatsNew.markInstalled();
+		} catch (error) {
+			// Setup already created the owner; a ledger write must not fail the wizard.
+			console.warn('[whats-new] could not record the install version:', error);
 		}
 		cookies.delete(SETUP_COOKIE, { path: '/setup' });
 		redirect(303, '/setup');
@@ -179,17 +225,39 @@ export const actions: Actions = {
 	startTotp: async (event) => {
 		const user = owner(event);
 		if (!user) return fail(401, { totpError: 'Sign in first.' });
-		if (userHasTotp(user.id)) return fail(400, { totpError: 'An authenticator app is already set up.' });
-		const started = await startTotpEnrolment(event.request.headers, formPassword(await event.request.formData()));
+		if (userHasTotp(user.id))
+			return fail(400, { totpError: 'An authenticator app is already set up.' });
+		const started = await startTotpEnrolment(
+			event.request.headers,
+			formPassword(await event.request.formData())
+		);
 		if (!started.ok) return fail(400, { totpError: started.message });
 		return { enrolment: started.value };
 	},
 
 	/** Keep everything on each node's system disk for now; Settings → Storage changes it later. */
 	skipStorage: async (event) => {
-		if (!owner(event) || !event.locals.principal) return fail(401, { storageError: 'Sign in first.' });
+		if (!owner(event) || !event.locals.principal)
+			return fail(401, { storageError: 'Sign in first.' });
 		core.disks.setOnboarding(event.locals.principal, { state: 'skipped' });
 		redirect(303, '/setup');
+	},
+
+	/** Opt in (or stay opted out) to the anonymous usage ping from the last setup step. */
+	usageAnalytics: async (event) => {
+		const principal = event.locals.principal;
+		if (!owner(event) || !principal) return fail(401, { usageAnalyticsError: 'Sign in first.' });
+		try {
+			const data = await event.request.formData();
+			// A checkbox only arrives when ticked, so absence means off.
+			const enabled = data.get('enabled') === 'on' || data.get('enabled') === 'true';
+			core.usageAnalytics.setEnabled(principal, { enabled });
+			return { usageAnalyticsSaved: true };
+		} catch (error) {
+			return fail(400, {
+				usageAnalyticsError: (error as Error).message || 'Could not save the preference.'
+			});
+		}
 	},
 
 	verifyTotp: async (event) => {

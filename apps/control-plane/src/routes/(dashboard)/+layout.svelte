@@ -26,6 +26,7 @@
 	import SettingsIcon from '@lucide/svelte/icons/settings';
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
+	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import UserRoundIcon from '@lucide/svelte/icons/user-round';
 	import WorkflowIcon from '@lucide/svelte/icons/workflow';
 	import ZapIcon from '@lucide/svelte/icons/zap';
@@ -475,6 +476,19 @@
 								<SettingsIcon />
 								Organisation
 							</DropdownMenu.Item>
+							{#if data.whatsNew}
+								<DropdownMenu.Item onSelect={() => goto(resolve('/(dashboard)/whats-new'))}>
+									<SparklesIcon />
+									<span class="flex-1">What’s new</span>
+									{#if data.whatsNew.pending > 0}
+										<span
+											class="rounded-full bg-primary px-1.5 text-[11px] font-semibold text-primary-foreground"
+										>
+											{data.whatsNew.pending}
+										</span>
+									{/if}
+								</DropdownMenu.Item>
+							{/if}
 							<DropdownMenu.Separator />
 							{#if data.stepUp?.fresh}
 								<DropdownMenu.Item onSelect={lockVerification}>
@@ -557,15 +571,40 @@
 			</div>
 		</header>
 
+		{#if data.whatsNew && data.whatsNew.pending > 0 && !page.url.pathname.startsWith('/whats-new')}
+			<div class="px-4 pt-6 md:px-8">
+				<Alert.Root class="mx-auto max-w-[1320px]">
+					<SparklesIcon />
+					<Alert.Title>What’s new in Yoal {data.whatsNew.currentVersion}</Alert.Title>
+					<Alert.Description>
+						{data.whatsNew.pending}
+						{data.whatsNew.pending === 1 ? 'change' : 'changes'} since you last reviewed.
+						{#if data.whatsNew.attention > 0}
+							{data.whatsNew.attention === 1
+								? 'One of them needs your decision'
+								: `${data.whatsNew.attention} of them need your decision`} before it applies.
+						{/if}
+						<a
+							class="font-medium underline underline-offset-4"
+							href={resolve('/(dashboard)/whats-new')}>Review what’s new</a
+						>
+					</Alert.Description>
+				</Alert.Root>
+			</div>
+		{/if}
+
 		{#if data.storageOnboarding === 'pending' && !page.url.pathname.startsWith('/settings/storage')}
 			<div class="px-4 pt-6 md:px-8">
 				<Alert.Root class="mx-auto max-w-[1320px]">
 					<HardDriveIcon />
 					<Alert.Title>Set up storage</Alert.Title>
 					<Alert.Description>
-						Choose where databases, object storage, app volumes and builds live before you deploy: pool your disks and
-						network shares, or keep everything on each node's system disk.
-						<a class="font-medium underline underline-offset-4" href="/settings/storage?onboarding=1">Open storage setup</a>
+						Choose where databases, object storage, app volumes and builds live before you deploy:
+						pool your disks and network shares, or keep everything on each node's system disk.
+						<a
+							class="font-medium underline underline-offset-4"
+							href="{resolve('/(dashboard)/settings/storage')}?onboarding=1">Open storage setup</a
+						>
 					</Alert.Description>
 				</Alert.Root>
 			</div>

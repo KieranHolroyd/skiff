@@ -169,7 +169,7 @@ function targetWith(links: StorageReplicationDesired[], secrets: Record<string, 
 		keysVersion: 'a'.repeat(64),
 		replication: links,
 	};
-	return { id: 'st_local', activationVersion: 'v1', port: 19001, status: 'running', admin: admin(secrets), desired };
+	return { id: 'st_local', activationVersion: 'v1', port: 19001, status: 'running', admin: admin(secrets), desired, notificationsTarget: false };
 }
 
 function setup(options: { links?: StorageReplicationDesired[]; secrets?: Record<string, string>; name: string; partBytes?: number }) {

@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHandler } from './server.ts';
-import { STUDIO_UNIT, SystemdDriver, type CommandRunner, type RunResult } from './systemd.ts';
+import { STUDIO_UNIT, SystemdDriver, takeRegistryFiles, type CommandRunner, type RunResult } from './systemd.ts';
 import { databaseTlsPaths } from './tls.ts';
 import { parseWorkload, type WorkloadActivation, type WorkloadDesired } from './validate.ts';
 
@@ -1028,6 +1028,26 @@ describe('platform registry (docs/REGISTRY.md G1)', () => {
 		// The config dir ends read-only; reopen it so the fixture cleanup (not root) can delete it.
 		expect((await fs.stat(join(f.runtimeDir, REG_ID, 'zot'))).mode & 0o777).toBe(0o500);
 		await fs.chmod(join(f.runtimeDir, REG_ID, 'zot'), 0o700);
+	});
+
+	test('managed S3 needs no cache URL; half a key pair and a bad cache URL are refused', () => {
+		const base = { YOAL_REGISTRY_TOKEN_CERT: CERT, YOAL_REGISTRY_EVENTS_URL: 'https://control.example.com/api/webhooks/registry/s3cret' };
+		expect(
+			takeRegistryFiles({
+				...base,
+				YOAL_REGISTRY_S3_ACCESS_KEY: 'AK',
+				YOAL_REGISTRY_S3_SECRET_KEY: 'SK',
+			}).s3,
+		).toEqual({ accessKey: 'AK', secretKey: 'SK', cacheUrl: null });
+		expect(() => takeRegistryFiles({ ...base, YOAL_REGISTRY_S3_ACCESS_KEY: 'AK' })).toThrow(/access key and a secret key/);
+		expect(() =>
+			takeRegistryFiles({
+				...base,
+				YOAL_REGISTRY_S3_ACCESS_KEY: 'AK',
+				YOAL_REGISTRY_S3_SECRET_KEY: 'SK',
+				YOAL_REGISTRY_CACHE_URL: 'http://cache',
+			}),
+		).toThrow(/redis/);
 	});
 
 	test('refuses another image, a missing certificate, and app ids with the registry prefix', async () => {

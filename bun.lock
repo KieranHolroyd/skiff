@@ -134,6 +134,14 @@
         "zod": "^4.6.7",
       },
     },
+    "apps/usage": {
+      "name": "@yoal/usage",
+      "version": "0.1.0",
+      "dependencies": {
+        "@yoal/contracts": "workspace:*",
+        "zod": "^4.6.7",
+      },
+    },
     "packages/contracts": {
       "name": "@yoal/contracts",
       "version": "0.1.0",
@@ -858,6 +866,8 @@
     "@yoal/site-config": ["@yoal/site-config@workspace:packages/site-config"],
 
     "@yoal/studio": ["@yoal/studio@workspace:packages/studio"],
+
+    "@yoal/usage": ["@yoal/usage@workspace:apps/usage"],
 
     "@zone-eu/mailsplit": ["@zone-eu/mailsplit@5.4.30", "", { "dependencies": { "libbase64": "1.4.1", "libmime": "5.6.4", "libqp": "3.0.1" } }, "sha512-qN0KT6/ziAFvo5TzscaqpurIJaJQEXPPtqBZnpyhiGrACOKLDVMV6Lm57kXt5e/8zZUWoYiSC8oKl/aewtrJDQ=="],
 

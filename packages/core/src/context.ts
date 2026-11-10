@@ -74,6 +74,8 @@ import type { UserPoolEngineService, UserPoolMailer } from './user-pool-engine.t
 import type { ScimTokenService } from './iam/scim.ts';
 import type { ServerErrorService } from './server-errors.ts';
 import type { SentryService } from './sentry.ts';
+import type { UsageAnalyticsService } from './usage-analytics.ts';
+import type { WhatsNewService } from './whats-new.ts';
 
 /**
  * Shared dependency object. Service instances are attached after construction (in `createCore`)
@@ -178,6 +180,10 @@ export interface CoreContext {
 	serverErrors: ServerErrorService;
 	/** Optional Sentry forwarding for the errors above (docs/SERVER-ERRORS.md §6). */
 	sentry: SentryService;
+	/** Opt-in anonymous usage pings (docs/USAGE-ANALYTICS.md, D211). */
+	usageAnalytics: UsageAnalyticsService;
+	/** Post-update onboarding for platform admins (docs/WHATS-NEW.md, D212). */
+	whatsNew: WhatsNewService;
 	/** Platform roles and bindings at `{ type: 'platform' }` (IAM.md I24, D129). */
 	platformIam: PlatformIamService;
 	/** Service accounts: org-owned machine principals (`sa_…`, IAM.md I13). */

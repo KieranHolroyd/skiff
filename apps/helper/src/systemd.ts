@@ -3172,10 +3172,11 @@ export function takeRegistryFiles(env: Record<string, string>): RegistrySecrets 
 		const s3 =
 			accessKey || secretKey || cacheUrl
 				? (() => {
-						if (!accessKey || !secretKey || !cacheUrl) throw new Error('S3 storage needs an access key, a secret key and a cache URL');
-						if (!/^rediss?:\/\/\S+$/.test(cacheUrl)) throw new Error(`${REGISTRY_CACHE_URL_ENV} must be a redis:// or rediss:// URL`);
+						// The cache URL is optional: managed S3 has no Redis, so zot uses its local BoltDB cache.
+						if (!accessKey || !secretKey) throw new Error('S3 storage needs an access key and a secret key');
+						if (cacheUrl && !/^rediss?:\/\/\S+$/.test(cacheUrl)) throw new Error(`${REGISTRY_CACHE_URL_ENV} must be a redis:// or rediss:// URL`);
 						if (/\s/.test(accessKey + secretKey)) throw new Error('S3 credentials cannot contain whitespace');
-						return { accessKey, secretKey, cacheUrl };
+						return { accessKey, secretKey, cacheUrl: cacheUrl ?? null };
 					})()
 				: null;
 		return {

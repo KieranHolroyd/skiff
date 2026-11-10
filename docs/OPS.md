@@ -686,6 +686,20 @@ authenticates as `yoal` against a server that only knows `skiff` — reported as
 `yoal: Authentication failed`. Its data stays in `/var/lib/skiff/clickhouse`; hot telemetry is not
 migrated.
 
+A host converted by hand can leave two more things behind, and either one is a restart loop whose
+only clue is the unit's journal:
+
+- `config.xml` still points at `/var/lib/skiff/clickhouse`, which is outside the unit's
+  `ReadWritePaths`, so ClickHouse dies with
+  `filesystem error: in create_directories: Read-only file system ["/var/lib/skiff/clickhouse"]`.
+- The store under `/var/lib/yoal/clickhouse` is still owned by `skiff-clickhouse` (or by `root`),
+  so ClickHouse dies with `Permission denied` on `data/system/…` or a `store/` directory.
+
+Any install or update, or `sudo yoal-platform-config telemetry on`, regenerates `config.xml` from
+the current paths and takes ownership of the store for `yoal-clickhouse`. If the writer password in
+`yoal.env` changed, the control plane has to be restarted to read it; the command above does that
+once the server answers.
+
 ```sh
 systemctl status yoal-clickhouse --no-pager
 journalctl -u yoal-clickhouse -n 100
@@ -863,6 +877,11 @@ sudo yoal-update-self recover             # resolve an interrupted update now (a
 ```
 
 Or use **Settings → Updates** in the dashboard (platform owners and admins only).
+
+After the new version is serving, platform admins get a **What’s new** notice listing every tracked
+change between the version they last reviewed and the release now running. Changes that need a
+decision (today the opt-in anonymous usage ping) stay pending until someone chooses Enable or Keep
+it off; see [WHATS-NEW.md](./WHATS-NEW.md).
 
 The goal is an updater that cannot leave the host broken and cannot block its own future: a bad
 release, a crash mid-update, a power cut or a bug in the updater itself all end with the last
@@ -2063,7 +2082,7 @@ the control plane.
 | Caddy can't reach the control plane | `ls -l /run/yoal`, `namei -l /run/yoal/control.sock` | `/run/yoal` must be `2770 root:caddy`; control plane needs `SupplementaryGroups=caddy`. |
 | Agent can't use Caddy admin | `ls -l /var/lib/caddy/admin.sock` | Socket must be `0660` and group `caddy`; agent needs that supplementary group. Never expose `:2019` as a workaround. |
 | Litestream exits immediately | `journalctl -u yoal-litestream` | Missing/incorrect `R2_*` in `yoal.env` (an old `litestream.yml` may still use `YOAL_R2_*`); `R2_ENDPOINT` must be the R2 S3 URL, region `auto`. |
-| Telemetry unavailable | `systemctl status yoal-clickhouse`, `curl -s 127.0.0.1:18123/ping`, `journalctl -u yoal-clickhouse -n 100`, and on a renamed host `systemctl status skiff-clickhouse` | Re-run `sudo yoal-platform-config telemetry on` (it repairs and restarts ClickHouse and prints why it could not). Not installed at all is normal: install it from Settings → Telemetry. `Authentication failed` in the control-plane log means `users.xml` and `yoal.env` disagree, or a pre-rename `skiff-clickhouse.service` still owns port 18123; the same command regenerates `users.xml` and retires the old unit. |
+| Telemetry unavailable | `systemctl status yoal-clickhouse`, `curl -s 127.0.0.1:18123/ping`, `journalctl -u yoal-clickhouse -n 100`, and on a renamed host `systemctl status skiff-clickhouse` | Re-run `sudo yoal-platform-config telemetry on` (it repairs and restarts ClickHouse and prints why it could not). Not installed at all is normal: install it from Settings → Telemetry. `Authentication failed` in the control-plane log means `users.xml` and `yoal.env` disagree, or a pre-rename `skiff-clickhouse.service` still owns port 18123; the same command regenerates `users.xml` and retires the old unit. `Read-only file system` or `Permission denied` in the unit log means a hand-converted host still points the config at, or leaves the store owned by, the old names — the same command fixes both (§3.6). |
 | Restore says "no snapshots" | R2 prefix/lifecycle, credentials | The replica path is `yoal/sqlite` in `/etc/yoal/litestream.yml`; confirm objects exist there; run a drill. |
 | Update stuck at **Test boot** / canary | `yoal-update-self status`, `journalctl -u yoal-update-self -n 200` | Stop the unit, `yoal-update-self recover`, retry. Installs older than 0.6.7 need one `update --no-canary` bootstrap: [§4.1.1](#411-recovering-a-stuck-or-failed-update). |
 | `yoal-recover.sh` download returns 404 | `gh release list --repo KieranHolroyd/yoal` | `/releases/latest` can resolve to a CLI release; pin the platform tag instead: [§4.1.1](#411-recovering-a-stuck-or-failed-update). |

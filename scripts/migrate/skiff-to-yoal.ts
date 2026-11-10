@@ -1026,6 +1026,19 @@ class Migrator {
 				this.move(source, target);
 			}
 		}
+
+		// A host already converted by hand can keep both accounts (the account rename is skipped when
+		// `yoal-clickhouse` exists), so the store is still owned by the legacy one and the unit,
+		// which runs as `yoal-clickhouse`, cannot read it. Take the tree over for the Yoal account.
+		if (
+			this.root === '/' &&
+			!this.dryRun &&
+			this.commandOk(['id', '-u', 'skiff-clickhouse']) &&
+			this.commandOk(['id', '-u', 'yoal-clickhouse'])
+		) {
+			this.command(['chown', '-R', 'yoal-clickhouse:yoal-clickhouse', targetRoot]);
+			this.record('took ownership of the ClickHouse store for yoal-clickhouse');
+		}
 	}
 
 	/** Read the setup marker from a SQLite database, if it is readable. */

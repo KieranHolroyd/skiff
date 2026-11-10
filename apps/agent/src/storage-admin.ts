@@ -59,6 +59,12 @@ export interface StorageTarget {
 	memoryBytes?: number;
 	admin: StorageAdmin;
 	desired: WorkloadObjectStorage;
+	/**
+	 * Whether RustFS on this instance runs with the `yoal` notification target. RustFS rejects any
+	 * bucket-notification PUT, even an empty one, while no target is configured, so the reconciler
+	 * only asserts it when there is a target (or a rule that is about to need one).
+	 */
+	notificationsTarget: boolean;
 }
 
 export interface StorageTargetSource {
@@ -787,6 +793,7 @@ export class StorageReconciler {
 			quotaBytes: bucket.quotaBytes,
 			objectLock: bucket.objectLock,
 			notifications: bucket.notifications,
+			notificationsTarget: target.notificationsTarget,
 		});
 		if (state.bucketConfigs.get(bucket.name) === signature) return;
 
@@ -815,8 +822,11 @@ export class StorageReconciler {
 			await attempt('quota', () => api.putBucketQuota(bucket.name, bucket.quotaBytes));
 			if (bucket.objectLock)
 				await attempt('object lock', () => api.putObjectLock(bucket.name, bucket.objectLock!));
-			// Always asserted, so turning a rule off clears the config RustFS keeps for the bucket.
-			await attempt('event notifications', () => api.putBucketNotifications(bucket.name, bucket.notifications));
+			// Always asserted while the instance has the `yoal` target, so turning a rule off clears the
+			// config RustFS keeps for the bucket. RustFS rejects the call outright when no target is
+			// configured (even for an empty config), so an instance with no rules at all is skipped.
+			if (target.notificationsTarget || bucket.notifications)
+				await attempt('event notifications', () => api.putBucketNotifications(bucket.name, bucket.notifications));
 			state.bucketConfigs.set(bucket.name, signature);
 			if (unsupported.length > 0) {
 				const message = `This RustFS build does not support ${unsupported.join(', ')}.`;

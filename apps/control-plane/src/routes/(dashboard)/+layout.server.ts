@@ -45,7 +45,7 @@ export const load: LayoutServerLoad = ({ locals, url, cookies }) => {
 				class: verification.class,
 				strongest: verification.strongest,
 				until: freshUntil(verification, STEP_UP_WINDOW_MS),
-				minutesLeft: minutesLeft(freshUntil(verification, STEP_UP_WINDOW_MS)),
+				minutesLeft: minutesLeft(freshUntil(verification, STEP_UP_WINDOW_MS))
 			}
 		: null;
 	return {
@@ -75,6 +75,13 @@ export const load: LayoutServerLoad = ({ locals, url, cookies }) => {
 		storageOnboarding: core.ctx.platformIam.can(principal, 'platform:storage')
 			? core.disks.onboardingState()
 			: ('done' as const),
+		/**
+		 * Post-update onboarding for platform admins (docs/WHATS-NEW.md, D212). One settings read
+		 * and the catalog filter; the page itself is `/whats-new`.
+		 */
+		whatsNew: core.ctx.platformIam.canAdminister(principal)
+			? core.whatsNew.summary(principal)
+			: null,
 		permissions: [...principal.permissions].sort(),
 		can: {
 			createProject: hasPermission(principal, 'project:create'),

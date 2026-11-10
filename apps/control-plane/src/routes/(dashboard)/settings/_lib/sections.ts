@@ -82,7 +82,8 @@ export type SectionId =
 	| 'shares'
 	| 'clustering'
 	| 'maintenance'
-	| 'updates';
+	| 'updates'
+	| 'usage-analytics';
 
 export type SectionGroup =
 	| 'you'
@@ -391,6 +392,17 @@ export const SECTIONS: Section[] = [
 		path: '/settings/notifications',
 		icon: BellRingIcon,
 		ownerOnly: true
+	},
+	{
+		id: 'usage-analytics',
+		group: 'platform',
+		label: 'Usage analytics',
+		summary: 'Opt-in anonymous usage data about this install, and exactly what a ping contains.',
+		// See `SectionHref`: the route is real, but `resolve()` cannot infer past 25 members.
+		href: '/(dashboard)/settings/usage-analytics' as unknown as SectionHref,
+		path: '/settings/usage-analytics',
+		icon: ActivityIcon,
+		platform: 'administer'
 	},
 	{
 		id: 'email',

@@ -68,6 +68,18 @@ export const systemPrincipals = {
 		// The engine writes `iam_bindings` rows directly; this is the permission that write stands for.
 		permissions: ['iam:manage-bindings'],
 	},
+	'system:usage-analytics': {
+		name: 'system:usage-analytics',
+		description: 'Records each opt-in usage ping in the audit log.',
+		// The ping path reads counts directly and calls no permissioned service.
+		permissions: [],
+	},
+	'system:whats-new': {
+		name: 'system:whats-new',
+		description: 'Seed the post-update onboarding ledger when setup completes.',
+		// The ledger is one settings row; no permissioned service is called.
+		permissions: [],
+	},
 } as const satisfies Record<string, SystemPrincipalSpec>;
 
 export function systemPermissions(name: keyof typeof systemPrincipals): readonly Permission[] {

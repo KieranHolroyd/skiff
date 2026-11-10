@@ -338,6 +338,7 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 				...(report?.memoryBytes !== undefined ? { memoryBytes: report.memoryBytes } : {}),
 				admin: { ...held.admin, users: { ...held.admin.users } },
 				desired: workload.objectStorage,
+				notificationsTarget: workload.env.RUSTFS_NOTIFY_ENABLE === 'true',
 			});
 		}
 		return targets.sort((a, b) => a.id.localeCompare(b.id));

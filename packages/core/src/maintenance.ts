@@ -112,6 +112,8 @@ export class MaintenanceService {
 		this.cleanupRows();
 		// Registry repository sizes for usage and the push quota; throttled to hourly inside.
 		void this.ctx.registry.sampleUsage().catch((error: unknown) => console.warn('[registry] usage sample failed:', error));
+		// Opt-in anonymous usage ping (D211): one a day at most, and a settings read when off.
+		void this.ctx.usageAnalytics.tick().catch((error: unknown) => console.warn('[usage] ping failed:', error));
 		// Signing keys reach zot once it runs (G5); retried until they land.
 		void this.ctx.registry.syncTrustKeys().catch(() => undefined);
 		this.ctx.releases.gcSnapshots(operationLimits.pruneGraceMs);

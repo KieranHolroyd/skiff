@@ -48,6 +48,8 @@ export const CLICKHOUSE_UNIT = 'yoal-clickhouse.service';
  * `skiff` user. Retire it before starting ours.
  */
 const LEGACY_CLICKHOUSE_UNIT = 'skiff-clickhouse.service';
+/** The pre-rename account. It only ever ran this server, so its processes are ours to stop. */
+const LEGACY_CLICKHOUSE_USER = 'skiff-clickhouse';
 export const CLICKHOUSE_SYSTEM_USER = 'yoal-clickhouse';
 export const CLICKHOUSE_HTTP_PORT = 18123;
 export const CLICKHOUSE_DATABASE = 'yoal';
@@ -664,23 +666,44 @@ function writeIfChanged(path: string, body: string, mode: number): boolean {
 /**
  * Stop and remove the pre-rename unit if it is still installed. Its data is left where it was
  * (hot telemetry is disposable and is not migrated); only the unit and its port are released.
+ *
+ * A unit file renamed by an earlier release can also leave the old server running with no file
+ * for systemd to stop, still bound to 18123 (and answering `/ping`, while rejecting `yoal`
+ * credentials). `skiff-clickhouse` only ever ran this binary, so its processes are killed here.
  */
-function retireLegacyClickHouseUnit(systemdDir: string, run: EnsureClickHouseOptions['run'], log: (message: string) => void): boolean {
-	const path = join(systemdDir, LEGACY_CLICKHOUSE_UNIT);
-	if (!existsSync(path)) return false;
+function retireLegacyClickHouse(
+	options: Pick<EnsureClickHouseOptions, 'systemdDir' | 'run' | 'capture'>,
+	log: (message: string) => void,
+): boolean {
+	const systemdDir = options.systemdDir ?? CLICKHOUSE_PATHS.systemdDir;
+	const unitPath = join(systemdDir, LEGACY_CLICKHOUSE_UNIT);
+	const legacyUser = options.capture(['id', '-u', LEGACY_CLICKHOUSE_USER]) !== null;
+	if (!existsSync(unitPath) && !legacyUser) return false;
 	try {
-		run(['systemctl', 'disable', '--now', LEGACY_CLICKHOUSE_UNIT]);
+		options.run(['systemctl', 'disable', '--now', LEGACY_CLICKHOUSE_UNIT]);
 	} catch {
 		// Already stopped, or systemd does not know it: the unit file still has to go.
 	}
-	rmSync(path, { force: true });
+	let killed = false;
+	if (legacyUser) {
+		try {
+			// Exit 0 means a process was signalled; nothing matched when the user is only left over.
+			options.run(['pkill', '-u', LEGACY_CLICKHOUSE_USER, '-x', 'clickhouse']);
+			killed = true;
+		} catch {
+			// No process left to kill.
+		}
+	}
+	const retired = existsSync(unitPath);
+	rmSync(unitPath, { force: true });
 	try {
-		run(['systemctl', 'daemon-reload']);
+		options.run(['systemctl', 'daemon-reload']);
 	} catch {
 		// The next start will notice the missing unit anyway.
 	}
-	log(`removed the pre-rename ${LEGACY_CLICKHOUSE_UNIT}; its data stays in /var/lib/skiff/clickhouse`);
-	return true;
+	if (retired) log(`removed the pre-rename ${LEGACY_CLICKHOUSE_UNIT}; its data stays in /var/lib/skiff/clickhouse`);
+	if (killed) log(`stopped a pre-rename ClickHouse still holding 127.0.0.1:${CLICKHOUSE_HTTP_PORT}`);
+	return retired || killed;
 }
 
 /** Installed version directories, newest first (by numeric version). */
@@ -845,6 +868,15 @@ export async function ensureClickHouse(options: EnsureClickHouseOptions): Promis
 		mkdirSync(dataDir, { recursive: true, mode: 0o750 });
 		options.run(['chown', `${user}:${user}`, dataDir]);
 		options.run(['chmod', '0750', dataDir]);
+		// The store must belong to the server's own account. A pre-rename install — or a tree moved
+		// by hand — leaves parts of it owned by the old user, and ClickHouse then dies with
+		// `Permission denied` on `data/system/...` while the unit restart-loops. `-quit` stops at
+		// the first mismatch, so a healthy store costs one walk and no writes.
+		const misowned = options.capture(['find', dataDir, '(', '!', '-user', user, '-o', '!', '-group', user, ')', '-print', '-quit']);
+		if (misowned) {
+			options.run(['chown', '-R', `${user}:${user}`, dataDir]);
+			log(`took ownership of ${dataDir} for ${user} (it belonged to another account)`);
+		}
 		mkdirSync(configDir, { recursive: true, mode: 0o750 });
 		options.run(['chown', `root:${user}`, configDir]);
 		options.run(['chmod', '0750', configDir]);
@@ -870,7 +902,7 @@ export async function ensureClickHouse(options: EnsureClickHouseOptions): Promis
 		}
 
 		// A pre-rename install may still own port 18123; free it before starting ours.
-		const legacyRetired = retireLegacyClickHouseUnit(systemdDir, options.run, log);
+		const legacyRetired = retireLegacyClickHouse({ systemdDir, run: options.run, capture: options.capture }, log);
 
 		const unitPath = join(systemdDir, CLICKHOUSE_UNIT);
 		const previousUnit = existsSync(unitPath) ? readFileSync(unitPath, 'utf8') : null;
@@ -923,7 +955,10 @@ export async function ensureClickHouse(options: EnsureClickHouseOptions): Promis
  * it to answer. Configuration is not touched. Never throws.
  */
 export async function restartClickHouse(
-	options: Pick<EnsureClickHouseOptions, 'envFile' | 'systemdDir' | 'run' | 'fetch' | 'sleep' | 'readyTimeoutMs' | 'log'>,
+	options: Pick<
+		EnsureClickHouseOptions,
+		'envFile' | 'systemdDir' | 'run' | 'capture' | 'fetch' | 'sleep' | 'readyTimeoutMs' | 'log'
+	>,
 ): Promise<{ ok: boolean; warning?: string }> {
 	const systemdDir = options.systemdDir ?? CLICKHOUSE_PATHS.systemdDir;
 	if (!clickhouseInstalled(systemdDir)) return { ok: false, warning: `${CLICKHOUSE_UNIT} is not installed` };
@@ -938,7 +973,7 @@ export async function restartClickHouse(
 		} catch {
 			// not in a failed state
 		}
-		retireLegacyClickHouseUnit(systemdDir, options.run, options.log ?? (() => {}));
+		retireLegacyClickHouse({ systemdDir, run: options.run, capture: options.capture }, options.log ?? (() => {}));
 		options.run(['systemctl', 'restart', CLICKHOUSE_UNIT]);
 	} catch (error) {
 		return { ok: false, warning: `systemctl restart ${CLICKHOUSE_UNIT} failed: ${(error as Error).message}` };
