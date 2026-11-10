@@ -67,7 +67,8 @@ function readText(files: FileMap, name: string): string | undefined {
 
 export function parseSiteConfig(files: FileMap): ParsedConfig {
 	const issues: ConfigIssue[] = [];
-	const config = parseYoalJson(readText(files, 'yoal.json'), issues);
+	// `skiff.json` is the pre-rename name; projects deployed before the rebrand keep using it.
+	const config = parseYoalJson(readText(files, 'yoal.json') ?? readText(files, 'skiff.json'), issues);
 	const redirects = parseRedirects(readText(files, '_redirects'), issues);
 	const headers = parseHeaders(readText(files, '_headers'), issues);
 	if (issues.length) throw new SiteConfigError(issues);

@@ -3,6 +3,7 @@ import { deployments, projects, releases } from '@yoal/db';
 import { parseManifest } from './artifact.ts';
 import {
 	FUNCTION_MANIFEST_FILE,
+	LEGACY_FUNCTION_MANIFEST_FILE,
 	type DeployFiles,
 	type DeploySite,
 	type Principal,
@@ -35,7 +36,10 @@ export class DeployService {
 			.get() as ProjectRow | undefined;
 		// A bundle with the function manifest creates a function project (D110). `projects.create`
 		// enforces the feature flag itself, so the check is not duplicated here.
-		const functionBundle = input.files?.some((file) => file.path === FUNCTION_MANIFEST_FILE) ?? false;
+		const functionBundle =
+			input.files?.some(
+				(file) => file.path === FUNCTION_MANIFEST_FILE || file.path === LEGACY_FUNCTION_MANIFEST_FILE,
+			) ?? false;
 		let projectCreated = false;
 		if (!project) {
 			this.ctx.iam.require(principal, 'project:create', { type: 'org' });

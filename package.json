@@ -11,6 +11,7 @@
     "docs:build": "bun run --cwd apps/docs build",
     "docs:check": "bun packages/docs/scripts/check-page.ts",
     "test": "bun test",
+    "migrate:skiff": "bun scripts/migrate/skiff-to-yoal.ts",
     "prepare": "git config core.hooksPath .githooks 2>/dev/null || true",
     "version:show": "bun scripts/version.ts show",
     "version:patch": "bun scripts/version.ts patch",

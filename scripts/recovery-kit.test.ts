@@ -100,6 +100,12 @@ describe('kit format', () => {
 		expect(decryptKit(armored, 'a long enough passphrase')).toEqual(kit);
 	});
 
+	test('accepts a kit exported before the Skiff -> Yoal rename', () => {
+		const kit = { ...buildKit({ masterKey: 'bWFzdGVy' }), format: 'skiff-recovery-kit' as const };
+		const armored = encryptKit(kit, 'pw-pw-pw-pw-pw', WF);
+		expect(decryptKit(armored, 'pw-pw-pw-pw-pw').format).toBe('skiff-recovery-kit');
+	});
+
 	test('rejects a decrypted file that is not a kit, or whose fingerprint was edited', () => {
 		expect(() => decryptKit(armor(ageEncrypt(new TextEncoder().encode('{}'), 'pw-pw-pw-pw-pw', WF)), 'pw-pw-pw-pw-pw')).toThrow(/not a Yoal recovery kit/);
 		const kit = { ...buildKit({ masterKey: 'k1' }), fingerprint: '0000000000000000' };

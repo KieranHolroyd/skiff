@@ -310,6 +310,15 @@ describe('phase 1 functions', () => {
 		expect(core.functions.view(principal, project)?.main).toBe('index.js');
 	});
 
+	test('accepts skiff-function.json from bundles built before the Yoal rename', async () => {
+		const files = bundle().map((entry) =>
+			entry.path === 'yoal-function.json' ? { ...entry, path: 'skiff-function.json' } : entry,
+		);
+		const result = await core.deploy.deploySite(principal, { name: 'fn-legacy', files, promote: true });
+		expect(result.projectCreated).toBe(true);
+		expect(effectiveRuntime(core.projects.requireRow(principal, 'fn-legacy'))).toBe('function');
+	});
+
 	test('rejects a function bundle while the FUNCTIONS flag is off', async () => {
 		const project = await createFunctionProject('fn-flag-off');
 		const features = core.ctx.config.features as { FUNCTIONS: boolean };

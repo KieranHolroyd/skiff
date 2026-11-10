@@ -28,6 +28,7 @@ import { chmodSync, chownSync, copyFileSync, existsSync, readFileSync, renameSyn
 import { hostname } from 'node:os';
 import { basename } from 'node:path';
 import { detectCredsSupport, locateMasterKey, readMasterKey, sealMasterKey, type MasterKeyStore } from './install/master-key.ts';
+import { migrateEnvText } from './migrate/skiff-to-yoal.ts';
 
 // ---------------------------------------------------------------------------------------------
 // ChaCha20-Poly1305 (RFC 8439)
@@ -294,7 +295,8 @@ export function dearmor(text: string): Uint8Array {
 // ---------------------------------------------------------------------------------------------
 
 export interface RecoveryKit {
-	format: 'yoal-recovery-kit';
+	/** `skiff-recovery-kit` is accepted on import: kits exported before the Yoal rename. */
+	format: 'yoal-recovery-kit' | 'skiff-recovery-kit';
 	version: 1;
 	createdAt: string;
 	host: string;
@@ -333,7 +335,12 @@ export function parseKit(plaintext: Uint8Array): RecoveryKit {
 	} catch {
 		throw new Error('decrypted file is not a Yoal recovery kit');
 	}
-	if (kit?.format !== 'yoal-recovery-kit' || kit.version !== 1 || typeof kit.masterKey !== 'string' || !kit.masterKey)
+	if (
+		(kit?.format !== 'yoal-recovery-kit' && kit?.format !== 'skiff-recovery-kit') ||
+		kit.version !== 1 ||
+		typeof kit.masterKey !== 'string' ||
+		!kit.masterKey
+	)
 		throw new Error('decrypted file is not a Yoal recovery kit (or an unsupported version)');
 	if (fingerprint(kit.masterKey) !== kit.fingerprint) throw new Error('recovery kit fingerprint does not match its master key');
 	return kit;
@@ -625,7 +632,9 @@ export async function main(argv: string[]): Promise<void> {
 			if (kit.env === undefined) process.stdout.write('The kit has no yoal.env (exported without --include-env); left it unchanged.\n');
 			else {
 				const gid = isRoot ? groupId('yoal') : null;
-				const backup = installFile(ENV_FILE, kit.env, 0o640, isRoot ? { uid: 0, gid: gid ?? 0 } : null);
+				// Kits exported before the rename carry `SKIFF_*` keys and `/opt/skiff` paths.
+				const body = kit.format === 'skiff-recovery-kit' ? migrateEnvText(kit.env) : kit.env;
+				const backup = installFile(ENV_FILE, body, 0o640, isRoot ? { uid: 0, gid: gid ?? 0 } : null);
 				process.stdout.write(`Wrote ${ENV_FILE}${backup ? ` (previous file kept at ${backup})` : ''}\n`);
 			}
 		}

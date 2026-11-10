@@ -19,6 +19,13 @@ describe('parseSiteConfig', () => {
 		expect(parsed.headers[1]?.headers['X-Frame-Options']).toBe('DENY');
 	});
 
+	test('reads skiff.json from projects deployed before the Yoal rename', () => {
+		const parsed = parseSiteConfig({
+			'skiff.json': file(JSON.stringify({ spa: true, notFound: '/index.html' })),
+		});
+		expect(parsed.config).toEqual({ spa: true, cleanUrls: false, trailingSlash: 'ignore', notFound: '/index.html' });
+	});
+
 	test('defaults are safe (no SPA, no clean URLs)', () => {
 		expect(parseSiteConfig({}).config).toEqual({
 			spa: false,

@@ -14,6 +14,8 @@ import * as z from 'zod';
 
 /** Manifest file a function bundle must contain at its root (FN8). */
 export const FUNCTION_MANIFEST_FILE = 'yoal-function.json';
+/** Pre-rename bundles still carry this name; accepted on deploy for compatibility. */
+export const LEGACY_FUNCTION_MANIFEST_FILE = 'skiff-function.json';
 /** Where the shim answers a health probe. Public, cheap and reveals nothing. */
 export const FUNCTION_HEALTH_PATH = '/__yoal/health';
 /**

@@ -11,6 +11,7 @@ import {
 	functionIsPython,
 	FUNCTION_HEALTH_PATH,
 	FUNCTION_MANIFEST_FILE,
+	LEGACY_FUNCTION_MANIFEST_FILE,
 	WORKERD_PINNED_VERSION,
 	compatibilityDateProblem,
 	functionBindingSummary,
@@ -63,7 +64,9 @@ export class FunctionService {
 		project: ProjectRow,
 		entries: FileEntry[],
 	): Promise<FunctionRuntimeSpec | null> {
-		const manifestEntry = entries.find((entry) => entry.path === FUNCTION_MANIFEST_FILE);
+		const manifestEntry = entries.find(
+			(entry) => entry.path === FUNCTION_MANIFEST_FILE || entry.path === LEGACY_FUNCTION_MANIFEST_FILE,
+		);
 		if (!manifestEntry) {
 			if (effectiveRuntime(project) !== 'function') return null;
 			// A redeploy of a prebuilt Worker (for example `yoal deploy ./dist`) carries no
@@ -575,8 +578,9 @@ function checkAssets(directory: string, entries: FileEntry[]): void {
 	if (
 		entries.some(
 			(entry) =>
-				entry.path === `${prefix}${FUNCTION_MANIFEST_FILE}` ||
-				entry.path.startsWith(`${prefix}${FUNCTION_MANIFEST_FILE}/`),
+				[FUNCTION_MANIFEST_FILE, LEGACY_FUNCTION_MANIFEST_FILE].some(
+					(name) => entry.path === `${prefix}${name}` || entry.path.startsWith(`${prefix}${name}/`),
+				),
 		)
 	)
 		throw new ValidationError(

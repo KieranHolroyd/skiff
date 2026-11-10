@@ -30,6 +30,26 @@ The manifest lists the size and SHA-256 of each artifact and is signed with Ed25
 
 Nothing updates on its own. The dashboard shows a newer version to platform admins, but an update runs only when someone starts it.
 
+## Upgrading a pre-rebrand Skiff install
+
+A host installed before the Yoal rename still keeps its files, users, units and database under the old `skiff` names. The current release looks for `yoal` names, so it cannot update that host in place. Convert it once, on every affected host including workers:
+
+```sh
+# preview; changes nothing
+curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/yoal/main/scripts/migrate/skiff-to-yoal.sh \
+  | sudo sh -s -- --dry-run
+
+# rename state, users, units, env keys, the database and ClickHouse metadata
+curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/yoal/main/scripts/migrate/skiff-to-yoal.sh \
+  | sudo sh -s -- --apply --yes
+
+# build and activate the current release
+curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/yoal/main/install.sh \
+  | sudo env YOAL_YES=1 sh -s -- --upgrade
+```
+
+The converter stops the old services and leaves them stopped; the installer starts the new release. It keeps a copy and a rollback manifest under `/var/backups/yoal-skiff-<timestamp>`. If a failed upgrade left both `skiff.db` and `yoal.db` populated, it stops unless you pass `--prefer legacy` or `--prefer current`.
+
 ## Update from Settings → Updates
 
 Only platform owners and admins can use this page.

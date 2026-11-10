@@ -1297,6 +1297,58 @@ This checks the bundle against `manifest.json` only; the dashboard path also ver
 manifest's signature. Workers joined with `scripts/dev/join-linux-worker.sh` can instead rebuild
 from `/opt/yoal/src`. Run neither on the control-plane host: use `yoal-update-self` there.
 
+### 4.1.3 Converting a pre-rebrand Skiff host
+
+Hosts installed before the Yoal rename keep their state under `/opt/skiff`, `/etc/skiff`,
+`/var/lib/skiff`, the `skiff-*` units and the `skiff` user. The current release looks for the
+Yoal names, so such a host cannot update in place until its state is renamed. The converter does
+that once, without rebuilding or re-signing anything:
+
+```sh
+# 1. See what would change; nothing is touched.
+curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/yoal/main/scripts/migrate/skiff-to-yoal.sh \
+  | sudo sh -s -- --dry-run
+
+# 2. Convert the host. It stops the old services and writes a backup + rollback manifest.
+curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/yoal/main/scripts/migrate/skiff-to-yoal.sh \
+  | sudo sh -s -- --apply --yes
+
+# 3. Build and activate the current release on the converted host.
+curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/yoal/main/install.sh \
+  | sudo env YOAL_YES=1 sh -s -- --upgrade
+
+# If the host follows the canary channel, add --canary after --upgrade.
+```
+
+What the converter rewrites:
+
+- directories (`/opt`, `/etc`, `/var/lib`, `/run`, `/srv`, `/usr/lib`) and the SQLite filename
+  (`skiff.db` → `yoal.db`, including its WAL/SHM files and the `skiff_migrations` ledger);
+- system users/groups (`skiff`, `skiff-build`, `skiff-clickhouse`, `skiff-caddy`) and the
+  `yoal-caddy` group the release-managed Caddy unit needs;
+- every `skiff-*` unit, drop-in, `.wants` link, Quadlet and workload unit, including the
+  `skiff-workload-*` / `skiff-workloads.slice` names;
+- `SKIFF_*` env keys, paths in values, `meta.json`, update state and Caddy's bootstrap/autosave
+  config;
+- ClickHouse's `metadata/skiff*` and `data/skiff` directories and the `skiff` user/database in its
+  generated XML.
+
+It deliberately does **not** start the platform: services are stopped so the rebuild in step 3
+runs against quiescent state. A pre-migration copy of `/etc/skiff`, the databases, Caddy and the
+unit files is kept under `/var/backups/yoal-skiff-<timestamp>`. To undo a conversion before
+running the installer:
+
+```sh
+sudo bun /path/to/skiff-to-yoal.ts --rollback /var/backups/yoal-skiff-<timestamp>/manifest.json
+```
+
+Run the same conversion on **every** host that was installed under Skiff, including worker nodes;
+the dashboard node updater cannot fix a worker that still has `skiff-*` units. A worker has no
+control-plane database: after conversion install the current `yoal-agent`/`yoal-helper` for that
+node and start `yoal-agent`; do not run `install.sh --upgrade` on a worker. Use `--prefer legacy`
+or `--prefer current` when a failed upgrade left both `skiff.db` and `yoal.db` set up; by default
+the converter stops rather than choose.
+
 ### 4.2 Uninstall
 
 ```sh

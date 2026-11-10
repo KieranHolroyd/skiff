@@ -15,6 +15,7 @@
 		"yoal-alert.ts",
 		"install/**/*.ts",
 		"systemd/**/*.ts",
-		"release/**/*.ts"
+		"release/**/*.ts",
+		"migrate/**/*.ts"
 	]
 }

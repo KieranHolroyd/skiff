@@ -935,6 +935,12 @@ function ensureUsersAndDirs(): void {
 		if (options.dryRun) log('would create caddy group');
 		else run('groupadd', ['--system', 'caddy']);
 	}
+	// The release-managed Caddy unit uses Group=yoal-caddy, and the control plane lists it as a
+	// supplementary group. Older installs (and the pre-rename skiff-caddy group) need it created.
+	if (!capture('getent', ['group', 'yoal-caddy'])) {
+		if (options.dryRun) log('would create yoal-caddy group');
+		else run('groupadd', ['--system', 'yoal-caddy']);
+	}
 	if (!capture('id', ['-u', 'yoal'])) {
 		if (options.dryRun) log('would create yoal user');
 		else run('useradd', ['--system', '--gid', 'yoal', '--home-dir', VAR_DIR, '--shell', '/usr/sbin/nologin', 'yoal']);
