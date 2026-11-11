@@ -42,6 +42,7 @@
 		"fflate": "^0.8.3",
 		"globals": "^17.6.0",
 		"mode-watcher": "^1.1.0",
+		"monaco-editor": "^0.55.0",
 		"prettier": "^3.8.3",
 		"prettier-plugin-svelte": "^4.1.0",
 		"prettier-plugin-tailwindcss": "^0.8.0",
@@ -79,7 +80,6 @@
 		"@yoal/studio": "workspace:*",
 		"better-auth": "1.7.15",
 		"drizzle-orm": "^0.45.4",
-		"monaco-editor": "^0.55.0",
 		"zod": "4.6.7"
 	}
 }

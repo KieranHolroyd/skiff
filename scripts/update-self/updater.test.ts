@@ -972,7 +972,12 @@ describe('signed release artifacts', () => {
 
 	beforeEach(() => {
 		host.fetchBytes = async (url) => bytes.get(url)!;
-		host.download = async (_url, path) => void writeFileSync(path, readFileSync(artifactPath));
+		host.download = async (_url, path) => {
+			const body = readFileSync(artifactPath);
+			writeFileSync(path, body);
+			// Like the real host: the digest is produced while the bytes stream, not read again.
+			return { bytes: body.byteLength, sha256: createHash('sha256').update(body).digest('hex') };
+		};
 		host.extract = async (archive, dest) => void execFileSync('tar', ['-xzf', archive, '-C', dest]);
 		host.sha256 = sha256File;
 		host.trustedKeys = () => new Map([['test', createPublicKey(keys.publicKey.export({ type: 'spki', format: 'pem' }))]]);
@@ -985,6 +990,17 @@ describe('signed release artifacts', () => {
 		expect(result).toMatchObject({ status: 'updated', version: '0.2.0' });
 		expect(host.calls).not.toContain('build');
 		expect(readMeta(readLink(layout.currentLink)!)).toMatchObject({ source: 'artifact', ref: 'main', tag: 'v0.2.0', commit: NEW, status: 'active' });
+	});
+
+	test('verifies the checksum computed while streaming; the archive is never hashed twice', async () => {
+		publish();
+		let rehashed = 0;
+		host.sha256 = () => {
+			rehashed++;
+			return sha256File(artifactPath);
+		};
+		expect((await new Updater(layout, host).update()).status).toBe('updated');
+		expect(rehashed).toBe(0);
 	});
 
 	test('a source build after an artifact install tracks the branch, not the installed tag', async () => {

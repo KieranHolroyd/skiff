@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,13 +19,15 @@ function streamedResponse(chunks: Uint8Array[], headers: Record<string, string> 
 }
 
 describe('writeResponseBody', () => {
-	test('writes a streamed body to disk and reports its size', async () => {
+	test('writes a streamed body to disk and reports its size and sha256', async () => {
 		const path = join(root, 'artifact.tar.gz');
 		const chunk = new Uint8Array(1024).fill(7);
-		const written = await writeResponseBody(streamedResponse([chunk, chunk, chunk]), path);
-		expect(written).toBe(3072);
-		expect(readFileSync(path).byteLength).toBe(3072);
-		expect([...readFileSync(path).subarray(0, 3)]).toEqual([7, 7, 7]);
+		const stats = await writeResponseBody(streamedResponse([chunk, chunk, chunk]), path);
+		const bytes = readFileSync(path);
+		expect(stats.bytes).toBe(3072);
+		expect(stats.sha256).toBe(createHash('sha256').update(bytes).digest('hex'));
+		expect(bytes.byteLength).toBe(3072);
+		expect([...bytes.subarray(0, 3)]).toEqual([7, 7, 7]);
 		rmSync(path, { force: true });
 	});
 

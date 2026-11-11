@@ -173,7 +173,7 @@ jobs:
       - name: Compile the stage-0 updater
         working-directory: repo
         run: |
-          bun build --compile scripts/update-self/main.ts \
+          bun build --compile --minify scripts/update-self/main.ts \
             --define "YOAL_UPDATER_BUILD=\"${GITHUB_SHA::12}\"" \
             --outfile ../updater/yoal-updated
           ../updater/yoal-updated --version
@@ -181,28 +181,65 @@ jobs:
       # Ship only what runs: build tooling (vite, svelte-check, eslint, drizzle-kit, ...) and the
       # SvelteKit build intermediates stay in CI. Done before the canary, so the canary boots
       # exactly the tree hosts install.
+      # A host never installs the docs site, the usage collector or the spikes, so they must not
+      # pull dependencies into the production tree either. Drop them once the apps are built, then
+      # install production deps only. Peer trees are omitted too: the peers that would otherwise
+      # be materialised here (svelte, vite, typescript, drizzle-kit, ...) are build tooling, not
+      # runtime dependencies of the shipped server. The canary below boots this exact tree.
       - name: Prune to production dependencies
         working-directory: repo
         run: |
+          rm -rf apps/docs apps/usage spikes
           find . -name node_modules -type d -prune -exec rm -rf {} +
           rm -rf apps/control-plane/.svelte-kit
-          bun install --frozen-lockfile --production
+          bun install --frozen-lockfile --production --omit=peer
+          # Source maps are build output: the shipped server and packages never read them.
+          find node_modules -name '*.map' -type f -delete
           du -sh node_modules .
 
       - name: Canary under the production sandbox
         run: sudo env BUN_BIN="$(command -v bun)" repo/scripts/release/ci-canary.sh repo
 
-      # Same gzip format hosts already unpack; pigz just compresses on every core.
+      # Same gzip format hosts already unpack; pigz just compresses on every core. Everything a
+      # host never reads at runtime (docs, tests, source of compiled apps, source maps, spikes,
+      # examples) stays in CI.
       - name: Package
         run: |
-          gz=gzip
-          command -v pigz >/dev/null && gz=pigz
+          gz='gzip -9'
+          command -v pigz >/dev/null && gz='pigz -9'
           echo "compressing with $gz"
           tar --use-compress-program="$gz" -cf "yoal-${VERSION}-linux-${{ matrix.arch }}.tar.gz" \
             --exclude='repo/.git' \
+            --exclude='repo/.github' \
+            --exclude='repo/.githooks' \
+            --exclude='repo/docs' \
+            --exclude='repo/research_notes' \
+            --exclude='repo/reports' \
+            --exclude='repo/examples' \
+            --exclude='repo/local-examples' \
+            --exclude='repo/tests' \
+            --exclude='repo/docker' \
+            --exclude='repo/spikes' \
+            --exclude='repo/apps/docs' \
+            --exclude='repo/apps/usage' \
+            --exclude='repo/apps/control-plane/tests' \
+            --exclude='repo/apps/control-plane/.svelte-kit' \
+            --exclude='repo/apps/agent/src' \
+            --exclude='repo/apps/cli/src' \
+            --exclude='repo/apps/helper/src' \
+            --exclude='repo/scripts/dev' \
+            --exclude='repo/scripts/e2e' \
+            --exclude='*.test.ts' \
+            --exclude='*.test.tsx' \
+            --exclude='*.map' \
+            --exclude='README.md' \
             --exclude='repo/node_modules/.old_modules-*' \
             --exclude='repo/node_modules/.cache' \
             repo updater caddy
+          tar -tzf "yoal-${VERSION}-linux-${{ matrix.arch }}.tar.gz" > "$RUNNER_TEMP/entries.txt"
+          grep -qx 'repo/apps/control-plane/build/index.js' "$RUNNER_TEMP/entries.txt"
+          grep -qx 'updater/yoal-updated' "$RUNNER_TEMP/entries.txt"
+          grep -qx 'caddy/caddy' "$RUNNER_TEMP/entries.txt"
           ls -l yoal-*.tar.gz
 
       # The tarballs are already compressed; zipping them again only costs time.

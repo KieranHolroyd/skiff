@@ -11,7 +11,6 @@
  * fails the previous binary is restored and Caddy is restarted again before the error escapes;
  * the updater then reverts the whole release.
  */
-import { createHash } from 'node:crypto';
 import {
 	chmodSync,
 	copyFileSync,
@@ -23,6 +22,7 @@ import {
 	writeFileSync
 } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
+import { filesEqual, sha256File } from './files.ts';
 
 export const CADDY_UNIT = 'yoal-caddy.service';
 export const STOCK_CADDY_UNIT = 'caddy.service';
@@ -79,7 +79,7 @@ export function caddyExecPath(unit: string, run: EnsureCaddyOptions['run']): str
 export function installCaddyBinary(source: string, target: string): boolean {
 	if (existsSync(target)) {
 		try {
-			if (readFileSync(target).equals(readFileSync(source))) return false;
+			if (filesEqual(target, source)) return false;
 		} catch {
 			// Unreadable target: replace it.
 		}
@@ -104,10 +104,6 @@ export function restoreCaddyBinary(target: string): boolean {
 	chmodSync(tmp, 0o755);
 	renameSync(tmp, target);
 	return true;
-}
-
-function sha256File(path: string): string {
-	return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
 function readInstalledHash(path: string): string | null {

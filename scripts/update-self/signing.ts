@@ -10,7 +10,7 @@
  * new key here, then retire the old one.
  */
 import { createHash, createPrivateKey, createPublicKey, sign, verify, type KeyObject } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 export const MANIFEST_SCHEMA = 1;
@@ -108,9 +108,20 @@ export function verifyManifest(bytes: Uint8Array, signatureB64: string, keys: Ma
 	return manifest;
 }
 
+/** sha256 hex of a file, read in chunks: a release artifact can be larger than RAM is comfortable. */
 export function sha256File(path: string): string {
 	const hash = createHash('sha256');
-	hash.update(readFileSync(path));
+	const fd = openSync(path, 'r');
+	const buffer = Buffer.allocUnsafe(1024 * 1024);
+	try {
+		for (;;) {
+			const read = readSync(fd, buffer, 0, buffer.length, null);
+			if (read === 0) break;
+			hash.update(buffer.subarray(0, read));
+		}
+	} finally {
+		closeSync(fd);
+	}
 	return hash.digest('hex');
 }
 

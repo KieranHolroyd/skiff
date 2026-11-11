@@ -3,11 +3,14 @@ import { createHash } from 'node:crypto';
 import {
 	accessSync,
 	chmodSync,
+	closeSync,
 	constants,
 	copyFileSync,
 	existsSync,
 	mkdirSync,
+	openSync,
 	readFileSync,
+	readSync,
 	readdirSync,
 	renameSync,
 	rmSync,
@@ -569,8 +572,21 @@ function safeName(value: string | null | undefined): string {
 	return (value ?? 'unknown').replace(/[^a-zA-Z0-9._-]+/g, '-').slice(0, 48) || 'unknown';
 }
 
+/** sha256 hex of a file, in chunks: a control DB copy can be far larger than its manifest needs in RAM. */
 function sha256File(path: string): string {
-	return createHash('sha256').update(readFileSync(path)).digest('hex');
+	const hash = createHash('sha256');
+	const fd = openSync(path, 'r');
+	const buffer = Buffer.allocUnsafe(1024 * 1024);
+	try {
+		for (;;) {
+			const read = readSync(fd, buffer, 0, buffer.length, null);
+			if (read === 0) break;
+			hash.update(buffer.subarray(0, read));
+		}
+	} finally {
+		closeSync(fd);
+	}
+	return hash.digest('hex');
 }
 
 function writeSealed(path: string, data: Uint8Array | string, mode = 0o600): void {

@@ -8,6 +8,7 @@
  */
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { filesEqual } from './files.ts';
 
 export const HELPER_UNIT = 'yoal-helper.service';
 export const HELPER_ENV_FILE = '/etc/yoal/helper.env';
@@ -92,7 +93,7 @@ export function installHelperBinary(
 	mkdirSync(dir, { recursive: true, mode: 0o755 });
 	const target = join(dir, 'yoal-helper');
 	try {
-		if (readFileSync(target).equals(readFileSync(source))) return false;
+		if (filesEqual(target, source)) return false;
 	} catch {
 		// Missing or unreadable target: replace it.
 	}

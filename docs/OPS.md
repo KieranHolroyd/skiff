@@ -928,6 +928,16 @@ with `yoal-<version>-linux-<arch>.tar.gz`, `manifest.json`, `manifest.json.sig` 
 public half is compiled into the updater ([`signing.ts`](../scripts/update-self/signing.ts)),
 and extra trusted keys can be dropped into `/etc/yoal/updater/keys/*.pub` for rotation.
 
+The tarball carries only what a host runs: the built control plane, the compiled agent, CLI,
+helper and stage-0 updater, Caddy, the release hooks and host command scripts, the migrations,
+and the production dependency tree. The docs site, the usage collector, spikes, examples, tests,
+the source of compiled apps and every source map stay in CI. Compiled binaries are minified;
+the docs renderers and Monaco are build-time dependencies (Vite inlines them into the
+control-plane build), so the production install never contains them. Peer trees are omitted from
+that install for the same reason — the peers it would materialise (Svelte, Vite, TypeScript,
+drizzle-kit) are build tooling. The canary boots the pruned tree, so CI validates exactly what a
+host receives.
+
 The updater installs the newest non-draft `v<semver>` release **on the host's channel** (below)
 whose manifest verifies, after checking the artifact's size and sha256 against it. It lists the
 newest 100 releases, so a stable release stays in view behind up to 99 canaries. Network,
@@ -1044,16 +1054,18 @@ Logs: the page, `/var/lib/yoal-update/update.log`, and `journalctl -u yoal-updat
    keeps serving. Once it is healthy on its own socket, `/run/yoal/control.sock` (a symlink
    that Caddy, the agent, the CLI and every script use) is renamed to point at it: one atomic
    rename, new connections follow, open ones finish on the old process.
-4. **Bake.** The new release serves real traffic for 60 s (`--bake <seconds>`), probed every
-   second through `control.sock`. If it stops, crash-restarts or stops answering, `control.sock`
-   is pointed back at the untouched primary and the standby stops: a code-only revert, no
-   restart, no database restore, no lost writes.
+4. **Bake (opt-in).** With `--bake <seconds>` the new release serves real traffic for that long,
+   probed every second through `control.sock`; the default is no wait, a single probe before
+   commit. If it stops, crash-restarts or stops answering, `control.sock` is pointed back at the
+   untouched primary and the standby stops: a code-only revert, no restart, no database restore,
+   no lost writes.
 5. **Commit.** `previous` → old release, `current` → new release, then the primary restarts on
    it while the standby keeps serving (`control.sock` is re-pointed at the standby between stop
    and start, so even a primary that unlinks the path on shutdown drops nothing). When the
    primary answers, `control.sock` points back at it, the standby drains and stops, the helper
-   restarts, and the live checks of the old design run once more (health, `/readyz`, 10 s
-   without crash-restarts, the public URL if it answered before).
+   restarts, and the live checks of the old design run once more (health, `/readyz`, 10 s from
+   the primary taking over without crash-restarts — the helper, Caddy and agent restarts happen
+   inside that window, so they add no waiting — and the public URL if it answered before).
 6. **Keep or revert.** On success, releases other than `current` and `previous` are pruned, as
    are superseded snapshots, and the release's own stage-0 updater is qualified (below).
 

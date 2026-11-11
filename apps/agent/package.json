@@ -7,7 +7,7 @@
 		"dev": "bun --watch src/main.ts",
 		"check": "tsc -p . --noEmit",
 		"test": "bun test",
-		"build": "bun build --compile --outfile dist/yoal-agent src/main.ts"
+		"build": "bun build --compile --minify --outfile dist/yoal-agent src/main.ts"
 	},
 	"dependencies": {
 		"@yoal/builder": "workspace:*",

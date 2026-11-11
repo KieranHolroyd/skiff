@@ -8,19 +8,22 @@
  * rollback.
  */
 import {
-	appendFileSync,
 	chmodSync,
 	chownSync,
+	closeSync,
 	existsSync,
 	lstatSync,
 	mkdirSync,
+	openSync,
 	readFileSync,
 	readlinkSync,
 	renameSync,
 	rmSync,
 	symlinkSync,
 	writeFileSync,
+	writeSync,
 } from 'node:fs';
+import { availableParallelism } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import {
 	DEFAULT_SELF_UPDATE_CHANNEL,
@@ -109,7 +112,7 @@ update options:
                        release, and back on rollback, so agent fixes take effect)
   --no-canary          skip the isolated pre-swap boot against a copy of the database
   --no-zero-downtime   stop the old release before starting the new one (no standby cutover)
-  --bake <seconds>     how long the new release must serve traffic before commit (default 60)
+  --bake <seconds>     how long the new release must serve traffic before commit (default 0: one probe)
   --require-public     the public URL must answer after the swap (default: only if it did before)
   --no-public-check    never gate on the public URL
   --allow-destructive  approve a reviewed destructive migration in the preflight
@@ -208,25 +211,68 @@ function usageError(text: string): never {
  * Live update log for the dashboard (JSON Lines, root:yoal 0640). A fresh file per update run;
  * the control plane only reads it. Writing must never break an update, so every failure is silent
  * (after one console warning).
+ *
+ * The fd is held open and batches are written at once: a source build streams thousands of lines,
+ * and one `open`/`write`/`close` per line was a measurable part of the build's wall time. Lines
+ * that are not streamed output (`info`, `phase`, `command`, …) still flush immediately so the
+ * dashboard's live log keeps up.
  */
 let logEnabled = false;
+let logFd: number | null = null;
+let logBuffer = '';
+let logTimer: ReturnType<typeof setInterval> | null = null;
+const LOG_FLUSH_BYTES = 64 * 1024;
 
 function stripAnsi(text: string): string {
 	// eslint-disable-next-line no-control-regex
 	return text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '');
 }
 
+function flushLog(): void {
+	if (logFd === null || !logBuffer) return;
+	const body = logBuffer;
+	logBuffer = '';
+	try {
+		writeSync(logFd, body);
+	} catch {
+		// Progress reporting must never break an update.
+		logEnabled = false;
+		if (logFd !== null) {
+			try {
+				closeSync(logFd);
+			} catch {
+				// Already gone.
+			}
+			logFd = null;
+		}
+	}
+}
+
 function appendLog(level: SelfUpdateLogLevel, text: string): void {
-	if (!logEnabled) return;
+	if (!logEnabled || logFd === null) return;
 	const at = new Date().toISOString();
 	for (const raw of stripAnsi(text).split(/\r\n|\r|\n/)) {
 		const line = raw.trimEnd();
 		if (!line) continue;
+		logBuffer += `${JSON.stringify({ at, level, text: line.slice(0, 4000) })}\n`;
+	}
+	// Streamed build output is the hot path; everything else appears in the live log at once.
+	if (logBuffer.length >= LOG_FLUSH_BYTES || level !== 'output') flushLog();
+}
+
+function closeLog(): void {
+	flushLog();
+	if (logTimer !== null) {
+		clearInterval(logTimer);
+		logTimer = null;
+	}
+	if (logFd !== null) {
 		try {
-			appendFileSync(LOG_FILE, `${JSON.stringify({ at, level, text: line.slice(0, 4000) })}\n`);
+			closeSync(logFd);
 		} catch {
-			// Progress reporting must never break an update.
+			// Already gone.
 		}
+		logFd = null;
 	}
 }
 
@@ -240,10 +286,18 @@ function startUpdateLog(trigger: string): void {
 		writeFileSync(LOG_FILE, '', { mode: 0o640 });
 		if (gid !== null) chownSync(LOG_FILE, 0, gid);
 		chmodSync(LOG_FILE, 0o640);
+		logFd = openSync(LOG_FILE, 'a');
 		logEnabled = true;
+		// Streamed output is batched; flush at least once a second so the dashboard keeps up and
+		// a hard kill loses no more than a second of it.
+		logTimer = setInterval(flushLog, 1_000);
+		logTimer.unref?.();
+		// A killed updater still leaves its last buffered lines behind.
+		signals.on('exit', closeLog);
 		appendLog('info', `Yoal self-update started from the ${trigger} at ${new Date().toISOString()}`);
 	} catch (error) {
 		logEnabled = false;
+		closeLog();
 		console.error(dim(`  (could not write ${LOG_FILE}: ${(error as Error).message})`));
 	}
 }
@@ -268,6 +322,42 @@ function run(
 		stdout: result.stdout ? new TextDecoder().decode(result.stdout).trim() : '',
 		stderr: result.stderr ? new TextDecoder().decode(result.stderr).trim() : '',
 	};
+	if (out.code !== 0 && !opts.allowFailure) {
+		if (out.stderr) appendLog('error', out.stderr);
+		throw new Error(`${cmd.join(' ')} exited ${out.code}${out.stderr ? `: ${out.stderr}` : ''}`);
+	}
+	return out;
+}
+
+/**
+ * The same contract as {@link run}, without blocking the event loop. Host operations that may run
+ * together (restarting the helper and the agent, sampling a unit while probing it) use this so the
+ * processes actually overlap instead of queueing behind `spawnSync`.
+ */
+async function runAsync(
+	cmd: string[],
+	opts: { quiet?: boolean; allowFailure?: boolean; timeoutMs?: number } = {},
+): Promise<{ code: number; stdout: string; stderr: string }> {
+	if (!opts.quiet) {
+		console.log(dim(`  $ ${cmd.join(' ')}`));
+		appendLog('command', `$ ${cmd.join(' ')}`);
+	}
+	const child = Bun.spawn({
+		cmd,
+		env: { ...process.env, PATH: `${dirname(layout.bunBin)}:${process.env.PATH ?? ''}` },
+		stdout: opts.quiet ? 'pipe' : 'inherit',
+		stderr: opts.quiet ? 'pipe' : 'inherit',
+	});
+	const timer = opts.timeoutMs ? setTimeout(() => child.kill('SIGKILL'), opts.timeoutMs) : null;
+	const [stdout, stderr] = opts.quiet && child.stdout && child.stderr
+		? await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()])
+		: ['', ''];
+	const out = {
+		code: (await child.exited) ?? 1,
+		stdout: stdout.trim(),
+		stderr: stderr.trim(),
+	};
+	if (timer) clearTimeout(timer);
 	if (out.code !== 0 && !opts.allowFailure) {
 		if (out.stderr) appendLog('error', out.stderr);
 		throw new Error(`${cmd.join(' ')} exited ${out.code}${out.stderr ? `: ${out.stderr}` : ''}`);
@@ -321,6 +411,39 @@ async function runStreaming(cmd: string[], opts: { cwd?: string } = {}): Promise
 		throw new Error(`${cmd.join(' ')} exited ${code}${tail.length ? `: ${tail.join(' ')}` : ''}`);
 }
 
+/** `MemAvailable` from /proc/meminfo; 0 when the host does not expose it. */
+function availableMemoryBytes(): number {
+	try {
+		const match = /^MemAvailable:\s+(\d+)\s+kB$/m.exec(readFileSync('/proc/meminfo', 'utf8'));
+		return match ? Number(match[1]) * 1024 : 0;
+	} catch {
+		return 0;
+	}
+}
+
+/**
+ * Run independent build jobs with bounded concurrency. The first failure stops new jobs from
+ * starting; jobs already running finish (the updater exits and takes its children with it).
+ */
+async function runBuildJobs(jobs: Array<() => Promise<void>>, limit: number): Promise<void> {
+	let next = 0;
+	let failure: unknown = null;
+	const worker = async () => {
+		while (failure === null) {
+			const index = next++;
+			if (index >= jobs.length) return;
+			try {
+				await jobs[index]!();
+			} catch (error) {
+				failure = error;
+				return;
+			}
+		}
+	};
+	await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, jobs.length)) }, worker));
+	if (failure !== null) throw failure;
+}
+
 function githubToken(): string | undefined {
 	if (process.env.YOAL_GITHUB_TOKEN) return process.env.YOAL_GITHUB_TOKEN;
 	const file = join(ETC_DIR, 'github.token');
@@ -353,8 +476,8 @@ async function poll(check: () => Promise<boolean>, timeoutMs: number, everyMs = 
 
 const socketFor = (target: SocketTarget) => (target === 'public' ? SOCKETS.public : target === 'primary' ? SOCKETS.primary : SOCKETS.standby);
 
-const unitState = (unit: string) =>
-	run(['systemctl', 'is-active', unit], { quiet: true, allowFailure: true }).stdout;
+const unitState = async (unit: string) =>
+	(await runAsync(['systemctl', 'is-active', unit], { quiet: true, allowFailure: true })).stdout;
 
 // ------------------------------------------------------------- dashboard status
 
@@ -656,32 +779,36 @@ async function selfTest(updater: Updater): Promise<number> {
 			failures.push(`${name}: ${(error as Error).message}`);
 		}
 	};
-	await attempt('identity', () => UPDATER_IDENTITY);
-	await attempt('state', () => {
-		const status = updater.status();
-		if (!status.current) throw new Error(`no active release at ${layout.currentLink}`);
-		return status.current.meta.version ?? 'unversioned';
-	});
-	await attempt('keys', () => {
-		const keys = loadTrustedKeys(join(ETC_DIR, 'updater', 'keys'));
-		if (keys.size === 0) throw new Error('no release-signing keys');
-		return `${keys.size} key(s)`;
-	});
-	await attempt('units', () => {
-		const units = triggerUnits({ requestFile: REQUEST_FILE, command: UPDATE_COMMAND });
-		if (Object.keys(units).length < 2) throw new Error('trigger units did not render');
-	});
-	await attempt('hooks', async () => {
-		const current = readLink(layout.currentLink);
-		if (!current) throw new Error('no active release');
-		const outcome = await host.releaseHook!(current, 'protocol', [], 60_000);
-		if (outcome.kind === 'error') throw new Error(outcome.reason);
-		return outcome.kind === 'absent' ? 'release predates hooks' : `protocol ${outcome.verdict.protocol}`;
-	});
+	await Promise.all([
+		attempt('identity', () => UPDATER_IDENTITY),
+		attempt('state', () => {
+			const status = updater.status();
+			if (!status.current) throw new Error(`no active release at ${layout.currentLink}`);
+			return status.current.meta.version ?? 'unversioned';
+		}),
+		attempt('keys', () => {
+			const keys = loadTrustedKeys(join(ETC_DIR, 'updater', 'keys'));
+			if (keys.size === 0) throw new Error('no release-signing keys');
+			return `${keys.size} key(s)`;
+		}),
+		attempt('units', () => {
+			const units = triggerUnits({ requestFile: REQUEST_FILE, command: UPDATE_COMMAND });
+			if (Object.keys(units).length < 2) throw new Error('trigger units did not render');
+		}),
+		attempt('hooks', async () => {
+			const current = readLink(layout.currentLink);
+			if (!current) throw new Error('no active release');
+			const outcome = await host.releaseHook!(current, 'protocol', [], 60_000);
+			if (outcome.kind === 'error') throw new Error(outcome.reason);
+			return outcome.kind === 'absent' ? 'release predates hooks' : `protocol ${outcome.verdict.protocol}`;
+		}),
+	]);
 	const report = { ok: failures.length === 0, identity: UPDATER_IDENTITY, checks, failures };
 	if (flag('--json')) console.log(JSON.stringify(report));
 	else {
-		for (const [name, value] of Object.entries(checks)) console.log(`${dim('  •')} ${name}: ${value}`);
+		// Fixed order: the checks finish in any order, the report should not.
+		for (const [name, value] of ['identity', 'state', 'keys', 'units', 'hooks'].map((name) => [name, checks[name]] as const))
+			if (value !== undefined) console.log(`${dim('  •')} ${name}: ${value}`);
 		for (const failure of failures) console.error(`${red('  !')} ${failure}`);
 	}
 	return report.ok ? 0 : 1;
@@ -758,15 +885,34 @@ const host: Host = {
 	async build(repoDir) {
 		const bun = layout.bunBin;
 		await runStreaming([bun, 'install', '--frozen-lockfile'], { cwd: repoDir });
-		await runStreaming([bun, 'run', '--cwd', 'apps/control-plane', 'build'], { cwd: repoDir });
-		await runStreaming([bun, 'run', '--cwd', 'apps/agent', 'build'], { cwd: repoDir });
-		await runStreaming([bun, 'run', '--cwd', 'apps/cli', 'build'], { cwd: repoDir });
-		await runStreaming([bun, 'run', '--cwd', 'apps/helper', 'build'], { cwd: repoDir });
-		// Stage-0 for this release (qualified and activated only after the release commits).
-		await runStreaming(
-			[bun, 'build', '--compile', 'scripts/update-self/main.ts', '--define', 'YOAL_UPDATER_BUILD="host-build"', '--outfile', 'scripts/update-self/dist/yoal-updated'],
-			{ cwd: repoDir },
-		);
+		const jobs = [
+			() => runStreaming([bun, 'run', '--cwd', 'apps/control-plane', 'build'], { cwd: repoDir }),
+			() => runStreaming([bun, 'run', '--cwd', 'apps/agent', 'build'], { cwd: repoDir }),
+			() => runStreaming([bun, 'run', '--cwd', 'apps/cli', 'build'], { cwd: repoDir }),
+			() => runStreaming([bun, 'run', '--cwd', 'apps/helper', 'build'], { cwd: repoDir }),
+			// Stage-0 for this release (qualified and activated only after the release commits).
+			() =>
+				runStreaming(
+					[bun, 'build', '--compile', '--minify', 'scripts/update-self/main.ts', '--define', 'YOAL_UPDATER_BUILD="host-build"', '--outfile', 'scripts/update-self/dist/yoal-updated'],
+					{ cwd: repoDir },
+				),
+		];
+		// Every job is independent. The SvelteKit build is the memory peak, so it only shares the
+		// machine with the four Bun bundles when there is headroom for both; otherwise it runs
+		// alone and the rest go together. Concurrency is capped at the core count.
+		const limit = Math.min(jobs.length, Math.max(2, availableParallelism()));
+		const together = availableMemoryBytes() >= 5 * 1024 ** 3 && limit >= 4;
+		const plan = together
+			? `building all ${jobs.length} steps together (up to ${limit} at once)`
+			: `building the control plane alone, then the remaining ${jobs.length - 1} steps together (up to ${limit} at once)`;
+		console.log(dim(`  ${plan}`));
+		appendLog('info', plan);
+		if (together) {
+			await runBuildJobs(jobs, limit);
+		} else {
+			await jobs[0]!();
+			await runBuildJobs(jobs.slice(1), limit);
+		}
 	},
 
 	/**
@@ -836,16 +982,16 @@ const host: Host = {
 	},
 
 	async start(unit) {
-		run(['systemctl', 'start', unit]);
+		await runAsync(['systemctl', 'start', unit]);
 	},
 	async stop(unit) {
-		run(['systemctl', 'stop', unit], { allowFailure: true });
+		await runAsync(['systemctl', 'stop', unit], { allowFailure: true });
 	},
 	async restart(unit) {
-		run(['systemctl', 'restart', unit]);
+		await runAsync(['systemctl', 'restart', unit]);
 	},
 	async tryRestart(unit) {
-		run(['systemctl', 'try-restart', unit], { allowFailure: true });
+		await runAsync(['systemctl', 'try-restart', unit], { allowFailure: true });
 	},
 	ensureHelper(release) {
 		ensureHelper({
@@ -872,10 +1018,16 @@ const host: Host = {
 		});
 	},
 	async isActive(unit) {
-		return unitState(unit) === 'active';
+		return (await unitState(unit)) === 'active';
 	},
 	async restartCount(unit) {
-		return Number(run(['systemctl', 'show', '-p', 'NRestarts', '--value', unit], { quiet: true, allowFailure: true }).stdout) || 0;
+		const out = await runAsync(['systemctl', 'show', '-p', 'NRestarts', '--value', unit], { quiet: true, allowFailure: true });
+		return Number(out.stdout) || 0;
+	},
+	async unitStatus(unit) {
+		const out = await runAsync(['systemctl', 'show', '-p', 'ActiveState', '-p', 'NRestarts', unit], { quiet: true, allowFailure: true });
+		const value = (key: string) => new RegExp(`^${key}=(.*)$`, 'm').exec(out.stdout)?.[1]?.trim();
+		return { active: value('ActiveState') === 'active', restarts: Number(value('NRestarts')) || 0 };
 	},
 	controlPlaneHealthy: async (timeoutMs) => (await pollProbe(() => socketHealthy(SOCKETS.public, probeOptions()), timeoutMs)).ok,
 	publicHealthy(timeoutMs) {
@@ -964,7 +1116,10 @@ const host: Host = {
 	async download(url, path) {
 		const response = await fetch(url, { headers: { 'User-Agent': 'yoal-update-self' }, signal: AbortSignal.timeout(900_000) });
 		if (!response.ok) throw new UpdateError(`GET ${url} answered ${response.status}`);
-		await writeResponseBody(response, path);
+		// The digest is computed as the bytes stream to disk, so verification does not re-read
+		// (or allocate) the whole artifact afterwards.
+		const stats = await writeResponseBody(response, path);
+		return stats;
 	},
 	async extract(archive, dest) {
 		run(['tar', '-xzf', archive, '-C', dest, '--no-same-owner'], { quiet: true });
@@ -1005,20 +1160,20 @@ const host: Host = {
 
 	// ------------------------------------------------------ stage-0 self-update
 	async updaterIdentity(binary) {
-		const result = Bun.spawnSync({ cmd: [binary, '--version'], stdout: 'pipe', stderr: 'pipe', timeout: 20_000 });
-		if (result.exitCode !== 0) return null;
-		const line = new TextDecoder().decode(result.stdout).trim().split('\n')[0] ?? '';
+		const result = await runAsync([binary, '--version'], { quiet: true, allowFailure: true, timeoutMs: 20_000 });
+		if (result.code !== 0) return null;
+		const line = result.stdout.trim().split('\n')[0] ?? '';
 		return /^\d+\.\d+\.\d+\+\S+$/.test(line) ? line : null;
 	},
 	async qualifyUpdater(binary) {
-		const result = Bun.spawnSync({ cmd: [binary, 'self-test', '--json'], stdout: 'pipe', stderr: 'pipe', timeout: 120_000 });
-		const text = new TextDecoder().decode(result.stdout).trim();
+		const result = await runAsync([binary, 'self-test', '--json'], { quiet: true, allowFailure: true, timeoutMs: 120_000 });
+		const text = result.stdout.trim();
 		try {
 			const report = JSON.parse(text.split('\n').pop() ?? '') as { ok?: boolean; failures?: string[] };
-			if (result.exitCode === 0 && report.ok === true) return { ok: true };
-			return { ok: false, reason: (report.failures ?? []).join('; ') || `exit ${result.exitCode}` };
+			if (result.code === 0 && report.ok === true) return { ok: true };
+			return { ok: false, reason: (report.failures ?? []).join('; ') || `exit ${result.code}` };
 		} catch {
-			return { ok: false, reason: `self-test exited ${result.exitCode} without a report` };
+			return { ok: false, reason: `self-test exited ${result.code} without a report` };
 		}
 	},
 	enterCritical() {

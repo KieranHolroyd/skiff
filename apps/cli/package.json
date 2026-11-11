@@ -18,7 +18,7 @@
   },
   "files": ["dist", "README.md", "LICENSE"],
   "scripts": {
-    "build": "rm -rf dist && bun build src/main.ts --target=node --external esbuild --outfile dist/yoal.js",
+    "build": "rm -rf dist && bun build --minify src/main.ts --target=node --external esbuild --outfile dist/yoal.js",
     "check": "tsc -p . --noEmit",
     "test": "bun test",
     "prepack": "bun run build"

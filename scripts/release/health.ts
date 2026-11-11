@@ -37,10 +37,19 @@ function describeError(error: unknown): string {
 
 /**
  * `/api/setup/status` returns the setup JSON (the app booted and can query SQLite) and `/login`
- * renders without a server error (SSR works).
+ * renders without a server error (SSR works). Both requests are sent together: they are
+ * independent, and health polls wait on them several times per update.
  */
 export async function socketHealthy(socket: string, options: ProbeOptions = {}): Promise<Probe> {
 	const headers = headersFor(options.origin);
+	const loginPromise = fetch('http://localhost/login', {
+		unix: socket,
+		headers,
+		redirect: 'manual',
+		signal: AbortSignal.timeout(5_000),
+	});
+	// The status check may decide the verdict first; never leave the login request unhandled.
+	loginPromise.catch(() => undefined);
 	try {
 		const status = await fetch('http://localhost/api/setup/status', {
 			unix: socket,
@@ -49,16 +58,15 @@ export async function socketHealthy(socket: string, options: ProbeOptions = {}):
 		});
 		if (status.status !== 200) {
 			await status.arrayBuffer().catch(() => undefined);
+			void loginPromise.then((login) => login.arrayBuffer()).catch(() => undefined);
 			return { ok: false, reason: `/api/setup/status answered ${status.status}` };
 		}
 		const body = (await status.json()) as { needsSetup?: unknown };
-		if (typeof body.needsSetup !== 'boolean') return { ok: false, reason: '/api/setup/status returned an unexpected body' };
-		const login = await fetch('http://localhost/login', {
-			unix: socket,
-			headers,
-			redirect: 'manual',
-			signal: AbortSignal.timeout(5_000),
-		});
+		if (typeof body.needsSetup !== 'boolean') {
+			void loginPromise.then((login) => login.arrayBuffer()).catch(() => undefined);
+			return { ok: false, reason: '/api/setup/status returned an unexpected body' };
+		}
+		const login = await loginPromise;
 		await login.arrayBuffer();
 		if (login.status >= 500) return { ok: false, reason: `/login answered ${login.status}` };
 		return { ok: true };
@@ -108,21 +116,23 @@ export async function readyzOnce(socket: string, options: ProbeOptions = {}): Pr
 	}
 }
 
-/** Both probes must pass: the setup/login smoke test and `/readyz`. */
+/** Both probes must pass: the setup/login smoke test and `/readyz`. They run side by side. */
 export async function fullyHealthy(socket: string, options: ProbeOptions = {}): Promise<Probe> {
-	const smoke = await socketHealthy(socket, options);
-	if (!smoke.ok) return smoke;
-	return readyzOnce(socket, options);
+	const [smoke, ready] = await Promise.all([socketHealthy(socket, options), readyzOnce(socket, options)]);
+	return smoke.ok ? ready : smoke;
 }
 
 /**
  * Poll `check` until it passes or `timeoutMs` elapses. Resolves with the last probe, so a
  * timeout still says what was wrong. A check that throws stops the poll (e.g. "unit exited").
+ *
+ * Four checks a second: a release that boots in 1.7 s should not wait until 2.0 s to be noticed,
+ * and a probe is a local socket request (plus one `systemctl is-active` in the canary).
  */
 export async function pollProbe(
 	check: () => Promise<Probe>,
 	timeoutMs: number,
-	everyMs = 1_000,
+	everyMs = 250,
 ): Promise<Probe> {
 	const deadline = Date.now() + timeoutMs;
 	let last: Probe = { ok: false, reason: 'not checked yet' };

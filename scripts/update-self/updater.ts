@@ -48,6 +48,8 @@ import {
 	writeSync,
 } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { rm } from 'node:fs/promises';
+import { availableParallelism } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { compareSemver, parseSemver } from '../../packages/contracts/src/semver.ts';
 import {
@@ -183,8 +185,11 @@ export interface Host {
 	listReleases?(repo: string): Promise<PublishedRelease[]>;
 	/** GET a (small) URL into memory. */
 	fetchBytes?(url: string): Promise<Uint8Array>;
-	/** Download `url` to `path`. */
-	download?(url: string, path: string): Promise<void>;
+	/**
+	 * Download `url` to `path`. When the implementation streams, it also returns the byte count
+	 * and sha256 it computed on the way, so staging can verify without a second read.
+	 */
+	download?(url: string, path: string): Promise<{ bytes: number; sha256: string } | void>;
 	/** Extract a .tar.gz into an existing directory. */
 	extract?(archive: string, dest: string): Promise<void>;
 	/** sha256 hex of a file. */
@@ -210,6 +215,8 @@ export interface Host {
 	restart(unit: string): Promise<void>;
 	/** `systemctl try-restart`: restart only if active; never throws (the unit may not exist yet). */
 	tryRestart?(unit: string): Promise<void>;
+	/** Active state and restart count in one call (halves the `systemctl` spawns in the bake loop). */
+	unitStatus?(unit: string): Promise<{ active: boolean; restarts: number }>;
 	/** Install/refresh yoal-helper from `release` (older hosts may lack the unit). */
 	ensureHelper(release: string): void;
 	/**
@@ -342,7 +349,7 @@ export interface UpdateOptions {
 	channel?: SelfUpdateChannel;
 	/** Default true. false: stop the old release before starting the new one (old behaviour). */
 	zeroDowntime?: boolean;
-	/** How long the new release must serve real traffic before it is committed. Default 60s. */
+	/** How long the new release must serve real traffic before it is committed. Default 0 (one probe). */
 	bakeMs?: number;
 }
 
@@ -419,7 +426,14 @@ const DEFAULTS = {
 	minFreeBytes: 2 * 1024 ** 3,
 	healthTimeoutMs: 90_000,
 	stabilizeMs: 10_000,
-	bakeMs: 60_000,
+	/**
+	 * No bake wait by default: the new release is probed once through control.sock and then
+	 * committed. Pass `--bake <seconds>` to watch it serve real traffic for that long first; a
+	 * release that wobbles during the bake is still reverted code-only, but without a bake a
+	 * release that fails a few seconds after the swap is caught by the post-commit checks
+	 * (and fixed by the next release or a rollback).
+	 */
+	bakeMs: 0,
 	bakeEveryMs: 1_000,
 	hookTimeoutMs: 240_000,
 	/** `converge` may download a ClickHouse or workerd pin (hundreds of MB). */
@@ -439,6 +453,10 @@ interface VerifiedRelease {
 export class Updater {
 	private snapshotKeep = 3;
 	private readonly hookCache = new Map<string, Set<string>>();
+	/** One GitHub release listing per repo per run (stable-source resolves it twice). */
+	private readonly releasesCache = new Map<string, Promise<PublishedRelease[]>>();
+	/** The backup target probe is a network round trip; one per run is enough. */
+	private backupFacts: Awaited<ReturnType<NonNullable<Host['backupTarget']>>> | null = null;
 
 	constructor(
 		private readonly layout: Layout,
@@ -523,14 +541,13 @@ export class Updater {
 
 	async update(options: UpdateOptions = {}): Promise<UpdateResult> {
 		this.snapshotKeep = Math.max(1, options.snapshotKeep ?? 3);
+		this.backupFacts = null;
+		this.releasesCache.clear();
 		return this.locked(async () => {
 			await this.recoverInterrupted();
 			const { host, layout } = this;
 			const current = readLink(layout.currentLink);
 			if (!current) throw new UpdateError(`No active release at ${layout.currentLink}. Run the installer first.`);
-			// Heal drift, and finish the host side of a release an older stage-0 committed without
-			// knowing about `converge`. Every update run does it, even one that finds nothing newer.
-			if (!options.dryRun && !(await this.syncHost())) await host.legacyHostSetup?.();
 			const currentMeta = readMeta(current);
 			const repo = options.repo ?? currentMeta.repo ?? DEFAULT_REPO;
 			const ref = options.ref ?? trackedRef(currentMeta) ?? DEFAULT_REF;
@@ -540,7 +557,18 @@ export class Updater {
 			const channel = options.channel ?? DEFAULT_SELF_UPDATE_CHANNEL;
 			host.log(`release channel: ${channel}`);
 			host.phase('checking', `Checking ${repo} for a newer ${channel} release`);
-			const target = await this.resolveTarget(repo, ref, currentMeta, options);
+
+			// Heal drift, and finish the host side of a release an older stage-0 committed without
+			// knowing about `converge`. Every update run does it, even one that finds nothing newer.
+			// It runs two hook processes locally while the GitHub lookup is in flight, so neither
+			// waits for the other.
+			const syncing = options.dryRun ? null : this.syncHost();
+			const resolving = this.resolveTarget(repo, ref, currentMeta, options);
+			// Reported by the `await` below; the guard only stops a sync failure from becoming an
+			// unhandled rejection while the host converges.
+			resolving.catch(() => undefined);
+			if (syncing && !(await syncing)) await host.legacyHostSetup?.();
+			const target = await resolving;
 			const { commit, version, fromVersion, published, builtRef } = target;
 			const v: Versions = { version, fromVersion };
 			host.phase('checking', `Latest is ${version}; running ${fromVersion ?? 'an unversioned release'}`, v);
@@ -646,6 +674,11 @@ export class Updater {
 			// Settings the new release needs before it first boots (the canary reads yoal.env too).
 			await this.prepareHost(release);
 
+			// The public URL is independent of the canary, so measure it while the canary boots:
+			// a slow probe (up to 10s on a host whose edge is down) must not sit on the critical path.
+			const publicCheck = options.publicCheck ?? 'auto';
+			const publicProbe = publicCheck === 'auto' ? host.publicHealthy(10_000).catch(() => false) : null;
+
 			// 2. Boot it in isolation against a copy of the live database, judged by its own hook.
 			if (options.canary !== false) {
 				try {
@@ -667,22 +700,32 @@ export class Updater {
 			}
 
 			// 3. Cut over, bake, commit or revert.
-			const publicCheck = options.publicCheck ?? 'auto';
 			const requirePublic =
-				publicCheck === 'require' || (publicCheck === 'auto' && (await host.publicHealthy(10_000)));
+				publicCheck === 'require' || (publicCheck === 'auto' && Boolean(await publicProbe));
 			if (publicCheck === 'auto')
 				host.log(requirePublic ? 'public URL is healthy; it must stay healthy after the swap' : 'public URL is not reachable now; it will not gate the swap');
 			const zeroDowntime = options.zeroDowntime !== false && Boolean(host.probe && host.pointControlSocket);
 			const result = zeroDowntime
 				? await this.activateZeroDowntime({ current, release, commit, version, requirePublic, options })
 				: await this.activate({ current, release, commit, version, requirePublic, options });
-			if (result.status === 'updated') await this.maybeInstallUpdater(release);
+			if (result.status === 'updated') {
+				// Qualification (spawned processes) overlaps the deletion of the superseded release:
+				// both are after the commit and neither touches the other's files.
+				const installing = this.maybeInstallUpdater(release);
+				try {
+					await this.prune();
+				} catch (error) {
+					host.warn(`could not prune old releases: ${message(error)}`);
+				}
+				await installing;
+			}
 			return { ...result, ...v };
 		});
 	}
 
 	/** Read-only: what would `update` install? Does not take the lock or touch the machine. */
 	async check(options: Pick<UpdateOptions, 'repo' | 'ref' | 'source' | 'channel'> = {}): Promise<CheckResult> {
+		this.releasesCache.clear();
 		const current = readLink(this.layout.currentLink);
 		const currentMeta = current ? readMeta(current) : {};
 		const repo = options.repo ?? currentMeta.repo ?? DEFAULT_REPO;
@@ -743,7 +786,7 @@ export class Updater {
 	/** The newest full (non-pre) `v<semver>` release tag, signed or not; null when none. */
 	private async newestStableTag(repo: string): Promise<string | null> {
 		if (!this.host.listReleases) throw new UpdateError('this host cannot list releases, so it cannot follow the stable channel');
-		const releases = await this.host.listReleases(repo);
+		const releases = await this.releases(repo);
 		const tags = releases
 			.filter((release) => releaseInChannel(release, 'stable') && /^v\d+\.\d+\.\d+$/.test(release.tag))
 			.map((release) => release.tag)
@@ -754,7 +797,7 @@ export class Updater {
 	private async resolvePublished(repo: string, channel: SelfUpdateChannel): Promise<VerifiedRelease | null> {
 		const { host } = this;
 		if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new UpdateError(`Invalid repository "${repo}" (expected owner/name).`);
-		const releases = await host.listReleases!(repo);
+		const releases = await this.releases(repo);
 		const candidates = releases
 			.filter(
 				(release) =>
@@ -768,8 +811,12 @@ export class Updater {
 		if (!top) return null;
 		if (!host.fetchBytes || !host.trustedKeys) throw new UpdateError('this host cannot verify signed releases');
 		const asset = (name: string) => top.assets.find((entry) => entry.name === name)!;
-		const bytes = await host.fetchBytes(asset('manifest.json').url);
-		const signature = new TextDecoder().decode(await host.fetchBytes(asset('manifest.json.sig').url));
+		// The manifest and its signature are two independent small GETs: fetch them together.
+		const [bytes, signatureBytes] = await Promise.all([
+			host.fetchBytes(asset('manifest.json').url),
+			host.fetchBytes(asset('manifest.json.sig').url),
+		]);
+		const signature = new TextDecoder().decode(signatureBytes);
 		let manifest: ReleaseManifest;
 		try {
 			manifest = verifyManifest(bytes, signature, host.trustedKeys());
@@ -789,6 +836,17 @@ export class Updater {
 		const download = top.assets.find((item) => item.name === entry.file);
 		if (!download) throw new UpdateError(`${top.tag} lists ${entry.file} but the release has no such asset`);
 		return { tag: top.tag, manifest, artifact: { ...entry, url: download.url } };
+	}
+
+	/** Published releases for `repo`, listed once per updater run. */
+	private releases(repo: string): Promise<PublishedRelease[]> {
+		const cached = this.releasesCache.get(repo);
+		if (cached) return cached;
+		const pending = this.host.listReleases!(repo);
+		this.releasesCache.set(repo, pending);
+		// A failed listing must not be remembered for the rest of the run.
+		pending.catch(() => this.releasesCache.delete(repo));
+		return pending;
 	}
 
 	private async resolve(repo: string, ref: string, currentMeta: ReleaseMeta): Promise<{ commit: string } & Versions> {
@@ -830,11 +888,11 @@ export class Updater {
 		try {
 			host.phase('building', `Downloading the signed ${input.version} release`);
 			host.log(`downloading ${published.artifact.file} (${(published.artifact.size / 1024 ** 2).toFixed(0)} MiB) from ${published.tag}`);
-			await host.download(published.artifact.url, archive);
-			const size = statSync(archive).size;
+			const streamed = await host.download(published.artifact.url, archive);
+			const size = streamed?.bytes ?? statSync(archive).size;
 			if (size !== published.artifact.size)
 				throw new UpdateError(`${published.artifact.file} is ${size} bytes; the signed manifest says ${published.artifact.size}`);
-			const sha = host.sha256(archive);
+			const sha = streamed?.sha256 ?? host.sha256(archive);
 			if (sha !== published.artifact.sha256)
 				throw new UpdateError(`${published.artifact.file} does not match its signed checksum (got ${sha.slice(0, 16)}…)`);
 			host.log('checksum and signature verified');
@@ -1028,9 +1086,8 @@ export class Updater {
 			// its own before its services restart.
 			await this.convergeHost(release, 'update');
 			await host.start(CONTROL_PLANE);
-			await host.restart(HELPER);
+			await this.restartUpkeep(withAgent, 'follow');
 			host.ensureCaddy?.(release);
-			await this.restartAgent(withAgent, 'follow');
 
 			host.phase('verifying', 'Waiting for the new release to prove it is healthy');
 			const problem = await this.verifyLive({
@@ -1043,7 +1100,6 @@ export class Updater {
 				this.finish(sw);
 				retireUpgradeSnapshotBundles(layout.backupsDir, sw.bundle ?? null);
 				writeMeta(release, { ...readMeta(release), status: 'active', activatedAt: host.now().toISOString() });
-				this.prune();
 				host.log(`updated to ${basename(release)}; ${basename(current)} kept as previous`);
 				return { status: 'updated', commit, release, previous: current };
 			}
@@ -1156,7 +1212,12 @@ export class Updater {
 
 			// 3. Bake: it must keep serving real traffic before anything irreversible happens.
 			const bakeMs = options.bakeMs ?? DEFAULTS.bakeMs;
-			host.phase('verifying', `Watching the new release serve traffic for ${Math.round(bakeMs / 1000)}s before committing`);
+			host.phase(
+				'verifying',
+				bakeMs > 0
+					? `Watching the new release serve traffic for ${Math.round(bakeMs / 1000)}s before committing`
+					: 'Checking the new release through control.sock before committing',
+			);
 			const problem = await this.bake({ bakeMs, requirePublic: input.requirePublic });
 			if (problem) return await fail('bake', problem);
 
@@ -1171,27 +1232,32 @@ export class Updater {
 			await this.restartPrimaryBehindStandby();
 			const primary = await host.probe!('primary', healthTimeout);
 			if (!primary.ok) return await fail('commit', `the primary did not come up on the new release: ${primary.reason}`);
+			// The stability window starts when the primary is proven, so the upkeep below and the
+			// standby drain happen inside it instead of before it.
+			const stabilizeSince = Date.now();
+			const restarts = (await this.sampleUnit(CONTROL_PLANE)).restarts;
 			host.pointControlSocket!('primary');
 			host.log('control.sock -> primary (now on the new release)');
 			// Requests already on the standby finish within its stop timeout (graceful SIGTERM).
-			await host.sleep(2_000);
+			const drain = host.sleep(2_000);
+			await this.restartUpkeep(withAgent, 'follow');
+			host.ensureCaddy?.(release);
+			await drain;
 			await host.stop(STANDBY);
 			rmSync(layout.standbyLink, { force: true });
-			await host.restart(HELPER);
-			host.ensureCaddy?.(release);
-			await this.restartAgent(withAgent, 'follow');
 			const settled = await this.verifyLive({
 				requirePublic: input.requirePublic,
 				withAgent,
 				healthTimeoutMs: options.healthTimeoutMs,
 				stabilizeMs: options.stabilizeMs,
+				stabilizeSince,
+				restartBaseline: restarts,
 			});
 			if (settled) return await fail('commit', settled);
 
 			this.finish(sw);
 			retireUpgradeSnapshotBundles(layout.backupsDir, sw.bundle ?? null);
 			writeMeta(release, { ...readMeta(release), status: 'active', activatedAt: host.now().toISOString() });
-			this.prune();
 			host.log(`updated to ${basename(release)} with ${sw.mode === 'fenced' ? 'a fenced' : 'a zero-downtime'} cutover; ${basename(current)} kept as previous`);
 			return { status: 'updated', commit, release, previous: current };
 		} catch (error) {
@@ -1221,20 +1287,26 @@ export class Updater {
 		await host.start(CONTROL_PLANE);
 	}
 
-	/** The new release serves real traffic through control.sock; any wobble fails the bake. */
+	/** The new release serves real traffic through control.sock; any wobble fails the bake. At the default 0 it is a single probe, not a window. */
 	private async bake(input: { bakeMs: number; requirePublic: boolean }): Promise<string | null> {
 		const { host } = this;
-		const restarts = await host.restartCount(STANDBY);
+		const baseline = await this.sampleUnit(STANDBY);
 		const rounds = Math.max(1, Math.ceil(input.bakeMs / DEFAULTS.bakeEveryMs));
 		for (let round = 0; round < rounds; round++) {
 			await host.sleep(Math.min(DEFAULTS.bakeEveryMs, input.bakeMs));
-			if (!(await host.isActive(STANDBY))) return 'the new release stopped while serving';
-			if ((await host.restartCount(STANDBY)) !== restarts) return 'the new release crashed while serving';
-			const probe = await host.probe!('public', 10_000);
+			const [sample, probe] = await Promise.all([this.sampleUnit(STANDBY), host.probe!('public', 10_000)]);
+			if (!sample.active) return 'the new release stopped while serving';
+			if (sample.restarts !== baseline.restarts) return 'the new release crashed while serving';
 			if (!probe.ok) return `the new release stopped answering: ${probe.reason}`;
 		}
 		if (input.requirePublic && !(await host.publicHealthy(60_000))) return 'public platform URL stopped answering';
 		return null;
+	}
+
+	/** One `systemctl show` where the host supports it, two probes otherwise. */
+	private async sampleUnit(unit: string): Promise<{ active: boolean; restarts: number }> {
+		if (this.host.unitStatus) return this.host.unitStatus(unit);
+		return { active: await this.host.isActive(unit), restarts: await this.host.restartCount(unit) };
 	}
 
 	/**
@@ -1450,9 +1522,8 @@ export class Updater {
 				host.log(`${layout.currentLink} -> ${previous}`);
 				await this.convergeHost(previous, 'rollback');
 				await host.start(CONTROL_PLANE);
-				await host.restart(HELPER);
+				await this.restartUpkeep(withAgent, 'stop');
 				host.ensureCaddy?.(previous);
-				await this.restartAgent(withAgent, 'stop');
 				const problem = await this.verifyLive({
 					requirePublic: false,
 					withAgent,
@@ -1515,20 +1586,41 @@ export class Updater {
 		withAgent: boolean;
 		healthTimeoutMs?: number;
 		stabilizeMs?: number;
+		/**
+		 * Epoch ms when the release became the serving primary. The stability window is measured
+		 * from here, so time spent on commit upkeep counts towards it instead of adding to it.
+		 */
+		stabilizeSince?: number;
+		/** Restart count sampled when the release became the primary. */
+		restartBaseline?: number;
 	}): Promise<string | null> {
 		const { host } = this;
 		const timeout = input.healthTimeoutMs ?? DEFAULTS.healthTimeoutMs;
-		if (!(await host.controlPlaneHealthy(timeout))) return 'control plane did not answer health checks';
-		const ready = host.readyz ? await host.readyz(15_000) : true;
+		// The smoke probe and /readyz are independent socket requests: ask both at once.
+		const [healthy, ready] = await Promise.all([
+			host.controlPlaneHealthy(timeout),
+			host.readyz ? host.readyz(15_000) : Promise.resolve(true),
+		]);
+		if (!healthy) return 'control plane did not answer health checks';
 		if (!ready) return '/readyz did not become ready';
-		const restarts = await host.restartCount(CONTROL_PLANE);
-		await host.sleep(input.stabilizeMs ?? DEFAULTS.stabilizeMs);
-		if (!(await host.isActive(CONTROL_PLANE)) || (await host.restartCount(CONTROL_PLANE)) !== restarts)
-			return 'control plane crashed after becoming healthy';
-		if (!(await host.controlPlaneHealthy(5_000))) return 'control plane stopped answering health checks';
-		if (host.readyz && !(await host.readyz(5_000))) return '/readyz stopped being ready';
-		if (input.requirePublic && !(await host.publicHealthy(60_000))) return 'public platform URL stopped answering';
-		if (input.withAgent && host.agentEnrolled() && !(await host.isActive(AGENT))) return 'agent is not running';
+		const restarts = input.restartBaseline ?? (await this.sampleUnit(CONTROL_PLANE)).restarts;
+		const window = input.stabilizeMs ?? DEFAULTS.stabilizeMs;
+		const remaining = input.stabilizeSince ? Math.max(0, window - (Date.now() - input.stabilizeSince)) : window;
+		if (remaining > 0) await host.sleep(remaining);
+		const [sample, alive, readyAgain] = await Promise.all([
+			this.sampleUnit(CONTROL_PLANE),
+			host.controlPlaneHealthy(5_000),
+			host.readyz ? host.readyz(5_000) : Promise.resolve(true),
+		]);
+		if (!sample.active || sample.restarts !== restarts) return 'control plane crashed after becoming healthy';
+		if (!alive) return 'control plane stopped answering health checks';
+		if (!readyAgain) return '/readyz stopped being ready';
+		const [publicOk, agentOk] = await Promise.all([
+			input.requirePublic ? host.publicHealthy(60_000) : true,
+			input.withAgent && host.agentEnrolled() ? host.isActive(AGENT) : true,
+		]);
+		if (!publicOk) return 'public platform URL stopped answering';
+		if (!agentOk) return 'agent is not running';
 		return null;
 	}
 
@@ -1544,6 +1636,16 @@ export class Updater {
 		await host.restart(AGENT);
 		if (studio === 'follow') await host.tryRestart?.(STUDIO);
 		else await host.stop(STUDIO).catch(() => undefined);
+	}
+
+	/**
+	 * Restart the helper and the agent together: the units are independent, so there is no reason
+	 * to serialize two `systemctl` calls. The studio follows the agent (or stops after a rollback).
+	 */
+	private async restartUpkeep(withAgent: boolean, studio: 'follow' | 'stop'): Promise<void> {
+		const results = await Promise.allSettled([this.host.restart(HELPER), this.restartAgent(withAgent, studio)]);
+		const failed = results.find((result) => result.status === 'rejected');
+		if (failed) throw (failed as PromiseRejectedResult).reason;
 	}
 
 	/** Undo a switch: database as `from` left it, links as they were, `from` running. */
@@ -1601,7 +1703,7 @@ export class Updater {
 						host.log(`${basename(sw.to)} is healthy on the primary; keeping it`);
 						this.finish(sw);
 						retireUpgradeSnapshotBundles(layout.backupsDir, sw.bundle ?? null);
-						this.prune();
+						await this.prune();
 						writeMeta(sw.to, { ...readMeta(sw.to), status: 'active', activatedAt: host.now().toISOString() });
 						return;
 					}
@@ -1625,7 +1727,7 @@ export class Updater {
 					host.log(`${basename(sw.to)} is healthy; keeping it`);
 					this.finish(sw);
 					retireUpgradeSnapshotBundles(layout.backupsDir, sw.bundle ?? null);
-					this.prune();
+					await this.prune();
 					if (sw.kind === 'update') writeMeta(sw.to, { ...readMeta(sw.to), status: 'active', activatedAt: host.now().toISOString() });
 					return;
 				}
@@ -1660,6 +1762,7 @@ export class Updater {
 	 * list; the update itself re-runs this against the exact staged release before the canary.
 	 */
 	async plan(options: Pick<UpdateOptions, 'repo' | 'ref' | 'source' | 'channel'> = {}): Promise<{ check: CheckResult; preflight: UpgradePreflight }> {
+		this.backupFacts = null;
 		const check = await this.check(options);
 		const current = readLink(this.layout.currentLink);
 		const preflight = await this.preflight({
@@ -1682,7 +1785,7 @@ export class Updater {
 		const migrations = input.release
 			? readMigrationsFromDir(join(input.release, 'repo', 'packages', 'db', 'migrations'))
 			: [];
-		const backup = host.backupTarget ? await host.backupTarget() : null;
+		const backup = await this.backupProbe();
 		const disk = diskFacts(layout.backupsDir);
 		return evaluateUpgradePreflight({
 			currentVersion: (readLink(layout.currentLink) && readMeta(readLink(layout.currentLink)!).version) || '0.0.0',
@@ -1714,6 +1817,22 @@ export class Updater {
 			allowDowngrade: input.allowDowngrade,
 			now: host.now().getTime()
 		});
+	}
+
+	/**
+	 * The backup target is probed (a network round trip for R2) once per run: the preflight runs
+	 * before staging and again against the staged release, and both only need to know it is up.
+	 */
+	private async backupProbe(): Promise<Awaited<ReturnType<NonNullable<Host['backupTarget']>>> | null> {
+		if (!this.host.backupTarget) return null;
+		if (!this.backupFacts) {
+			try {
+				this.backupFacts = await this.host.backupTarget();
+			} catch (error) {
+				this.backupFacts = { ok: false, kind: 'unknown', error: message(error) };
+			}
+		}
+		return this.backupFacts;
 	}
 
 	private takeSnapshotBundle(
@@ -1811,7 +1930,7 @@ export class Updater {
 	}
 
 	/** Keep exactly `current` and `previous`; remove other releases and superseded snapshots. */
-	private prune(): void {
+	private async prune(): Promise<void> {
 		const { host, layout } = this;
 		const keep = new Set([readLink(layout.currentLink), readLink(layout.previousLink)].filter(Boolean));
 		for (const entry of readdirSync(layout.releasesDir)) {
@@ -1823,7 +1942,7 @@ export class Updater {
 				real = path;
 			}
 			if (keep.has(real)) continue;
-			rmSync(path, { recursive: true, force: true });
+			await removeTree(path);
 			host.log(`pruned release ${entry}`);
 		}
 		this.pruneSnapshots();
@@ -1900,6 +2019,33 @@ export function readLink(link: string): string | null {
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * Delete a tree with its top-level children in parallel. A release holds tens of thousands of
+ * files (node_modules); one recursive walk is visibly slower than a few concurrent ones.
+ */
+async function removeTree(path: string): Promise<void> {
+	let entries: string[];
+	try {
+		entries = readdirSync(path);
+	} catch {
+		// A stray file, or already gone: one `rm` handles both.
+		await rm(path, { recursive: true, force: true });
+		return;
+	}
+	let next = 0;
+	const workers = Array.from(
+		{ length: Math.min(entries.length, Math.max(2, availableParallelism())) },
+		async () => {
+			while (next < entries.length) {
+				const child = join(path, entries[next++]!);
+				await rm(child, { recursive: true, force: true });
+			}
+		},
+	);
+	await Promise.all(workers);
+	await rm(path, { recursive: true, force: true });
 }
 
 /** Atomically point `link` at `target` (rename over the old link). */
