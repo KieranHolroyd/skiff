@@ -984,7 +984,9 @@ function ensureUsersAndDirs(): void {
 	ensureDir(join(OPT_DIR, 'releases'), '0755', 'root:root');
 	ensureDir(ETC_DIR, '0750', 'root:yoal');
 	ensureDir(VAR_DIR, '0751', 'yoal:yoal');
-	for (const sub of ['data', 'data/objects', 'agent', 'backups']) ensureDir(join(VAR_DIR, sub), '0750', 'yoal:yoal');
+	for (const sub of ['data', 'data/objects', 'backups']) ensureDir(join(VAR_DIR, sub), '0750', 'yoal:yoal');
+	// Traverse-only for others: process apps run as a DynamicUser inside agent/releases/<sha>.
+	ensureDir(join(VAR_DIR, 'agent'), '0751', 'yoal:yoal');
 	// Dashboard-requested updates: the control plane drops a request in a directory it owns; the
 	// root updater reports progress from a directory the control plane can read but not write.
 	ensureDir(dirname(SELF_UPDATE_DEFAULTS.requestFile), '0750', 'yoal:yoal');

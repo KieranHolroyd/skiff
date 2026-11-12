@@ -389,6 +389,11 @@ export class ReleaseManager {
 		// UMask=0007 on the agent service otherwise makes these 0750; Caddy and DynamicUser
 		// workloads both need to traverse them.
 		await fs.chmod(this.releasesDir, 0o755).catch(() => undefined);
+		// A process app's unit runs as a DynamicUser with its release as WorkingDirectory, so the
+		// data dir itself must be traversable (o+x). Not listable: everything else in it is 0600
+		// or a closed directory. The installer created it 0750, which failed every start with
+		// "Changing to the requested working directory failed: Permission denied".
+		await traversable(this.dataDir);
 
 		for (const name of await fs.readdir(this.tmpDir)) {
 			await fs.rm(join(this.tmpDir, name), { recursive: true, force: true }).catch(() => undefined);
@@ -557,4 +562,14 @@ async function directorySize(path: string): Promise<number> {
 		else if (entry.isFile()) total += (await fs.stat(full)).size;
 	}
 	return total;
+}
+
+/** Add search permission for others (o+x) without touching the rest of the mode. */
+async function traversable(dir: string): Promise<void> {
+	try {
+		const { mode } = await fs.stat(dir);
+		if ((mode & 0o001) === 0) await fs.chmod(dir, (mode & 0o7777) | 0o001);
+	} catch {
+		// Not ours to change (a test dir, or a parent another service owns): leave it.
+	}
 }

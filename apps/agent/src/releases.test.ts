@@ -245,6 +245,14 @@ describe('ReleaseManager', () => {
 		};
 	}
 
+	test('init makes the data dir traversable for DynamicUser workloads, not listable', async () => {
+		const dir = await tempDir();
+		await fs.chmod(dir, 0o750);
+		await new ReleaseManager(dir).init();
+		expect((await fs.stat(dir)).mode & 0o777).toBe(0o751);
+		expect((await fs.stat(join(dir, 'releases'))).mode & 0o777).toBe(0o755);
+	});
+
 	test('gc keeps production symlinks and every local release, and drops the rest', async () => {
 		const dir = await tempDir();
 		const manager = new ReleaseManager(dir);
