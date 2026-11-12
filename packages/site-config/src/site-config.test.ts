@@ -106,12 +106,12 @@ describe('compileSiteRoute', () => {
 	test('multi-node replicas list every upstream in one reverse_proxy', () => {
 		const route = compileSiteRoute({
 			...base,
-			upstreams: ['10.88.1.2:8080', '10.88.1.3:8080'],
+			upstreams: ['10.47.1.2:8080', '10.47.1.3:8080'],
 			healthPath: '/health',
 		});
 		const json = JSON.stringify(route);
-		expect(json).toContain('"dial":"10.88.1.2:8080"');
-		expect(json).toContain('"dial":"10.88.1.3:8080"');
+		expect(json).toContain('"dial":"10.47.1.2:8080"');
+		expect(json).toContain('"dial":"10.47.1.3:8080"');
 		// Caddy's JSON field names; the Caddyfile spellings (`lb_policy`, `health_uri`) are refused
 		// as unknown fields and fail the whole config load.
 		expect(json).toContain('"load_balancing":{"selection_policy":{"policy":"least_conn"}}');
@@ -123,7 +123,7 @@ describe('compileSiteRoute', () => {
 	test('the active health-check interval follows replicas.healthIntervalSeconds', () => {
 		const route = (healthIntervalSeconds?: number) =>
 			JSON.stringify(
-				compileSiteRoute({ ...base, upstreams: ['10.88.1.2:8080', '10.88.1.3:8080'], healthPath: '/health', healthIntervalSeconds }),
+				compileSiteRoute({ ...base, upstreams: ['10.47.1.2:8080', '10.47.1.3:8080'], healthPath: '/health', healthIntervalSeconds }),
 			);
 		expect(route(15)).toContain('"active":{"uri":"/health","interval":"15s"}');
 		// Out of range (or absent, from an older control plane) is Caddy's documented 5 s.

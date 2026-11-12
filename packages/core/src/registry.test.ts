@@ -136,8 +136,8 @@ describe('registry settings', () => {
 		expect(core.registry.routesForNode(workerId, false, () => null)).toEqual([
 			{ storageId: desired!.id, host: HOST, upstream: '127.0.0.1:15000' },
 		]);
-		expect(core.registry.routesForNode(edgeId, true, (id) => (id === workerId ? '10.88.0.2:80' : null))).toEqual([
-			{ storageId: desired!.id, host: HOST, upstream: 'http://10.88.0.2:80' },
+		expect(core.registry.routesForNode(edgeId, true, (id) => (id === workerId ? '10.47.0.2:80' : null))).toEqual([
+			{ storageId: desired!.id, host: HOST, upstream: 'http://10.47.0.2:80' },
 		]);
 		const activation = core.workloads.activation(workerId, desired!.id);
 		expect(activation.activationVersion).toBe(desired!.activationVersion);

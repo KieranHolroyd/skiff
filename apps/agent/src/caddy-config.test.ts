@@ -396,7 +396,7 @@ describe('per-deployment roots, worker routes and logging', () => {
 		const value = state();
 		value.routes[0] = {
 			...value.routes[0]!,
-			upstreams: ['http://10.88.1.2:8080', 'http://10.88.1.3:8080'],
+			upstreams: ['http://10.47.1.2:8080', 'http://10.47.1.3:8080'],
 			healthPath: '/healthz',
 			healthIntervalSeconds: 12,
 		};

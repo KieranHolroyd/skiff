@@ -30,7 +30,7 @@ export interface OverlayNode {
 	lanEndpoint: string | null;
 }
 
-/** `10.88.1.1` and up by default: the first /24 of a /22 is reserved for gateways. */
+/** `10.47.1.1` and up by default: the first /24 of a /22 is reserved for gateways. */
 export function allocateOverlayAddress(cidr: string, used: ReadonlySet<string>): string | null {
 	const parsed = parseCidr(cidr);
 	if (!parsed) return null;

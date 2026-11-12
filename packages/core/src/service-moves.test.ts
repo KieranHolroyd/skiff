@@ -44,8 +44,8 @@ afterAll(() => {
 const join_ = (name: string, publicAddress?: string) =>
 	core.nodes.join({ token: core.nodes.createJoinToken(owner, name).token, name, ...(publicAddress ? { publicAddress } : {}) });
 const edge = join_('edge');
-const alpha = join_('alpha', '10.88.0.2:8080');
-const beta = join_('beta', '10.88.0.3:8080');
+const alpha = join_('alpha', '10.47.0.2:8080');
+const beta = join_('beta', '10.47.0.3:8080');
 
 function beat(node: { nodeId: string; token: string }, extra: Partial<Heartbeat> = {}): void {
 	core.nodes.heartbeat(node.token, {

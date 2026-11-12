@@ -6,7 +6,7 @@ const db = {
 	serviceId: 'db_1',
 	upstreamNodeId: 'nod_b',
 	upstreamPort: 15432,
-	address: '10.88.1.2',
+	address: '10.47.1.2',
 };
 
 describe('service endpoint planning', () => {
@@ -16,14 +16,14 @@ describe('service endpoint planning', () => {
 			expect.objectContaining({
 				id: 'sep_nod_a_database_db_1',
 				localPort: 21_000,
-				upstream: { nodeId: 'nod_b', address: '10.88.1.2', port: 15_432 },
+				upstream: { nodeId: 'nod_b', address: '10.47.1.2', port: 15_432 },
 			}),
 		]);
 	});
 
 	test('reuses the port when the provider moves', () => {
 		const first = planServiceEndpoints('nod_a', [db], []);
-		const moved = planServiceEndpoints('nod_a', [{ ...db, upstreamNodeId: 'nod_c', address: '10.88.1.3' }], [
+		const moved = planServiceEndpoints('nod_a', [{ ...db, upstreamNodeId: 'nod_c', address: '10.47.1.3' }], [
 			{ kind: 'database', serviceId: 'db_1', localPort: first.endpoints[0]!.localPort },
 		]);
 		expect(moved.endpoints[0]).toMatchObject({ localPort: 21_000, upstream: { nodeId: 'nod_c' } });

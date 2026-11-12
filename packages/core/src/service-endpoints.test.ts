@@ -78,7 +78,7 @@ describe('cross-node database endpoint', () => {
 		const storageEnv = core.storage.consumerEnv(project.id, edge.nodeId, 'process');
 		expect(storageEnv.S3_ENDPOINT_URL).toBe('http://127.0.0.1:21001');
 
-		opened.sqlite.run(`UPDATE nodes SET private_address = '10.88.1.2' WHERE id = ?`, [worker.nodeId]);
+		opened.sqlite.run(`UPDATE nodes SET private_address = '10.47.1.2' WHERE id = ?`, [worker.nodeId]);
 		const workerState = await core.nodes.desiredState(worker.token);
 		expect(workerState.serviceProviders).toEqual(
 			expect.arrayContaining([
@@ -138,7 +138,7 @@ describe('endpoint reconcile across projects (pre-existing bug)', () => {
 		const provider = core.nodes.join({ token: core.nodes.createJoinToken(principal, 'p2').token, name: 'p2' });
 		const a = core.nodes.join({ token: core.nodes.createJoinToken(principal, 'c-a').token, name: 'c-a' });
 		const b = core.nodes.join({ token: core.nodes.createJoinToken(principal, 'c-b').token, name: 'c-b' });
-		opened.sqlite.run(`UPDATE nodes SET private_address = '10.88.1.9' WHERE id = ?`, [provider.nodeId]);
+		opened.sqlite.run(`UPDATE nodes SET private_address = '10.47.1.9' WHERE id = ?`, [provider.nodeId]);
 		const fingerprint = (char: string) => char.repeat(64);
 		for (const [node, char] of [[a, 'a'], [b, 'b']] as const)
 			core.nodes.heartbeat(node.token, {

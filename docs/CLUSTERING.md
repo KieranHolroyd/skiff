@@ -457,8 +457,10 @@ every remote `/32` sits under exactly one entry.
 3. Cryptokey routing drops any source outside a peer's `allowedIps`, which is what makes the §4.3
    allowlist enforceable.
 
-**Addresses.** `10.88.0.0/22` per install by default, in `nodes.private_cidr`; `10.88.0.0/24` is
-reserved for gateways, leaving 768 node `/32`s taken from `10.88.1.0` in join order. A join is
+**Addresses.** `10.47.0.0/22` per install by default, in `nodes.private_cidr`; `10.47.0.0/24` is
+reserved for gateways, leaving 768 node `/32`s taken from `10.47.1.0` in join order. The range sits
+below Podman's: its default network is `10.88.0.0/16`, and it allocates new networks (one per org
+here) upward from `10.89.0.0/24`, so `10.88.x` collided with containers. A join is
 refused if the CIDR overlaps `ip route` or `100.64.0.0/10` (CGNAT, Tailscale). C1 adds
 `nodes.private_address`, `private_cidr`, `wg_public_key` and `network_mode`, superseding plan 10's
 `10.88.0.0/16` and plan 23's random `/24` and `nodes.wg_address`: one field name, one CIDR.
@@ -544,9 +546,9 @@ allocator hands it out.
 
 ```jsonc
 // consumer: loopback + workload gateway -> the provider's overlay port
-{"apps":{"layer4":{"servers":{"ep-db_01":{"listen":["127.0.0.1:21432","10.89.0.1:21432"],"routes":[{"handle":[{"handler":"proxy","upstreams":[{"dial":["10.88.1.5:15432"]}]}]}]}}}}}}
+{"apps":{"layer4":{"servers":{"ep-db_01":{"listen":["127.0.0.1:21432","10.89.0.1:21432"],"routes":[{"handle":[{"handler":"proxy","upstreams":[{"dial":["10.47.1.5:15432"]}]}]}]}}}}}}
 // provider: overlay listener, client cert from the install CA -> the service loopback
-{"apps":{"layer4":{"servers":{"svc-15432":{"listen":["10.88.1.5:15432"],"tls":{"connection_policies":[{"client_authentication":{"mode":"require_and_verify","trusted_ca_certs":["<install CA PEM>"]}}]},"routes":[{"handle":[{"handler":"proxy","upstreams":[{"dial":["127.0.0.1:15432"]}]}]}]}}}}}}
+{"apps":{"layer4":{"servers":{"svc-15432":{"listen":["10.47.1.5:15432"],"tls":{"connection_policies":[{"client_authentication":{"mode":"require_and_verify","trusted_ca_certs":["<install CA PEM>"]}}]},"routes":[{"handle":[{"handler":"proxy","upstreams":[{"dial":["127.0.0.1:15432"]}]}]}]}}}}}}
 ```
 
 **mTLS and authorisation.** One per-install CA issues each node a leaf at join (CN = node id, URI
@@ -751,7 +753,7 @@ caveat shown. It is C9 and unbuilt: nothing exports NFS, and nothing installs `n
   needs only TCP 2049, so there is no rpcbind or portmapper; the nftables verb accepts 2049 on the
   overlay interface from the same `/32` set and drops it elsewhere, and both lists render from one
   desired-state object, so drift is an alert.
-- **Client mount shape.** The §5.2 unit with `10.88.0.5:/yoal/shares/<shareId>` as the source;
+- **Client mount shape.** The §5.2 unit with `10.47.0.5:/yoal/shares/<shareId>` as the source;
   `hard` by default, and a read-write mount over a home uplink warns.
 - **Performance.** Every write is a synchronous round trip, so commit latency is the WAN RTT plus
   the array's write latency: 10–30 ms over the home uplink, worse on a parity array, with metadata
@@ -2272,7 +2274,7 @@ in `/etc/yoal/yoal.env` via `yoal-platform-config` (verified). This is the canon
 `ha.placementGraceSeconds` (`120`), `ha.dbFailoverGraceSeconds` (`30`), `ha.syncTimeoutSeconds`
 (`30`), `ha.promoteHoldSeconds` (`40`), `ha.drillSchedule` (`0 4 1 * *`), `ha.minAgentVersion` (the
 C6 release), `ha.epochFloorVersion` (the first release that served this install an epoch above zero)
-and `overlay.cidr` (`10.88.0.0/22`); JSON scalars validated in `@yoal/contracts`, missing = default,
+and `overlay.cidr` (`10.47.0.0/22`); JSON scalars validated in `@yoal/contracts`, missing = default,
 audited as `ha.setting`. `ha.mode` is per install; `control_nodes.role` is per node.
 
 ### 13.3 Workloads, placement and replicas

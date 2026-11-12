@@ -195,7 +195,7 @@ These are the keys that code reads today:
 
 | Key | Default | Effect |
 |---|---|---|
-| `overlay.cidr` | `10.88.0.0/22` | Address range for the managed WireGuard network between nodes |
+| `overlay.cidr` | `10.47.0.0/22` | Address range for the managed WireGuard network between nodes |
 | `overlay.mtu` | `1420` | MTU of the WireGuard interface |
 | `overlay.listenPort` | `51820` | UDP port WireGuard listens on |
 | `endpoints.portMin`, `endpoints.portMax` | `21000`, `21999` | Local port range for cross-node service endpoints; `portMin` must be below `portMax` |

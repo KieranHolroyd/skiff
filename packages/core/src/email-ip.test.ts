@@ -100,7 +100,7 @@ const aRecord = () => core.email.platformRecords().find((record) => record.type 
 describe('mail node IPv4', () => {
 	test('public IPv4 test', () => {
 		expect(isPublicIpv4('163.172.72.185')).toBe(true);
-		for (const ip of ['10.88.0.2', '192.168.0.9', '172.20.1.1', '100.100.1.1', '127.0.0.1', '169.254.1.1', '256.1.1.1', '1.2.3'])
+		for (const ip of ['10.47.0.2', '192.168.0.9', '172.20.1.1', '100.100.1.1', '127.0.0.1', '169.254.1.1', '256.1.1.1', '1.2.3'])
 			expect(isPublicIpv4(ip)).toBe(false);
 	});
 
@@ -113,7 +113,7 @@ describe('mail node IPv4', () => {
 
 	test('an entered IP wins and is kept when only the pause changes', async () => {
 		const edge = core.email.settings().nodeId!;
-		await expect(core.email.configure(admin, { nodeId: edge, ip: '10.88.0.1' })).rejects.toThrow(/not a public IPv4/);
+		await expect(core.email.configure(admin, { nodeId: edge, ip: '10.47.0.1' })).rejects.toThrow(/not a public IPv4/);
 		await core.email.configure(admin, { nodeId: edge, ip: '198.51.100.20' });
 		await core.email.configure(admin, { paused: true });
 		expect(core.email.settings()).toMatchObject({ ip: '198.51.100.20', paused: true });
@@ -124,7 +124,7 @@ describe('mail node IPv4', () => {
 	test('a worker uses a public address it was given, and needs one entered otherwise', async () => {
 		const routed = joinMailNode('routed', '198.51.100.30:8080');
 		expect((await core.email.configure(admin, { nodeId: routed })).ip).toBe('198.51.100.30');
-		const tunnelled = joinMailNode('tunnelled', '10.88.0.3:8080');
+		const tunnelled = joinMailNode('tunnelled', '10.47.0.3:8080');
 		await expect(core.email.configure(admin, { nodeId: tunnelled })).rejects.toThrow(/Couldn't find a public IPv4/);
 		expect(core.email.settings().nodeId).toBe(routed);
 	});

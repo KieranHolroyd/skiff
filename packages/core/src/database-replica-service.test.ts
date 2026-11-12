@@ -42,9 +42,9 @@ const joinNode = (name: string, address: string | null): JoinedNode => {
 	return node;
 };
 const edge = joinNode('edge', null);
-const primary = joinNode('primary', '10.88.1.2');
-const second = joinNode('second', '10.88.1.3');
-const third = joinNode('third', '10.88.1.4');
+const primary = joinNode('primary', '10.47.1.2');
+const second = joinNode('second', '10.47.1.3');
+const third = joinNode('third', '10.47.1.4');
 const hostPortOf = (name: string) => Number(core.databases.get(owner, name).internalHost.process.split(':')[1]);
 const fingerprint = (node: JoinedNode) => node.nodeId.replace(/[^a-f0-9]/g, '').padEnd(64, 'a').slice(0, 64);
 
@@ -99,7 +99,7 @@ describe('adding replicas', () => {
 		core.databases.create(owner, { name: 'cache', engine: 'valkey', placement: primary.nodeId });
 		expect(() => core.databaseReplicas.add(owner, 'cache', { node: second.nodeId })).toThrow(/only Postgres/);
 		expect(() => core.databaseReplicas.add(owner, 'refusals', { node: edge.nodeId })).toThrow(/overlay/);
-		const old = joinNode('old-agent', '10.88.1.9');
+		const old = joinNode('old-agent', '10.47.1.9');
 		beat(old, { capabilities: nodeCapabilities.filter((item) => item !== DATABASE_REPLICAS_CAPABILITY) });
 		expect(() => core.databaseReplicas.add(owner, 'refusals', { node: old.nodeId })).toThrow(/too old/);
 	});
@@ -122,7 +122,7 @@ describe('adding replicas', () => {
 			{
 				workloadId: replica.workloadId,
 				databaseId: db.id,
-				upstream: { kind: 'remote', nodeId: primary.nodeId, address: '10.88.1.2', port: db.hostPort, tlsFingerprint: fingerprint(primary) },
+				upstream: { kind: 'remote', nodeId: primary.nodeId, address: '10.47.1.2', port: db.hostPort, tlsFingerprint: fingerprint(primary) },
 			},
 		]);
 		const activation = core.workloads.activation(second.nodeId, replica.workloadId);
@@ -137,7 +137,7 @@ describe('adding replicas', () => {
 			{ databaseId: db.id, version: expect.any(String), slots: [replica.slot!] },
 		]);
 		const provider = primaryState.serviceProviders.find((item) => item.listenPort === db.hostPort)!;
-		expect(provider).toMatchObject({ listenAddress: '10.88.1.2', targetPort: db.hostPort, allowedClientFingerprints: [fingerprint(second)] });
+		expect(provider).toMatchObject({ listenAddress: '10.47.1.2', targetPort: db.hostPort, allowedClientFingerprints: [fingerprint(second)] });
 		const secret = core.databaseReplicas.replicationActivation(primary.nodeId, db.id);
 		expect(secret.password).toBe(activation.env.PGPASSWORD!);
 		expect(() => core.databaseReplicas.replicationActivation(second.nodeId, db.id)).toThrow(/another node/);

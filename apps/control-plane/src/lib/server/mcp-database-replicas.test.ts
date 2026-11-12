@@ -67,8 +67,8 @@ describe('database replica tools', () => {
 				capabilities: [...nodeCapabilities]
 			});
 		}
-		opened.sqlite.run(`UPDATE nodes SET private_address = '10.88.1.2' WHERE id = ?`, [edge.nodeId]);
-		opened.sqlite.run(`UPDATE nodes SET private_address = '10.88.1.3' WHERE id = ?`, [worker.nodeId]);
+		opened.sqlite.run(`UPDATE nodes SET private_address = '10.47.1.2' WHERE id = ?`, [edge.nodeId]);
+		opened.sqlite.run(`UPDATE nodes SET private_address = '10.47.1.3' WHERE id = ?`, [worker.nodeId]);
 		realCore.databases.create(owner, { name: 'main-db', placement: edge.nodeId });
 	});
 

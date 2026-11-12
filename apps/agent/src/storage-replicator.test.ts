@@ -150,7 +150,7 @@ const link = (overrides: Partial<StorageReplicationDesired> = {}): StorageReplic
 	id: 'srp_1',
 	direction: 'push',
 	peerId: 'st_peer',
-	endpoint: 'http://10.88.1.3:8080',
+	endpoint: 'http://10.47.1.3:8080',
 	host: 's3-peer.storage.internal',
 	accessKeyId: 'SKFLINKKEY',
 	buckets: ['media'],
@@ -220,7 +220,7 @@ describe('storage replicator', () => {
 		expect(ctx.peer.calls).not.toContain('put:b.txt');
 		// The peer is reached through its gateway, signed for its internal host, with the link key.
 		expect(ctx.built).toContainEqual({
-			endpoint: 'http://10.88.1.3:8080',
+			endpoint: 'http://10.47.1.3:8080',
 			host: 's3-peer.storage.internal',
 			accessKeyId: 'SKFLINKKEY',
 			secretAccessKey: 'link-secret',
@@ -425,7 +425,7 @@ describe('S3ReplicaStore', () => {
 	test('signs for the internal host and sends it as Host to the gateway', async () => {
 		const seen: Array<{ url: string; host: string | null; auth: string | null; sha: string | null }> = [];
 		const store = new S3ReplicaStore({
-			endpoint: 'http://10.88.1.3:8080',
+			endpoint: 'http://10.47.1.3:8080',
 			host: 's3-peer.storage.internal',
 			accessKeyId: 'SKFLINKKEY',
 			secretAccessKey: 'link-secret',
@@ -443,7 +443,7 @@ describe('S3ReplicaStore', () => {
 			objects: [{ key: 'a & b.txt', size: 3, etag: 'abc', lastModified: Date.parse('2026-11-07T10:00:00.000Z') }],
 			next: 'tok',
 		});
-		expect(seen[0]!.url).toStartWith('http://10.88.1.3:8080/media?');
+		expect(seen[0]!.url).toStartWith('http://10.47.1.3:8080/media?');
 		expect(seen[0]!.url).toContain('start-after=k0');
 		expect(seen[0]!.host).toBe('s3-peer.storage.internal');
 		expect(seen[0]!.auth).toContain('Credential=SKFLINKKEY/');

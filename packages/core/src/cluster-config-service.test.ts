@@ -34,7 +34,7 @@ afterAll(() => {
 describe('cluster configuration', () => {
 	test('defaults are the documented values', () => {
 		expect(core.cluster.get()).toMatchObject({
-			overlay: { cidr: '10.88.0.0/22', listenPort: 51820 },
+			overlay: { cidr: '10.47.0.0/22', listenPort: 51820 },
 			endpoints: { portMin: 21000, portMax: 21999, requireMtls: true },
 			replicas: { max: 20, spread: 'node' },
 			database: { maxReplicas: 2, defaultMode: 'async' },

@@ -74,7 +74,7 @@ describe('ReplicaLinkForwarder', () => {
 		const remote = {
 			workloadId: REPLICA,
 			databaseId: PRIMARY,
-			upstream: { kind: 'remote' as const, nodeId: 'nod_b', address: '10.88.1.2', port: 15432, tlsFingerprint: 'a'.repeat(64) },
+			upstream: { kind: 'remote' as const, nodeId: 'nod_b', address: '10.47.1.2', port: 15432, tlsFingerprint: 'a'.repeat(64) },
 		};
 		expect(await links.converge([remote])).toEqual({ started: 1, stopped: 1 });
 		// The directory survived the restart; only the socket inside it was recreated.

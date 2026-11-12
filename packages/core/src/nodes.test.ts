@@ -272,7 +272,7 @@ describe('changing the edge node', () => {
 		const candidate = joinNode('candidate');
 		beat(candidate);
 		expect(() => core.nodes.setEdge(admin, candidate.nodeId)).toThrow(/no address the new edge could proxy to/);
-		core.nodes.update(admin, edge.id, { publicAddress: '10.88.0.9:8080' });
+		core.nodes.update(admin, edge.id, { publicAddress: '10.47.0.9:8080' });
 		expect(core.nodes.setEdge(admin, candidate.nodeId).mode).toBe('edge');
 		opened.sqlite.run(`UPDATE projects SET deleted_at = ? WHERE id = 'prj_edgepin'`, [now]);
 	});
@@ -485,19 +485,19 @@ describe('managed overlay join (C1)', () => {
 		});
 		expect(joined.wireguard).toMatchObject({
 			mode: 'yoal',
-			address: '10.88.1.1',
-			cidr: '10.88.0.0/22',
+			address: '10.47.1.1',
+			cidr: '10.47.0.0/22',
 			listenPort: 51820,
 		});
 		const view = core.nodes.get(joined.nodeId);
 		expect(view).toMatchObject({
 			networkMode: 'yoal',
-			privateAddress: '10.88.1.1',
+			privateAddress: '10.47.1.1',
 			wgPublicKey: key,
 		});
-		expect(view.publicAddress).toBe('10.88.1.1:8080');
+		expect(view.publicAddress).toBe('10.47.1.1:8080');
 		const state = await core.nodes.desiredState(joined.token);
-		expect(state.wireguard).toMatchObject({ address: '10.88.1.1', mode: 'yoal' });
+		expect(state.wireguard).toMatchObject({ address: '10.47.1.1', mode: 'yoal' });
 
 		core.nodes.heartbeat(joined.token, {
 			nodeId: joined.nodeId,
@@ -524,7 +524,7 @@ describe('managed overlay join (C1)', () => {
 			networkMode: 'yoal',
 			wireguardPublicKey: `${'B'.repeat(43)}=`,
 		});
-		expect(joined.wireguard?.address).toBe('10.88.1.2');
+		expect(joined.wireguard?.address).toBe('10.47.1.2');
 	});
 
 	test('refuses a managed join without a public key', () => {
@@ -552,11 +552,11 @@ describe('managed overlay join (C1)', () => {
 		expect(() => core.nodes.adoptOverlay(member, plain.nodeId, { endpoint: '198.51.100.7' })).toThrow();
 		const adopted = core.nodes.adoptOverlay(admin, plain.nodeId, { endpoint: '198.51.100.7' });
 		expect(adopted).toMatchObject({ networkMode: 'yoal', wgEndpoint: '198.51.100.7:51820', wgPublicKey: null });
-		expect(adopted.privateAddress).toMatch(/^10\.88\.1\.\d+$/);
+		expect(adopted.privateAddress).toMatch(/^10\.47\.1\.\d+$/);
 		expect(() => core.nodes.adoptOverlay(admin, plain.nodeId, {})).toThrow(/already/);
 
 		const state = await core.nodes.desiredState(plain.token);
-		expect(state.wireguard).toMatchObject({ mode: 'yoal', address: adopted.privateAddress, cidr: '10.88.0.0/22' });
+		expect(state.wireguard).toMatchObject({ mode: 'yoal', address: adopted.privateAddress, cidr: '10.47.0.0/22' });
 
 		const beat = { nodeId: plain.nodeId, agentVersion: '0.1.0', actualStateVersion: 1, status: 'online' as const, caddyOk: true, releases: [] };
 		core.nodes.heartbeat(plain.token, { ...beat, wireguardPublicKey: keyD });
@@ -597,7 +597,7 @@ describe('service endpoints in desired state (C2)', () => {
 		const consumer = joinNode('endpoint-consumer');
 		const provider = joinNode('endpoint-provider');
 		const now = Date.now();
-		opened.sqlite.run(`UPDATE nodes SET private_address = '10.88.1.9' WHERE id = ?`, [provider.nodeId]);
+		opened.sqlite.run(`UPDATE nodes SET private_address = '10.47.1.9' WHERE id = ?`, [provider.nodeId]);
 		opened.sqlite.run(
 			`INSERT INTO databases (id, org_id, name, engine, version, node_id, host_port, memory_mb, owner_secret, monitor_secret, created_by, created_at, updated_at)
 			 VALUES ('db_test', 'org_1', 'endpoint-db', 'postgres', '16', ?, 15432, 256, 'owner', 'monitor', 'user_1', ?, ?)`,
@@ -615,7 +615,7 @@ describe('service endpoints in desired state (C2)', () => {
 				kind: 'database',
 				serviceId: 'db_test',
 				localPort: 21000,
-				upstream: { nodeId: provider.nodeId, address: '10.88.1.9', port: 15432 },
+				upstream: { nodeId: provider.nodeId, address: '10.47.1.9', port: 15432 },
 				tlsFingerprint: null,
 			},
 		]);
@@ -623,7 +623,7 @@ describe('service endpoints in desired state (C2)', () => {
 		expect(providerState.serviceProviders).toEqual([
 			{
 				id: 'svp_sep_test',
-				listenAddress: '10.88.1.9',
+				listenAddress: '10.47.1.9',
 				listenPort: 15432,
 				targetPort: 15432,
 				allowedClientFingerprints: [],

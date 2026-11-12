@@ -35,8 +35,8 @@ const edge = core.nodes.join({ token: core.nodes.createJoinToken(owner, 'edge').
 const worker = core.nodes.join({ token: core.nodes.createJoinToken(owner, 'worker').token, name: 'worker' });
 const worker2 = core.nodes.join({ token: core.nodes.createJoinToken(owner, 'worker-2').token, name: 'worker-2' });
 for (const node of [edge, worker, worker2]) core.nodes.update(owner, node.nodeId, { sliceMemoryMb: 4096 });
-core.nodes.update(owner, worker.nodeId, { publicAddress: '10.88.1.2:8080' });
-core.nodes.update(owner, worker2.nodeId, { publicAddress: '10.88.1.3:8080' });
+core.nodes.update(owner, worker.nodeId, { publicAddress: '10.47.1.2:8080' });
+core.nodes.update(owner, worker2.nodeId, { publicAddress: '10.47.1.3:8080' });
 
 const desiredOn = async (token: string, name: string) =>
 	(await core.nodes.desiredState(token)).workloads.find((item) => item.projectSlug === name);
@@ -80,7 +80,7 @@ describe('storage replication', () => {
 			id: added.id,
 			direction: 'push',
 			peerId: target.id,
-			endpoint: 'http://10.88.1.3:8080',
+			endpoint: 'http://10.47.1.3:8080',
 			host: storageGatewayHost(target.id),
 			buckets: ['avatars', 'uploads'],
 			intervalSeconds: 15 * 60,
@@ -166,7 +166,7 @@ describe('storage replication', () => {
 		expect(local.objectStorage!.replication[0]).toMatchObject({
 			direction: 'pull',
 			peerId: sourceWorkload.id,
-			endpoint: 'http://10.88.1.2:8080',
+			endpoint: 'http://10.47.1.2:8080',
 		});
 		expect(sourceWorkload.objectStorage!.replication).toEqual([]);
 		expect(sourceWorkload.objectStorage!.users).toContainEqual({

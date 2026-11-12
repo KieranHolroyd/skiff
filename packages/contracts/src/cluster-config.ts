@@ -14,7 +14,7 @@ const int = (min: number, max: number) => z.number().int().min(min).max(max);
 
 const overlay = z.object({
 	/** Per-install overlay CIDR; the first /24 is reserved for gateways. */
-	cidr: z.string().trim().regex(/^(?:\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/).default('10.88.0.0/22'),
+	cidr: z.string().trim().regex(/^(?:\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/).default('10.47.0.0/22'),
 	mtu: int(1280, 1420).default(1420),
 	listenPort: int(1, 65_535).default(51_820),
 	keepaliveSeconds: int(0, 65_535).default(25),

@@ -15,11 +15,11 @@ const node = (overrides: Partial<OverlayNode> & { id: string; privateAddress: st
 
 describe('overlay allocation', () => {
 	test('starts after the reserved first /24 and skips network/broadcast octets', () => {
-		expect(allocateOverlayAddress('10.88.0.0/22', new Set())).toBe('10.88.1.1');
+		expect(allocateOverlayAddress('10.47.0.0/22', new Set())).toBe('10.47.1.1');
 	});
 
 	test('skips used addresses and returns null when exhausted', () => {
-		expect(allocateOverlayAddress('10.88.0.0/22', new Set(['10.88.1.1', '10.88.1.2']))).toBe('10.88.1.3');
+		expect(allocateOverlayAddress('10.47.0.0/22', new Set(['10.47.1.1', '10.47.1.2']))).toBe('10.47.1.3');
 	});
 
 	test('rejects an invalid CIDR', () => {
@@ -30,28 +30,28 @@ describe('overlay allocation', () => {
 describe('peer graph', () => {
 	const edge = node({
 		id: 'nod_edge',
-		privateAddress: '10.88.1.1',
+		privateAddress: '10.47.1.1',
 		zone: 'cloud-a',
 		roles: ['ingress', 'control', 'compute', 'data'],
 		wgEndpoint: '203.0.113.10:51820',
 	});
 	const edgeB = node({
 		id: 'nod_edge_b',
-		privateAddress: '10.88.1.2',
+		privateAddress: '10.47.1.2',
 		zone: 'cloud-b',
 		roles: ['ingress', 'control', 'data'],
 		wgEndpoint: '203.0.113.20:51820',
 	});
 	const homelab = node({
 		id: 'nod_home',
-		privateAddress: '10.88.1.3',
+		privateAddress: '10.47.1.3',
 		zone: 'home',
 		roles: ['compute', 'data'],
 		lanEndpoint: '192.168.1.20:51820',
 	});
 	const linux = node({
 		id: 'nod_linux',
-		privateAddress: '10.88.1.4',
+		privateAddress: '10.47.1.4',
 		zone: 'home',
 		roles: ['compute', 'build'],
 		lanEndpoint: '192.168.1.30:51820',
@@ -60,10 +60,10 @@ describe('peer graph', () => {
 
 	test('a spoke peers with every hub and its LAN neighbour', () => {
 		const state = buildWireguardState('nod_home', all);
-		expect(state).toMatchObject({ mode: 'yoal', address: '10.88.1.3', cidr: '10.88.0.0/22' });
+		expect(state).toMatchObject({ mode: 'yoal', address: '10.47.1.3', cidr: '10.47.0.0/22' });
 		expect(state.peers.map((peer) => peer.nodeId).sort()).toEqual(['nod_edge', 'nod_edge_b', 'nod_linux']);
 		const direct = state.peers.find((peer) => peer.nodeId === 'nod_linux')!;
-		expect(direct).toMatchObject({ endpoint: '192.168.1.30:51820', allowedIps: ['10.88.1.4/32'] });
+		expect(direct).toMatchObject({ endpoint: '192.168.1.30:51820', allowedIps: ['10.47.1.4/32'] });
 	});
 
 	test('a hub peers with every managed node', () => {

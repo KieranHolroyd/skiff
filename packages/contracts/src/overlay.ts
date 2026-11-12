@@ -14,7 +14,7 @@ export type NodeNetworkMode = (typeof nodeNetworkModes)[number];
 export const nodeNetworkModeSchema = z.enum(nodeNetworkModes);
 
 /** WireGuard interface defaults; a path probe may lower the MTU to 1280. */
-export const DEFAULT_OVERLAY_CIDR = '10.88.0.0/22';
+export const DEFAULT_OVERLAY_CIDR = '10.47.0.0/22';
 export const DEFAULT_WG_PORT = 51820;
 export const DEFAULT_WG_MTU = 1420;
 export const WG_KEEPALIVE_SECONDS = 25;
