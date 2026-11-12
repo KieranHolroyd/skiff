@@ -30,8 +30,49 @@
 		canManage: boolean;
 	} = $props();
 
+	const autoLinked = $derived(service?.targets.filter((target) => target.autoLinked).length ?? 0);
+
 	function snippet(target: AppErrorTargetView): string {
 		return `<script src="${origin.replace(/\/$/, '')}/e.js" data-dsn="${target.dsn}"><\/script>`;
+	}
+
+	function health(target: AppErrorTargetView): { label: string; tone: 'success' | 'warning' | 'danger' | 'info' } {
+		if (!target.enabled) return { label: 'disabled', tone: 'danger' };
+		if (target.lastSeenAt && target.lastSeenAt >= Date.now() - 24 * 60 * 60 * 1000)
+			return { label: 'reporting', tone: 'success' };
+		if (target.lastSeenAt) return { label: 'quiet', tone: 'warning' };
+		return { label: 'waiting for first event', tone: 'info' };
+	}
+
+	function setup(target: AppErrorTargetView): Array<{ label: string; code: string; language: string }> {
+		const dsn = target.dsn ?? 'https://<key>@<platform>/ingest/<id>';
+		return [
+			{
+				label: 'Node / Bun',
+				language: 'ts',
+				code: `import * as Sentry from '@sentry/node';\n\nSentry.init({\n  dsn: '${dsn}',\n  environment: 'production',\n});`
+			},
+			{
+				label: 'Browser SDK',
+				language: 'ts',
+				code: `import * as Sentry from '@sentry/browser';\n\nSentry.init({\n  dsn: '${dsn}',\n  environment: 'production',\n});`
+			},
+			{
+				label: 'PHP',
+				language: 'php',
+				code: `\\Sentry\\init([\n  'dsn' => '${dsn}',\n  'environment' => 'production',\n]);`
+			},
+			{
+				label: 'Go',
+				language: 'go',
+				code: `sentry.Init(sentry.ClientOptions{\n  Dsn: "${dsn}",\n  Environment: "production",\n})`
+			},
+			{
+				label: 'Python',
+				language: 'python',
+				code: `import sentry_sdk\n\nsentry_sdk.init(\n    dsn="${dsn}",\n    environment="production",\n)`
+			}
+		];
 	}
 
 	function removeTarget(target: AppErrorTargetView) {
@@ -69,6 +110,10 @@
 				Turning it off disables targets that were created automatically; targets enabled by hand stay on.
 				Nothing is deleted.
 			</p>
+			<span class="ms-auto text-xs text-muted-foreground">
+				{service?.summary.targets ?? 0} targets · {autoLinked} auto-linked ·
+				{service?.summary.reporting24h ?? 0} reporting in 24h
+			</span>
 		</Card.Content>
 	</Card.Root>
 
@@ -124,6 +169,7 @@
 										<Badge variant="info">{target.kind === 'project' ? 'Yoal project' : 'Off-platform'}</Badge>
 										{#if target.autoLinked}<Badge variant="success">auto-linked</Badge>{/if}
 										<Badge variant={target.enabled ? 'success' : 'danger'}>{target.enabled ? 'enabled' : 'disabled'}</Badge>
+										<Badge variant={health(target).tone}>{health(target).label}</Badge>
 									</div>
 									{#if target.projectSlug}
 										<a class="text-xs text-muted-foreground hover:underline" href="/projects/{target.projectSlug}">
@@ -133,12 +179,27 @@
 										<p class="text-xs text-muted-foreground">Not linked to a Yoal project.</p>
 									{/if}
 								</div>
-								<div class="flex flex-wrap items-center gap-2">
-									<span class="text-xs text-muted-foreground">{target.unresolved.toLocaleString()} unresolved</span>
-									<span class="text-xs text-muted-foreground">{target.events24h.toLocaleString()} in 24h</span>
-									<span class="text-xs text-muted-foreground">
-										{target.lastSeenAt ? `last seen ${formatDateTime(target.lastSeenAt)}` : 'no events yet'}
-									</span>
+								<div class="flex flex-wrap items-center gap-3">
+									<div class="flex h-8 w-28 items-end gap-0.5" title="Events, last 7 days">
+										{#each target.daily as value}
+											<div
+												class="min-h-0.5 flex-1 rounded-sm bg-primary/50"
+												style={`height: ${Math.max(4, (value / Math.max(1, ...target.daily)) * 100)}%`}
+												title={`${value} events`}
+											></div>
+										{/each}
+									</div>
+									<div class="flex flex-wrap items-center gap-2">
+										<a class="text-xs text-muted-foreground hover:underline" href="?tab=issues&target={target.id}">View issues</a>
+										<span class="text-xs text-muted-foreground">{target.unresolved.toLocaleString()} unresolved</span>
+										<span class="text-xs text-muted-foreground">{target.events24h.toLocaleString()} in 24h</span>
+										<span class="text-xs text-muted-foreground">
+											{target.lastSeenAt ? `last seen ${formatDateTime(target.lastSeenAt)}` : 'no events yet'}
+										</span>
+										{#if target.firstSeenAt}
+											<span class="text-xs text-muted-foreground">first seen {formatDateTime(target.firstSeenAt)}</span>
+										{/if}
+									</div>
 								</div>
 							</div>
 
@@ -167,6 +228,28 @@
 									</Button>
 								{/if}
 							</div>
+
+							<details class="mt-3 text-sm">
+								<summary class="cursor-pointer text-xs text-muted-foreground hover:underline">Setup snippets</summary>
+								<div class="mt-3 grid gap-2">
+									{#each setup(target) as item (item.label)}
+										<div class="rounded-lg border">
+											<div class="flex items-center justify-between border-b bg-muted/30 px-3 py-1.5">
+												<span class="text-xs font-medium">{item.label}</span>
+												<CopyButton value={item.code} label="Copy" />
+											</div>
+											<pre class="overflow-x-auto p-3 text-xs">{item.code}</pre>
+										</div>
+									{/each}
+									<div class="rounded-lg border">
+										<div class="flex items-center justify-between border-b bg-muted/30 px-3 py-1.5">
+											<span class="text-xs font-medium">Static site</span>
+											<CopyButton value={snippet(target)} label="Copy" />
+										</div>
+										<pre class="overflow-x-auto p-3 text-xs">{snippet(target)}</pre>
+									</div>
+								</div>
+							</details>
 
 							{#if canManage}
 								<details class="mt-3 text-sm">

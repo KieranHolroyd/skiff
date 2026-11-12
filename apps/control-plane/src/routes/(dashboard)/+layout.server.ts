@@ -82,6 +82,14 @@ export const load: LayoutServerLoad = ({ locals, url, cookies }) => {
 		whatsNew: core.ctx.platformIam.canAdminister(principal)
 			? core.whatsNew.summary(principal)
 			: null,
+		/** Unresolved app errors for the sidebar badge. */
+		errorCount: (() => {
+			try {
+				return core.appErrors.unresolvedCount(principal);
+			} catch {
+				return 0;
+			}
+		})(),
 		permissions: [...principal.permissions].sort(),
 		can: {
 			createProject: hasPermission(principal, 'project:create'),

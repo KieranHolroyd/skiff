@@ -103,6 +103,8 @@ export interface AppErrorListView {
 	hourly: number[];
 	/** Pass back as `before` for the next page; null on the last page. */
 	nextBefore: number | null;
+	/** Pass back as `offset` for the next page; null on the last page. */
+	nextOffset: number | null;
 	/** Distinct environments seen in this project, most recent first. */
 	environments: string[];
 	/** Distinct releases seen in this project, most recent first. */
@@ -160,6 +162,9 @@ export interface AppErrorTargetView {
 	unresolved: number;
 	events24h: number;
 	lastSeenAt: number | null;
+	firstSeenAt: number | null;
+	/** Event counts for the last 7 days, oldest first. */
+	daily: number[];
 }
 
 /** The top-level service page's configuration and target list. */
@@ -167,6 +172,22 @@ export interface AppErrorServiceView {
 	/** When on, every current and future project gets a linked target and an injected DSN. */
 	autoLink: boolean;
 	targets: AppErrorTargetView[];
+	summary: {
+		unresolved: number;
+		resolved: number;
+		ignored: number;
+		events24h: number;
+		new24h: number;
+		/** Targets with at least one event in the last 24 hours. */
+		reporting24h: number;
+		targets: number;
+	};
+	/** Event counts for the last 14 days, oldest first. */
+	daily: number[];
+	/** New-issue counts for the last 14 days, oldest first. */
+	newDaily: number[];
+	/** Event counts for the last 24 hours, oldest first. */
+	hourly: number[];
 }
 
 export const appErrorTargetCreateSchema = z.object({
@@ -182,15 +203,21 @@ export const appErrorTargetUpdateSchema = z.object({
 });
 export type AppErrorTargetUpdate = z.infer<typeof appErrorTargetUpdateSchema>;
 
+export const appErrorSorts = ['last_seen', 'first_seen', 'events'] as const;
+export type AppErrorSort = (typeof appErrorSorts)[number];
+
 export const appErrorListQuerySchema = z.object({
 	status: z.enum([...appErrorStatuses, 'all']).default('unresolved'),
+	level: z.enum(appErrorLevels).optional(),
 	environment: z.string().trim().max(40).optional(),
 	release: z.string().trim().max(200).optional(),
 	/** Standalone target or linked project id (top-level page only). */
 	target: z.string().trim().max(100).optional(),
 	q: z.string().trim().max(200).optional(),
 	range: z.enum(appErrorRanges).default('all'),
+	sort: z.enum(appErrorSorts).default('last_seen'),
 	before: z.coerce.number().int().positive().optional(),
+	offset: z.coerce.number().int().min(0).optional(),
 	limit: z.coerce.number().int().min(1).max(200).default(50),
 });
 export type AppErrorListQuery = z.input<typeof appErrorListQuerySchema>;

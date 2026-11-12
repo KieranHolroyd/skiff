@@ -60,7 +60,7 @@ project's public DSN key (`X-Sentry-Auth` or `?sentry_key=`), never a session co
 | DELETE | `/projects/:slug/sessions` | `project:update` | sign out everyone: bumps the project's session epoch (rotates its site key), ending password, platform and share sessions on every scope → `{ ok, epoch, signedOutAt, shareSessions }`. Share links keep working |
 | DELETE | `/projects/:slug/sessions/:id` | `shareLink:revoke` | end one share-link session (`red_…`) → `{ ok, sessionId }` |
 | GET | `/projects/:slug/logs` | `logs:read` | `?after&limit&source&buildId&deploymentId&level&q`; ordered events plus a `cursor` for tailing |
-| GET | `/projects/:slug/errors` | `project:read` | App errors (docs/APP-ERRORS.md): `?status=unresolved\|resolved\|ignored\|all&environment=&release=&range=24h\|7d\|30d\|all&q=&before=&limit=` |
+| GET | `/projects/:slug/errors` | `project:read` | App errors (docs/APP-ERRORS.md): `?status=unresolved\|resolved\|ignored\|all&level=&environment=&release=&range=24h\|7d\|30d\|all&sort=last_seen\|first_seen\|events&q=&before=&offset=&limit=` |
 | PATCH | `/projects/:slug/errors` | `project:update` | `{ ids, status }` bulk resolve/ignore/reopen |
 | GET/DELETE | `/projects/:slug/errors/:id` | read / `project:update` | one issue with its events, hourly/daily counts; delete removes its events and counts |
 | GET/PATCH | `/projects/:slug/errors/settings` | read / `project:update` | enable/disable, sample rate, notification toggle; the view carries the DSN |

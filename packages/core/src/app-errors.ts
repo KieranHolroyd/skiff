@@ -809,9 +809,85 @@ export class AppErrorService {
 	/** The Errors page's configuration and every target the caller may read. */
 	serviceView(principal: Principal): AppErrorServiceView {
 		this.#requireOrgRead(principal);
+		const targets = this.#accessibleTargets(principal);
+		const now = this.ctx.now();
+		const hourStart = Math.floor(now / HOUR) * HOUR - 23 * HOUR;
+		const dayStart = Math.floor(now / DAY) * DAY - 13 * DAY;
+		const projectIds = targets.map((row) => row.project_id);
+		const emptySummary = {
+			unresolved: 0,
+			resolved: 0,
+			ignored: 0,
+			events24h: 0,
+			new24h: 0,
+			reporting24h: 0,
+			targets: targets.length,
+		};
+		if (projectIds.length === 0) {
+			return {
+				autoLink: this.#autoLinkForOrg(principal.orgId),
+				targets: [],
+				summary: emptySummary,
+				daily: new Array<number>(14).fill(0),
+				newDaily: new Array<number>(14).fill(0),
+				hourly: new Array<number>(24).fill(0),
+			};
+		}
+		const placeholders = projectIds.map(() => '?').join(', ');
+		const counts = this.ctx.sqlite
+			.query<{ status: AppErrorStatus; n: number }, Array<string>>(
+				`SELECT status, COUNT(*) AS n FROM app_error_issues WHERE project_id IN (${placeholders}) GROUP BY status`,
+			)
+			.all(...projectIds);
+		const summary = { ...emptySummary };
+		for (const row of counts) summary[row.status] = row.n;
+		summary.new24h =
+			this.ctx.sqlite
+				.query<{ n: number }, Array<string | number>>(
+					`SELECT COUNT(*) AS n FROM app_error_issues WHERE project_id IN (${placeholders}) AND first_seen_at >= ?`,
+				)
+				.get(...projectIds, now - DAY)?.n ?? 0;
+		summary.reporting24h =
+			this.ctx.sqlite
+				.query<{ n: number }, Array<string | number>>(
+					`SELECT COUNT(DISTINCT project_id) AS n FROM app_error_issues
+					 WHERE project_id IN (${placeholders}) AND last_seen_at >= ?`,
+				)
+				.get(...projectIds, now - DAY)?.n ?? 0;
+		const hourly = this.ctx.sqlite
+			.query<{ hour: number; n: number }, Array<string | number>>(
+				`SELECT h.hour AS hour, SUM(h.count) AS n FROM app_error_hourly h
+				 JOIN app_error_issues i ON i.id = h.issue_id
+				 WHERE i.project_id IN (${placeholders}) AND h.hour >= ? GROUP BY h.hour`,
+			)
+			.all(...projectIds, hourStart);
+		summary.events24h = this.ctx.sqlite
+			.query<{ n: number }, Array<string | number>>(
+				`SELECT COALESCE(SUM(h.count), 0) AS n FROM app_error_hourly h
+				 JOIN app_error_issues i ON i.id = h.issue_id
+				 WHERE i.project_id IN (${placeholders}) AND h.hour >= ?`,
+			)
+			.get(...projectIds, hourStart)?.n ?? 0;
+		const dailyRows = this.ctx.sqlite
+			.query<{ hour: number; n: number }, Array<string | number>>(
+				`SELECT h.hour AS hour, SUM(h.count) AS n FROM app_error_hourly h
+				 JOIN app_error_issues i ON i.id = h.issue_id
+				 WHERE i.project_id IN (${placeholders}) AND h.hour >= ? GROUP BY h.hour`,
+			)
+			.all(...projectIds, dayStart);
+		const newRows = this.ctx.sqlite
+			.query<{ hour: number; n: number }, Array<string | number>>(
+				`SELECT first_seen_at AS hour, COUNT(*) AS n FROM app_error_issues
+				 WHERE project_id IN (${placeholders}) AND first_seen_at >= ? GROUP BY first_seen_at`,
+			)
+			.all(...projectIds, dayStart);
 		return {
 			autoLink: this.#autoLinkForOrg(principal.orgId),
-			targets: this.#accessibleTargets(principal).map((row) => this.#targetView(row)),
+			targets: targets.map((row) => this.#targetView(row)),
+			summary,
+			daily: this.#bucketsFor(dailyRows, dayStart, DAY, 14),
+			newDaily: this.#bucketsFor(newRows, dayStart, DAY, 14),
+			hourly: this.#bucketsFor(hourly, hourStart, HOUR, 24),
 		};
 	}
 
@@ -992,6 +1068,22 @@ export class AppErrorService {
 		return { issueId: stored.issueId, eventId: normalized.eventId };
 	}
 
+	/** The unresolved count for the sidebar badge; 0 when the caller cannot see errors. */
+	unresolvedCount(principal: Principal): number {
+		if (!this.ctx.iam.can(principal, 'project:read', { type: 'org' })) return 0;
+		const targets = this.#accessibleTargets(principal);
+		if (targets.length === 0) return 0;
+		const placeholders = targets.map(() => '?').join(', ');
+		return (
+			this.ctx.sqlite
+				.query<{ n: number }, Array<string>>(
+					`SELECT COUNT(*) AS n FROM app_error_issues
+					 WHERE project_id IN (${placeholders}) AND status = 'unresolved'`,
+				)
+				.get(...targets.map((target) => target.project_id))?.n ?? 0
+		);
+	}
+
 	// --- top-level issues ----------------------------------------------------------------------
 
 	/** Issues across every target the caller may read, optionally narrowed to one target. */
@@ -1035,6 +1127,30 @@ export class AppErrorService {
 		return changed;
 	}
 
+	orgDeleteIssues(principal: Principal, ids: string[]): number {
+		this.#requireOrgWrite(principal);
+		const unique = [...new Set(ids)].filter(Boolean);
+		if (unique.length === 0) return 0;
+		const targets = this.#targetsForIssueIds(unique);
+		for (const target of targets) this.#requireTargetWrite(principal, target);
+		let deleted = 0;
+		for (const id of unique) {
+			const issue = this.ctx.sqlite
+				.query<{ project_id: string }, [string]>('SELECT project_id FROM app_error_issues WHERE id = ?')
+				.get(id);
+			if (issue && this.#deleteIssueFor(issue.project_id, id)) deleted++;
+		}
+		this.ctx.audit.record({
+			principal,
+			action: 'app_errors.delete',
+			resource: 'org',
+			resourceId: principal.orgId,
+			args: { issues: deleted },
+			result: 'ok',
+		});
+		return deleted;
+	}
+
 	orgDeleteIssue(principal: Principal, issueId: string): boolean {
 		this.#requireOrgWrite(principal);
 		const issue = this.ctx.sqlite
@@ -1067,7 +1183,7 @@ export class AppErrorService {
 	#listForTargets(targets: ProjectRow[], query: AppErrorListQuery): AppErrorListView {
 		const parsed = appErrorListQuerySchema.safeParse(query);
 		if (!parsed.success) throw new ValidationError('Invalid app error filters.', parsed.error.issues);
-		const { status, environment, release, q, range, before, limit } = parsed.data;
+		const { status, level, environment, release, q, range, sort, before, offset, limit } = parsed.data;
 		const now = this.ctx.now();
 		const since = Math.floor(now / HOUR) * HOUR - 23 * HOUR;
 		const rangeStart =
@@ -1078,6 +1194,7 @@ export class AppErrorService {
 			summary: { unresolved: 0, resolved: 0, ignored: 0, events24h: 0 },
 			hourly: new Array<number>(24).fill(0),
 			nextBefore: null,
+			nextOffset: null,
 			environments: [],
 			releases: [],
 		});
@@ -1088,6 +1205,10 @@ export class AppErrorService {
 		if (status !== 'all') {
 			where.push('i.status = ?');
 			params.push(status);
+		}
+		if (level) {
+			where.push('i.level = ?');
+			params.push(level);
 		}
 		if (rangeStart !== null) {
 			where.push('i.last_seen_at >= ?');
@@ -1110,15 +1231,26 @@ export class AppErrorService {
 			where.push('i.last_seen_at < ?');
 			params.push(before);
 		}
+		const order =
+			sort === 'first_seen'
+				? 'i.first_seen_at DESC, i.id DESC'
+				: sort === 'events'
+					? 'i.event_count DESC, i.last_seen_at DESC, i.id DESC'
+					: 'i.last_seen_at DESC, i.id DESC';
+		const pageQuery =
+			offset === undefined
+				? `LIMIT ?`
+				: `LIMIT ? OFFSET ?`;
+		const pageParams = offset === undefined ? [limit + 1] : [limit + 1, offset];
 		const rows = this.ctx.sqlite
 			.query<IssueRow, Array<string | number>>(
 				`SELECT i.*, (SELECT COALESCE(SUM(h.count), 0) FROM app_error_hourly h WHERE h.issue_id = i.id AND h.hour >= ?) AS count_24h
 				 FROM app_error_issues i
 				 WHERE ${where.join(' AND ')}
-				 ORDER BY i.last_seen_at DESC, i.id DESC
-				 LIMIT ?`,
+				 ORDER BY ${order}
+				 ${pageQuery}`,
 			)
-			.all(since, ...params, limit + 1);
+			.all(since, ...params, ...pageParams);
 		const page = rows.slice(0, limit);
 		const counts = this.ctx.sqlite
 			.query<{ status: AppErrorStatus; n: number }, Array<string>>(
@@ -1158,7 +1290,8 @@ export class AppErrorService {
 			issues: page.map((row) => toIssueView(row, metadata.get(row.project_id))),
 			summary,
 			hourly,
-			nextBefore: rows.length > limit ? (page.at(-1)?.last_seen_at ?? null) : null,
+			nextBefore: offset === undefined && rows.length > limit ? (page.at(-1)?.last_seen_at ?? null) : null,
+			nextOffset: offset !== undefined && rows.length > limit ? offset + limit : null,
 			environments,
 			releases,
 		};
@@ -1704,15 +1837,34 @@ export class AppErrorService {
 		const key = this.#activeKey(row.project_id);
 		const now = this.ctx.now();
 		const stats = this.ctx.sqlite
-			.query<{ unresolved: number; events24h: number; last_seen_at: number | null }, [string, string, number, string]>(
+			.query<{
+				unresolved: number;
+				events24h: number;
+				last_seen_at: number | null;
+				first_seen_at: number | null;
+			}, [string, string, number, string, string]>(
 				`SELECT
 				   (SELECT COUNT(*) FROM app_error_issues WHERE project_id = ? AND status = 'unresolved') AS unresolved,
 				   (SELECT COALESCE(SUM(h.count), 0) FROM app_error_hourly h
 				      JOIN app_error_issues i ON i.id = h.issue_id
 				     WHERE i.project_id = ? AND h.hour >= ?) AS events24h,
-				   (SELECT MAX(last_seen_at) FROM app_error_issues WHERE project_id = ?) AS last_seen_at`,
+				   (SELECT MAX(last_seen_at) FROM app_error_issues WHERE project_id = ?) AS last_seen_at,
+				   (SELECT MIN(first_seen_at) FROM app_error_issues WHERE project_id = ?) AS first_seen_at`,
 			)
-			.get(row.project_id, row.project_id, now - 24 * HOUR, row.project_id)!;
+			.get(row.project_id, row.project_id, now - 24 * HOUR, row.project_id, row.project_id)!;
+		const dayStart = Math.floor(now / DAY) * DAY - 6 * DAY;
+		const daily = this.#bucketsFor(
+			this.ctx.sqlite
+				.query<{ hour: number; n: number }, [string, number]>(
+					`SELECT h.hour AS hour, SUM(h.count) AS n FROM app_error_hourly h
+					 JOIN app_error_issues i ON i.id = h.issue_id
+					 WHERE i.project_id = ? AND h.hour >= ? GROUP BY h.hour`,
+				)
+				.all(row.project_id, dayStart),
+			dayStart,
+			DAY,
+			7,
+		);
 		return {
 			id: row.project_id,
 			kind: row.kind,
@@ -1733,6 +1885,8 @@ export class AppErrorService {
 			unresolved: stats.unresolved,
 			events24h: stats.events24h,
 			lastSeenAt: stats.last_seen_at,
+			firstSeenAt: stats.first_seen_at,
+			daily,
 		};
 	}
 

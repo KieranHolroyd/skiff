@@ -424,28 +424,36 @@ and never alerts. Delete removes the issue, its events and counts; a fresh occur
 
 **Issues** (default; `?tab=issues`):
 
-- filters: status tabs (Unresolved / Resolved / Ignored / All), target, environment, release, time
-  range (24h / 7d / 30d / all), search over name/message/culprit/issue id;
-- rows: level, `Name: message`, target name and project slug, culprit, count, last seen;
-- keyset pagination via `before`, behind a **Load older issues** link.
+- overview: unresolved, events in 24h, new issues in 24h, active targets, and 14-day event and
+  new-issue charts;
+- filters: status tabs (Unresolved / Resolved / Ignored / All), target, level, environment, release,
+  time range (24h / 7d / 30d / all), search over name/message/culprit/issue id, and sort by last
+  seen, newest first or most events;
+- rows: level, `Name: message`, target name and project slug, culprit, count, last seen, with
+  checkboxes for bulk resolve, ignore, reopen and delete;
+- offset pagination with **Newer** / **Older**.
 
 **Issue detail** (the same page with `?issue=<issueId>`, opened from a row or an alert link; the
 card has a back link):
 
-- name + message, target, status buttons (Resolve / Ignore / Reopen / Delete), first/last seen,
-  count, environment and release badges;
+- name + message, target, level, status buttons (Resolve / Ignore / Reopen / Delete), first/last
+  seen, count, environment and release badges;
 - 24-hour and 14-day bar charts from `app_error_hourly`;
-- the exception chain and top-first frames with `file:line:col`, in-app highlighted;
-- tags, browser/os/runtime, extra and request path;
-- the newest stored events (at most 50 per issue).
+- one selected occurrence at a time: the exception chain, top-first frames with `file:line:col`,
+  in-app highlighted, and a copy-stack button;
+- tags, browser/os/runtime, request path, SDK and extra for that occurrence;
+- an occurrence list (at most 50 stored per issue) to switch between events.
 
 **Targets** (`?tab=targets`):
 
-- the **Automatic linking** switch with its consequences spelled out;
-- **Attach an off-platform project**, one name field and a DSN;
-- one row per target: name, kind (`Yoal project` / `Off-platform`), auto-linked/manual, enabled,
-  DSN with copy, unresolved and 24-hour counts, last seen, Send test, Rotate key, Enable/Disable,
-  Delete, and a settings form for name, stored-event sample rate, notification toggle and usage.
+- the **Automatic linking** switch with target/auto-linked/reporting counts;
+- **Link a Yoal project by hand** and **Attach an off-platform project**, one field each;
+- one card per target: name, kind (`Yoal project` / `Off-platform`), auto-linked/manual, enabled,
+  health (`reporting` / `quiet` / `waiting for first event` / `disabled`), DSN with copy, browser
+  snippet, a seven-day sparkline, unresolved and 24-hour counts, first/last seen, Send test, Rotate
+  key, Enable/Disable, Delete;
+- expandable **Setup snippets** for Node/Bun, the browser SDK, PHP, Go and Python;
+- a settings form for name (standalone), stored-event sample rate, notification toggle and usage.
 
 No comments, assignee, breadcrumbs, merge/split or "seen by". Project pages do not get an Errors tab;
 the top-level page is the only error view.

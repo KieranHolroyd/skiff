@@ -530,7 +530,18 @@ describe('AppErrorService', () => {
 		expect(core.appErrors.orgGet(owner, issue.id).issue.targetName).toBe('Off-platform shop');
 		expect(core.appErrors.orgSetStatus(owner, { ids: [issue.id], status: 'resolved' })).toBe(1);
 		expect(core.appErrors.orgList(owner, { status: 'resolved', target: target.id }).issues[0]?.id).toBe(issue.id);
-		expect(core.appErrors.orgDeleteIssue(owner, issue.id)).toBe(true);
+
+		const overview = core.appErrors.serviceView(owner);
+		expect(overview.daily).toHaveLength(14);
+		expect(overview.newDaily).toHaveLength(14);
+		expect(overview.hourly).toHaveLength(24);
+		const targetView = overview.targets.find((row) => row.id === target.id)!;
+		expect(targetView.daily).toHaveLength(7);
+		expect(targetView.firstSeenAt).not.toBeNull();
+		expect(overview.summary.targets).toBeGreaterThan(0);
+
+		const testIssue = core.appErrors.testTarget(owner, target.id);
+		expect(core.appErrors.orgDeleteIssues(owner, [issue.id, testIssue.issueId])).toBe(2);
 		expect(core.appErrors.orgList(owner, { status: 'all', target: target.id }).issues).toHaveLength(0);
 
 		const paused = core.appErrors.updateTarget(owner, target.id, { enabled: false });

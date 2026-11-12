@@ -35,30 +35,38 @@ export const load: PageServerLoad = ({ locals, url }) => {
 
 	const parsed = appErrorListQuerySchema.safeParse({
 		status: queryValue(url, 'status'),
+		level: queryValue(url, 'level'),
 		environment: queryValue(url, 'environment'),
 		release: queryValue(url, 'release'),
 		target: queryValue(url, 'target'),
 		q: queryValue(url, 'q'),
 		range: queryValue(url, 'range'),
-		before: queryValue(url, 'before')
+		sort: queryValue(url, 'sort'),
+		offset: queryValue(url, 'offset') ?? '0'
 	});
 	const filters = parsed.success
 		? {
 				status: parsed.data.status,
+				level: parsed.data.level ?? '',
 				environment: parsed.data.environment ?? '',
 				release: parsed.data.release ?? '',
 				target: parsed.data.target ?? '',
 				q: parsed.data.q ?? '',
 				range: parsed.data.range,
+				sort: parsed.data.sort,
+				offset: parsed.data.offset ?? 0,
 				before: parsed.data.before ?? null
 			}
 		: {
 				status: 'unresolved',
+				level: '',
 				environment: '',
 				release: '',
 				target: '',
 				q: '',
 				range: 'all' as const,
+				sort: 'last_seen' as const,
+				offset: 0,
 				before: null
 			};
 	const list = safely(
@@ -231,6 +239,22 @@ export const actions: Actions = {
 		try {
 			core.appErrors.orgDeleteIssue(principal, issueId);
 			return { success: 'Issue deleted.' };
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	deleteIssues: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const ids = formString(data, 'ids')
+			.split(',')
+			.map((id) => id.trim())
+			.filter(Boolean);
+		if (ids.length === 0) return fail(400, { message: 'Select at least one issue.' });
+		try {
+			const deleted = core.appErrors.orgDeleteIssues(principal, ids);
+			return { success: `${deleted} issue${deleted === 1 ? '' : 's'} deleted.` };
 		} catch (caught) {
 			return fail(failStatus(caught), toFormFailure(caught));
 		}

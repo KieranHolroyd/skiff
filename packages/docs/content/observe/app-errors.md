@@ -15,9 +15,12 @@ Open **Observe → Errors → Targets**.
 - **Automatic linking** gives every project in the organization a DSN and injects it into linked
   process apps and functions. New projects are linked as they are created. Turning it off disables
   the targets it created and keeps their data.
+- **Link a Yoal project by hand** even while automatic linking is off.
 - **Attach an off-platform project** creates a standalone target with its own DSN for an app that
   Yoal does not deploy.
-- Each target can be enabled, disabled, rotated, sampled, notified and deleted independently.
+- Each target card shows its health, DSN, browser snippet, a seven-day sparkline, setup snippets
+  for Node, the browser SDK, PHP, Go and Python, and actions to send a test, rotate the key,
+  enable/disable, edit sample rate and notifications, or delete.
 
 Copy the DSN from a target, or use its browser snippet. Press **Send test** to prove the pipe works.
 
@@ -83,14 +86,16 @@ is, so staging never reopens or inflates a production issue.
 
 ## Issues
 
-The **Issues** tab has **Unresolved**, **Resolved**, **Ignored** and **All** filters, plus filters
-for target, environment, release and time range (24 hours, 7 days, 30 days or all time) and a search
-over the type, message, culprit and issue id. Older matches load with **Load older issues**.
+The **Issues** tab opens with unresolved, 24-hour, new-issue and active-target counts and 14-day
+charts. It has **Unresolved**, **Resolved**, **Ignored** and **All** filters, plus filters for target,
+level, environment, release and time range (24 hours, 7 days, 30 days or all time), search over the
+type, message, culprit and issue id, and a sort by last seen, newest first or most events. Select
+issues for bulk resolve, ignore, reopen or delete; **Newer** and **Older** page through the rest.
 
-Open an issue to see its target, 24-hour and 14-day charts, exception chain and the newest stored
-events. **Resolve** marks it fixed; a new event reopens it and records that regression. **Ignore**
-keeps counting but hides it from the default list. **Delete** removes the issue, its events and
-counts.
+Open an issue to see its target, 24-hour and 14-day charts, an occurrence list, the exception chain
+and frames, and the tags, context and extra for the selected occurrence. **Resolve** marks it fixed;
+a new event reopens it and records that regression. **Ignore** keeps counting but hides it from the
+default list. **Delete** removes the issue, its events and counts.
 
 Counts are exact. Stored events are sampled: at most one per issue per second, 50 kept per issue
 and 500 per target per minute. Events and hourly counts are pruned after 30 days; issues not seen

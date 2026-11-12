@@ -419,6 +419,11 @@
 													{firing}<span class="sr-only"> firing alerts</span>
 												</Sidebar.MenuBadge>
 											{/if}
+											{#if item.path === '/errors' && (data.errorCount ?? 0) > 0}
+												<Sidebar.MenuBadge title={`${data.errorCount} unresolved errors`}>
+													{data.errorCount}<span class="sr-only"> unresolved errors</span>
+												</Sidebar.MenuBadge>
+											{/if}
 											{#if item.path === '/settings'}
 												{#await data.updateAvailable then update}
 													{#if update}
