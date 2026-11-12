@@ -63,3 +63,11 @@ describe('NetworkManager', () => {
 		expect(() => manager.renderNftables()).toThrow(/invalid overlay port range/);
 	});
 });
+
+describe('defaultRunner', () => {
+	test('a missing executable is exit 127, not a thrown error', async () => {
+		const { defaultRunner } = await import('./wireguard.ts');
+		const result = await defaultRunner(['yoal-definitely-not-installed', '--state']);
+		expect(result.code).toBe(127);
+	});
+});

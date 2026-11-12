@@ -254,6 +254,9 @@ export function parseWireguardState(raw: unknown): WireguardState {
 }
 
 export const defaultRunner: CommandRunner = async (argv, input) => {
+	// A missing tool is an answer, not a crash: the firewall probe asks for ufw and firewall-cmd,
+	// and most hosts have at most one of them. Exit 127, like a shell.
+	if (!Bun.which(argv[0]!)) return { code: 127, stdout: '', stderr: `${argv[0]}: command not found` };
 	const proc = Bun.spawn(argv, {
 		stdin: input === undefined ? 'ignore' : new Blob([input]),
 		stdout: 'pipe',
