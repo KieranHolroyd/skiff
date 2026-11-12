@@ -94,16 +94,28 @@ export class NetworkManager {
 		return { backend: 'nftables', opened: this.paths.overlayTcpPorts.length };
 	}
 
-	/** Ruleset rendered for review and for `nft -f`; no shell interpolation. */
+	/**
+	 * Ruleset rendered for review and for `nft -f`; no shell interpolation.
+	 *
+	 * Declare, delete, recreate: one `nft -f` transaction replaces the table, so a re-apply never
+	 * appends a second copy of the chain (it did, once per reconcile). Replies to connections this
+	 * node opened over the overlay come back to an ephemeral port, so established and related
+	 * traffic is accepted before the port allowlist; without it an ingress could not reach a worker.
+	 */
 	renderNftables(): string {
+		const iface = this.paths.interface;
 		const accept = this.paths.overlayTcpPorts
-			.map((port) => `\t\tiifname "${this.paths.interface}" tcp dport ${portSpec(port, '-')} accept`)
+			.map((port) => `\t\tiifname "${iface}" tcp dport ${portSpec(port, '-')} accept`)
 			.join('\n');
-		return `table inet yoal {
+		return `table inet yoal
+delete table inet yoal
+table inet yoal {
 \tchain input {
 \t\ttype filter hook input priority -10; policy accept;
+\t\tiifname "${iface}" ct state established,related accept
+\t\tiifname "${iface}" icmp type echo-request accept
 ${accept}
-\t\tiifname "${this.paths.interface}" drop
+\t\tiifname "${iface}" drop
 \t}
 }
 `;

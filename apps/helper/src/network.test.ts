@@ -58,6 +58,18 @@ describe('NetworkManager', () => {
 		expect(rules).toContain('iifname "wg0" drop');
 	});
 
+	test('replaces the table instead of appending, and lets replies back in first', () => {
+		const rules = new NetworkManager({ paths: { configPath: join(dir, 'idem.nft') } }).renderNftables();
+		// Declare + delete + recreate in one file: re-applying it cannot duplicate the chain.
+		expect(rules.indexOf('delete table inet yoal')).toBeGreaterThan(rules.indexOf('table inet yoal'));
+		expect(rules.match(/chain input/g)).toHaveLength(1);
+		const established = rules.indexOf('ct state established,related accept');
+		expect(established).toBeGreaterThan(0);
+		// Replies to an ingress's own connections arrive on ephemeral ports: accepted before the drop.
+		expect(established).toBeLessThan(rules.indexOf('iifname "wg0" drop'));
+		expect(established).toBeLessThan(rules.indexOf('tcp dport 8080 accept'));
+	});
+
 	test('refuses an invalid range instead of rendering it', () => {
 		const manager = new NetworkManager({ paths: { configPath: join(dir, 'bad.nft'), overlayTcpPorts: [[200, 100]] } });
 		expect(() => manager.renderNftables()).toThrow(/invalid overlay port range/);
