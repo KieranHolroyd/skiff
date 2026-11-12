@@ -4,6 +4,7 @@ import { brokerSubnav } from '../brokers/_lib/subnav.js';
 import { databaseSubnav } from '../databases/_lib/subnav.js';
 import { docsSubnav } from '../docs/_lib/subnav.js';
 import { emailSubnav } from '../email/_lib/subnav.js';
+import { errorsSubnav } from '../errors/_lib/subnav.js';
 import { functionDeploymentSubnav, functionSubnav } from '../functions/_lib/subnav.js';
 import { deploymentSubnav, projectSubnav } from '../projects/[slug]/_components/project-subnav.js';
 import { settingsSubnav } from '../settings/_lib/subnav.js';
@@ -36,6 +37,8 @@ export function subnavFor(
 		return has('emailArea') ? emailSubnav(d, url) : null;
 
 	if (routeId.startsWith('/(dashboard)/docs/')) return has('docsNav') ? docsSubnav(d, url) : null;
+
+	if (routeId === '/(dashboard)/errors') return has('tab') ? errorsSubnav(d) : null;
 
 	switch (routeId) {
 		case '/(dashboard)/projects/[slug]':

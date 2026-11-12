@@ -6,12 +6,8 @@ import {
 	appErrorTargetUpdateSchema
 } from '@yoal/contracts';
 import { core } from '#lib/server/core.js';
-import {
-	failStatus,
-	formBoolean,
-	formString,
-	toFormFailure
-} from '../_lib/errors.js';
+import { failStatus, formBoolean, formString, toFormFailure } from '../_lib/errors.js';
+import { readErrorsTab } from './_lib/subnav.js';
 import type { Actions, PageServerLoad } from './$types';
 
 /** Read something a viewer may not be allowed to see without taking the page down. */
@@ -30,7 +26,10 @@ function queryValue(url: URL, name: string): string | undefined {
 
 export const load: PageServerLoad = ({ locals, url }) => {
 	const principal = locals.principal!;
-	const canManage = safely(() => core.ctx.iam.can(principal, 'project:update', { type: 'org' }), false);
+	const canManage = safely(
+		() => core.ctx.iam.can(principal, 'project:update', { type: 'org' }),
+		false
+	);
 	const service = safely(() => core.appErrors.serviceView(principal), null);
 
 	const parsed = appErrorListQuerySchema.safeParse({
@@ -69,13 +68,17 @@ export const load: PageServerLoad = ({ locals, url }) => {
 				offset: 0,
 				before: null
 			};
-	const list = safely(
-		() => core.appErrors.orgList(principal, parsed.success ? parsed.data : {}),
-		null
-	);
-	const issueId = url.searchParams.get('issue');
+	const tab = readErrorsTab(url.searchParams.get('tab'), service ? service.targets.length : null);
+	// The list and an open issue are only read on the Issues tab.
+	const list =
+		tab === 'issues'
+			? safely(() => core.appErrors.orgList(principal, parsed.success ? parsed.data : {}), null)
+			: null;
+	const issueId = tab === 'issues' ? url.searchParams.get('issue') : null;
 	const detail = issueId ? safely(() => core.appErrors.orgGet(principal, issueId), null) : null;
-	const linked = new Set((service?.targets ?? []).map((target) => target.projectId).filter(Boolean));
+	const linked = new Set(
+		(service?.targets ?? []).map((target) => target.projectId).filter(Boolean)
+	);
 	const unlinkedProjects = safely(
 		() =>
 			core.projects
@@ -84,23 +87,13 @@ export const load: PageServerLoad = ({ locals, url }) => {
 				.map((project) => ({ slug: project.slug, name: project.name })),
 		[]
 	);
-	const requested = url.searchParams.get('tab');
-	const tab =
-		requested === 'targets'
-			? ('targets' as const)
-			: requested === 'setup'
-				? ('setup' as const)
-				: requested === 'issues'
-					? ('issues' as const)
-					: service && service.targets.length === 0
-						? ('setup' as const)
-						: ('issues' as const);
 
 	return {
 		tab,
 		service,
 		list,
 		detail,
+		missingIssue: Boolean(issueId) && detail === null,
 		filters,
 		canManage,
 		unlinkedProjects

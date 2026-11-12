@@ -265,6 +265,17 @@ describe('AppErrorService', () => {
 		expect(issue.name).toBe('errorString');
 	});
 
+	test('accepts the minimal store event the setup page curls, with no event id', async () => {
+		const { dsnId, key } = await enabled();
+		// Keep in step with `storeCurl` in the Errors setup (apps/control-plane errors/_lib/sdks.ts).
+		const body = '{"level":"error","platform":"other","exception":{"values":[{"type":"Error","value":"Hello from curl"}]}}';
+		const result = core.appErrors.ingest({ dsnProjectId: dsnId, endpoint: 'store', body: Buffer.from(body), queryKey: key });
+		expect(result.status).toBe(200);
+		expect(result.eventId).toMatch(/^[0-9a-f]{32}$/);
+		const issue = core.appErrors.list(owner, project, { q: 'Hello from curl' }).issues[0]!;
+		expect(issue.name).toBe('Error');
+	});
+
 	test('rejects a wrong key and an envelope with mismatched auth', async () => {
 		const { dsnId, key } = await enabled();
 		const body = envelope([{ type: 'event', payload: sentryEvent({ event_id: '1'.repeat(32) }) }], {

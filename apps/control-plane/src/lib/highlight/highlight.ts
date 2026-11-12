@@ -25,6 +25,7 @@ const GRAMMARS = {
 	systemd: () => import('shiki/langs/systemd.mjs'),
 	prisma: () => import('shiki/langs/prisma.mjs'),
 	python: () => import('shiki/langs/python.mjs'),
+	php: () => import('shiki/langs/php.mjs'),
 	ruby: () => import('shiki/langs/ruby.mjs'),
 	go: () => import('shiki/langs/go.mjs'),
 	rust: () => import('shiki/langs/rust.mjs'),

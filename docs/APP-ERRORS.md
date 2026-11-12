@@ -247,7 +247,8 @@ The sink never validates auth, rate limits or retention; the real route tests do
 
 ### On the Errors page
 
-**Errors → Targets** shows two configuration paths:
+**Errors → Setup** is the guided path (§10): choose or create a target, copy an SDK snippet, then
+send a first error and watch it arrive. **Errors → Targets** shows the two configuration paths:
 
 - **Automatic linking.** One switch creates a linked target for every current project; every new
   project gets one as it is created. Turning it off disables the targets it created and keeps their
@@ -255,15 +256,10 @@ The sink never validates auth, rate limits or retention; the real route tests do
 - **Attach an off-platform project.** Give it a name; Yoal creates a standalone target with its own
   DSN. This is for an app that is not deployed by Yoal.
 
-Every target row shows:
-
-- the DSN and a copy button;
-- **"Already using Sentry? Replace your DSN with this. That's it."**
-- a browser snippet for static sites;
-- a **Send test error** button that pushes a real event through the ingest path;
-- enable/disable, rotate key, stored-event sample rate, notification toggle and delete.
-
-No wizard, no environment picker, no platform picker, no team.
+Every target row shows its DSN with a copy button, and its menu sends a test error through the real
+ingest path, opens the setup guide, and edits enable/disable, rotate key, stored-event sample rate,
+notifications and delete. The setup guide's SDK picker exists only to show the right install line
+and snippet; nothing is stored per platform, and there is still no team or environment setup.
 
 ### Browser (one line)
 
@@ -420,54 +416,71 @@ and never alerts. Delete removes the issue, its events and counts; a fresh occur
 
 ## 10. UI: top-level Errors page
 
-**Observe → Errors** is an organization-level page, not a project sub-page. It has three tabs.
+**Observe → Errors** is an organization-level page, not a project sub-page. Opening it swaps the
+sidebar to the Errors subnav (like Alerts): **Issues** (with the unresolved count), **Targets** (with
+the target count) and **Setup** (with a pulsing dot until any target has reported). The section is
+`?tab=`; with no tab an organization without targets lands on Setup, everyone else on Issues. The
+list and an open issue are only read on the Issues tab.
 
-**Setup** (auto-opened when there are no targets):
+**Setup** (`?tab=setup`, `&target=<id>` preselects one; `_lib/Setup.svelte`):
 
-- three steps with live completion badges: **Target**, **DSN**, **First event**;
-- step 1 offers automatic linking, a single-project link and an off-platform target;
-- step 2 picks Node/Bun, browser SDK, PHP, Go, Python or a static site and shows the exact snippet
-  with the selected target's DSN, each with copy buttons;
-- step 3 sends a test event or re-checks for the first real event and reports when it arrived.
+- a numbered stepper judged from live state, with a progress bar until the first event and a
+  success panel after it (View issues, Notify me of new issues, Set up another);
+- step 1 offers three cards when there are no targets (every project — recommended; one project;
+  an app outside Yoal), and a target picker with health once there are;
+- step 2 picks Node/Bun, Browser, Static site, PHP, Go or Python and shows the install command and the
+  init snippet (`_lib/sdks.ts`, the single source of snippets). For an enabled linked target and a
+  server SDK it defaults to reading the injected `SENTRY_DSN`; otherwise the DSN is inlined and an
+  optional environment and release are added;
+- step 3 proves the pipe three ways — **Send test error**, one `captureException` line for the
+  chosen SDK, or a `curl` of a minimal `store` event with query-string auth — and polls the page
+  every four seconds (visible tab only, up to 15 minutes) until `lastSeenAt` is set, with a
+  troubleshooting list.
 
-**Issues** (default; `?tab=issues`):
+**Issues** (default; `?tab=issues`; `_lib/IssueList.svelte`):
 
-- overview: unresolved, events in 24h, new issues in 24h, active targets, and 14-day event and
-  new-issue charts;
-- filters: status tabs (Unresolved / Resolved / Ignored / All), target, level, environment, release,
-  time range (24h / 7d / 30d / all), search over name/message/culprit/issue id, and sort by last
-  seen, newest first or most events;
-- rows: level, `Name: message`, target name and project slug, culprit, count, last seen, with
-  checkboxes for bulk resolve, ignore, reopen and delete;
-- offset pagination with **Newer** / **Older**.
+- overview: a stat strip (unresolved with new in 24h, events in 24h, reporting targets, resolved) and
+  14-day event and new-issue bar charts with a hover readout;
+- status tabs with counts; last-seen range (24h / 7d / 30d / all); search; target, level,
+  environment and release selects that apply on change; sort by last seen, first seen or most events;
+  removable filter chips and **Clear all**;
+- rows: a level-coloured edge, type, **New** / **Regressed** flags, message, culprit, target (when
+  more than one), environment and release, total and today's counts, last seen and age; hover actions
+  resolve / ignore / reopen; checkboxes drive a floating bulk bar (resolve, ignore, reopen, delete);
+- offset pagination with Previous / Next and a `1–50 of N` range;
+- keyboard: `/` search, `j`/`k` move, `x` select, `o` open, `r`/`i`/`u` resolve / ignore / reopen the
+  selection or the focused row, `Esc` clears the selection;
+- empty states: filters with no match, no target ever reported (setup and send-test), nothing
+  unresolved.
 
-**Issue detail** (the same page with `?issue=<issueId>`, opened from a row or an alert link; the
-card has a back link):
+**Issue detail** (the same page with `?issue=<issueId>`, opened from a row or an alert link;
+`_lib/IssueDetail.svelte`):
 
-- name + message, target, level, status buttons (Resolve / Ignore / Reopen / Delete), first/last
-  seen, count, environment and release badges;
-- 24-hour and 14-day bar charts from `app_error_hourly`;
-- one selected occurrence at a time: the exception chain, top-first frames with `file:line:col`,
-  in-app highlighted, and a copy-stack button;
-- tags, browser/os/runtime, request path, SDK and extra for that occurrence;
-- an occurrence list (at most 50 stored per issue) to switch between events.
+- level edge, level / status / regressed badges, target, environment and platform, type, message and
+  culprit; Resolve and Ignore (or Reopen), and a menu for copy link, copy id and delete;
+- a notice for regressed, resolved or ignored issues;
+- stat strip: events, last 24 hours, first and last seen with their releases;
+- one activity chart with a 24h / 14d toggle;
+- one stored event at a time, newest first, stepped with arrows, `j`/`k` or the occurrence list:
+  request, release, environment and user; the exception chain crash-frame first with runs of library
+  frames folded (`Full stack` opens them; a stack with no in-app frame is shown whole) and a
+  copy-stack button; tags and context as key/value lists; extra as highlighted JSON;
+- a details card (issue id, target, first/last release, first/last/resolved times); `Esc` returns
+  to the list.
 
-**Targets** (`?tab=targets`):
+**Targets** (`?tab=targets`; `_lib/Targets.svelte`):
 
-- the **Automatic linking** switch with target/auto-linked/reporting counts;
-- **Link a Yoal project by hand** and **Attach an off-platform project**, one field each;
-- one card per target: name, kind (`Yoal project` / `Off-platform`), auto-linked/manual, enabled,
-  health (`reporting` / `quiet` / `waiting for first event` / `disabled`), DSN with copy, browser
-  snippet, a seven-day sparkline, unresolved and 24-hour counts, first/last seen, Send test, Rotate
-  key, Enable/Disable, Delete;
-- expandable **Setup snippets** for Node/Bun, the browser SDK, PHP, Go and Python;
-- a settings form for name (standalone), stored-event sample rate, notification toggle and usage.
+- the **Automatic linking** switch (turning it off asks first) with auto-linked and reporting counts;
+- **Add target** opens a dialog: a Yoal project (select) or an app outside Yoal (name);
+- one row per target: health dot (reporting / quiet / waiting for first event / disabled), name,
+  kind, auto-linked, a monthly-cap warning from 80%, last event, project link, seven-day sparkline,
+  unresolved and 24-hour counts, and the DSN with copy and a setup-guide link;
+- a row menu: view issues, setup guide, copy DSN, send test error, settings (name for standalone,
+  stored-event sample rate, notifications, monthly usage), rotate key (confirmed), enable/disable,
+  delete (type the name to confirm).
 
 No comments, assignee, breadcrumbs, merge/split or "seen by". Project pages do not get an Errors tab;
 the top-level page is the only error view.
-
-Empty state: *"No errors here"* with the target hint, or *"No issues match these filters"* when a
-filter is active.
 
 Permissions: viewing the page needs the organization-level `project:read`; linked targets are
 further filtered to projects the caller can read. Configuring auto-linking, attaching off-platform

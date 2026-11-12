@@ -8,23 +8,37 @@ apps. A Sentry SDK works by changing one DSN, and a static site can use one scri
 grouped into issues with a stack trace, an exact count and a resolve button. There are no
 organisations, teams, replays, performance traces, crons or alert rules to configure.
 
-## Link targets
+## Set up
 
-Open **Observe → Errors**. On a fresh organization the **Setup** tab opens automatically with three
-steps: create a target, copy an SDK snippet, and verify the first event.
+Open **Observe → Errors**. The sidebar switches to the Errors sections: **Issues**, **Targets** and
+**Setup**. A fresh organization lands on **Setup**, a three-step guide:
 
-- **Automatic linking** gives every project in the organization a DSN and injects it into linked
+1. **Choose where errors go.** Link every Yoal project at once (recommended), link one project, or
+   create a target for an app outside Yoal. Once targets exist, pick one from the list.
+2. **Add the SDK.** Pick Node/Bun, Browser, Static site, PHP, Go or Python to get the install command
+   and an init snippet with the target's real DSN. For a linked Yoal project the snippet reads the
+   injected `SENTRY_DSN` instead, so it holds no secret. Optionally tag events with an environment
+   and release.
+3. **Send your first error.** Send a test error from Yoal, add one `captureException` line to the
+   app, or `curl` an event straight at the DSN from a terminal. The page listens for the event and
+   updates the moment it lands; then it offers the target's issues and new-issue notifications.
+
+Already using Sentry? Swap the DSN in your existing `Sentry.init` and skip to step 3.
+
+## Targets
+
+The **Targets** section lists every target with its health (reporting, quiet, waiting for its first
+event, or disabled), a seven-day sparkline, unresolved and 24-hour counts, and its DSN with a copy
+button.
+
+- **Automatic linking** gives every project in the organization a target and injects its DSN into
   process apps and functions. New projects are linked as they are created. Turning it off disables
   the targets it created and keeps their data.
-- **Link a Yoal project by hand** even while automatic linking is off.
-- **Attach an off-platform project** creates a standalone target with its own DSN for an app that
-  Yoal does not deploy.
-- Each target card shows its health, DSN, browser snippet, a seven-day sparkline, setup snippets
-  for Node, the browser SDK, PHP, Go and Python, and actions to send a test, rotate the key,
-  enable/disable, edit sample rate and notifications, or delete.
-
-Copy the DSN from a target, or use its browser snippet. Press **Send test** to prove the pipe works;
-**Check again** in Setup re-reads the target until the first event arrives.
+- **Add target** links one Yoal project by hand, or creates a standalone target for an app that Yoal
+  does not deploy.
+- Each target's **⋯** menu opens its issues or setup guide, copies the DSN, sends a test error, edits
+  settings (name, stored-event sample rate, notifications, monthly usage), rotates the key,
+  enables or disables it, or deletes it.
 
 ## Connect an app
 
@@ -88,16 +102,35 @@ is, so staging never reopens or inflates a production issue.
 
 ## Issues
 
-The **Issues** tab opens with unresolved, 24-hour, new-issue and active-target counts and 14-day
-charts. It has **Unresolved**, **Resolved**, **Ignored** and **All** filters, plus filters for target,
-level, environment, release and time range (24 hours, 7 days, 30 days or all time), search over the
-type, message, culprit and issue id, and a sort by last seen, newest first or most events. Select
-issues for bulk resolve, ignore, reopen or delete; **Newer** and **Older** page through the rest.
+The **Issues** section opens with unresolved, 24-hour, reporting-target and resolved counts and
+14-day charts of events and new issues (hover a bar for its value). Status tabs (**Unresolved**,
+**Resolved**, **Ignored**, **All**) show their counts. Filter by target, level, environment, release
+and when it was last seen (24 hours, 7 days, 30 days or all), search the type, message, culprit or
+issue id, and sort by last seen, first seen or most events. Active filters show as chips you can
+remove one at a time.
 
-Open an issue to see its target, 24-hour and 14-day charts, an occurrence list, the exception chain
-and frames, and the tags, context and extra for the selected occurrence. **Resolve** marks it fixed;
-a new event reopens it and records that regression. **Ignore** keeps counting but hides it from the
-default list. **Delete** removes the issue, its events and counts.
+Each row shows the level, type, message, culprit, target, environment and release, with **New**
+(first seen in the last day) and **Regressed** flags, the total and today's event counts, and when it
+was last and first seen. Hover a row to resolve, ignore or reopen it; tick rows for bulk actions.
+
+Open an issue to see its status and any regression, its counts and releases, a 24-hour or 14-day
+chart, and one stored event at a time: request, release and user, the exception chain with your own
+frames shown and library frames folded (**Full stack** opens them), and the tags, context and
+extra. Step through occurrences with the arrows or the list beside it. **Resolve** marks it fixed; a
+new event reopens it and flags the regression. **Ignore** keeps counting but hides it from the
+default list. The **⋯** menu copies a link or the issue id, and deletes the issue with its events and
+counts.
+
+### Keyboard shortcuts
+
+| Key | In the list | On an issue |
+|---|---|---|
+| `/` | Search | |
+| `j` / `k` | Next / previous issue | Older / newer event |
+| `x` | Select the issue | |
+| `o` | Open the issue | |
+| `r`, `i`, `u` | Resolve, ignore or reopen the selection (or the current issue) | Resolve, ignore or reopen |
+| `Esc` | Clear the selection | Back to the list |
 
 Counts are exact. Stored events are sampled: at most one per issue per second, 50 kept per issue
 and 500 per target per minute. Events and hourly counts are pruned after 30 days; issues not seen
