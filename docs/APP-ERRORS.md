@@ -1,13 +1,15 @@
-# App errors — Yoal sub-pages
+# App errors — top-level Errors service
 
-Status: **built — 2026-11-12.** The ingest, core service, project sub-pages, filters/search,
-pagination, REST, MCP, environment injection, browser snippet and tests are in place. Source maps
-and auto-instrumentation (Phase 3) and the CLI/metrics polish (Phase 4) are not.
+Status: **built — 2026-11-12.** The ingest, core service, top-level Errors page, auto-linking,
+standalone targets, filters/search, pagination, REST, MCP, environment injection, browser snippet
+and tests are in place. Source maps and auto-instrumentation (Phase 3) and the CLI/metrics polish
+(Phase 4) are not.
 
-A Sentry-sized slice of Sentry for the apps Yoal deploys: exceptions grouped into issues, with a
-stack trace, a count and a resolve button. It lives inside a project, under a new **Errors** subnav
-item, and reuses the project you already have, Yoal's auth, permissions, audit log, alerts and
-SQLite. There is no second service and no org → team → project → key setup.
+A Sentry-sized slice of Sentry for everything an organization deploys: exceptions grouped into
+issues, with a stack trace, a count and a resolve button. It is an organization-level **Errors**
+page, not a per-project page. A target is either a Yoal project (linked automatically or by hand)
+or an off-platform app attached with its own DSN. It reuses Yoal's auth, permissions, audit log,
+alerts and SQLite; there is no second service and no org → team → project → key setup.
 
 The compatibility bet: **errors are drop-in Sentry-compatible**. An app already using a Sentry SDK
 switches by changing one DSN. Static sites get a one-line script. JS, PHP and Go harnesses already
@@ -19,13 +21,15 @@ exist in `tests/harnesses/error-tracker/` and are the acceptance test for the in
 
 **The whole product**
 
-1. Open a project → **Errors** → turn tracking on.
-2. Yoal mints a numeric DSN and shows a copy button plus a one-line browser snippet.
-3. A Sentry SDK or the snippet sends errors.
-4. Issues are grouped by bug, with stack, counts, first/last seen, environment and release.
-5. **Resolve** marks it fixed; if it happens again, it reopens.
-6. A new issue can send one alert through Yoal's existing notifiers.
-7. Process apps and functions get the DSN injected, so most apps need no code change.
+1. Open the organization-level **Errors** page.
+2. Turn on **automatic linking** to give every Yoal project a numeric DSN, or attach an
+   off-platform app as a standalone target with its own DSN.
+3. Copy the DSN or the one-line browser snippet.
+4. A Sentry SDK or the snippet sends errors.
+5. Issues are grouped by bug, with stack, counts, first/last seen, environment, release and target.
+6. **Resolve** marks it fixed; if it happens again, it reopens.
+7. A new issue can send one alert through Yoal's existing notifiers.
+8. Linked process apps and functions get the DSN injected, so most apps need no code change.
 
 **Not building** (the fluff):
 
@@ -49,11 +53,12 @@ The one "extra" kept is **source maps**, because a minified stack is not error m
 
 ## 2. Why built into Yoal
 
-- **The project already is the Sentry project.** No second tenancy model, no duplicate member list.
+- **The project already is a target.** No duplicate tenancy model, no duplicate member list. An
+  off-platform app is a target without a project link.
 - **Deploy metadata comes for free.** `environment` is production or preview, `release` is the
   deployment short ID or git commit, and the issue page can link back to the deployment.
-- **One permission model.** Viewing needs `project:read`; changing anything needs `project:update`,
-  exactly like the rest of the project.
+- **One permission model.** Viewing needs organization `project:read`; changing anything needs
+  organization `project:update`, or the linked project's `project:update` for that target.
 - **One alert path.** The existing notifiers already send email, webhook, Slack, Discord, Telegram,
   ntfy, SMS and push. No new channel code.
 - **One backup and one migration story.** The rows live in Yoal's SQLite; the existing backup,
@@ -185,7 +190,7 @@ and basic tokens, JWTs, `sk_/pk_/ghp_/xox…` keys, AWS key ids, PEM blocks and
 | `feedback` / `user_report` | `200`, dropped |
 
 A `200` is deliberate: a `4xx` makes Sentry SDKs retry or disable features, and their session and
-transaction noise must not fill the logs. Ignored item types are counted per project per hour and
+transaction noise must not fill the logs. Ignored item types are counted per target per hour and
 shown as "ignored telemetry" in settings.
 
 ### Compatibility reality check
@@ -240,18 +245,25 @@ The sink never validates auth, rate limits or retention; the real route tests do
 
 ## 5. Setup experience
 
-### In the project
+### On the Errors page
 
-**Project → Errors → Turn on error tracking.**
+**Errors → Targets** shows two configuration paths:
 
-The panel shows:
+- **Automatic linking.** One switch creates a linked target for every current project; every new
+  project gets one as it is created. Turning it off disables the targets it created and keeps their
+  data.
+- **Attach an off-platform project.** Give it a name; Yoal creates a standalone target with its own
+  DSN. This is for an app that is not deployed by Yoal.
+
+Every target row shows:
 
 - the DSN and a copy button;
 - **"Already using Sentry? Replace your DSN with this. That's it."**
 - a browser snippet for static sites;
-- a **Send test error** button that pushes a real event through the ingest path.
+- a **Send test error** button that pushes a real event through the ingest path;
+- enable/disable, rotate key, stored-event sample rate, notification toggle and delete.
 
-No wizard, no environment picker, no platform picker, no team. One toggle and one key.
+No wizard, no environment picker, no platform picker, no team.
 
 ### Browser (one line)
 
@@ -281,9 +293,10 @@ transactions, replays and attachments.
 
 ### Injected into Yoal apps
 
-When tracking is on, `WorkloadService.activation` adds defaults before the spec's own env:
+For a linked target that is enabled, `WorkloadService.activation` adds defaults before the spec's
+own env:
 
-- `SENTRY_DSN` — the project DSN;
+- `SENTRY_DSN` — the target DSN;
 - `SENTRY_RELEASE` — the deployment short ID or git commit;
 - `SENTRY_ENVIRONMENT` — `production` or `preview`.
 
@@ -304,9 +317,9 @@ defaults are not secrets and can be overridden per project.
  control plane: ingest route → parse → scrub → fingerprint
         │                                                    │ 100 ms / 500 events
         │                                                    ▼
-        │                                     SQLite: issues, events, hourly, usage
+        │                                     SQLite: targets, issues, events, hourly, usage
         ▼
- dashboard project sub-pages · REST /api/v1/projects/:slug/errors · MCP
+ dashboard /errors · REST /api/v1/projects/:slug/errors · MCP
 ```
 
 - **Ingest writes synchronously, with sampling.** One event is one SQLite transaction; the rate
@@ -320,7 +333,7 @@ defaults are not secrets and can be overridden per project.
 - **Single writer.** Yoal has one active control plane (D5); there is no multi-writer ingest.
 - **Contracts:** `packages/contracts/src/app-errors.ts` for event schemas, list queries, views and
   limits.
-- **Migration:** `packages/db/migrations/0110_app_errors.sql` (current max is 0109).
+- **Migration:** `packages/db/migrations/0110_app_errors.sql` and `0111_app_error_targets.sql`.
 
 ---
 
@@ -328,16 +341,22 @@ defaults are not secrets and can be overridden per project.
 
 | Table | Contents |
 |---|---|
-| `app_error_projects` | `dsn_project_id INTEGER PRIMARY KEY AUTOINCREMENT`, `project_id TEXT UNIQUE` (the Yoal `prj_…`), enabled, sample rate, notification channels, created/updated. |
-| `app_error_keys` | id, `dsn_project_id`, `public_key` (32 hex), label, created/revoked. One active key per project. |
-| `app_error_issues` | `aei_…`, project, fingerprint, platform, environment, name, message, culprit, level, status, exact `event_count`, first/last seen, first/last release, regression/resolution. Unique `(project_id, fingerprint)`. |
-| `app_error_events` | `aev_…`, project, issue, `event_id` (Sentry 32 hex), received_at, timestamp, level, message, `exceptions_json` (the chain with frames), path, method, release, environment, `tags_json`, `contexts_json`, `extra_json`, user id, platform, sdk. Unique `(project_id, event_id)`. |
+| `app_error_projects` | A target: `dsn_project_id INTEGER PRIMARY KEY AUTOINCREMENT`, `project_id TEXT UNIQUE` (the Yoal `prj_…` for a linked target, or `ext_…` for a standalone app), `org_id`, `name`, `kind` (`project` or `standalone`), `auto_linked`, enabled, sample rate, notification channels, created/updated. |
+| `app_error_settings` | `org_id → auto_link`, one row per organization for the top-level switch. |
+| `app_error_keys` | id, target, `public_key` (32 hex), label, created/revoked. One active key per target. |
+| `app_error_issues` | `aei_…`, target, fingerprint, platform, environment, name, message, culprit, level, status, exact `event_count`, first/last seen, first/last release, regression/resolution. Unique `(project_id, fingerprint)`. |
+| `app_error_events` | `aev_…`, target, issue, `event_id` (Sentry 32 hex), received_at, timestamp, level, message, `exceptions_json` (the chain with frames), path, method, release, environment, `tags_json`, `contexts_json`, `extra_json`, user id, platform, sdk. Unique `(project_id, event_id)`. |
 | `app_error_hourly` | `(issue_id, hour) → count`, exact. |
 | `app_error_usage` | `(project_id, month) → accepted, dropped, ignored`, for the cap and the settings panel. |
 
-- `dsn_project_id` is the only place a numeric id exists. It is allocated once when tracking is
-  enabled and never reused, so a DSN cannot be recycled onto another project.
-- Deleting a Yoal project cascades keys, issues, events, hourly rows and usage.
+- The internal `project_id` is either a Yoal project id or the synthetic `ext_…` id of a standalone
+  target. Every issue, event, key and usage row keys off it, so the ingest path does not care which
+  kind of target it wrote to.
+- `dsn_project_id` is the only place a numeric id exists. It is allocated once per target and never
+  reused, so a DSN cannot be recycled onto another target.
+- Deleting a Yoal project cascades its linked target's keys, issues, events, hourly rows and usage.
+  Deleting a standalone target does the same; the off-platform app is untouched.
+- Turning automatic linking off disables only targets marked `auto_linked`; it never deletes data.
 - `events` keeps the newest 50 per issue. Counts come from `issues.event_count` and
   `app_error_hourly`; a sampled-out event never changes the count.
 - All timestamps are integer milliseconds; Sentry's float seconds and ISO strings are normalised.
@@ -370,12 +389,12 @@ and never alerts. Delete removes the issue, its events and counts; a fresh occur
 
 ## 9. Limits, security and abuse
 
-- **Per DSN project:** 600 accepted events/minute, burst 50; in-memory token bucket.
+- **Per target:** 600 accepted events/minute, burst 50; in-memory token bucket.
 - **Global ingest:** 5 000 accepted events/minute, to protect SQLite.
-- **Monthly cap:** platform policy `appErrorEventsPerMonth`, default 100 000 per project. Past it,
+- **Monthly cap:** platform policy `appErrorEventsPerMonth`, default 100 000 per target. Past it,
   respond `429` with `X-Sentry-Rate-Limits: 3600:error:project:quota_exceeded` and count the drop.
-  The project page shows usage. It never blocks a deploy or a request.
-- **Stored events:** at most one per issue per second, 50 per issue, 500 per project per minute.
+  The target panel shows usage. It never blocks a deploy or a request.
+- **Stored events:** at most one per issue per second, 50 per issue, 500 per target per minute.
   Counts remain exact.
 - **Payload:** envelope 1 MB decompressed, event 512 KB, 100 frames, 20 tags, 4 KB extra, 16 KB
   of exception chain and values after frame trimming; oversized events answer `413`.
@@ -399,61 +418,69 @@ and never alerts. Delete removes the issue, its events and counts; a fresh occur
 
 ---
 
-## 10. UI: project sub-pages
+## 10. UI: top-level Errors page
 
-**Project subnav** gets an **Errors** item with an unresolved-count badge, next to Traffic and Logs.
+**Observe → Errors** is an organization-level page, not a project sub-page. It has two tabs.
 
-**Errors list** (`?tab=errors`):
+**Issues** (default; `?tab=issues`):
 
-- header: DSN with copy button, static-site snippet, test event, sample rate, notification toggle,
-  rotate key, turn off, delete all, and monthly usage;
-- filters: status tabs (Unresolved / Resolved / Ignored / All), environment, release, time range
-  (24h / 7d / 30d / all), search over name/message/culprit/issue id;
-- rows: level, `Name: message`, culprit, count, last seen;
+- filters: status tabs (Unresolved / Resolved / Ignored / All), target, environment, release, time
+  range (24h / 7d / 30d / all), search over name/message/culprit/issue id;
+- rows: level, `Name: message`, target name and project slug, culprit, count, last seen;
 - keyset pagination via `before`, behind a **Load older issues** link.
 
-**Issue detail** (the same page with `?tab=errors&issue=<issueId>`, opened from a row or an alert
-link; the card has a back link):
+**Issue detail** (the same page with `?issue=<issueId>`, opened from a row or an alert link; the
+card has a back link):
 
-- name + message, status buttons (Resolve / Ignore / Reopen / Delete), first/last seen, count,
-  environment and release badges;
+- name + message, target, status buttons (Resolve / Ignore / Reopen / Delete), first/last seen,
+  count, environment and release badges;
 - 24-hour and 14-day bar charts from `app_error_hourly`;
 - the exception chain and top-first frames with `file:line:col`, in-app highlighted;
 - tags, browser/os/runtime, extra and request path;
 - the newest stored events (at most 50 per issue).
 
-No comments, assignee, breadcrumbs, merge/split or "seen by".
+**Targets** (`?tab=targets`):
 
-**Settings** (inside the tab): DSN and key rotation, snippet, test event, stored-event sample rate,
-notification toggle, ignored-telemetry counts, monthly usage, and delete-all.
+- the **Automatic linking** switch with its consequences spelled out;
+- **Attach an off-platform project**, one name field and a DSN;
+- one row per target: name, kind (`Yoal project` / `Off-platform`), auto-linked/manual, enabled,
+  DSN with copy, unresolved and 24-hour counts, last seen, Send test, Rotate key, Enable/Disable,
+  Delete, and a settings form for name, stored-event sample rate, notification toggle and usage.
 
-Empty state: *"No errors here"* with the DSN hint, or *"No issues match these filters"* when a
-filter is active, plus **Send test error**.
+No comments, assignee, breadcrumbs, merge/split or "seen by". Project pages do not get an Errors tab;
+the top-level page is the only error view.
 
-Permissions: viewing needs `project:read`; enabling, key rotation, status changes, settings and
-deletes need `project:update`. Platform admins pass through IAM as usual.
+Empty state: *"No errors here"* with the target hint, or *"No issues match these filters"* when a
+filter is active.
+
+Permissions: viewing the page needs the organization-level `project:read`; linked targets are
+further filtered to projects the caller can read. Configuring auto-linking, attaching off-platform
+targets, rotating keys and changing target settings needs organization-level `project:update`.
+Platform admins pass through IAM as usual.
 
 ---
 
 ## 11. Alerts
 
-One fixed notification per project, not a rule builder:
+One fixed notification per target, not a rule builder:
 
 - **New issue** and **regressed issue** send once through the platform's configured notifier channels,
-  at most 10 per hour per project.
-- Detail: project, environment, `Name: message`, culprit, first release, link to the issue.
+  at most 10 per hour per target.
+- Detail: target name, environment, `Name: message`, culprit, first release, link to the issue on
+  the top-level Errors page.
 - Off by default; one checkbox turns it on. Recording errors never depends on delivery.
 - No resolved notifications, repeats, digests, escalation or on-call.
 
 Implementation: `AppErrorService` fans out to `ctx.notifiers` with the same `AlertMessage` shape the
 existing alerts use, so there is no new channel code. Platform system alerts are not used; app
-errors belong to the project's org.
+errors belong to the organization.
 
 ---
 
 ## 12. Surfaces
 
-**REST** (thin wrappers over `core.appErrors`):
+**REST** and **MCP** remain project-scoped thin wrappers over `core.appErrors`, for callers that
+already know the project; the top-level page calls the organization-scoped service methods directly.
 
 | Method | Path | Permission |
 |---|---|---|
@@ -499,10 +526,12 @@ events + stacks), `update_app_errors` (`resolve`/`ignore`/`reopen`). Read needs 
 ### Phase 0 — service and ingest — **built**
 
 - `packages/contracts/src/app-errors.ts`: Sentry event schema, list query, views, statuses, limits.
-- `packages/db/migrations/0110_app_errors.sql`: the six tables.
-- `packages/core/src/app-errors.ts`: `AppErrorService` with `ingest`, `list`, `get`, `setStatus`,
-  `delete`, `settings`, `rotateKey`, `prune`, `consumerEnv`, `usage`; exported pure helpers for the
-  parser, fingerprint and scrub.
+- `packages/db/migrations/0110_app_errors.sql` and `0111_app_error_targets.sql`: the target,
+  settings, key, issue, event, hourly and usage tables.
+- `packages/core/src/app-errors.ts`: `AppErrorService` with `ingest`, `serviceView`, `setAutoLink`,
+  `createProjectTarget`, `createStandaloneTarget`, `updateTarget`, `orgList`, `orgGet`,
+  `orgSetStatus`, `orgDeleteIssue`, `prune`, `consumerEnv`; exported pure helpers for the parser,
+  fingerprint and scrub.
 - `apps/control-plane/src/routes/ingest/api/[project]/envelope/+server.ts` and `store/+server.ts`:
   CORS, auth, caps, rate limit, `200`.
 - Wire `ctx.appErrors` into `packages/core/src/index.ts` and the maintenance sweep.
@@ -513,8 +542,10 @@ events + stacks), `update_app_errors` (`resolve`/`ignore`/`reopen`). Read needs 
 
 ### Phase 1 — the usable product — **built**
 
-- `errors` tab in `project-nav.ts` / `project-subnav.ts` with unresolved badge.
-- List, issue detail sub-page, setup panel, status actions, delete-all, test event.
+- Organization-level `Errors` page in the sidebar (Observe), with Issues and Targets tabs.
+- Target list, auto-link switch, manual project link, off-platform attachment, setup panel, status
+  actions, delete, test event.
+- Filters, search, pagination and issue detail.
 - REST routes and `docs/API.md`; MCP tools.
 - User docs page `packages/docs/content/observe/app-errors.md`.
 - Run the JS/PHP/Go harness against a dev install; `--repeat 2` must group.
@@ -524,7 +555,7 @@ events + stacks), `update_app_errors` (`resolve`/`ignore`/`reopen`). Read needs 
 - Inject `SENTRY_DSN`/`SENTRY_RELEASE`/`SENTRY_ENVIRONMENT` in `WorkloadService.activation` and the
   function host spec.
 - Ship `/e.js` and the snippet panel; cache headers and CSP note.
-- Project alerts through the existing notifier fan-out.
+- Target alerts through the existing notifier fan-out.
 - Usage/cap display and ignored-telemetry counts.
 
 ### Phase 3 — source maps — **not built**
@@ -554,14 +585,20 @@ events + stacks), `update_app_errors` (`resolve`/`ignore`/`reopen`). Read needs 
 
 **Product**
 
+- Automatic linking creates a target for every existing project and for a project created later;
+  turning it off disables auto-linked targets and keeps data.
+- A manual project link creates one target while automatic linking is off.
+- An off-platform target ingests, lists, resolves and deletes from the top-level page.
+- The top-level Issues tab filters by target and shows the target name and project slug.
 - Resolve then throw again reopens the same issue with `regressed_at`.
 - Ignore then throw again counts but stays out of the default list and does not alert.
 - Two environments are separate issues; two releases are one issue with first/last release.
 - 10 000 events in a minute leaves a bounded database, returns `429`s and shows dropped counts.
-- Wrong key, wrong project, revoked key `401`; oversized body `413`; bad gzip `400`.
+- Wrong key, wrong target, revoked key `401`; oversized body `413`; bad gzip `400`.
 - No headers, cookies, query strings, email or IP in any stored row.
-- Deleting the Yoal project removes every row, key and map.
-- Permissions: `project:read` can view, not mutate; `project:update` can.
+- Deleting the Yoal project removes every row and key for its linked target.
+- Permissions: organization `project:read` can view, not mutate; organization `project:update`
+  (or the linked project's `project:update`) can manage targets.
 
 **Operations**
 
@@ -573,8 +610,8 @@ events + stacks), `update_app_errors` (`resolve`/`ignore`/`reopen`). Read needs 
 
 ## 16. Decisions to confirm
 
-1. **DSN path.** Recommended `/ingest/<numeric-dsn-project-id>`, with the numeric id allocated per
-   Yoal project. It is required by the Sentry SDKs and keeps `/api` clean. The alternative — a
+1. **DSN path.** Recommended `/ingest/<numeric-dsn-target-id>`, with the numeric id allocated per
+   target. It is required by the Sentry SDKs and keeps `/api` clean. The alternative — a
    query-param or custom SDK — is not drop-in.
 2. **Injection.** Recommended injecting `SENTRY_DSN`/`SENTRY_RELEASE`/`SENTRY_ENVIRONMENT` as
    overridable defaults. The alternative is `YOAL_ERRORS_*` only, which needs one line of app code.
@@ -588,10 +625,13 @@ events + stacks), `update_app_errors` (`resolve`/`ignore`/`reopen`). Read needs 
 
 ## 17. Success check
 
+- An owner turns on automatic linking once and every project has a DSN; a new project gets one
+  without another visit.
+- An off-platform app gets a target and a DSN without a Yoal project.
 - A Sentry user changes one DSN and their error page keeps working with their existing SDK.
 - A static site owner pastes one line and sees a grouped exception in under a minute.
 - A process app or function reports errors with no code change because the DSN and release were
   injected.
 - The dashboard has no concept the user did not ask for.
 - A 10 000-event storm cannot take down the control plane or grow the database without bound.
-- The project page, the issue page and the settings page feel like the rest of Yoal.
+- The Errors page, the issue page and the target settings feel like the rest of Yoal.

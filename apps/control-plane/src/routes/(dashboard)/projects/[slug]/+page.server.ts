@@ -2,7 +2,6 @@ import { error, fail, redirect } from '@sveltejs/kit';
 import { CoreError, entriesFromZip, isFunctionTier } from '@yoal/core';
 import {
 	accessModes,
-	appErrorListQuerySchema,
 	appVolumeAttachSchema,
 	appVolumeCreateSchema,
 	appVolumeDetachSchema,
@@ -272,34 +271,6 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 					}, [])
 				: [];
 
-		const appErrorQuery = appErrorListQuerySchema.safeParse({
-			status: url.searchParams.get('status')?.trim() || undefined,
-			environment: url.searchParams.get('environment')?.trim() || undefined,
-			release: url.searchParams.get('release')?.trim() || undefined,
-			q: url.searchParams.get('q')?.trim() || undefined,
-			range: url.searchParams.get('range')?.trim() || undefined,
-			before: url.searchParams.get('before')?.trim() || undefined
-		});
-		const appErrorFilters = appErrorQuery.success
-			? {
-					status: appErrorQuery.data.status,
-					environment: appErrorQuery.data.environment ?? '',
-					release: appErrorQuery.data.release ?? '',
-					q: appErrorQuery.data.q ?? '',
-					range: appErrorQuery.data.range,
-					before: appErrorQuery.data.before ?? null
-				}
-			: { status: 'unresolved', environment: '', release: '', q: '', range: 'all' as const, before: null };
-		const appErrorSettings = safely(() => core.appErrors.settings(principal, row), null);
-		const appErrorList = safely(
-			() => core.appErrors.list(principal, row, appErrorQuery.success ? appErrorQuery.data : {}),
-			null
-		);
-		const appErrorIssueId = url.searchParams.get('issue');
-		const appErrorDetail = appErrorIssueId
-			? safely(() => core.appErrors.get(principal, row, appErrorIssueId), null)
-			: null;
-
 		return {
 			project,
 			traffic,
@@ -330,11 +301,6 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			/** Storage targets the volume form offers (docs/STORAGE.md §2.2). */
 			appVolumeStorage: appVolumesEnabled ? core.disks.choices('app-volumes') : null,
 			appVolumes,
-			appErrors: appErrorList ? { unresolved: appErrorList.summary.unresolved } : null,
-			appErrorSettings,
-			appErrorList,
-			appErrorDetail,
-			appErrorFilters,
 			/** Policies assignable to this project's scopes (IAM.md I25). */
 			accessPolicies: safely(() => core.accessPolicies.list(principal, { projectId: row.id }), []),
 			// Jobs (plan 09): the tab hides unless YOAL_FEATURE_JOBS is on.
@@ -384,8 +350,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 				readUserPools: canAt('userPool:read'),
 				attachUserPool:
 					canAt('userPool:update') && canAt('project:update'),
-				manageVolumes: appVolumesEnabled && canAt('project:update'),
-				manageErrors: canAt('project:update')
+				manageVolumes: appVolumesEnabled && canAt('project:update')
 			}
 		};
 	} catch (caught) {
@@ -1597,114 +1562,5 @@ export const actions: Actions = {
 			success:
 				'Secret deleted. Running workloads keep the value they activated with until they restart.'
 		};
-	},
-
-	// --- App errors (docs/APP-ERRORS.md) -------------------------------------------------------
-
-	enableAppErrors: async ({ locals, params }) => {
-		const principal = locals.principal!;
-		try {
-			const project = core.projects.requireRow(principal, params.slug);
-			core.appErrors.enable(principal, project);
-			return { success: 'Error tracking is on. Copy the DSN or the snippet into the app.' };
-		} catch (caught) {
-			return fail(failStatus(caught), toFormFailure(caught));
-		}
-	},
-
-	disableAppErrors: async ({ locals, params }) => {
-		const principal = locals.principal!;
-		try {
-			const project = core.projects.requireRow(principal, params.slug);
-			core.appErrors.updateSettings(principal, project, { enabled: false });
-			return { success: 'Error tracking is off. Existing issues are kept until you delete them.' };
-		} catch (caught) {
-			return fail(failStatus(caught), toFormFailure(caught));
-		}
-	},
-
-	updateAppErrorSettings: async ({ request, locals, params }) => {
-		const principal = locals.principal!;
-		const data = await request.formData();
-		const sampleRateText = formString(data, 'sampleRate');
-		const sampleRate = sampleRateText ? Number(sampleRateText) : undefined;
-		try {
-			const project = core.projects.requireRow(principal, params.slug);
-			core.appErrors.updateSettings(principal, project, {
-				...(sampleRate === undefined ? {} : { sampleRate }),
-				notify: formBoolean(data, 'notify')
-			});
-			return { success: 'Error tracking settings saved.' };
-		} catch (caught) {
-			return fail(failStatus(caught), toFormFailure(caught));
-		}
-	},
-
-	rotateAppErrorKey: async ({ locals, params }) => {
-		const principal = locals.principal!;
-		try {
-			const project = core.projects.requireRow(principal, params.slug);
-			core.appErrors.rotateKey(principal, project);
-			return { success: 'New key created. The old key works for another 24 hours.' };
-		} catch (caught) {
-			return fail(failStatus(caught), toFormFailure(caught));
-		}
-	},
-
-	updateAppErrorStatus: async ({ request, locals, params }) => {
-		const principal = locals.principal!;
-		const data = await request.formData();
-		const ids = formString(data, 'ids')
-			.split(',')
-			.map((id) => id.trim())
-			.filter(Boolean);
-		const status = formString(data, 'status');
-		if (ids.length === 0) return fail(400, { message: 'Missing the issue ids.' });
-		if (status !== 'unresolved' && status !== 'resolved' && status !== 'ignored')
-			return fail(400, { message: 'Choose unresolved, resolved or ignored.' });
-		try {
-			const project = core.projects.requireRow(principal, params.slug);
-			const changed = core.appErrors.setStatus(principal, project, { ids, status });
-			return { success: `${changed} issue${changed === 1 ? '' : 's'} updated.` };
-		} catch (caught) {
-			return fail(failStatus(caught), toFormFailure(caught));
-		}
-	},
-
-	deleteAppErrorIssue: async ({ request, locals, params }) => {
-		const principal = locals.principal!;
-		const data = await request.formData();
-		const issueId = formString(data, 'issueId');
-		if (!issueId) return fail(400, { message: 'Missing the issue id.' });
-		try {
-			const project = core.projects.requireRow(principal, params.slug);
-			core.appErrors.deleteIssue(principal, project, issueId);
-			return { success: 'Issue deleted.' };
-		} catch (caught) {
-			return fail(failStatus(caught), toFormFailure(caught));
-		}
-	},
-
-	deleteAllAppErrors: async ({ locals, params }) => {
-		const principal = locals.principal!;
-		try {
-			const project = core.projects.requireRow(principal, params.slug);
-			const count = core.appErrors.deleteAll(principal, project);
-			return { success: `Deleted ${count} issue${count === 1 ? '' : 's'} and their events.` };
-		} catch (caught) {
-			return fail(failStatus(caught), toFormFailure(caught));
-		}
-	},
-
-	testAppError: async ({ locals, params }) => {
-		const principal = locals.principal!;
-		try {
-			const project = core.projects.requireRow(principal, params.slug);
-			const result = core.appErrors.testEvent(principal, project);
-			return { success: `Test event sent (issue ${result.issueId}).` };
-		} catch (caught) {
-			return fail(failStatus(caught), toFormFailure(caught));
-		}
 	}
-
 };

@@ -207,6 +207,7 @@ export class ProjectService {
 			() => {
 				this.ctx.db.insert(projects).values(row).run();
 				this.ctx.environments.ensureProduction(row);
+				this.ctx.appErrors.onProjectCreated(row);
 				this.bump(principal.orgId);
 			},
 		);

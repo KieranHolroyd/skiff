@@ -2,9 +2,13 @@
  * App errors (docs/APP-ERRORS.md): the app-facing error tracker.
  *
  * Ingest is Sentry-compatible at the edge: the control plane exposes
- * `POST /ingest/api/<numeric-dsn-id>/{envelope,store}/`, accepts the four auth forms Sentry SDKs
- * use, and normalises envelope/store payloads into one internal event. Everything after that is
- * Yoal: SQLite rows, project permissions, the audit log and a project subnav page.
+ * `POST /ingest/api/<numeric-dsn-id>/{envelope,store}/`, accepts the Sentry auth forms
+ * SDKs use, and normalises envelope/store payloads into one internal event. Everything after that
+ * is Yoal: SQLite rows, organization permissions, the audit log and the top-level Errors page.
+ *
+ * A target is a linked Yoal project or a standalone off-platform app. Auto-linking creates targets
+ * for every project in an organization; a target can also be linked by hand or created standalone,
+ * and each has its own DSN, issues, events and usage.
  *
  * Stored events are sampled (one per issue per second, 500 per project per minute) and capped at
  * 50 per issue; counts are exact. Messages, stacks, tags and extra are scrubbed with the same
@@ -23,10 +27,15 @@ import type {
 	AppErrorLevel,
 	AppErrorListView,
 	AppErrorListQuery,
+	AppErrorServiceView,
 	AppErrorSettingsView,
 	AppErrorSettingsUpdate,
 	AppErrorStatus,
 	AppErrorStatusUpdate,
+	AppErrorTargetCreate,
+	AppErrorTargetKind,
+	AppErrorTargetUpdate,
+	AppErrorTargetView,
 	AppErrorUsageView,
 	Principal,
 } from '@yoal/contracts';
@@ -37,6 +46,8 @@ import {
 	appErrorSettingsUpdateSchema,
 	appErrorStatuses,
 	appErrorStatusUpdateSchema,
+	appErrorTargetCreateSchema,
+	appErrorTargetUpdateSchema,
 } from '@yoal/contracts';
 import type { CoreContext } from './context.ts';
 import { NotFoundError, ValidationError } from './errors.ts';
@@ -69,6 +80,15 @@ export interface AppErrorProjectRef {
 	id: string;
 	slug: string;
 	name: string;
+	/** Present when the caller has the project row; used to backfill a target's organisation. */
+	orgId?: string;
+}
+
+interface TargetMetadata {
+	id: string;
+	name: string;
+	kind: AppErrorTargetKind;
+	projectSlug: string | null;
 }
 
 export interface AppErrorIngestInput {
@@ -99,6 +119,10 @@ export class AppErrorPayloadTooLarge extends Error {
 interface ProjectRow {
 	dsn_project_id: number;
 	project_id: string;
+	org_id: string | null;
+	name: string | null;
+	kind: AppErrorTargetKind;
+	auto_linked: number;
 	enabled: number;
 	sample_rate: number;
 	notify: number;
@@ -556,10 +580,18 @@ function monthKey(now: number): string {
 	return new Date(now).toISOString().slice(0, 7);
 }
 
-function toIssueView(row: IssueRow): AppErrorIssueView {
+function toIssueView(row: IssueRow, target?: TargetMetadata | null): AppErrorIssueView {
 	return {
 		id: row.id,
 		projectId: row.project_id,
+		...(target
+			? {
+					targetId: target.id,
+					targetName: target.name,
+					targetKind: target.kind,
+					projectSlug: target.projectSlug,
+				}
+			: {}),
 		platform: row.platform,
 		environment: row.environment,
 		name: row.name,
@@ -632,6 +664,40 @@ export class AppErrorService {
 		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 	}
 
+	#requireOrgRead(principal: Principal): void {
+		this.ctx.iam.require(principal, 'project:read', { type: 'org' });
+	}
+
+	#requireOrgWrite(principal: Principal): void {
+		this.ctx.iam.require(principal, 'project:update', { type: 'org' });
+	}
+
+	/** A target is visible only to its organisation, and a linked one also needs project access. */
+	#requireTargetRead(principal: Principal, row: ProjectRow): void {
+		if (!row.org_id || row.org_id !== principal.orgId) throw new NotFoundError('App error target');
+		if (row.kind === 'project')
+			this.ctx.iam.require(principal, 'project:read', { type: 'project', id: row.project_id });
+		else this.#requireOrgRead(principal);
+	}
+
+	#requireTargetWrite(principal: Principal, row: ProjectRow): void {
+		if (!row.org_id || row.org_id !== principal.orgId) throw new NotFoundError('App error target');
+		if (row.kind === 'project')
+			this.ctx.iam.require(principal, 'project:update', { type: 'project', id: row.project_id });
+		else this.#requireOrgWrite(principal);
+	}
+
+	#usageFor(projectId: string): AppErrorUsageView {
+		const now = this.ctx.now();
+		const month = monthKey(now);
+		const row = this.ctx.sqlite
+			.query<{ accepted: number; dropped: number; ignored: number }, [string, string]>(
+				'SELECT accepted, dropped, ignored FROM app_error_usage WHERE project_id = ? AND month = ?',
+			)
+			.get(projectId, month);
+		return toUsage(projectId, month, row ?? undefined);
+	}
+
 	#settingsView(project: AppErrorProjectRef): AppErrorSettingsView {
 		const row = this.#projectRow(project.id);
 		const now = this.ctx.now();
@@ -665,12 +731,19 @@ export class AppErrorService {
 		this.#requireWrite(principal, project);
 		const now = this.ctx.now();
 		const row = this.#projectRow(project.id);
+		const orgId = project.orgId ?? this.#projectOrgId(project.id);
 		if (row) {
-			this.ctx.sqlite.run('UPDATE app_error_projects SET enabled = 1, updated_at = ? WHERE project_id = ?', [now, project.id]);
+			this.ctx.sqlite.run(
+				`UPDATE app_error_projects SET enabled = 1, org_id = COALESCE(org_id, ?), name = COALESCE(name, ?),
+				   kind = 'project', updated_at = ? WHERE project_id = ?`,
+				[orgId, project.name, now, project.id],
+			);
 		} else {
 			this.ctx.sqlite.run(
-				'INSERT INTO app_error_projects (project_id, enabled, sample_rate, notify, created_at, updated_at) VALUES (?, 1, 1, 0, ?, ?)',
-				[project.id, now, now],
+				`INSERT INTO app_error_projects
+				   (project_id, org_id, name, kind, auto_linked, enabled, sample_rate, notify, created_at, updated_at)
+				 VALUES (?, ?, ?, 'project', 0, 1, 1, 0, ?, ?)`,
+				[project.id, orgId, project.name, now, now],
 			);
 		}
 		if (!this.#activeKey(project.id)) this.#createKey(project.id, now);
@@ -731,10 +804,267 @@ export class AppErrorService {
 		return this.#settingsView(project);
 	}
 
+	// --- top-level service ---------------------------------------------------------------------
+
+	/** The Errors page's configuration and every target the caller may read. */
+	serviceView(principal: Principal): AppErrorServiceView {
+		this.#requireOrgRead(principal);
+		return {
+			autoLink: this.#autoLinkForOrg(principal.orgId),
+			targets: this.#accessibleTargets(principal).map((row) => this.#targetView(row)),
+		};
+	}
+
+	/**
+	 * Turn automatic linking on for the organisation. On creates (and enables) a target for every
+	 * current project; new projects get one from `onProjectCreated`. Off disables the targets that
+	 * are still marked auto-linked; a target enabled by hand stays on.
+	 */
+	setAutoLink(principal: Principal, enabled: boolean): AppErrorServiceView {
+		this.#requireOrgWrite(principal);
+		const now = this.ctx.now();
+		this.ctx.sqlite.run(
+			`INSERT INTO app_error_settings (org_id, auto_link, created_at, updated_at) VALUES (?, ?, ?, ?)
+			 ON CONFLICT(org_id) DO UPDATE SET auto_link = excluded.auto_link, updated_at = excluded.updated_at`,
+			[principal.orgId, enabled ? 1 : 0, now, now],
+		);
+		if (enabled) {
+			const projects = this.ctx.sqlite
+				.query<{ id: string; name: string; slug: string }, [string]>(
+					'SELECT id, name, slug FROM projects WHERE org_id = ? AND deleted_at IS NULL',
+				)
+				.all(principal.orgId);
+			for (const project of projects)
+				this.#ensureTarget({ id: project.id, name: project.name, slug: project.slug }, true);
+		} else {
+			this.ctx.sqlite.run(
+				"UPDATE app_error_projects SET enabled = 0, updated_at = ? WHERE org_id = ? AND kind = 'project' AND auto_linked = 1",
+				[now, principal.orgId],
+			);
+		}
+		this.ctx.audit.record({
+			principal,
+			action: 'app_errors.auto_link',
+			resource: 'org',
+			resourceId: principal.orgId,
+			args: { enabled },
+			result: 'ok',
+		});
+		return this.serviceView(principal);
+	}
+
+	/** Called by `ProjectService.create`; a no-op unless the organisation has auto-linking on. */
+	onProjectCreated(project: AppErrorProjectRef): void {
+		if (!project.orgId || !this.#autoLinkForOrg(project.orgId)) return;
+		this.#ensureTarget(project, true);
+	}
+
+	/** Link one Yoal project by hand, even when automatic linking is off. */
+	createProjectTarget(principal: Principal, project: AppErrorProjectRef): AppErrorTargetView {
+		this.#requireOrgWrite(principal);
+		this.#requireWrite(principal, project);
+		const row = this.#ensureTarget(project, false);
+		this.ctx.audit.record({
+			principal,
+			action: 'app_errors.target.link',
+			resource: 'org',
+			resourceId: principal.orgId,
+			args: { target: project.id, project: project.slug },
+			result: 'ok',
+		});
+		return this.#targetView(row);
+	}
+
+	createStandaloneTarget(principal: Principal, input: AppErrorTargetCreate): AppErrorTargetView {
+		this.#requireOrgWrite(principal);
+		const parsed = appErrorTargetCreateSchema.safeParse(input);
+		if (!parsed.success) throw new ValidationError('Invalid app error target.', parsed.error.issues);
+		const now = this.ctx.now();
+		const id = `ext_${newId('').toLowerCase()}`;
+		this.ctx.sqlite.run(
+			`INSERT INTO app_error_projects
+			   (project_id, org_id, name, kind, auto_linked, enabled, sample_rate, notify, created_at, updated_at)
+			 VALUES (?, ?, ?, 'standalone', 0, 1, 1, 0, ?, ?)`,
+			[id, principal.orgId, parsed.data.name, now, now],
+		);
+		this.#createKey(id, now);
+		this.ctx.audit.record({
+			principal,
+			action: 'app_errors.target.create',
+			resource: 'org',
+			resourceId: principal.orgId,
+			args: { target: id, name: parsed.data.name },
+			result: 'ok',
+		});
+		return this.#targetView(this.#projectRow(id)!);
+	}
+
+	updateTarget(principal: Principal, targetId: string, input: AppErrorTargetUpdate): AppErrorTargetView {
+		const row = this.#targetRow(targetId);
+		if (!row) throw new NotFoundError('App error target');
+		this.#requireTargetWrite(principal, row);
+		const parsed = appErrorTargetUpdateSchema.safeParse(input);
+		if (!parsed.success) throw new ValidationError('Invalid app error target.', parsed.error.issues);
+		const now = this.ctx.now();
+		const enabled = parsed.data.enabled === undefined ? row.enabled : parsed.data.enabled ? 1 : 0;
+		const sampleRate = parsed.data.sampleRate ?? row.sample_rate;
+		const notify = parsed.data.notify === undefined ? row.notify : parsed.data.notify ? 1 : 0;
+		const name = parsed.data.name ?? row.name ?? row.project_id;
+		// A manual enable/disable is a deliberate override: auto-link off must not undo it later.
+		const autoLinked = parsed.data.enabled === undefined ? row.auto_linked : 0;
+		this.ctx.sqlite.run(
+			'UPDATE app_error_projects SET name = ?, enabled = ?, sample_rate = ?, notify = ?, auto_linked = ?, updated_at = ? WHERE project_id = ?',
+			[name, enabled, sampleRate, notify, autoLinked, now, targetId],
+		);
+		if (enabled && !this.#activeKey(targetId)) this.#createKey(targetId, now);
+		this.ctx.audit.record({
+			principal,
+			action: 'app_errors.target.update',
+			resource: 'org',
+			resourceId: principal.orgId,
+			args: { target: targetId, enabled: enabled === 1, sampleRate, notify: notify === 1 },
+			result: 'ok',
+		});
+		return this.#targetView(this.#projectRow(targetId)!);
+	}
+
+	rotateTargetKey(principal: Principal, targetId: string): AppErrorTargetView {
+		const row = this.#targetRow(targetId);
+		if (!row) throw new NotFoundError('App error target');
+		this.#requireTargetWrite(principal, row);
+		const now = this.ctx.now();
+		this.ctx.sqlite.run('UPDATE app_error_keys SET revoked_at = ? WHERE project_id = ? AND revoked_at IS NULL', [now, targetId]);
+		this.#createKey(targetId, now);
+		this.ctx.audit.record({
+			principal,
+			action: 'app_errors.target.rotate',
+			resource: 'org',
+			resourceId: principal.orgId,
+			args: { target: targetId },
+			result: 'ok',
+		});
+		return this.#targetView(this.#projectRow(targetId)!);
+	}
+
+	deleteTarget(principal: Principal, targetId: string): boolean {
+		const row = this.#targetRow(targetId);
+		if (!row) throw new NotFoundError('App error target');
+		this.#requireTargetWrite(principal, row);
+		this.#deleteTargetData(targetId);
+		this.ctx.audit.record({
+			principal,
+			action: 'app_errors.target.delete',
+			resource: 'org',
+			resourceId: principal.orgId,
+			args: { target: targetId, kind: row.kind },
+			result: 'ok',
+		});
+		return true;
+	}
+
+	testTarget(principal: Principal, targetId: string): AppErrorTestResult {
+		const row = this.#targetRow(targetId);
+		if (!row) throw new NotFoundError('App error target');
+		this.#requireTargetWrite(principal, row);
+		const normalized = normalizeSentryEvent(
+			{
+				event_id: newId(''),
+				platform: 'node',
+				level: 'error',
+				environment: 'test',
+				release: 'test',
+				message: `Yoal test error for ${row.name ?? targetId}`,
+				exception: {
+					values: [
+						{
+							type: 'Error',
+							value: `Yoal test error for ${row.name ?? targetId}`,
+							stacktrace: { frames: [{ function: 'testTarget', filename: 'yoal-test.ts', lineno: 1, in_app: true }] },
+						},
+					],
+				},
+				tags: { 'yoal.test': 'true' },
+			},
+			null,
+			this.ctx.now(),
+		);
+		const stored = this.#record(row, normalized, true);
+		return { issueId: stored.issueId, eventId: normalized.eventId };
+	}
+
+	// --- top-level issues ----------------------------------------------------------------------
+
+	/** Issues across every target the caller may read, optionally narrowed to one target. */
+	orgList(principal: Principal, query: AppErrorListQuery = {}): AppErrorListView {
+		this.#requireOrgRead(principal);
+		const targets = this.#accessibleTargets(principal);
+		const targetId = (query as { target?: string }).target;
+		const selected = targetId ? targets.filter((row) => row.project_id === targetId) : targets;
+		return this.#listForTargets(selected, query);
+	}
+
+	orgGet(principal: Principal, issueId: string): AppErrorDetail {
+		this.#requireOrgRead(principal);
+		const issue = this.ctx.sqlite
+			.query<{ project_id: string }, [string]>('SELECT project_id FROM app_error_issues WHERE id = ?')
+			.get(issueId);
+		if (!issue) throw new NotFoundError('App error');
+		const target = this.#targetRow(issue.project_id);
+		if (!target) throw new NotFoundError('App error');
+		this.#requireTargetRead(principal, target);
+		return this.#detailFor(target, issueId);
+	}
+
+	orgSetStatus(principal: Principal, input: AppErrorStatusUpdate): number {
+		this.#requireOrgWrite(principal);
+		const parsed = appErrorStatusUpdateSchema.safeParse(input);
+		if (!parsed.success) throw new ValidationError('Invalid app error status.', parsed.error.issues);
+		const ids = [...new Set(parsed.data.ids)];
+		if (ids.length === 0) return 0;
+		const targets = this.#targetsForIssueIds(ids);
+		for (const target of targets) this.#requireTargetWrite(principal, target);
+		const changed = this.#setStatusFor(ids, parsed.data.status, principal.userId);
+		this.ctx.audit.record({
+			principal,
+			action: 'app_errors.status',
+			resource: 'org',
+			resourceId: principal.orgId,
+			args: { status: parsed.data.status, issues: changed },
+			result: 'ok',
+		});
+		return changed;
+	}
+
+	orgDeleteIssue(principal: Principal, issueId: string): boolean {
+		this.#requireOrgWrite(principal);
+		const issue = this.ctx.sqlite
+			.query<{ project_id: string }, [string]>('SELECT project_id FROM app_error_issues WHERE id = ?')
+			.get(issueId);
+		if (!issue) throw new NotFoundError('App error');
+		const target = this.#targetRow(issue.project_id);
+		if (!target) throw new NotFoundError('App error');
+		this.#requireTargetWrite(principal, target);
+		const deleted = this.#deleteIssueFor(target.project_id, issueId);
+		this.ctx.audit.record({
+			principal,
+			action: 'app_errors.delete',
+			resource: 'org',
+			resourceId: principal.orgId,
+			args: { issue: issueId },
+			result: 'ok',
+		});
+		return deleted;
+	}
+
 	// --- issues --------------------------------------------------------------------------------
 
 	list(principal: Principal, project: AppErrorProjectRef, query: AppErrorListQuery = {}): AppErrorListView {
 		this.#requireRead(principal, project);
+		const target = this.#targetRow(project.id);
+		return this.#listForTargets(target ? [target] : [], query);
+	}
+
+	#listForTargets(targets: ProjectRow[], query: AppErrorListQuery): AppErrorListView {
 		const parsed = appErrorListQuerySchema.safeParse(query);
 		if (!parsed.success) throw new ValidationError('Invalid app error filters.', parsed.error.issues);
 		const { status, environment, release, q, range, before, limit } = parsed.data;
@@ -742,8 +1072,19 @@ export class AppErrorService {
 		const since = Math.floor(now / HOUR) * HOUR - 23 * HOUR;
 		const rangeStart =
 			range === 'all' ? null : now - (range === '24h' ? DAY : range === '7d' ? 7 * DAY : 30 * DAY);
-		const where = ['i.project_id = ?'];
-		const params: Array<string | number> = [project.id];
+		const projectIds = [...new Set(targets.map((row) => row.project_id))];
+		const empty = (): AppErrorListView => ({
+			issues: [],
+			summary: { unresolved: 0, resolved: 0, ignored: 0, events24h: 0 },
+			hourly: new Array<number>(24).fill(0),
+			nextBefore: null,
+			environments: [],
+			releases: [],
+		});
+		if (projectIds.length === 0) return empty();
+		const placeholders = projectIds.map(() => '?').join(', ');
+		const where = [`i.project_id IN (${placeholders})`];
+		const params: Array<string | number> = [...projectIds];
 		if (status !== 'all') {
 			where.push('i.status = ?');
 			params.push(status);
@@ -780,35 +1121,41 @@ export class AppErrorService {
 			.all(since, ...params, limit + 1);
 		const page = rows.slice(0, limit);
 		const counts = this.ctx.sqlite
-			.query<{ status: AppErrorStatus; n: number }, [string]>('SELECT status, COUNT(*) AS n FROM app_error_issues WHERE project_id = ? GROUP BY status')
-			.all(project.id);
+			.query<{ status: AppErrorStatus; n: number }, Array<string>>(
+				`SELECT status, COUNT(*) AS n FROM app_error_issues WHERE project_id IN (${placeholders}) GROUP BY status`,
+			)
+			.all(...projectIds);
 		const summary = { unresolved: 0, resolved: 0, ignored: 0, events24h: 0 };
 		for (const row of counts) summary[row.status] = row.n;
 		const hourly = this.#bucketsFor(
 			this.ctx.sqlite
-				.query<{ hour: number; n: number }, [string, number]>(
-					'SELECT h.hour AS hour, SUM(h.count) AS n FROM app_error_hourly h JOIN app_error_issues i ON i.id = h.issue_id WHERE i.project_id = ? AND h.hour >= ? GROUP BY h.hour',
+				.query<{ hour: number; n: number }, Array<string | number>>(
+					`SELECT h.hour AS hour, SUM(h.count) AS n FROM app_error_hourly h JOIN app_error_issues i ON i.id = h.issue_id
+					 WHERE i.project_id IN (${placeholders}) AND h.hour >= ? GROUP BY h.hour`,
 				)
-				.all(project.id, since),
+				.all(...projectIds, since),
 			since,
 			HOUR,
 			24,
 		);
 		summary.events24h = hourly.reduce((total, value) => total + value, 0);
 		const environments = this.ctx.sqlite
-			.query<{ value: string }, [string]>(
-				'SELECT environment AS value FROM app_error_issues WHERE project_id = ? GROUP BY environment ORDER BY MAX(last_seen_at) DESC LIMIT 50',
+			.query<{ value: string }, Array<string>>(
+				`SELECT environment AS value FROM app_error_issues WHERE project_id IN (${placeholders})
+				 GROUP BY environment ORDER BY MAX(last_seen_at) DESC LIMIT 50`,
 			)
-			.all(project.id)
+			.all(...projectIds)
 			.map((row) => row.value);
 		const releases = this.ctx.sqlite
-			.query<{ value: string }, [string]>(
-				'SELECT last_release AS value FROM app_error_issues WHERE project_id = ? AND last_release IS NOT NULL GROUP BY last_release ORDER BY MAX(last_seen_at) DESC LIMIT 50',
+			.query<{ value: string }, Array<string>>(
+				`SELECT last_release AS value FROM app_error_issues WHERE project_id IN (${placeholders}) AND last_release IS NOT NULL
+				 GROUP BY last_release ORDER BY MAX(last_seen_at) DESC LIMIT 50`,
 			)
-			.all(project.id)
+			.all(...projectIds)
 			.map((row) => row.value);
+		const metadata = this.#metadataFor(targets);
 		return {
-			issues: page.map(toIssueView),
+			issues: page.map((row) => toIssueView(row, metadata.get(row.project_id))),
 			summary,
 			hourly,
 			nextBefore: rows.length > limit ? (page.at(-1)?.last_seen_at ?? null) : null,
@@ -819,6 +1166,13 @@ export class AppErrorService {
 
 	get(principal: Principal, project: AppErrorProjectRef, issueId: string): AppErrorDetail {
 		this.#requireRead(principal, project);
+		const target = this.#targetRow(project.id);
+		if (!target) throw new NotFoundError('App error');
+		return this.#detailFor(target, issueId);
+	}
+
+	#detailFor(target: ProjectRow, issueId: string): AppErrorDetail {
+		const projectId = target.project_id;
 		const now = this.ctx.now();
 		const hourStart = Math.floor(now / HOUR) * HOUR - 23 * HOUR;
 		const row = this.ctx.sqlite
@@ -826,7 +1180,7 @@ export class AppErrorService {
 				`SELECT i.*, (SELECT COALESCE(SUM(h.count), 0) FROM app_error_hourly h WHERE h.issue_id = i.id AND h.hour >= ?) AS count_24h
 				 FROM app_error_issues i WHERE i.project_id = ? AND i.id = ?`,
 			)
-			.get(hourStart, project.id, issueId);
+			.get(hourStart, projectId, issueId);
 		if (!row) throw new NotFoundError('App error');
 		const events = this.ctx.sqlite
 			.query<EventRow, [string, number]>('SELECT * FROM app_error_events WHERE issue_id = ? ORDER BY at DESC, id DESC LIMIT ?')
@@ -838,7 +1192,7 @@ export class AppErrorService {
 		const day = DAY;
 		const dayStart = Math.floor(now / day) * day - 13 * day;
 		return {
-			issue: toIssueView(row),
+			issue: toIssueView(row, this.#metadataFor([target]).get(projectId)),
 			events,
 			hourly: this.#bucketsFor(hours, hourStart, HOUR, 24),
 			daily: this.#bucketsFor(hours, dayStart, day, 14),
@@ -1207,16 +1561,22 @@ export class AppErrorService {
 		if (times.length >= APP_ERROR_LIMITS.alertsPerHour) return;
 		times.push(now);
 		this.#alertTimes.set(row.project_id, times);
-		const project = this.ctx.sqlite
-			.query<{ slug: string; name: string }, [string]>('SELECT slug, name FROM projects WHERE id = ?')
-			.get(row.project_id);
-		if (!project) return;
+		const project =
+			row.kind === 'project'
+				? this.ctx.sqlite
+						.query<{ slug: string; name: string }, [string]>('SELECT slug, name FROM projects WHERE id = ?')
+						.get(row.project_id)
+				: undefined;
+		const name =
+			row.kind === 'project'
+				? (project?.name ?? row.name ?? row.project_id)
+				: (row.name ?? row.project_id);
 		const origin = this.ctx.config.platformOrigin?.replace(/\/$/, '') ?? '';
-		const link = new URLSearchParams({ tab: 'errors', status: 'all', issue: issueId });
-		const url = origin ? `${origin}/projects/${encodeURIComponent(project.slug)}?${link.toString()}` : undefined;
+		const link = new URLSearchParams({ issue: issueId });
+		const url = origin ? `${origin}/errors?${link.toString()}` : undefined;
 		const message = {
 			key: `app_error:${issueId}`,
-			title: kind === 'new' ? `New error in ${project.name}` : `Error is back in ${project.name}`,
+			title: kind === 'new' ? `New error in ${name}` : `Error is back in ${name}`,
 			detail: `${event.name}: ${event.message.slice(0, 300)}${event.culprit ? `\nIn ${event.culprit}` : ''}${kind === 'regressed' ? '\nIt was marked resolved and happened again.' : ''}`,
 			severity: 'warning' as const,
 			url,
@@ -1250,6 +1610,183 @@ export class AppErrorService {
 	}
 
 	// --- internals -----------------------------------------------------------------------------
+
+	#projectOrgId(projectId: string): string | null {
+		return (
+			this.ctx.sqlite
+				.query<{ org_id: string }, [string]>('SELECT org_id FROM projects WHERE id = ?')
+				.get(projectId)?.org_id ?? null
+		);
+	}
+
+	#autoLinkForOrg(orgId: string): boolean {
+		return (
+			this.ctx.sqlite
+				.query<{ auto_link: number }, [string]>('SELECT auto_link FROM app_error_settings WHERE org_id = ?')
+				.get(orgId)?.auto_link === 1
+		);
+	}
+
+	/** Targets in the caller's organisation that they may read; linked ones also need project read. */
+	#accessibleTargets(principal: Principal): ProjectRow[] {
+		this.#requireOrgRead(principal);
+		const rows = this.ctx.sqlite
+			.query<ProjectRow, [string]>(
+				'SELECT * FROM app_error_projects WHERE org_id = ? ORDER BY enabled DESC, name COLLATE NOCASE ASC',
+			)
+			.all(principal.orgId);
+		return rows.filter(
+			(row) =>
+				row.kind !== 'project' ||
+				this.ctx.iam.can(principal, 'project:read', { type: 'project', id: row.project_id }),
+		);
+	}
+
+	#targetRow(targetId: string): ProjectRow | null {
+		return this.#projectRow(targetId);
+	}
+
+	/** Create or refresh a linked target for a Yoal project. */
+	#ensureTarget(project: AppErrorProjectRef, autoLinked: boolean): ProjectRow {
+		const now = this.ctx.now();
+		const orgId = project.orgId ?? this.#projectOrgId(project.id);
+		const existing = this.#projectRow(project.id);
+		if (existing) {
+			this.ctx.sqlite.run(
+				`UPDATE app_error_projects
+				 SET org_id = COALESCE(org_id, ?), name = COALESCE(name, ?), kind = 'project', enabled = 1,
+				     auto_linked = CASE WHEN ? THEN 1 ELSE auto_linked END,
+				     updated_at = ?
+				 WHERE project_id = ?`,
+				[orgId, project.name, autoLinked ? 1 : 0, now, project.id],
+			);
+		} else {
+			this.ctx.sqlite.run(
+				`INSERT INTO app_error_projects
+				   (project_id, org_id, name, kind, auto_linked, enabled, sample_rate, notify, created_at, updated_at)
+				 VALUES (?, ?, ?, 'project', ?, 1, 1, 0, ?, ?)`,
+				[project.id, orgId, project.name, autoLinked ? 1 : 0, now, now],
+			);
+		}
+		if (!this.#activeKey(project.id)) this.#createKey(project.id, now);
+		return this.#projectRow(project.id)!;
+	}
+
+	#metadataFor(targets: ProjectRow[]): Map<string, TargetMetadata> {
+		const out = new Map<string, TargetMetadata>();
+		for (const target of targets) {
+			const project =
+				target.kind === 'project'
+					? this.ctx.sqlite
+							.query<{ slug: string; name: string }, [string]>('SELECT slug, name FROM projects WHERE id = ?')
+							.get(target.project_id)
+					: undefined;
+			out.set(target.project_id, {
+				id: target.project_id,
+				name:
+					target.kind === 'project'
+						? (project?.name ?? target.name ?? target.project_id)
+						: (target.name ?? target.project_id),
+				kind: target.kind,
+				projectSlug: project?.slug ?? null,
+			});
+		}
+		return out;
+	}
+
+	#targetView(row: ProjectRow): AppErrorTargetView {
+		const project =
+			row.kind === 'project'
+				? this.ctx.sqlite
+						.query<{ slug: string; name: string }, [string]>('SELECT slug, name FROM projects WHERE id = ?')
+						.get(row.project_id)
+				: undefined;
+		const key = this.#activeKey(row.project_id);
+		const now = this.ctx.now();
+		const stats = this.ctx.sqlite
+			.query<{ unresolved: number; events24h: number; last_seen_at: number | null }, [string, string, number, string]>(
+				`SELECT
+				   (SELECT COUNT(*) FROM app_error_issues WHERE project_id = ? AND status = 'unresolved') AS unresolved,
+				   (SELECT COALESCE(SUM(h.count), 0) FROM app_error_hourly h
+				      JOIN app_error_issues i ON i.id = h.issue_id
+				     WHERE i.project_id = ? AND h.hour >= ?) AS events24h,
+				   (SELECT MAX(last_seen_at) FROM app_error_issues WHERE project_id = ?) AS last_seen_at`,
+			)
+			.get(row.project_id, row.project_id, now - 24 * HOUR, row.project_id)!;
+		return {
+			id: row.project_id,
+			kind: row.kind,
+			name:
+				row.kind === 'project'
+					? (project?.name ?? row.name ?? row.project_id)
+					: (row.name ?? row.project_id),
+			projectId: row.kind === 'project' ? row.project_id : null,
+			projectSlug: project?.slug ?? null,
+			dsnProjectId: row.dsn_project_id,
+			dsn: key ? this.#dsn(row, key.public_key) : null,
+			publicKey: key?.public_key ?? null,
+			enabled: row.enabled === 1,
+			autoLinked: row.auto_linked === 1,
+			sampleRate: row.sample_rate,
+			notify: row.notify === 1,
+			usage: this.#usageFor(row.project_id),
+			unresolved: stats.unresolved,
+			events24h: stats.events24h,
+			lastSeenAt: stats.last_seen_at,
+		};
+	}
+
+	#targetsForIssueIds(ids: string[]): ProjectRow[] {
+		if (ids.length === 0) return [];
+		const placeholders = ids.map(() => '?').join(', ');
+		const projectIds = this.ctx.sqlite
+			.query<{ project_id: string }, Array<string>>(
+				`SELECT DISTINCT project_id FROM app_error_issues WHERE id IN (${placeholders})`,
+			)
+			.all(...ids)
+			.map((row) => row.project_id);
+		return projectIds.map((id) => this.#targetRow(id)).filter((row): row is ProjectRow => row !== null);
+	}
+
+	#setStatusFor(ids: string[], status: AppErrorStatus, userId: string, projectId?: string): number {
+		const placeholders = ids.map(() => '?').join(', ');
+		const now = this.ctx.now();
+		const scope = projectId ? ' AND project_id = ?' : '';
+		const tail = projectId ? [...ids, projectId] : ids;
+		return status === 'resolved'
+			? this.ctx.sqlite.run(
+					`UPDATE app_error_issues SET status = 'resolved', resolved_at = ?, resolved_by = ? WHERE id IN (${placeholders})${scope}`,
+					[now, userId, ...tail],
+				).changes
+			: this.ctx.sqlite.run(
+					`UPDATE app_error_issues SET status = ?, resolved_at = NULL, resolved_by = NULL WHERE id IN (${placeholders})${scope}`,
+					[status, ...tail],
+				).changes;
+	}
+
+	#deleteIssueFor(projectId: string, issueId: string): boolean {
+		let changes = 0;
+		this.ctx.sqlite.transaction(() => {
+			this.ctx.sqlite.run('DELETE FROM app_error_events WHERE project_id = ? AND issue_id = ?', [projectId, issueId]);
+			this.ctx.sqlite.run('DELETE FROM app_error_hourly WHERE issue_id = ?', [issueId]);
+			changes = this.ctx.sqlite.run('DELETE FROM app_error_issues WHERE project_id = ? AND id = ?', [projectId, issueId]).changes;
+		})();
+		return changes > 0;
+	}
+
+	#deleteTargetData(targetId: string): void {
+		this.ctx.sqlite.transaction(() => {
+			this.ctx.sqlite.run('DELETE FROM app_error_events WHERE project_id = ?', [targetId]);
+			this.ctx.sqlite.run(
+				'DELETE FROM app_error_hourly WHERE issue_id IN (SELECT id FROM app_error_issues WHERE project_id = ?)',
+				[targetId],
+			);
+			this.ctx.sqlite.run('DELETE FROM app_error_issues WHERE project_id = ?', [targetId]);
+			this.ctx.sqlite.run('DELETE FROM app_error_keys WHERE project_id = ?', [targetId]);
+			this.ctx.sqlite.run('DELETE FROM app_error_usage WHERE project_id = ?', [targetId]);
+			this.ctx.sqlite.run('DELETE FROM app_error_projects WHERE project_id = ?', [targetId]);
+		})();
+	}
 
 	#projectRow(projectId: string): ProjectRow | null {
 		return this.ctx.sqlite

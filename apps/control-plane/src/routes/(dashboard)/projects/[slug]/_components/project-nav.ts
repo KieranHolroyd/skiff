@@ -1,7 +1,6 @@
 /** Every section of a project, in the order the navigation presents them. */
 export const PROJECT_TABS = [
 	'traffic',
-	'errors',
 	'container',
 	'logs',
 	'shell',

@@ -9,6 +9,10 @@ import * as z from 'zod';
 export const appErrorStatuses = ['unresolved', 'resolved', 'ignored'] as const;
 export type AppErrorStatus = (typeof appErrorStatuses)[number];
 
+/** A target is either a Yoal project (DSN injected automatically) or a standalone off-platform app. */
+export const appErrorTargetKinds = ['project', 'standalone'] as const;
+export type AppErrorTargetKind = (typeof appErrorTargetKinds)[number];
+
 export const appErrorLevels = ['fatal', 'error', 'warning', 'info', 'debug'] as const;
 export type AppErrorLevel = (typeof appErrorLevels)[number];
 
@@ -56,6 +60,12 @@ export interface AppErrorEventView {
 export interface AppErrorIssueView {
 	id: string;
 	projectId: string;
+	/** The target this issue belongs to (a Yoal project id or an `ext_…` standalone id). */
+	targetId?: string;
+	targetName?: string;
+	targetKind?: AppErrorTargetKind;
+	/** The project's slug for a linked target; null for standalone targets. */
+	projectSlug?: string | null;
 	platform: string;
 	environment: string;
 	/** The exception type, or `Message` for a message event. */
@@ -128,10 +138,56 @@ export interface AppErrorSettingsView {
 	usage: AppErrorUsageView;
 }
 
+/** One target in the top-level Errors service. */
+export interface AppErrorTargetView {
+	/** The internal target id: the Yoal project id for a linked target, or `ext_…` standalone. */
+	id: string;
+	kind: AppErrorTargetKind;
+	name: string;
+	/** The linked project id (null for standalone targets). */
+	projectId: string | null;
+	/** The linked project's slug (null for standalone targets). */
+	projectSlug: string | null;
+	dsnProjectId: number;
+	dsn: string | null;
+	publicKey: string | null;
+	enabled: boolean;
+	/** Created by the organisation's auto-link setting rather than by hand. */
+	autoLinked: boolean;
+	sampleRate: number;
+	notify: boolean;
+	usage: AppErrorUsageView;
+	unresolved: number;
+	events24h: number;
+	lastSeenAt: number | null;
+}
+
+/** The top-level service page's configuration and target list. */
+export interface AppErrorServiceView {
+	/** When on, every current and future project gets a linked target and an injected DSN. */
+	autoLink: boolean;
+	targets: AppErrorTargetView[];
+}
+
+export const appErrorTargetCreateSchema = z.object({
+	name: z.string().trim().min(1).max(100),
+});
+export type AppErrorTargetCreate = z.infer<typeof appErrorTargetCreateSchema>;
+
+export const appErrorTargetUpdateSchema = z.object({
+	name: z.string().trim().min(1).max(100).optional(),
+	enabled: z.boolean().optional(),
+	sampleRate: z.number().min(0).max(1).optional(),
+	notify: z.boolean().optional(),
+});
+export type AppErrorTargetUpdate = z.infer<typeof appErrorTargetUpdateSchema>;
+
 export const appErrorListQuerySchema = z.object({
 	status: z.enum([...appErrorStatuses, 'all']).default('unresolved'),
 	environment: z.string().trim().max(40).optional(),
 	release: z.string().trim().max(200).optional(),
+	/** Standalone target or linked project id (top-level page only). */
+	target: z.string().trim().max(100).optional(),
 	q: z.string().trim().max(200).optional(),
 	range: z.enum(appErrorRanges).default('all'),
 	before: z.coerce.number().int().positive().optional(),

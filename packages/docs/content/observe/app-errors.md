@@ -1,31 +1,35 @@
 ---
 title: App errors
-description: Sentry-compatible error tracking for a project's apps, built into the project's Errors page.
+description: Sentry-compatible error tracking for every app in the organization, from one top-level Errors page.
 ---
 
-Every project has an **Errors** page. Turn it on and Yoal gives you a DSN that existing Sentry SDKs
-accept unchanged, or a one-line script for a static site. Errors are grouped into issues with a
-stack trace, an exact count and a resolve button. There are no organisations, teams, replays,
-performance traces, crons or alert rules to configure.
+The organization-level **Errors** page collects exceptions from Yoal projects and from off-platform
+apps. A Sentry SDK works by changing one DSN, and a static site can use one script tag. Errors are
+grouped into issues with a stack trace, an exact count and a resolve button. There are no
+organisations, teams, replays, performance traces, crons or alert rules to configure.
 
-## Turn it on
+## Link targets
 
-1. Open a project → **Errors**.
-2. Press **Turn on error tracking**.
-3. Copy the DSN or the snippet. Press **Send test error** to prove the pipe works.
+Open **Observe → Errors → Targets**.
 
-Nothing is collected until you turn it on. A project updater can enable it, rotate its key, resolve
-issues or turn it off; anyone who can read the project can see the issues.
+- **Automatic linking** gives every project in the organization a DSN and injects it into linked
+  process apps and functions. New projects are linked as they are created. Turning it off disables
+  the targets it created and keeps their data.
+- **Attach an off-platform project** creates a standalone target with its own DSN for an app that
+  Yoal does not deploy.
+- Each target can be enabled, disabled, rotated, sampled, notified and deleted independently.
+
+Copy the DSN from a target, or use its browser snippet. Press **Send test** to prove the pipe works.
 
 ## Connect an app
 
 ### A Sentry SDK
 
-Replace the Sentry DSN with the one on the Errors page. Nothing else changes:
+Replace the Sentry DSN with the target's DSN. Nothing else changes:
 
 ```ts
 Sentry.init({
-  dsn: 'https://<public-key>@<your-platform>/ingest/<project-number>',
+  dsn: 'https://<public-key>@<your-platform>/ingest/<target-number>',
   release: 'web@1.4.2',
   environment: 'production',
 });
@@ -41,7 +45,7 @@ Add one line before `</head>`:
 
 ```html
 <script src="https://<your-platform>/e.js"
-        data-dsn="https://<public-key>@<your-platform>/ingest/<project-number>"
+        data-dsn="https://<public-key>@<your-platform>/ingest/<target-number>"
         data-release="web@1.4.2"
         data-environment="production"></script>
 ```
@@ -52,12 +56,12 @@ Content Security Policy, allow the platform origin in `script-src` and `connect-
 
 ### A process app or function
 
-When tracking is on, Yoal injects these into a process app's activation environment (and the DSN
+For a linked target, Yoal injects these into a process app's activation environment (and the DSN
 into a function's bindings) unless the app already sets them:
 
 | Variable | Value |
 |---|---|
-| `SENTRY_DSN` | the project DSN |
+| `SENTRY_DSN` | the target DSN |
 | `SENTRY_RELEASE` | the deployment id (process apps) |
 | `SENTRY_ENVIRONMENT` | `production` or `preview` (process apps) |
 
@@ -72,30 +76,31 @@ Messages and stacks are scrubbed of credentials, tokens, JWTs, AWS keys, PEM blo
 `password=`/`token:` pairs before storage. Request headers, cookies, bodies, query strings, user
 email, username and IP are never stored, even if a SDK sends them.
 
-Issues group by platform, environment, exception type, normalised message, the top three in-app
-frames and the culprit. Line numbers, build hashes, ids, numbers and quoted values are ignored, so
-one bug stays one issue across deploys. Release is not part of the grouping; environment is, so
-staging never reopens or inflates a production issue.
+Issues group by target, platform, environment, exception type, normalised message, the top three
+in-app frames and the culprit. Line numbers, build hashes, ids, numbers and quoted values are
+ignored, so one bug stays one issue across deploys. Release is not part of the grouping; environment
+is, so staging never reopens or inflates a production issue.
 
 ## Issues
 
-The list has **Unresolved**, **Resolved**, **Ignored** and **All** tabs, filters by environment,
-release and time range (24 hours, 7 days, 30 days or all time), and a search over the type,
-message, culprit and issue id. Older matches load with **Load older issues**.
+The **Issues** tab has **Unresolved**, **Resolved**, **Ignored** and **All** filters, plus filters
+for target, environment, release and time range (24 hours, 7 days, 30 days or all time) and a search
+over the type, message, culprit and issue id. Older matches load with **Load older issues**.
 
-Open an issue to see its 24-hour and 14-day charts, exception chain and the newest stored events.
-**Resolve** marks it fixed; a new event reopens it and records that regression. **Ignore** keeps
-counting but hides it from the default list. **Delete** removes the issue, its events and counts.
+Open an issue to see its target, 24-hour and 14-day charts, exception chain and the newest stored
+events. **Resolve** marks it fixed; a new event reopens it and records that regression. **Ignore**
+keeps counting but hides it from the default list. **Delete** removes the issue, its events and
+counts.
 
 Counts are exact. Stored events are sampled: at most one per issue per second, 50 kept per issue
-and 500 per project per minute. Events and hourly counts are pruned after 30 days; issues not seen
+and 500 per target per minute. Events and hourly counts are pruned after 30 days; issues not seen
 for 90 days are removed.
 
 ## Limits
 
-Ingest is rate limited per project (600 events a minute, burst 50) and globally. A project has a
-soft cap of 100,000 accepted events a month; past it, events are rejected with a Sentry rate-limit
-response and the usage panel says so. It never blocks a deploy or a visitor.
+Ingest is rate limited per target (600 events a minute, burst 50) and globally. A target has a soft
+cap of 100,000 accepted events a month; past it, events are rejected with a Sentry rate-limit
+response and the target panel says so. It never blocks a deploy or a visitor.
 
 Rotating the key creates a new DSN. The old key keeps working for 24 hours so a rollout is not a
 race.

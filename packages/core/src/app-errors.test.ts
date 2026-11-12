@@ -435,10 +435,114 @@ describe('AppErrorService', () => {
 			});
 			const issue = core.appErrors.list(owner, project, { status: 'all', q: 'alert me once' }).issues[0]!;
 			expect(alerts.at(-1)?.title).toContain('New error');
-			expect(alerts.at(-1)?.url).toBe(`https://control.test/projects/shop?tab=errors&status=all&issue=${issue.id}`);
+			expect(alerts.at(-1)?.url).toBe(`https://control.test/errors?issue=${issue.id}`);
 		} finally {
 			core.appErrors.updateSettings(owner, project, { notify: false });
 			core.ctx.notifiers.pop();
 		}
+	});
+
+	test('auto-links current and future projects, then leaves manual targets alone', async () => {
+		expect(core.appErrors.serviceView(owner).autoLink).toBe(false);
+		expect(() => core.appErrors.setAutoLink(viewer, true)).toThrow();
+		expect(core.appErrors.serviceView(viewer).targets.length).toBeGreaterThan(0);
+
+		await core.projects.create(owner, {
+			name: 'Auto linked',
+			slug: 'auto-linked',
+			runtime: 'static',
+			placement: 'edge',
+			productionAccess: 'public',
+			previewAccess: 'platform',
+		});
+		const enabledView = core.appErrors.setAutoLink(owner, true);
+		expect(enabledView.autoLink).toBe(true);
+		const shopTarget = enabledView.targets.find((target) => target.projectSlug === 'shop')!;
+		expect(shopTarget.kind).toBe('project');
+		expect(shopTarget.enabled).toBe(true);
+		expect(shopTarget.autoLinked).toBe(true);
+		expect(shopTarget.dsn).toMatch(/^https:\/\/[0-9a-f]{32}@control\.test\/ingest\/\d+$/);
+
+		await core.projects.create(owner, {
+			name: 'Created after auto link',
+			slug: 'created-after-auto-link',
+			runtime: 'static',
+			placement: 'edge',
+			productionAccess: 'public',
+			previewAccess: 'platform',
+		});
+		const autoLinked = core.appErrors.serviceView(owner).targets.find((target) => target.projectSlug === 'created-after-auto-link');
+		expect(autoLinked).toBeDefined();
+		expect(autoLinked?.autoLinked).toBe(true);
+		expect(autoLinked?.enabled).toBe(true);
+
+		const afterOff = core.appErrors.setAutoLink(owner, false);
+		expect(afterOff.autoLink).toBe(false);
+		expect(afterOff.targets.find((target) => target.projectSlug === 'shop')?.enabled).toBe(false);
+		expect(afterOff.targets.find((target) => target.projectSlug === 'created-after-auto-link')?.enabled).toBe(false);
+
+		await core.projects.create(owner, {
+			name: 'Manual link',
+			slug: 'manual-link',
+			runtime: 'static',
+			placement: 'edge',
+			productionAccess: 'public',
+			previewAccess: 'platform',
+		});
+		expect(core.appErrors.serviceView(owner).targets.some((target) => target.projectSlug === 'manual-link')).toBe(false);
+		const manual = core.appErrors.createProjectTarget(owner, core.projects.requireRow(owner, 'manual-link'));
+		expect(manual.kind).toBe('project');
+		expect(manual.autoLinked).toBe(false);
+		expect(manual.enabled).toBe(true);
+	});
+
+	test('attaches an off-platform target and manages its issues from the top-level service', async () => {
+		const target = core.appErrors.createStandaloneTarget(owner, { name: 'Off-platform shop' });
+		expect(target.kind).toBe('standalone');
+		expect(target.projectId).toBeNull();
+		expect(target.projectSlug).toBeNull();
+		expect(target.enabled).toBe(true);
+		expect(target.dsn).toMatch(/^https:\/\/[0-9a-f]{32}@control\.test\/ingest\/\d+$/);
+		const dsnId = target.dsn!.match(/\/ingest\/(\d+)$/)![1]!;
+		expect(() => core.appErrors.createStandaloneTarget(viewer, { name: 'Nope' })).toThrow();
+
+		const event = sentryEvent({
+			event_id: '8'.repeat(32),
+			environment: 'production',
+			message: 'off-platform boom',
+			exception: {
+				values: [{ type: 'Error', value: 'off-platform boom', stacktrace: { frames: [{ function: 'offPlatform', filename: 'src/off.ts', lineno: 1, in_app: true }] } }],
+			},
+		});
+		const outcome = core.appErrors.ingest({
+			dsnProjectId: dsnId,
+			endpoint: 'envelope',
+			body: envelope([{ type: 'event', payload: event }], { event_id: event.event_id }),
+			headerKey: target.publicKey!,
+		});
+		expect(outcome.status).toBe(200);
+
+		const all = core.appErrors.orgList(owner, { status: 'all', target: target.id, q: 'off-platform boom' });
+		expect(all.issues).toHaveLength(1);
+		expect(all.issues[0]?.targetName).toBe('Off-platform shop');
+		expect(all.issues[0]?.targetKind).toBe('standalone');
+		const issue = all.issues[0]!;
+		expect(core.appErrors.orgGet(owner, issue.id).issue.targetName).toBe('Off-platform shop');
+		expect(core.appErrors.orgSetStatus(owner, { ids: [issue.id], status: 'resolved' })).toBe(1);
+		expect(core.appErrors.orgList(owner, { status: 'resolved', target: target.id }).issues[0]?.id).toBe(issue.id);
+		expect(core.appErrors.orgDeleteIssue(owner, issue.id)).toBe(true);
+		expect(core.appErrors.orgList(owner, { status: 'all', target: target.id }).issues).toHaveLength(0);
+
+		const paused = core.appErrors.updateTarget(owner, target.id, { enabled: false });
+		expect(paused.enabled).toBe(false);
+		const resumed = core.appErrors.updateTarget(owner, target.id, { enabled: true, sampleRate: 0.5, notify: true });
+		expect(resumed.enabled).toBe(true);
+		expect(resumed.sampleRate).toBe(0.5);
+		expect(resumed.notify).toBe(true);
+		const rotated = core.appErrors.rotateTargetKey(owner, target.id);
+		expect(rotated.publicKey).not.toBe(resumed.publicKey);
+
+		expect(core.appErrors.deleteTarget(owner, target.id)).toBe(true);
+		expect(core.appErrors.serviceView(owner).targets.some((row) => row.id === target.id)).toBe(false);
 	});
 });

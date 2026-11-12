@@ -9,6 +9,7 @@
 	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
 	import ChartAreaIcon from '@lucide/svelte/icons/chart-area';
 	import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
+	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import CylinderIcon from '@lucide/svelte/icons/cylinder';
 	import DatabaseIcon from '@lucide/svelte/icons/database';
 	import FolderKanbanIcon from '@lucide/svelte/icons/folder-kanban';
@@ -77,6 +78,7 @@
 			| '/(dashboard)/topology'
 			| '/(dashboard)/dashboards'
 			| '/(dashboard)/alerts'
+			| '/(dashboard)/errors'
 			| '/(dashboard)/projects'
 			| '/(dashboard)/functions'
 			| '/(dashboard)/databases'
@@ -179,7 +181,8 @@
 					path: '/dashboards',
 					icon: ChartAreaIcon
 				},
-				{ label: 'Alerts', href: '/(dashboard)/alerts', path: '/alerts', icon: BellIcon }
+				{ label: 'Alerts', href: '/(dashboard)/alerts', path: '/alerts', icon: BellIcon },
+				{ label: 'Errors', href: '/(dashboard)/errors', path: '/errors', icon: CircleAlertIcon }
 			]
 		},
 		{

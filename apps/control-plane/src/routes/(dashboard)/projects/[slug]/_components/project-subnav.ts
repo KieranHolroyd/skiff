@@ -4,7 +4,6 @@ import BoxIcon from '@lucide/svelte/icons/box';
 import FolderOpenIcon from '@lucide/svelte/icons/folder-open';
 import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 import ChartNoAxesCombinedIcon from '@lucide/svelte/icons/chart-no-axes-combined';
-import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 import ClockIcon from '@lucide/svelte/icons/clock';
 import CpuIcon from '@lucide/svelte/icons/cpu';
 import DatabaseIcon from '@lucide/svelte/icons/database';
@@ -36,8 +35,6 @@ export interface ProjectSubnavData {
 	storageAttachments: unknown[];
 	workloadSpec: { env: Record<string, unknown>; secrets: unknown[] } | null;
 	shareLinks: Parameters<typeof shareState>[0][];
-	/** Unresolved app errors for the badge; null/absent when the viewer cannot read them. */
-	appErrors?: { unresolved: number } | null;
 	/** YOAL_FEATURE_JOBS (plan 09). */
 	jobsEnabled?: boolean;
 	/** Container console permissions (D127); absent means none. */
@@ -75,7 +72,7 @@ export function projectSubnav(data: ProjectSubnavData, url: RouteUrl): Subnav {
 						{
 							id: 'monitor',
 							label: 'Monitor',
-							items: [item('traffic', 'Traffic', ChartNoAxesCombinedIcon), item('errors', 'Errors', CircleAlertIcon, data.appErrors?.unresolved || undefined)]
+							items: [item('traffic', 'Traffic', ChartNoAxesCombinedIcon)]
 						},
 						{
 							id: 'container',
@@ -94,7 +91,6 @@ export function projectSubnav(data: ProjectSubnavData, url: RouteUrl): Subnav {
 							label: 'Monitor',
 							items: [
 								item('traffic', 'Traffic', ChartNoAxesCombinedIcon),
-								item('errors', 'Errors', CircleAlertIcon, data.appErrors?.unresolved || undefined),
 								{ ...item('logs', 'Logs', ScrollTextIcon), live }
 							]
 						}
