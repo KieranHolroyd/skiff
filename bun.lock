@@ -237,6 +237,9 @@
         "@duckdb/node-api": "2.0.0-r.1",
       },
     },
+    "spikes/s3-cas": {
+      "name": "@yoal-spike/s3-cas",
+    },
   },
   "packages": {
     "@antfu/install-pkg": ["@antfu/install-pkg@2.1.0", "", { "dependencies": { "package-manager-detector": "^1.8.0", "tinyexec": "^1.3.1" } }, "sha512-sdg9NxU3zR4Mnawfbc/x6GB5Wf17WYud5qOuEuxXjaKpYpMkISSJEjItGebXJ2bQ4DIcly4NYH23mtkGJjvKUw=="],
@@ -834,6 +837,8 @@
     "@yoal-spike/cimd-bun": ["@yoal-spike/cimd-bun@workspace:spikes/cimd-bun"],
 
     "@yoal-spike/duckdb": ["@yoal-spike/duckdb@workspace:spikes/duckdb"],
+
+    "@yoal-spike/s3-cas": ["@yoal-spike/s3-cas@workspace:spikes/s3-cas"],
 
     "@yoal/agent": ["@yoal/agent@workspace:apps/agent"],
 
