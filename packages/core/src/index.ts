@@ -95,6 +95,7 @@ export * from './util.ts';
 export * from './cron.ts';
 export * from './artifact.ts';
 export * from './object-store.ts';
+export * from './ha-lease.ts';
 export * from './orgs.ts';
 export * from './iam/service.ts';
 export * from './iam/governance.ts';

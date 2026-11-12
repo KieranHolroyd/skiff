@@ -1,0 +1,1 @@
+{"name":"@yoal-spike/s3-cas","private":true,"type":"module","scripts":{"spike":"bun run spike.ts"}}

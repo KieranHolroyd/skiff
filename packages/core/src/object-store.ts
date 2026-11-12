@@ -72,6 +72,35 @@ export interface ObjectStore {
 	testConnection?(): Promise<ObjectStoreTestResult>;
 }
 
+/**
+ * A read that carries what a compare-and-swap needs: the ETag and the store's own clock (the
+ * `Date` header), which the HA lease trusts instead of the local wall clock (CLUSTERING §6.3).
+ */
+export interface VersionedRead {
+	status: number;
+	/** Present on 200. */
+	body: string | null;
+	etag: string | null;
+	/** Epoch ms from the response `Date` header, or null when the store sent none. */
+	serverDate: number | null;
+}
+
+/** `ifNoneMatch: '*'` creates only; `ifMatch` replaces only the version read. */
+export type WriteCondition = { ifMatch: string } | { ifNoneMatch: '*' };
+
+export interface ConditionalWrite {
+	/** 200 won; 409/412 lost the race; 501 means the store has no conditional PUT. */
+	status: number;
+	etag: string | null;
+	serverDate: number | null;
+}
+
+/** Conditional object access: the only arbiter of one control-plane primary (§6.3). */
+export interface ConditionalStore {
+	readVersioned(key: string): Promise<VersionedRead>;
+	writeConditional(key: string, body: string, condition: WriteCondition): Promise<ConditionalWrite>;
+}
+
 export interface StoredObject {
 	key: string;
 	size: number;
@@ -345,7 +374,7 @@ type StreamingRequestInit = RequestInit & { duplex?: 'half' };
  * S3-compatible object store. Speaks the same ListObjectsV2 and presign dialects as R2, MinIO,
  * RustFS and Garage. Upload/download bodies stay streams; no arrayBuffer on the streaming paths.
  */
-export class S3ObjectStore implements ObjectStore {
+export class S3ObjectStore implements ObjectStore, ConditionalStore {
 	readonly kind = 's3' as const;
 	private readonly client: AwsClient;
 	private readonly endpoint: string;
@@ -490,6 +519,32 @@ export class S3ObjectStore implements ObjectStore {
 		} while (token);
 	}
 
+	async readVersioned(key: string): Promise<VersionedRead> {
+		const response = await this.send(this.url(key), { headers: { 'cache-control': 'no-cache' } });
+		const serverDate = parseHttpDate(response.headers.get('date'));
+		if (!response.ok) {
+			await response.body?.cancel().catch(() => undefined);
+			return { status: response.status, body: null, etag: null, serverDate };
+		}
+		return { status: 200, body: await response.text(), etag: response.headers.get('etag'), serverDate };
+	}
+
+	async writeConditional(key: string, body: string, condition: WriteCondition): Promise<ConditionalWrite> {
+		const data = new TextEncoder().encode(body);
+		const headers: Record<string, string> = {
+			'content-type': 'application/json',
+			'content-length': String(data.byteLength),
+			...('ifMatch' in condition ? { 'if-match': condition.ifMatch } : { 'if-none-match': condition.ifNoneMatch }),
+		};
+		const response = await this.send(this.url(key), { method: 'PUT', body: data, headers });
+		await response.body?.cancel().catch(() => undefined);
+		return {
+			status: response.status,
+			etag: response.ok ? response.headers.get('etag') : null,
+			serverDate: parseHttpDate(response.headers.get('date')),
+		};
+	}
+
 	private async presign(method: 'GET' | 'PUT', key: string, ttlSeconds: number): Promise<string> {
 		const url = this.url(key);
 		url.searchParams.set('X-Amz-Expires', String(ttlSeconds));
@@ -565,6 +620,12 @@ export class R2ObjectStore extends S3ObjectStore {
 			forcePathStyle: options.forcePathStyle ?? true,
 		});
 	}
+}
+
+function parseHttpDate(value: string | null): number | null {
+	if (!value) return null;
+	const parsed = Date.parse(value);
+	return Number.isFinite(parsed) ? parsed : null;
 }
 
 const xmlEntities: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
