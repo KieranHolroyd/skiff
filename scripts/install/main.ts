@@ -37,7 +37,7 @@
  *   --canary                  follow the canary channel (install.sh then builds main instead of
  *                             the newest stable release; D128)
  */
-import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { confirm } from './confirm.ts';
@@ -1923,7 +1923,7 @@ async function joinWorker(join_: NonNullable<Options['join']>): Promise<void> {
 	run('chmod', ['0640', ENV_FILE], { allowFailure: true });
 
 	const release = buildRelease(env, 'worker');
-	switchCurrent(release);
+	installWorkerLayout(release);
 
 	step('systemd units');
 	// Nothing listens publicly until the overlay address is known.
@@ -1946,6 +1946,9 @@ async function joinWorker(join_: NonNullable<Options['join']>): Promise<void> {
 		log,
 		start: false,
 	});
+	// The binaries now live in /opt/yoal/current/agent and /opt/yoal/helper; the source build
+	// (about 1.4 GB with node_modules) is not needed on a worker.
+	rmSync(release, { recursive: true, force: true });
 	run('systemctl', ['daemon-reload']);
 	run('systemctl', ['enable', HELPER_UNIT]);
 	run('systemctl', ['restart', HELPER_UNIT]);
@@ -1994,6 +1997,25 @@ async function joinWorker(join_: NonNullable<Options['join']>): Promise<void> {
 	step('Joined');
 	console.log(`${color.green(`Node "${join_.name}" joined.`)} It appears in Nodes after its first heartbeat.`);
 	console.log(`The overlay comes up once the ingress node has this node's key. Logs: ${color.dim('journalctl -u yoal-agent -f')}`);
+}
+
+/**
+ * A worker's `/opt/yoal/current` is a plain directory with the agent binary, never a symlink to a
+ * release: signed node updates (D99) replace `current/agent/yoal-agent` and `helper/yoal-helper`
+ * in place, and the helper refuses a symlinked control-plane layout.
+ */
+function installWorkerLayout(release: string): void {
+	step('Activate (worker layout)');
+	const current = join(OPT_DIR, 'current');
+	const stat = existsSync(current) ? lstatSync(current) : null;
+	if (stat?.isSymbolicLink()) rmSync(current, { force: true });
+	ensureDir(join(current, 'agent'), '0755', 'root:root');
+	const binary = join(current, 'agent', 'yoal-agent');
+	cpSync(join(release, 'agent', 'yoal-agent'), `${binary}.new`);
+	chmodSync(`${binary}.new`, 0o755);
+	renameSync(`${binary}.new`, binary);
+	linkAgentCommands(current);
+	log(`${binary} ${options.version}`);
 }
 
 const main = async (): Promise<void> => {
