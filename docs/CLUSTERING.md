@@ -20,7 +20,7 @@ Related: [DESIGN.md](./DESIGN.md) §3 and §9, [VOLUMES.md](./VOLUMES.md),
 | Phase | In the tree | Not built |
 |---|---|---|
 | C0 | Hardware heartbeat, zones/roles/labels, placement spec, CPU admission, disk tiers (D169), topology/blast radius, Topology UI | Hardware tab, MCP tools |
-| C1 | Managed overlay, hubs/LAN mesh, join, installer, helper keygen/apply/status, ufw/firewalld/nftables, peer health | Real two-host verification; installer still needs the signed agent bundle |
+| C1 | Managed overlay, hubs/LAN mesh, join, installer, helper keygen/apply/status, ufw/firewalld/nftables, peer health; `install.sh --join` worker installs; `POST /nodes/:id/overlay` adopts an existing node. **Verified on two hosts 2026-11-12** (Scaleway `par1` edge + Hetzner `hel1` worker, 41 ms RTT): ingress → overlay → worker app serves | MTU probe, hub loss with a second hub, LAN mesh on real hardware |
 | C2 | Cross-node DB/private storage for process apps, TCP/TLS forwarder, pinned self-signed mTLS, endpoint status plumbing | Per-install CA, Caddy L4, container apps, endpoint failover UI |
 | C3 | Share registry/API/dashboard, helper NFS/SMB mount verbs | Desired-state mounts, `backing: share`, quotas/uid-gid, blast radius |
 | C4 | Replica table/planner, deploy population, per-node state, route fan-out, health checks (configurable interval) | Rolling/surge, operator drain workflow, move-back |
