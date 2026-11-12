@@ -63,22 +63,39 @@ export class WireguardError extends Error {
 	}
 }
 
+/**
+ * Under `/etc/wireguard/`, because Ubuntu's AppArmor profile for `/usr/bin/wg` only lets it read
+ * files there: from `/etc/yoal/wireguard/` `wg setconf` fails with "fopen: Permission denied".
+ */
 export const DEFAULT_WIREGUARD_PATHS: WireguardPaths = {
 	interface: 'wg0',
-	dir: '/etc/yoal/wireguard',
-	privateKeyPath: '/etc/yoal/wireguard/wg0.key',
-	configPath: '/etc/yoal/wireguard/wg0.conf',
+	dir: '/etc/wireguard/yoal',
+	privateKeyPath: '/etc/wireguard/yoal/wg0.key',
+	configPath: '/etc/wireguard/yoal/wg0.conf',
 	wgPath: 'wg',
 	ipPath: 'ip',
 };
+
+/** Where releases before 0.14.5 kept the key; `keygen` moves it so the node keeps its identity. */
+export const LEGACY_WIREGUARD_KEY_PATH = '/etc/yoal/wireguard/wg0.key';
 
 export class WireguardManager {
 	private readonly paths: WireguardPaths;
 	private readonly runner: CommandRunner;
 	private readonly firewall?: { apply(): Promise<unknown> };
+	private readonly legacyKeyPath: string | null;
 
-	constructor(options: { paths?: Partial<WireguardPaths>; runner?: CommandRunner; firewall?: { apply(): Promise<unknown> } } = {}) {
+	constructor(
+		options: {
+			paths?: Partial<WireguardPaths>;
+			runner?: CommandRunner;
+			firewall?: { apply(): Promise<unknown> };
+			legacyKeyPath?: string | null;
+		} = {},
+	) {
 		this.paths = { ...DEFAULT_WIREGUARD_PATHS, ...options.paths };
+		// Only the default layout migrates; a test or custom layout names its own paths.
+		this.legacyKeyPath = options.paths?.privateKeyPath ? (options.legacyKeyPath ?? null) : (options.legacyKeyPath ?? LEGACY_WIREGUARD_KEY_PATH);
 		this.runner = options.runner ?? defaultRunner;
 		this.firewall = options.firewall;
 	}
@@ -90,6 +107,19 @@ export class WireguardManager {
 		try {
 			privateKey = (await fs.readFile(this.paths.privateKeyPath, 'utf8')).trim();
 		} catch {
+			privateKey = '';
+		}
+		if (!privateKey && this.legacyKeyPath && this.legacyKeyPath !== this.paths.privateKeyPath) {
+			// Keep the identity the control plane already has: a new key would orphan every peer.
+			const legacy = await fs.readFile(this.legacyKeyPath, 'utf8').catch(() => '');
+			if (legacy.trim()) {
+				privateKey = legacy.trim();
+				await fs.writeFile(this.paths.privateKeyPath, `${privateKey}\n`, { mode: 0o600 });
+				await fs.chmod(this.paths.privateKeyPath, 0o600);
+				await fs.rm(this.legacyKeyPath, { force: true });
+			}
+		}
+		if (!privateKey) {
 			const generated = await this.runWg(['genkey']);
 			privateKey = generated.stdout.trim();
 			if (!privateKey) throw new WireguardError('wg genkey returned no key');

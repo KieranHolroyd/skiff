@@ -466,7 +466,7 @@ refused if the CIDR overlaps `ip route` or `100.64.0.0/10` (CGNAT, Tailscale). C
 `10.88.0.0/16` and plan 23's random `/24` and `nodes.wg_address`: one field name, one CIDR.
 
 **Keys, MTU and keepalive.** `wireguard/keygen` runs on the node: the public key goes to the control
-plane, the private key to `/etc/yoal/wireguard/wg0.key` (0600 root), never to desired state, logs
+plane, the private key to `/etc/wireguard/yoal/wg0.key` (0600 root; under `/etc/wireguard/` because Ubuntu confines `wg` there with AppArmor), never to desired state, logs
 or audit. The MTU is the minimum of the probed paths: probe 1360–1500 in 8-byte steps with `ping -M
 do`, subtract 80 bytes of WireGuard overhead, giving a `wg0` MTU of 1280–1420, at join and after a
 restart; a probe filtered by ICMP keeps 1420. `PersistentKeepalive=25` is set only on the dialling

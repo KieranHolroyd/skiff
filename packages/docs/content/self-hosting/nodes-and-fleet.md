@@ -88,7 +88,7 @@ The control plane decides the mode, not the command.
 
 Managed nodes are connected by WireGuard. The control plane gives each one a `/32` address from the overlay range, `10.47.0.0/22` by default (the first `/24` is reserved). You can change the range with `PATCH /api/v1/cluster/config` before you join nodes.
 
-- **Keys stay on the node.** The helper generates the private key, stores it under `/etc/yoal/wireguard/`, and sends only the public key to the control plane.
+- **Keys stay on the node.** The helper generates the private key, stores it under `/etc/wireguard/yoal/`, and sends only the public key to the control plane.
 - **The edge is the hub.** Worker traffic from the edge runs over WireGuard to each worker's overlay address. The interface is `wg0`, listening on UDP `51820`, with an MTU of `1420`.
 - **NAT'd workers need no inbound port.** A worker without a reachable endpoint dials out and sends a keepalive every 25 seconds.
 - **Same-zone workers can peer directly** when both have a LAN endpoint, so traffic between them does not pass through the edge.

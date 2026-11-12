@@ -74,6 +74,28 @@ describe('WireguardManager', () => {
 		expect(calls).toContainEqual(['ip', 'route', 'replace', '10.47.0.0/22', 'dev', 'wg0', 'src', '10.47.1.5']);
 	});
 
+	test('moves a key from the pre-AppArmor location instead of generating a new one', async () => {
+		const { mkdirSync, writeFileSync, existsSync } = await import('node:fs');
+		mkdirSync(join(dir, 'legacy'), { recursive: true });
+		writeFileSync(join(dir, 'legacy', 'wg0.key'), 'private-key\n');
+		const calls: string[][] = [];
+		const manager = new WireguardManager({
+			paths: { dir: join(dir, 'moved'), privateKeyPath: join(dir, 'moved', 'wg0.key'), configPath: join(dir, 'moved', 'wg0.conf') },
+			legacyKeyPath: join(dir, 'legacy', 'wg0.key'),
+			runner: fakeRunner(calls),
+		});
+		expect((await manager.keygen()).publicKey).toBe(publicKey);
+		expect(readFileSync(join(dir, 'moved', 'wg0.key'), 'utf8')).toBe('private-key\n');
+		expect(existsSync(join(dir, 'legacy', 'wg0.key'))).toBe(false);
+		expect(calls.some((call) => call.includes('genkey'))).toBe(false);
+	});
+
+	test('keeps its files where the wg AppArmor profile allows reads', async () => {
+		const { DEFAULT_WIREGUARD_PATHS } = await import('./wireguard.ts');
+		expect(DEFAULT_WIREGUARD_PATHS.configPath.startsWith('/etc/wireguard/')).toBe(true);
+		expect(DEFAULT_WIREGUARD_PATHS.privateKeyPath.startsWith('/etc/wireguard/')).toBe(true);
+	});
+
 	test('reads status and treats a missing interface as empty', async () => {
 		const manager = new WireguardManager({
 			paths: { dir: join(dir, 'status'), privateKeyPath: join(dir, 'keys', 'wg0.key'), configPath: join(dir, 'status', 'wg0.conf') },
