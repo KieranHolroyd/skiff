@@ -105,7 +105,8 @@ path is unaffected: forwarding is fire-and-forget and every error is still store
 
 ## 7. Not built
 
-- Browser (client-side) errors: they would need an unauthenticated, rate-limited intake.
+- Browser (client-side) errors: they would need an unauthenticated, rate-limited intake. That is the
+  app-facing tracker in [APP-ERRORS.md](./APP-ERRORS.md), not part of this one.
 - Agent and helper errors: agents log to their own journal (`journalctl -u yoal-agent`).
 - Source maps for the production bundle: frames point at built chunks, which is enough to group
   but not to show original line numbers.

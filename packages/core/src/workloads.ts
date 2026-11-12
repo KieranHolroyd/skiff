@@ -821,8 +821,14 @@ export class WorkloadService {
 		const row = this.ctx.db.select().from(workloads).where(eq(workloads.id, workloadId)).get();
 		if (!row) throw new NotFoundError('Workload');
 		this.assertWorkloadOnNode(row, workloadId, replica, nodeId);
-		const spec = this.specOf(this.requireProject(row.projectId), row);
+		const project = this.requireProject(row.projectId);
+		const spec = this.specOf(project, row);
 		if (replica >= spec.replicas) throw new NotFoundError('Workload replica');
+		const appErrorEnv = this.ctx.appErrors.consumerEnv(row.projectId);
+		if (appErrorEnv.SENTRY_DSN && row.deploymentId) {
+			appErrorEnv.SENTRY_RELEASE = row.deploymentId;
+			appErrorEnv.SENTRY_ENVIRONMENT = project.productionDeploymentId === row.deploymentId ? 'production' : 'preview';
+		}
 		// Attached database, storage and broker connection values sit under the spec's own env and secrets (D56, S4, D111).
 		const env: Record<string, string> = {
 			...this.ctx.email.consumerEnv(row.projectId),
@@ -830,6 +836,7 @@ export class WorkloadService {
 			...this.ctx.storage.consumerEnv(row.projectId, row.nodeId, spec.runtime),
 			...this.ctx.databases.consumerEnv(row.projectId, row.nodeId, spec.runtime),
 			...this.ctx.userPools.consumerEnv(row.projectId),
+			...appErrorEnv,
 			...spec.env,
 		};
 		const files: Record<string, string> = {};

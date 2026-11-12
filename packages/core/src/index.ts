@@ -17,6 +17,7 @@ import { SecretService } from './secrets.ts';
 import { MetricsService } from './metrics.ts';
 import { MetricsExporter } from './metrics-export.ts';
 import { ServerErrorService } from './server-errors.ts';
+import { AppErrorService } from './app-errors.ts';
 import { SentryService } from './sentry.ts';
 import { UsageAnalyticsService } from './usage-analytics.ts';
 import { WhatsNewService } from './whats-new.ts';
@@ -125,6 +126,7 @@ export * from './secrets.ts';
 export * from './metrics.ts';
 export * from './metrics-export.ts';
 export * from './server-errors.ts';
+export * from './app-errors.ts';
 export * from './sentry.ts';
 export * from './usage-analytics.ts';
 export * from './whats-new.ts';
@@ -208,6 +210,8 @@ export interface Core {
 	deploy: DeployService;
 	maintenance: MaintenanceService;
 	serverErrors: ServerErrorService;
+	/** The app-facing error tracker (docs/APP-ERRORS.md). */
+	appErrors: AppErrorService;
 	/** Optional Sentry forwarding for the errors above (docs/SERVER-ERRORS.md §6). */
 	sentry: SentryService;
 	/** Opt-in anonymous usage pings (docs/USAGE-ANALYTICS.md, D211). */
@@ -351,6 +355,7 @@ export function createCore(options: CoreOptions): Core {
 	ctx.governance = new GovernanceService(ctx);
 	ctx.authPolicy = new AuthPolicyService(ctx);
 	ctx.serverErrors = new ServerErrorService(ctx, options.version ?? null);
+	ctx.appErrors = new AppErrorService(ctx, options.version ?? null);
 	ctx.sentry = new SentryService(ctx);
 	ctx.usageAnalytics = new UsageAnalyticsService(ctx, { version: options.version ?? '0.0.0' });
 	ctx.whatsNew = new WhatsNewService(ctx, { version: options.version ?? '0.0.0' });
@@ -508,6 +513,7 @@ export function createCore(options: CoreOptions): Core {
 		governance: ctx.governance,
 		authPolicy: ctx.authPolicy,
 		serverErrors: ctx.serverErrors,
+		appErrors: ctx.appErrors,
 		sentry: ctx.sentry,
 		usageAnalytics: ctx.usageAnalytics,
 		whatsNew: ctx.whatsNew,

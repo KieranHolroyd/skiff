@@ -205,6 +205,7 @@ export const TOOL_PERMISSIONS: Record<string, Permission> = {
 	create_storage: 'storage:create',
 	create_bucket: 'storage:update',
 	get_bucket_config: 'storage:read',
+	update_app_errors: 'project:update',
 	update_bucket_config: 'storage:update',
 	attach_storage: 'storage:update',
 	detach_storage: 'storage:update',
@@ -1269,6 +1270,78 @@ function buildServer(
 					...view,
 					deployments: core.deployments.list(principal, row, { limit: 10 }),
 				};
+			}),
+	);
+
+	tool(
+		'list_app_errors',
+		{
+			title: 'List app errors',
+			description:
+				'List app errors (Sentry-compatible exceptions) for one project, newest first. Filter by unresolved/resolved/ignored, environment, release, time range or a text query.',
+			inputSchema: z.object({
+				project: z.string().describe('Project slug'),
+				status: z.enum(['unresolved', 'resolved', 'ignored', 'all']).optional().describe('Default unresolved'),
+				environment: z.string().max(40).optional(),
+				release: z.string().max(200).optional(),
+				range: z.enum(['24h', '7d', '30d', 'all']).optional().describe('Default all'),
+				q: z.string().max(200).optional().describe('Search the type, message, culprit or issue id'),
+				limit: z.number().int().min(1).max(100).optional().describe('Default 50'),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('project:read'),
+		},
+		async ({ project, ...query }) =>
+			run(() => {
+				const row = core.projects.requireRow(principal, project);
+				return core.appErrors.list(principal, row, {
+					status: query.status ?? 'unresolved',
+					...(query.environment ? { environment: query.environment } : {}),
+					...(query.release ? { release: query.release } : {}),
+					...(query.range ? { range: query.range } : {}),
+					...(query.q ? { q: query.q } : {}),
+					...(query.limit ? { limit: query.limit } : {}),
+				});
+			}),
+	);
+
+	tool(
+		'get_app_error',
+		{
+			title: 'Get app error',
+			description:
+				'Get one app-error issue with its newest stored events and stack traces, plus 24-hour and 14-day counts.',
+			inputSchema: z.object({
+				project: z.string().describe('Project slug'),
+				issue: z.string().describe('Issue id (aei_…)'),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('project:read'),
+		},
+		async ({ project, issue }) =>
+			run(() => {
+				const row = core.projects.requireRow(principal, project);
+				return core.appErrors.get(principal, row, issue);
+			}),
+	);
+
+	tool(
+		'update_app_errors',
+		{
+			title: 'Update app errors',
+			description: 'Resolve, ignore or reopen one or more app-error issues.',
+			inputSchema: z.object({
+				project: z.string().describe('Project slug'),
+				ids: z.array(z.string()).min(1).max(500).describe('Issue ids (aei_…)'),
+				status: z.enum(['unresolved', 'resolved', 'ignored']),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('project:update'),
+		},
+		async ({ project, ids, status }) =>
+			run(() => {
+				const row = core.projects.requireRow(principal, project);
+				return { updated: core.appErrors.setStatus(principal, row, { ids, status }) };
 			}),
 	);
 

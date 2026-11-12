@@ -124,6 +124,7 @@ export class MaintenanceService {
 		const logsPruned = this.ctx.logs.prune(this.ctx.now());
 		// Server errors: 30 days of events and hourly counts, 90 days of quiet issues (D171).
 		this.ctx.serverErrors.prune(this.ctx.now());
+		this.ctx.appErrors.prune(this.ctx.now());
 		const stale = this.ctx.nodes.markStale();
 		// Replica copies on a lost or draining node are moved by the failover controller's own loop
 		// (FailoverService.tick, every few seconds under its lease), not by this sweep.

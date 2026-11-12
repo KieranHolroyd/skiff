@@ -10,6 +10,10 @@ owner/admin. Authentication is either the Better Auth session cookie (dashboard)
 { "error": "conflict", "message": "\"blog\" is already taken.", "suggestions": ["blog-app"] }
 ```
 
+App-error ingest is the one public, unversioned API (docs/APP-ERRORS.md): Sentry SDKs post to
+`https://<platformOrigin>/ingest/api/<numeric-dsn-id>/{envelope,store}/`, authenticated by the
+project's public DSN key (`X-Sentry-Auth` or `?sentry_key=`), never a session cookie.
+
 | Method | Path | Permission | Notes |
 |---|---|---|---|
 | GET | `/whoami` | — | user, org, role, effective permissions |
@@ -56,6 +60,12 @@ owner/admin. Authentication is either the Better Auth session cookie (dashboard)
 | DELETE | `/projects/:slug/sessions` | `project:update` | sign out everyone: bumps the project's session epoch (rotates its site key), ending password, platform and share sessions on every scope → `{ ok, epoch, signedOutAt, shareSessions }`. Share links keep working |
 | DELETE | `/projects/:slug/sessions/:id` | `shareLink:revoke` | end one share-link session (`red_…`) → `{ ok, sessionId }` |
 | GET | `/projects/:slug/logs` | `logs:read` | `?after&limit&source&buildId&deploymentId&level&q`; ordered events plus a `cursor` for tailing |
+| GET | `/projects/:slug/errors` | `project:read` | App errors (docs/APP-ERRORS.md): `?status=unresolved\|resolved\|ignored\|all&environment=&release=&range=24h\|7d\|30d\|all&q=&before=&limit=` |
+| PATCH | `/projects/:slug/errors` | `project:update` | `{ ids, status }` bulk resolve/ignore/reopen |
+| GET/DELETE | `/projects/:slug/errors/:id` | read / `project:update` | one issue with its events, hourly/daily counts; delete removes its events and counts |
+| GET/PATCH | `/projects/:slug/errors/settings` | read / `project:update` | enable/disable, sample rate, notification toggle; the view carries the DSN |
+| POST | `/projects/:slug/errors/key/rotate` | `project:update` | new public key; the old key works for 24 hours |
+| POST | `/projects/:slug/errors/test` | `project:update` | send a synthetic event through the real store |
 | POST | `/uploads` | `deployment:create` | `{ project, fileCount?, totalBytes? }` → presigned PUT |
 | POST | `/uploads/:id/finalize` | `deployment:create` | `{ project, uploadId?, promote?, message? }`; `uploadId` must match `:id`, and the upload must belong to `project` |
 | POST | `/projects/:slug/move` | `project:update` | `{ node }`; moves a deployed process/container app to another node and pins its placement there (D97). 409 for static sites, apps pinned by an attached database or private storage (move the database instead), app volumes or a persistent data dir; 422 when the target lacks budget or is not online |

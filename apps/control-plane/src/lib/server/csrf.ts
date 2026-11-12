@@ -32,6 +32,8 @@ const COOKIELESS_ENDPOINTS = new Set([
 // `/share/storage/` is authenticated by an unguessable share token, never a cookie.
 const COOKIELESS_PREFIXES = [
 	'/api/agent/',
+	// App error ingest (docs/APP-ERRORS.md): public DSN key, never a cookie.
+	'/ingest/',
 	// Pipeline job tokens (docs/PIPELINES.md W9): bearer only, never a cookie.
 	'/api/pipeline/',
 	'/api/objects/',

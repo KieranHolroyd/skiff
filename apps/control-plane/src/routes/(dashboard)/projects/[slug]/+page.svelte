@@ -59,6 +59,7 @@
 	import ContainerShell from './_components/ContainerShell.svelte';
 	import DatabasesCard from './_components/DatabasesCard.svelte';
 	import DomainsPanel from './_components/DomainsPanel.svelte';
+	import ErrorsPanel from './_components/ErrorsPanel.svelte';
 	import EnvironmentsPanel from './_components/EnvironmentsPanel.svelte';
 	import LogsPanel from './_components/LogsPanel.svelte';
 	import JobsPanel from './_components/JobsPanel.svelte';
@@ -537,6 +538,16 @@
 				ranges={data.trafficRanges}
 				links={data.trafficLinks}
 				variant="project"
+			/>
+		{:else if tab === 'errors'}
+			<ErrorsPanel
+				slug={data.project.slug}
+				origin={data.platform.origin}
+				settings={data.appErrorSettings}
+				list={data.appErrorList}
+				detail={data.appErrorDetail}
+				filters={data.appErrorFilters}
+				can={{ manageErrors: data.can.manageErrors }}
 			/>
 		{:else if tab === 'environments'}
 			<EnvironmentsPanel

@@ -76,7 +76,7 @@
 | **Access** | Public, password-protected or platform-login sites via `forward_auth`; share links with limits and instant revocation |
 | **Accounts** | Email + password, passkeys, GitHub, magic links, TOTP 2FA (owners must prove a passkey or TOTP each session), first-run setup wizard, orgs, member invites, roles, API keys |
 | **Fleet** | Node agents with desired-state reconciliation, an on-disk release cache and heartbeats; wildcard TLS via DNS-01; a branded 503 with `Retry-After` when a node is down |
-| **Observe** | Dashboard for fleet, projects, deployments, traffic, errors, logs and the audit log; `/metrics` on the control plane and agents; optional ClickHouse telemetry with custom dashboards; alerts for offline nodes, disk, certs, backups and 5xx spikes after a promote, plus metric alert rules, sent by email, webhook, Discord, Slack, Telegram, ntfy, SMS or Web Push |
+| **Observe** | Dashboard for fleet, projects, deployments, traffic, errors, logs and the audit log; Sentry-compatible app error tracking on every project (issues, stacks, resolve/ignore, DSN and one-line browser snippet); `/metrics` on the control plane and agents; optional ClickHouse telemetry with custom dashboards; alerts for offline nodes, disk, certs, backups and 5xx spikes after a promote, plus metric alert rules, sent by email, webhook, Discord, Slack, Telegram, ntfy, SMS or Web Push |
 | **Recover** | Litestream → R2, scripted restore, monthly drill, age-encrypted recovery kit, atomic release switch with automatic rollback |
 | **Managed services** | Postgres 16–18 databases (MySQL, MariaDB, MongoDB, Valkey, Redis and ClickHouse too, with lifecycle, credential rotation and the studio) and RustFS S3-compatible object storage as tier-3 containers: attachments with scoped credentials, Railway-style env suggestions from `.env`/code, one-click linking, usage charts, soft delete and restore, human-only credential reveal, scheduled/verified backups and restore-to-new, PgBouncer pooling, an extension allowlist with slow queries, a native database studio with a data grid and query editor for every engine (read-only by default, write mode with `database:update`), and staged credential rotation ([DATABASES.md](./docs/DATABASES.md), [OBJECT-STORAGE.md](./docs/OBJECT-STORAGE.md)) |
 | **Functions** | Workers-compatible functions on a pinned workerd runtime, bundled by Yoal (no Wrangler needed), with cron triggers and `yoal wrangler dev` for local runs ([FUNCTIONS.md](./docs/FUNCTIONS.md)) |
@@ -306,8 +306,10 @@ open the real files.
 ### Tests
 
 ```sh
-bun test           # unit + integration: core, site-config, contracts, agent, CLI, telemetry
-bun run check      # type-check every package
+bun test             # unit + integration: core, site-config, contracts, agent, CLI, telemetry
+bun run test:parallel # the same suite in four worker processes (~2–3× faster)
+bun run test:changed  # only the test files affected by uncommitted changes
+bun run check         # type-check every package
 ```
 
 End-to-end, against a running dev server with a fresh data dir:

@@ -42,7 +42,8 @@ describe('checkCsrf', () => {
 
 	test('cookieless prefixes cover only their own subtree', () => {
 		expect(checkCsrf(...req('POST', '/api/agent/heartbeat', { origin: 'https://evil.example' }), ORIGIN).ok).toBe(true);
-		for (const path of ['/api/agentx', '/api/v1/site-access', '/api/v1/site-access-evil'])
+		expect(checkCsrf(...req('POST', '/ingest/api/1/envelope/', { origin: 'https://shop.example' }), ORIGIN).ok).toBe(true);
+		for (const path of ['/api/agentx', '/api/v1/site-access', '/api/v1/site-access-evil', '/ingestx/api/1/envelope/'])
 			expect(checkCsrf(...req('POST', path, { origin: 'https://evil.example' }), ORIGIN).ok).toBe(false);
 	});
 });

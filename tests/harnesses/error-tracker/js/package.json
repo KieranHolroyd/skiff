@@ -1,0 +1,12 @@
+{
+	"name": "@yoal/harness-error-tracker-js",
+	"private": true,
+	"type": "module",
+	"description": "Sentry SDK compatibility harness for the Yoal app error tracker",
+	"scripts": {
+		"start": "node index.mjs"
+	},
+	"dependencies": {
+		"@sentry/node": "^11.12.0"
+	}
+}

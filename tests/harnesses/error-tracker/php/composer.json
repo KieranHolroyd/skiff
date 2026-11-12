@@ -1,0 +1,12 @@
+{
+	"name": "yoal/harness-error-tracker-php",
+	"description": "Sentry SDK compatibility harness for the Yoal app error tracker",
+	"type": "project",
+	"require": {
+		"php": ">=8.2",
+		"sentry/sentry": "^4.37"
+	},
+	"config": {
+		"sort-packages": true
+	}
+}

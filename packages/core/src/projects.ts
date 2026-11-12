@@ -490,6 +490,14 @@ export class ProjectService {
 			);
 			for (const table of projectOwnedTables)
 				this.ctx.sqlite.run(`DELETE FROM ${table} WHERE project_id = ?`, [row.id]);
+			// App errors (docs/APP-ERRORS.md) key hourly counts by issue, not project.
+			this.ctx.sqlite.run('DELETE FROM app_error_events WHERE project_id = ?', [row.id]);
+			this.ctx.sqlite.run(
+				'DELETE FROM app_error_hourly WHERE issue_id IN (SELECT id FROM app_error_issues WHERE project_id = ?)',
+				[row.id],
+			);
+			for (const table of ['app_error_issues', 'app_error_keys', 'app_error_projects', 'app_error_usage'])
+				this.ctx.sqlite.run(`DELETE FROM ${table} WHERE project_id = ?`, [row.id]);
 			this.ctx.sqlite.run(
 				'DELETE FROM share_redemptions WHERE share_link_id IN (SELECT id FROM share_links WHERE project_id = ?)',
 				[row.id],

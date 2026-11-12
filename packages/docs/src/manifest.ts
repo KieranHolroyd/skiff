@@ -68,7 +68,7 @@ export const SECTIONS: DocsSection[] = [
 		id: 'observe',
 		title: 'Observe',
 		icon: 'chart',
-		pages: ['observe/dashboards-and-logs', 'observe/metrics', 'observe/alerts']
+		pages: ['observe/dashboards-and-logs', 'observe/app-errors', 'observe/metrics', 'observe/alerts']
 	},
 	{
 		id: 'clients',

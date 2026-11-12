@@ -73,6 +73,7 @@ import type { UserPoolService } from './user-pools.ts';
 import type { UserPoolEngineService, UserPoolMailer } from './user-pool-engine.ts';
 import type { ScimTokenService } from './iam/scim.ts';
 import type { ServerErrorService } from './server-errors.ts';
+import type { AppErrorService } from './app-errors.ts';
 import type { SentryService } from './sentry.ts';
 import type { UsageAnalyticsService } from './usage-analytics.ts';
 import type { WhatsNewService } from './whats-new.ts';
@@ -178,6 +179,8 @@ export interface CoreContext {
 	authPolicy: AuthPolicyService;
 	/** The control plane's own error tracker (docs/SERVER-ERRORS.md). */
 	serverErrors: ServerErrorService;
+	/** The app-facing error tracker (docs/APP-ERRORS.md). */
+	appErrors: AppErrorService;
 	/** Optional Sentry forwarding for the errors above (docs/SERVER-ERRORS.md §6). */
 	sentry: SentryService;
 	/** Opt-in anonymous usage pings (docs/USAGE-ANALYTICS.md, D211). */

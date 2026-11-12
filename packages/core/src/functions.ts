@@ -539,6 +539,11 @@ export class FunctionService {
 		);
 		if (!alreadyBound && this.ctx.userPools.soleAttachedPool(project.id))
 			bindings.push(await this.ctx.userPools.authBindingForProject(project.id));
+		// App errors (docs/APP-ERRORS.md): a function sees the DSN as `env.SENTRY_DSN` without a
+		// manifest change, unless it already declared one.
+		const appErrorEnv = this.ctx.appErrors.consumerEnv(project.id);
+		if (appErrorEnv.SENTRY_DSN && !bindings.some((binding) => binding.name === 'SENTRY_DSN'))
+			bindings.push({ name: 'SENTRY_DSN', type: 'text', value: appErrorEnv.SENTRY_DSN });
 		return { bindings, secrets };
 	}
 }
