@@ -71,11 +71,23 @@ jobs:
         with:
           bun-version: '1.4.4'
 
+      # The tarballs Bun has already downloaded; a cache hit turns install into links.
+      - name: Cache Bun packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # Test files run in four worker processes (a GitHub runner has four vCPUs) instead of one.
+      # A few suites spawn child processes and are timing-sensitive, so four workers is the
+      # configuration validated to stay green; the larger timeout absorbs a busy runner without
+      # hiding real failures.
       - name: Test
-        run: bun test
+        run: bun test --parallel=4 --timeout=30000
 
       - name: Type-check and lint
         run: bun run check
@@ -153,6 +165,13 @@ jobs:
         with:
           bun-version: '1.4.4'
 
+      - name: Cache Bun packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
@@ -180,6 +199,13 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.4.4'
+
+      - name: Cache Bun packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
 
       - name: Install dependencies
         run: bun install --frozen-lockfile

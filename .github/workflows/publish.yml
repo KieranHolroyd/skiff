@@ -79,7 +79,7 @@ jobs:
       matrix:
         include:
           - name: Test
-            run: bun test
+            run: bun test --parallel=4 --timeout=30000
           - name: Type-check
             run: bun run check && bunx tsc -p scripts/tsconfig.json --noEmit
     steps:
@@ -87,6 +87,12 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
+      - name: Cache Bun packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
       - run: bun install --frozen-lockfile
       - run: ${{ matrix.run }}
 
@@ -149,6 +155,13 @@ jobs:
           bun-version: ${{ env.BUN_VERSION }}
 
       # The same steps the host updater used to run, done once here instead of on every server.
+      - name: Cache Bun packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+
       - name: Install and build
         working-directory: repo
         run: |
