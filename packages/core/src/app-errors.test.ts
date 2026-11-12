@@ -270,7 +270,7 @@ describe('AppErrorService', () => {
 		// Keep in step with `storeCurl` in the Errors setup (apps/control-plane errors/_lib/sdks.ts).
 		const body = '{"level":"error","platform":"other","exception":{"values":[{"type":"Error","value":"Hello from curl"}]}}';
 		const result = core.appErrors.ingest({ dsnProjectId: dsnId, endpoint: 'store', body: Buffer.from(body), queryKey: key });
-		expect(result.status).toBe(200);
+		if (result.status !== 200) throw new Error(`ingest failed: ${result.error}`);
 		expect(result.eventId).toMatch(/^[0-9a-f]{32}$/);
 		const issue = core.appErrors.list(owner, project, { q: 'Hello from curl' }).issues[0]!;
 		expect(issue.name).toBe('Error');
