@@ -3,6 +3,7 @@
 	import EmptyState from '../_lib/EmptyState.svelte';
 	import PageHeader from '../_lib/PageHeader.svelte';
 	import Issues from './_lib/Issues.svelte';
+	import Onboarding from './_lib/Onboarding.svelte';
 	import Targets from './_lib/Targets.svelte';
 	import type { PageProps } from './$types';
 
@@ -36,13 +37,29 @@
 			>
 				Targets
 			</a>
+			<a
+				href="?tab=setup"
+				class="rounded-md px-3 py-1.5 text-sm {data.tab === 'setup' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'}"
+			>
+				Setup
+			</a>
 			<span class="ms-auto text-xs text-muted-foreground">
 				{data.service.targets.length} target{data.service.targets.length === 1 ? '' : 's'}
 				· {data.service.autoLink ? 'automatic linking on' : 'automatic linking off'}
+				{#if data.service.summary.unresolved > 0}
+					· {data.service.summary.unresolved.toLocaleString()} unresolved
+				{/if}
 			</span>
 		</div>
 
-		{#if data.tab === 'targets'}
+		{#if data.tab === 'setup'}
+			<Onboarding
+				service={data.service}
+				projects={data.unlinkedProjects}
+				origin={data.platform.origin}
+				canManage={data.canManage}
+			/>
+		{:else if data.tab === 'targets'}
 			<Targets service={data.service} projects={data.unlinkedProjects} origin={data.platform.origin} canManage={data.canManage} />
 		{:else}
 			<Issues

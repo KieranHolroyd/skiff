@@ -10,7 +10,8 @@ organisations, teams, replays, performance traces, crons or alert rules to confi
 
 ## Link targets
 
-Open **Observe → Errors → Targets**.
+Open **Observe → Errors**. On a fresh organization the **Setup** tab opens automatically with three
+steps: create a target, copy an SDK snippet, and verify the first event.
 
 - **Automatic linking** gives every project in the organization a DSN and injects it into linked
   process apps and functions. New projects are linked as they are created. Turning it off disables
@@ -22,7 +23,8 @@ Open **Observe → Errors → Targets**.
   for Node, the browser SDK, PHP, Go and Python, and actions to send a test, rotate the key,
   enable/disable, edit sample rate and notifications, or delete.
 
-Copy the DSN from a target, or use its browser snippet. Press **Send test** to prove the pipe works.
+Copy the DSN from a target, or use its browser snippet. Press **Send test** to prove the pipe works;
+**Check again** in Setup re-reads the target until the first event arrives.
 
 ## Connect an app
 

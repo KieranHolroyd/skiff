@@ -527,7 +527,7 @@
 			{#if canManage && filters.target}
 				<Button variant="outline" onclick={sendTest}><SendIcon />Send test error</Button>
 			{:else}
-				<a class="text-sm text-muted-foreground hover:underline" href="?tab=targets">Open Targets</a>
+				<a class="text-sm text-muted-foreground hover:underline" href="?tab=setup">Open setup</a>
 			{/if}
 		</EmptyState>
 	{:else}

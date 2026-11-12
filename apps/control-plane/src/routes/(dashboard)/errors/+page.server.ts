@@ -84,9 +84,20 @@ export const load: PageServerLoad = ({ locals, url }) => {
 				.map((project) => ({ slug: project.slug, name: project.name })),
 		[]
 	);
+	const requested = url.searchParams.get('tab');
+	const tab =
+		requested === 'targets'
+			? ('targets' as const)
+			: requested === 'setup'
+				? ('setup' as const)
+				: requested === 'issues'
+					? ('issues' as const)
+					: service && service.targets.length === 0
+						? ('setup' as const)
+						: ('issues' as const);
 
 	return {
-		tab: url.searchParams.get('tab') === 'targets' ? ('targets' as const) : ('issues' as const),
+		tab,
 		service,
 		list,
 		detail,

@@ -420,7 +420,15 @@ and never alerts. Delete removes the issue, its events and counts; a fresh occur
 
 ## 10. UI: top-level Errors page
 
-**Observe → Errors** is an organization-level page, not a project sub-page. It has two tabs.
+**Observe → Errors** is an organization-level page, not a project sub-page. It has three tabs.
+
+**Setup** (auto-opened when there are no targets):
+
+- three steps with live completion badges: **Target**, **DSN**, **First event**;
+- step 1 offers automatic linking, a single-project link and an off-platform target;
+- step 2 picks Node/Bun, browser SDK, PHP, Go, Python or a static site and shows the exact snippet
+  with the selected target's DSN, each with copy buttons;
+- step 3 sends a test event or re-checks for the first real event and reports when it arrived.
 
 **Issues** (default; `?tab=issues`):
 
