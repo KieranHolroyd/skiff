@@ -105,6 +105,8 @@ export class WireguardManager {
 	async apply(raw: unknown): Promise<{ peers: number }> {
 		const state = parseWireguardState(raw);
 		if (state.mode === 'external' || !state.address) return { peers: 0 };
+		// A node adopted into the overlay after it joined has no key yet; keygen keeps an existing one.
+		await this.keygen();
 		const privateKey = (await fs.readFile(this.paths.privateKeyPath, 'utf8')).trim();
 		if (!privateKey) throw new WireguardError('the WireGuard private key is missing; run keygen first');
 		await fs.mkdir(this.paths.dir, { recursive: true, mode: 0o700 });
@@ -117,6 +119,12 @@ export class WireguardManager {
 		await this.runIp(['link', 'set', this.paths.interface, 'up']);
 		const setconf = await this.runWg(['setconf', this.paths.interface, this.paths.configPath]);
 		if (setconf.code !== 0) throw new WireguardError(`wg setconf failed: ${setconf.stderr.trim()}`);
+		// The address is a /32, so nothing routes the overlay to the interface by itself: without
+		// this, traffic to a peer leaves through the default gateway. `src` pins the reply address.
+		if (state.cidr) {
+			const route = await this.runIp(['route', 'replace', state.cidr, 'dev', this.paths.interface, 'src', state.address]);
+			if (route.code !== 0) throw new WireguardError(`could not route ${state.cidr} via ${this.paths.interface}: ${route.stderr.trim()}`);
+		}
 		await this.firewall?.apply();
 		return { peers: state.peers.length };
 	}

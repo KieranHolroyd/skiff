@@ -70,6 +70,8 @@ describe('WireguardManager', () => {
 		expect(config).toContain('Endpoint = 203.0.113.10:51820');
 		expect(calls.some((call) => call[0] === 'ip' && call.includes('addr') && call.includes('10.88.1.5/32'))).toBe(true);
 		expect(calls.some((call) => call[0] === 'wg' && call.includes('setconf'))).toBe(true);
+		// The /32 address alone routes nothing: the overlay CIDR must point at the interface.
+		expect(calls).toContainEqual(['ip', 'route', 'replace', '10.88.0.0/22', 'dev', 'wg0', 'src', '10.88.1.5']);
 	});
 
 	test('reads status and treats a missing interface as empty', async () => {

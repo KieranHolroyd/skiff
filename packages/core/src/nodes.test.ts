@@ -531,6 +531,65 @@ describe('managed overlay join (C1)', () => {
 		const token = core.nodes.createJoinToken(admin, 'managed-bad').token;
 		expect(() => core.nodes.join({ token, name: 'managed-bad', networkMode: 'yoal' })).toThrow(/public key/);
 	});
+
+	test('a public address on a managed join is the WireGuard endpoint, not the proxied upstream', () => {
+		const token = core.nodes.createJoinToken(admin, 'managed-public').token;
+		const joined = core.nodes.join({
+			token,
+			name: 'managed-public',
+			networkMode: 'yoal',
+			publicAddress: '203.0.113.20',
+			wireguardPublicKey: `${'C'.repeat(43)}=`,
+		});
+		const view = core.nodes.get(joined.nodeId);
+		expect(view.wgEndpoint).toBe('203.0.113.20:51820');
+		expect(view.publicAddress).toBe(`${view.privateAddress}:8080`);
+	});
+
+	test('adopts a host-networked node: address now, key from its first heartbeat', async () => {
+		const plain = joinNode('adopt-me');
+		const keyD = `${'D'.repeat(43)}=`;
+		expect(() => core.nodes.adoptOverlay(member, plain.nodeId, { endpoint: '198.51.100.7' })).toThrow();
+		const adopted = core.nodes.adoptOverlay(admin, plain.nodeId, { endpoint: '198.51.100.7' });
+		expect(adopted).toMatchObject({ networkMode: 'yoal', wgEndpoint: '198.51.100.7:51820', wgPublicKey: null });
+		expect(adopted.privateAddress).toMatch(/^10\.88\.1\.\d+$/);
+		expect(() => core.nodes.adoptOverlay(admin, plain.nodeId, {})).toThrow(/already/);
+
+		const state = await core.nodes.desiredState(plain.token);
+		expect(state.wireguard).toMatchObject({ mode: 'yoal', address: adopted.privateAddress, cidr: '10.88.0.0/22' });
+
+		const beat = { nodeId: plain.nodeId, agentVersion: '0.1.0', actualStateVersion: 1, status: 'online' as const, caddyOk: true, releases: [] };
+		core.nodes.heartbeat(plain.token, { ...beat, wireguardPublicKey: keyD });
+		expect(core.nodes.get(plain.nodeId).wgPublicKey).toBe(keyD);
+		// A later, different key is not taken from a heartbeat.
+		core.nodes.heartbeat(plain.token, { ...beat, wireguardPublicKey: `${'E'.repeat(43)}=` });
+		expect(core.nodes.get(plain.nodeId).wgPublicKey).toBe(keyD);
+	});
+
+	test('a host-networked node ignores a reported key', () => {
+		const plain = joinNode('stay-external');
+		core.nodes.heartbeat(plain.token, {
+			nodeId: plain.nodeId,
+			agentVersion: '0.1.0',
+			actualStateVersion: 1,
+			status: 'online',
+			caddyOk: true,
+			releases: [],
+			wireguardPublicKey: `${'F'.repeat(43)}=`,
+		});
+		expect(core.nodes.get(plain.nodeId).wgPublicKey).toBeNull();
+	});
+});
+
+describe('withPort', () => {
+	test('adds the default port only when none is given', async () => {
+		const { withPort } = await import('./nodes.ts');
+		expect(withPort('203.0.113.1', 51820)).toBe('203.0.113.1:51820');
+		expect(withPort('203.0.113.1:4000', 51820)).toBe('203.0.113.1:4000');
+		expect(withPort('vpn.example.com', 51820)).toBe('vpn.example.com:51820');
+		expect(withPort('2001:db8::1', 51820)).toBe('[2001:db8::1]:51820');
+		expect(withPort('[2001:db8::1]:9', 51820)).toBe('[2001:db8::1]:9');
+	});
 });
 
 describe('service endpoints in desired state (C2)', () => {

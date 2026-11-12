@@ -3,7 +3,7 @@ import * as z from 'zod';
 import { nodeContainerConsoleDesiredSchema } from './container-console.ts';
 import { nodeStudioDesiredSchema } from './database-studio.ts';
 import { nodeHardwareSchema } from './cluster.ts';
-import { wireguardStateSchema, wireguardStatusSchema } from './overlay.ts';
+import { wireguardPublicKeySchema, wireguardStateSchema, wireguardStatusSchema } from './overlay.ts';
 import { nodeIdentityCertificateSchema, serviceEndpointSchema, serviceProviderSchema } from './endpoint.ts';
 import { databaseStudioPrincipalResultSchema, databaseStudioPrincipalTaskSchema } from './database-studio-principal.ts';
 import { accessModes, deploymentStatuses, nodeStatuses, runtimes } from './model.ts';
@@ -388,6 +388,11 @@ export const heartbeatSchema = z.object({
 	hardware: nodeHardwareSchema.optional(),
 	/** Latest WireGuard peer health, when this node runs a managed overlay (C1). */
 	wireguard: wireguardStatusSchema.optional(),
+	/**
+	 * This node's WireGuard public key, sent while desired state puts it on the overlay. A node
+	 * adopted into the overlay after it joined has no stored key until this arrives (C1).
+	 */
+	wireguardPublicKey: wireguardPublicKeySchema.optional(),
 	/** Public node certificate for C2 mTLS; the private key never leaves the node. */
 	nodeCertificate: nodeIdentityCertificateSchema.optional(),
 	/** What the node's storage service last applied (D48). */

@@ -252,6 +252,24 @@ export async function convergeHost(input: ConvergeInput): Promise<ConvergeReport
 			}),
 		);
 		await step(report, 'agent-commands', () => void linkAgentCommands(release));
+		// The managed overlay (docs/CLUSTERING.md §4.1, C1): the helper drives kernel WireGuard with
+		// `wg`, so every agent host needs wireguard-tools before a node can be put on the overlay.
+		// Debian/Ubuntu only, and never on a host whose operator skipped package installs.
+		await step(report, 'wireguard-tools', () => {
+			if (runner.capture(['sh', '-c', 'command -v wg'])) return false;
+			if (!runner.capture(['sh', '-c', 'command -v apt-get'])) throw new Error('wg is missing; install wireguard-tools');
+			const helperEnv = join(paths.etcDir, 'helper.env');
+			if (existsSync(helperEnv) && /^YOAL_HELPER_STORAGE_TOOLS=0$/m.test(readFileSync(helperEnv, 'utf8')))
+				throw new Error('wg is missing and package installs are off (--skip-deps); install wireguard-tools');
+			const install = ['env', 'DEBIAN_FRONTEND=noninteractive', 'apt-get', 'install', '-y', '-q', '--no-install-recommends', 'wireguard-tools'];
+			if (runner.capture(install) === null) {
+				// Stale package lists are the usual cause; refresh once and retry.
+				runner.run(['env', 'DEBIAN_FRONTEND=noninteractive', 'apt-get', 'update', '-q']);
+				runner.run(install);
+			}
+			log('installed wireguard-tools');
+			return true;
+		});
 		// PartOf=yoal-agent.service: it restarts with the agent, so never start it here.
 		await step(report, 'builder', () =>
 			ensureBuilder({

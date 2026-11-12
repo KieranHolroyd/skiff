@@ -419,6 +419,11 @@ const api: RequestHandler = async (event) => {
 			if (segments[2] === 'rotate-token' && method === 'POST')
 				return core.nodes.rotateToken(principal, nodeId);
 			if (segments[2] === 'edge' && method === 'POST') return core.nodes.setEdge(principal, nodeId);
+			if (segments[2] === 'overlay' && method === 'POST') {
+				// Move a host-networked node onto the managed overlay (docs/CLUSTERING.md §4.1, C1).
+				const body = (await request.json().catch(() => ({}))) as { endpoint?: string | null };
+				return core.nodes.adoptOverlay(principal, nodeId, { endpoint: body.endpoint ?? null });
+			}
 			return json({ error: 'not_found' }, 404);
 		}
 

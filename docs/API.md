@@ -81,6 +81,7 @@ project's public DSN key (`X-Sentry-Auth` or `?sentry_key=`), never a session co
 | POST | `/nodes/:id/drain` \| `/resume` | platform admin **session** | |
 | POST | `/nodes/:id/rotate-token` | platform admin **session** | |
 | POST | `/nodes/:id/edge` | platform admin **session** | makes this online node the edge; the old edge becomes a worker (D98). 409 while `YOAL_EDGE_NODE_ID` is set, for a node that is not online, or when the old edge hosts apps or data but has no public address |
+| POST | `/nodes/:id/overlay` | platform admin **session** | moves a node that joined with host networking onto the managed WireGuard overlay (CLUSTERING §4.1, C1). Body `{ endpoint?: "host[:port]" }` is the underlay address other nodes dial (port defaults to the overlay listen port). Allocates an overlay address; the node's helper creates its key pair on the next reconcile and the heartbeat stores the public key. 409 when already on the overlay or the CIDR is full |
 | GET | `/storage/:name/replicas` | `storage:read` | bucket replication targets and status (C9) |
 | POST | `/storage/:name/replicas` | `storage:update` | `{ target }`; another node, private target |
 | DELETE | `/storage/:name/replicas/:id` | `storage:update` | remove the replication intent |

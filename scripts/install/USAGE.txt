@@ -50,6 +50,14 @@ Options:
   --canary                    Install the head of main and follow the canary channel (every
                               release). Default: the newest stable release, stable channel.
                               Also YOAL_CHANNEL=canary.
+  --join <control-url>        Install this machine as a worker of an existing control plane on
+                              the managed WireGuard overlay, instead of a control plane. Needs
+                              --token and --name; takes --endpoint and the runtime flags.
+  --token <join-token>        One-time token from Nodes → Enroll node (with --join).
+                              Also YOAL_JOIN_TOKEN.
+  --name <node-name>          The node's name (with --join).
+  --endpoint <host[:port]>    Underlay address other nodes dial for WireGuard (with --join;
+                              default: this server's IPv4, port 51820).
   -h, --help                  Print this help and exit.
 
 Bootstrap environment:

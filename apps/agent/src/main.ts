@@ -114,6 +114,8 @@ class AgentRuntime {
 	private readonly serviceForwarder: ServiceForwarder;
 	private readonly nodeCertificate: NodeCertificateManager;
 	private wireguardStatus: WireguardStatus | null = null;
+	/** The helper's WireGuard public key, once fetched; the private key never leaves the helper. */
+	private wireguardPublicKey: string | null = null;
 	private wireguardStatusAt = 0;
 	private readonly certs: CertProbe | null;
 	private readonly helper: HelperClient;
@@ -1223,6 +1225,14 @@ class AgentRuntime {
 				// A helper that predates the overlay simply reports no peer health.
 			}
 		}
+		if (this.desired?.wireguard && this.desired.wireguard.mode !== 'external' && !this.wireguardPublicKey) {
+			try {
+				// Idempotent: returns the existing key's public half, or creates the pair.
+				this.wireguardPublicKey = (await this.helper.wireguardKeygen()).publicKey;
+			} catch (error) {
+				log('warn', `Could not read the WireGuard public key: ${errorText(error)}`);
+			}
+		}
 		// Cached; refreshed in the background at most every ~6 h (cert-expiry alert, DESIGN §8), and
 		// sooner for a custom domain that just arrived (its report moves the domain to `active`).
 		const certs = this.certs?.current() ?? [];
@@ -1273,6 +1283,7 @@ class AgentRuntime {
 			...(hardware ? { hardware } : {}),
 			...(nodeCertificate ? { nodeCertificate } : {}),
 			...(this.desired?.wireguard && this.wireguardStatus ? { wireguard: this.wireguardStatus } : {}),
+			...(this.desired?.wireguard && this.wireguardPublicKey ? { wireguardPublicKey: this.wireguardPublicKey } : {}),
 			releases: this.releases.listReleases(),
 			...(storage ? { storage } : {}),
 			...(reports.length > 0 ? { workloads: workloadHeartbeat(reports) } : {}),

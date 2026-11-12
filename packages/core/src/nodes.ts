@@ -422,7 +422,11 @@ export class NodeService {
 		const privateAddress = managed ? allocateOverlayAddress(this.ctx.cluster.get().overlay.cidr, used) : null;
 		if (managed && !privateAddress)
 			throw new ConflictError('The overlay CIDR has no free address. Widen it before adding another node.');
-		const publicAddress = input.publicAddress ?? (managed && privateAddress ? `${privateAddress}:8080` : null);
+		// On the overlay the edge proxies to the overlay address, and `--public-address` is the
+		// underlay endpoint other nodes dial for WireGuard: two different addresses.
+		const listenPort = this.ctx.cluster.get().overlay.listenPort;
+		const publicAddress = managed && privateAddress ? `${privateAddress}:8080` : (input.publicAddress ?? null);
+		const wgEndpoint = managed && input.publicAddress ? withPort(input.publicAddress, listenPort) : null;
 		this.ctx.sqlite.transaction(() => {
 			this.ctx.sqlite.run(
 				`INSERT INTO nodes (
@@ -443,8 +447,8 @@ export class NodeService {
 					managed ? this.ctx.cluster.get().overlay.cidr : null,
 					managed ? input.wireguardPublicKey ?? null : null,
 					managed ? 'yoal' : 'external',
-					managed ? input.publicAddress ?? null : null,
-					managed ? this.ctx.cluster.get().overlay.listenPort : null,
+					wgEndpoint,
+					managed ? listenPort : null,
 				],
 			);
 			this.ctx.sqlite.run('UPDATE node_join_tokens SET used_at = ?, used_by_node_id = ? WHERE id = ?', [now, nodeId, join.id]);
@@ -484,6 +488,11 @@ export class NodeService {
 		if (node.id !== input.nodeId) throw new UnauthorizedError('Node id does not match token');
 		const now = this.ctx.now();
 		this.storeCertificate(node.id, input.nodeCertificate, now);
+		// A node moved onto the overlay after it joined (`adoptOverlay`) has an address but no key
+		// until its helper reports one. Only the first key is taken: a different key later is a
+		// re-key the operator must do by re-adopting, not something a heartbeat may change.
+		const adoptedKey =
+			node.networkMode !== 'external' && !node.wgPublicKey && input.wireguardPublicKey ? input.wireguardPublicKey : null;
 		this.ctx.db
 			.update(nodes)
 			.set({
@@ -494,6 +503,7 @@ export class NodeService {
 				capabilitiesJson: JSON.stringify(input.capabilities ?? []),
 				...hardwarePatch(input.hardware, now),
 				...wireguardStatusPatch(input.wireguard, now),
+				...(adoptedKey ? { wgPublicKey: adoptedKey } : {}),
 				...this.settleUpdate(node, input.agentVersion, input.nodeUpdateResult),
 				lastHeartbeatAt: now,
 				statsJson: input.stats ? JSON.stringify(input.stats) : node.statsJson,
@@ -502,6 +512,8 @@ export class NodeService {
 			})
 			.where(eq(nodes.id, node.id))
 			.run();
+		// Every peer's desired state now carries this node's key.
+		if (adoptedKey) this.bump();
 		if (input.workloads?.length) {
 			this.ctx.workloads.applyHeartbeat(node.id, input.workloads);
 			this.ctx.databases.applyHeartbeat(node.id, input.workloads);
@@ -686,6 +698,54 @@ export class NodeService {
 	 * (D42), because the kernel limit would then OOM-kill workloads the control plane accepted.
 	 * Every change is in desired state, so agents converge on their next pull.
 	 */
+	/**
+	 * Move a node that joined with host-provided networking onto the managed overlay (C1): give it
+	 * an overlay address and record the underlay endpoint other nodes dial. Its helper creates the
+	 * key pair when it first applies the overlay, and the heartbeat stores the public key.
+	 * Workloads keep running; upstreams move to the overlay address once the key arrives.
+	 */
+	adoptOverlay(principal: Principal, nodeId: string, input: { endpoint?: string | null }): NodeView {
+		this.assertPlatformAdmin(principal);
+		const node = this.ctx.db.select().from(nodes).where(eq(nodes.id, nodeId)).get();
+		if (!node) throw new NotFoundError('Node');
+		if (node.networkMode !== 'external') throw new ConflictError(`"${node.name}" is already on the managed overlay.`);
+		const { cidr, listenPort } = this.ctx.cluster.get().overlay;
+		const endpoint = input.endpoint?.trim() ? withPort(input.endpoint.trim(), listenPort) : null;
+		if (endpoint && !/^[A-Za-z0-9.\-[\]:]+$/.test(endpoint))
+			throw new ValidationError('The endpoint is host or host:port, without a scheme or path.');
+		const used = new Set(
+			this.ctx.sqlite
+				.query<{ address: string }, []>('SELECT private_address AS address FROM nodes WHERE private_address IS NOT NULL')
+				.all()
+				.map((row) => row.address),
+		);
+		const privateAddress = allocateOverlayAddress(cidr, used);
+		if (!privateAddress) throw new ConflictError('The overlay CIDR has no free address. Widen it before adding another node.');
+		const now = this.ctx.now();
+		const changes = {
+			networkMode: 'yoal' as const,
+			privateAddress,
+			privateCidr: cidr,
+			wgEndpoint: endpoint,
+			wgListenPort: listenPort,
+			wgPublicKey: null,
+			// The edge keeps serving its own routes on loopback; a worker is proxied on the overlay.
+			...(node.mode === 'edge' ? {} : { publicAddress: `${privateAddress}:8080` }),
+			updatedAt: now,
+		};
+		this.ctx.db.update(nodes).set(changes).where(eq(nodes.id, nodeId)).run();
+		this.ctx.audit.record({
+			principal,
+			action: 'node.overlay_adopt',
+			resource: 'node',
+			resourceId: nodeId,
+			args: { privateAddress, endpoint },
+			result: 'ok',
+		});
+		this.bump();
+		return this.view({ ...node, ...changes });
+	}
+
 	update(principal: Principal, nodeId: string, input: NodeUpdate): NodeView {
 		this.assertPlatformAdmin(principal);
 		const reservedLabel = Object.keys(input.labels ?? {}).find((key) => key.startsWith('yoal.io/'));
@@ -1668,6 +1728,13 @@ function hardwarePatch(hardware: NodeHardware | undefined, now: number): Partial
 function wireguardStatusFor(raw: string | null): WireguardStatus | null {
 	const parsed = wireguardStatusSchema.safeParse(parseJson<unknown>(raw, null));
 	return parsed.success ? parsed.data : null;
+}
+
+/** `host` → `host:port`; an explicit port or a bracketed IPv6 with a port is kept. */
+export function withPort(address: string, port: number): string {
+	if (/^\[.*\]:\d+$/.test(address) || /^[^:\[\]]+:\d+$/.test(address)) return address;
+	if (address.includes(':') && !address.startsWith('[')) return `[${address}]:${port}`;
+	return `${address}:${port}`;
 }
 
 function wireguardStatusPatch(status: WireguardStatus | undefined, now: number): Partial<typeof nodesTable.$inferInsert> {
